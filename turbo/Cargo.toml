@@ -1,0 +1,30 @@
+[workspace]
+members = [
+    "crates/turbo-lexer",
+    "crates/turbo-ast",
+    "crates/turbo-parser",
+    "crates/turbo-codegen-cranelift",
+    "crates/turbo-sema",
+    "crates/turbo-cli",
+]
+resolver = "2"
+
+[workspace.dependencies]
+logos = "0.14"
+cranelift = "0.113"
+cranelift-jit = "0.113"
+cranelift-module = "0.113"
+cranelift-codegen = "0.113"
+cranelift-frontend = "0.113"
+cranelift-native = "0.113"
+cranelift-object = "0.113"
+target-lexicon = "0.12"
+ariadne = "0.4"
+clap = { version = "4", features = ["derive"] }
+
+[profile.dev]
+opt-level = 0
+
+[profile.release]
+opt-level = 3
+lto = true

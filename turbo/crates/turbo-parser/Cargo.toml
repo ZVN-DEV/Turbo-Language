@@ -1,0 +1,8 @@
+[package]
+name = "turbo-parser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+turbo-lexer = { path = "../turbo-lexer" }
+turbo-ast = { path = "../turbo-ast" }

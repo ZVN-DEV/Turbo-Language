@@ -1,0 +1,523 @@
+// =============================================================================
+// perf_test.tb — Performance tests for the edge image processing pipeline
+//
+// Demonstrates:
+//   - @perf decorator with max_memory and max_time constraints
+//   - @stress decorator for concurrent load testing
+//   - memory.snapshot() for tracking WASM memory usage
+//   - Performance assertions with .ms(), .mb(), .kb() unit helpers
+//   - Throughput measurement (images per second)
+//   - WASM memory budget enforcement (must stay under 256MB)
+//   - Latency measurement per transform operation
+// =============================================================================
+
+import { Stream } from "turbo/stream"
+import { time } from "std/time"
+import {
+  ImageFormat, TransformOp, TransformPipeline, Dimensions,
+  ResizeAlgorithm, ProcessingConfig, PipelineError,
+} from "../src/models"
+import { PipelineExecutor, PipelineBuilder, ImageChunk } from "../src/pipeline"
+import { EdgeCache } from "../src/cache"
+import {
+  apply_resize, apply_crop, apply_blur, apply_sharpen,
+  apply_grayscale, apply_brightness, apply_contrast, apply_flip,
+} from "../src/transforms"
+import { RequestArena, MemoryPool, GLOBAL_POOL } from "../src/wasm_bindings"
+
+// --- Test fixtures ---
+
+/// Generate a mock image stream of specified dimensions
+fn mock_image(width: u32, height: u32) -> Stream<ImageChunk> {
+  let rows_per_chunk = 64
+  let mut current_row: u32 = 0
+
+  async gen {
+    while current_row < height {
+      let chunk_rows = u32.min(rows_per_chunk, height - current_row)
+      let data_size = chunk_rows as usize * width as usize * 4
+      let mut data: [u8] = []
+      data.reserve(data_size)
+
+      for i in 0..data_size {
+        data.push((i % 256) as u8)
+      }
+
+      yield ImageChunk {
+        data,
+        row_start: current_row,
+        row_end: current_row + chunk_rows,
+        width,
+        channels: 4,
+        is_last: current_row + chunk_rows >= height,
+      }
+
+      current_row += chunk_rows
+    }
+  }
+}
+
+// =============================================================================
+// Per-Transform Latency Tests
+// =============================================================================
+
+@test
+@perf(max_time: 500.ms(), max_memory: 50.mb())
+async fn test_resize_latency_small() {
+  // Resize a 1000x1000 image to 200x200
+  let input = mock_image(1000, 1000)
+  let target = Dimensions { width: 200, height: 200 }
+
+  let start = time.now()
+  let resized = input |> apply_resize(target, ResizeAlgorithm.Bilinear)
+
+  let mut rows: u32 = 0
+  for await chunk in resized {
+    rows += chunk.row_count()
+  }
+
+  let elapsed = time.since(start).as_ms()
+  assert_eq(rows, 200)
+  assert(elapsed < 500.0, "Resize 1000x1000 -> 200x200 took {elapsed}ms (max 500ms)")
+}
+
+@test
+@perf(max_time: 2.seconds(), max_memory: 100.mb())
+async fn test_resize_latency_large() {
+  // Resize a 4000x3000 image to 800x600
+  let input = mock_image(4000, 3000)
+  let target = Dimensions { width: 800, height: 600 }
+
+  let start = time.now()
+  let resized = input |> apply_resize(target, ResizeAlgorithm.Lanczos(window: 3))
+
+  let mut rows: u32 = 0
+  for await chunk in resized {
+    rows += chunk.row_count()
+  }
+
+  let elapsed = time.since(start).as_ms()
+  assert_eq(rows, 600)
+  assert(elapsed < 2000.0, "Resize 4000x3000 -> 800x600 took {elapsed}ms (max 2000ms)")
+}
+
+@test
+@perf(max_time: 1.seconds(), max_memory: 50.mb())
+async fn test_blur_latency() {
+  let input = mock_image(800, 600)
+
+  let start = time.now()
+  let blurred = input |> apply_blur(3.0)
+
+  let mut rows: u32 = 0
+  for await chunk in blurred {
+    rows += chunk.row_count()
+  }
+
+  let elapsed = time.since(start).as_ms()
+  assert_eq(rows, 600)
+  assert(elapsed < 1000.0, "Blur 800x600 sigma=3.0 took {elapsed}ms (max 1000ms)")
+}
+
+@test
+@perf(max_time: 1.seconds(), max_memory: 50.mb())
+async fn test_sharpen_latency() {
+  let input = mock_image(800, 600)
+
+  let start = time.now()
+  let sharpened = input |> apply_sharpen(1.0, 1.5, 0.0)
+
+  let mut rows: u32 = 0
+  for await chunk in sharpened {
+    rows += chunk.row_count()
+  }
+
+  let elapsed = time.since(start).as_ms()
+  assert_eq(rows, 600)
+  assert(elapsed < 1000.0, "Sharpen 800x600 took {elapsed}ms (max 1000ms)")
+}
+
+@test
+@perf(max_time: 200.ms(), max_memory: 20.mb())
+async fn test_grayscale_latency() {
+  let input = mock_image(800, 600)
+
+  let start = time.now()
+  let gray = input |> apply_grayscale()
+
+  let mut rows: u32 = 0
+  for await chunk in gray {
+    rows += chunk.row_count()
+  }
+
+  let elapsed = time.since(start).as_ms()
+  assert_eq(rows, 600)
+  assert(elapsed < 200.0, "Grayscale 800x600 took {elapsed}ms (max 200ms)")
+}
+
+@test
+@perf(max_time: 200.ms(), max_memory: 20.mb())
+async fn test_crop_latency() {
+  let input = mock_image(2000, 2000)
+  let crop_box = BoundingBox { x: 500, y: 500, width: 800, height: 600 }
+
+  let start = time.now()
+  let cropped = input |> apply_crop(crop_box)
+
+  let mut rows: u32 = 0
+  for await chunk in cropped {
+    rows += chunk.row_count()
+  }
+
+  let elapsed = time.since(start).as_ms()
+  assert_eq(rows, 600)
+  assert(elapsed < 200.0, "Crop 2000x2000 -> 800x600 took {elapsed}ms (max 200ms)")
+}
+
+// =============================================================================
+// Full Pipeline Performance
+// =============================================================================
+
+@test
+@perf(max_time: 3.seconds(), max_memory: 100.mb())
+async fn test_full_pipeline_latency() {
+  // Realistic pipeline: resize + sharpen + convert
+  let input = mock_image(2000, 1500)
+  let target = Dimensions { width: 800, height: 600 }
+
+  let start = time.now()
+
+  let result = input
+    |> apply_resize(target, ResizeAlgorithm.Lanczos(window: 3))
+    |> apply_sharpen(0.5, 1.0, 0.0)
+    |> apply_grayscale()
+
+  let mut rows: u32 = 0
+  for await chunk in result {
+    rows += chunk.row_count()
+  }
+
+  let elapsed = time.since(start).as_ms()
+  assert_eq(rows, 600)
+  assert(elapsed < 3000.0, "Full pipeline 2000x1500 took {elapsed}ms (max 3000ms)")
+}
+
+@test
+@perf(max_time: 5.seconds(), max_memory: 150.mb())
+async fn test_complex_pipeline_latency() {
+  // Complex pipeline with many operations
+  let input = mock_image(3000, 2000)
+  let target = Dimensions { width: 1200, height: 800 }
+  let crop_box = BoundingBox { x: 100, y: 100, width: 1000, height: 600 }
+
+  let start = time.now()
+
+  let result = input
+    |> apply_resize(target, ResizeAlgorithm.Lanczos(window: 3))
+    |> apply_crop(crop_box)
+    |> apply_blur(1.5)
+    |> apply_sharpen(0.3, 1.0, 0.0)
+    |> apply_brightness(1.1)
+    |> apply_contrast(1.2)
+    |> apply_grayscale()
+
+  let mut rows: u32 = 0
+  for await chunk in result {
+    rows += chunk.row_count()
+  }
+
+  let elapsed = time.since(start).as_ms()
+  assert(elapsed < 5000.0, "Complex pipeline 3000x2000 took {elapsed}ms (max 5000ms)")
+}
+
+// =============================================================================
+// Memory Usage Tests — WASM-critical
+// =============================================================================
+
+@test
+@perf(max_memory: 256.mb())
+async fn test_wasm_memory_stays_under_limit() {
+  // Process a large image and verify we never exceed 256MB
+  let before = memory.snapshot()
+
+  let input = mock_image(4000, 3000)  // 48MB uncompressed
+  let target = Dimensions { width: 1920, height: 1080 }
+
+  let result = input
+    |> apply_resize(target, ResizeAlgorithm.Bilinear)
+    |> apply_sharpen(0.5, 1.0, 0.0)
+
+  for await chunk in result {
+    let current = memory.snapshot()
+    let used = current.allocated - before.allocated
+
+    assert(used < 256.mb(),
+      "Memory usage {used} exceeds WASM limit of 256MB during processing")
+  }
+
+  let after = memory.snapshot()
+  let peak = after.peak_allocated - before.allocated
+
+  assert(peak < 256.mb(),
+    "Peak memory {peak} exceeds WASM limit of 256MB")
+}
+
+@test
+async fn test_streaming_uses_constant_memory() {
+  // Regardless of image size, memory usage should be roughly constant
+  // because we process in chunks, never buffering the full image
+
+  let sizes = [
+    (500, 500),
+    (1000, 1000),
+    (2000, 2000),
+    (4000, 4000),
+  ]
+
+  let mut peak_usages: [usize] = []
+
+  for (width, height) in sizes {
+    let before = memory.snapshot()
+
+    let input = mock_image(width, height)
+    let target = Dimensions { width: 200, height: 200 }
+
+    let result = input |> apply_resize(target, ResizeAlgorithm.Bilinear)
+
+    for await _ in result {
+      // Consume stream
+    }
+
+    let after = memory.snapshot()
+    peak_usages.push(after.peak_allocated - before.allocated)
+  }
+
+  // The peak memory for 4000x4000 should not be dramatically more than 500x500
+  // Allow 3x variance for buffer overhead
+  let ratio = peak_usages[3] as f64 / peak_usages[0] as f64
+
+  assert(ratio < 3.0,
+    "Memory doesn't scale linearly with image size: 500x500={peak_usages[0]}, 4000x4000={peak_usages[3]}, ratio={ratio}")
+}
+
+@test
+async fn test_no_memory_leaks_across_requests() {
+  let before = memory.snapshot()
+
+  // Simulate 100 requests
+  for i in 0..100 {
+    let arena = RequestArena.new()
+    defer arena.free()
+
+    let input = mock_image(800, 600)
+    let target = Dimensions { width: 400, height: 300 }
+    let result = input |> apply_resize(target, ResizeAlgorithm.Bilinear)
+
+    for await _ in result {
+      // Consume stream
+    }
+  }
+
+  let after = memory.snapshot()
+  let retained = after.allocated - before.allocated
+
+  assert(retained < 1.mb(),
+    "Memory leak: {retained} bytes retained after 100 requests")
+}
+
+@test
+async fn test_arena_allocator_efficiency() {
+  let arena = RequestArena.new(capacity: 1_048_576)  // 1MB
+
+  // Allocate many small buffers
+  for i in 0..100 {
+    let buf = arena.alloc(1024)?  // 1KB each
+    assert_eq(buf.len(), 1024)
+  }
+
+  // Should have used ~100KB of the 1MB arena
+  let utilization = arena.utilization()
+  assert(utilization > 0.09 && utilization < 0.15,
+    "Arena utilization {utilization} not in expected range")
+
+  // Cleanup is O(1): free the entire arena at once
+  arena.free()
+}
+
+@test
+async fn test_arena_overflow_returns_error() {
+  let arena = RequestArena.new(capacity: 4096)  // Tiny arena
+
+  // This should succeed
+  let buf1 = arena.alloc(2048)?
+  assert_eq(buf1.len(), 2048)
+
+  // This should fail (not enough space)
+  match arena.alloc(4096) {
+    ok(_) => assert(false, "Should have failed: arena overflow")
+    err(PipelineError.WasmMemoryExceeded(used, limit)) => {
+      assert(used > limit)
+    }
+    err(e) => assert(false, "Wrong error type: {e}")
+  }
+
+  arena.free()
+}
+
+// =============================================================================
+// Throughput Tests
+// =============================================================================
+
+@test
+@perf(max_time: 10.seconds())
+async fn test_throughput_small_images() {
+  // Measure how many small image resizes we can do per second
+  let target = Dimensions { width: 200, height: 200 }
+  let mut count: u32 = 0
+  let start = time.now()
+  let duration = 3.seconds()
+
+  while time.since(start) < duration {
+    let input = mock_image(800, 600)
+    let result = input |> apply_resize(target, ResizeAlgorithm.Bilinear)
+
+    for await _ in result {}
+    count += 1
+  }
+
+  let elapsed = time.since(start).as_secs()
+  let throughput = count as f64 / elapsed
+
+  assert(throughput > 10.0,
+    "Throughput too low: {throughput} images/sec (expected > 10)")
+
+  log.info("Throughput test: small images", {
+    count,
+    elapsed_sec: elapsed,
+    images_per_sec: throughput,
+  })
+}
+
+@test
+@perf(max_time: 10.seconds())
+async fn test_throughput_medium_images() {
+  // Measure throughput for medium-sized images with a full pipeline
+  let target = Dimensions { width: 800, height: 600 }
+  let mut count: u32 = 0
+  let start = time.now()
+  let duration = 3.seconds()
+
+  while time.since(start) < duration {
+    let input = mock_image(2000, 1500)
+
+    let result = input
+      |> apply_resize(target, ResizeAlgorithm.Bilinear)
+      |> apply_sharpen(0.5, 1.0, 0.0)
+
+    for await _ in result {}
+    count += 1
+  }
+
+  let elapsed = time.since(start).as_secs()
+  let throughput = count as f64 / elapsed
+
+  assert(throughput > 2.0,
+    "Throughput too low: {throughput} images/sec (expected > 2)")
+
+  log.info("Throughput test: medium images", {
+    count,
+    elapsed_sec: elapsed,
+    images_per_sec: throughput,
+  })
+}
+
+// =============================================================================
+// Transform Cost Benchmarks
+// =============================================================================
+
+@test
+async fn test_transform_cost_ordering() {
+  // Verify that transform costs reflect relative computational expense
+  let ops = [
+    TransformOp.Flip(true),                                         // cost 1
+    TransformOp.Grayscale,                                          // cost 2
+    TransformOp.Crop(BoundingBox { x: 0, y: 0, width: 100, height: 100 }),  // cost 2
+    TransformOp.Convert(ImageFormat.WebP(quality: 80)),             // cost 4
+    TransformOp.Resize(800, 600, ResizeAlgorithm.default()),        // cost 5
+    TransformOp.Blur(2.0),                                          // cost 6
+    TransformOp.Sharpen(1.0, 1.0, 0.0),                            // cost 6
+    TransformOp.SmartCrop(400, 400, CropAnchor.SmartFace),          // cost 7
+    TransformOp.Watermark("https://x.com/logo.png", CropAnchor.BottomRight, 0.5, 0.15),  // cost 8
+  ]
+
+  // Costs should be non-decreasing
+  let mut prev_cost: u8 = 0
+  for op in ops {
+    let cost = op.cost()
+    assert(cost >= prev_cost,
+      "Cost ordering violated: {op.name()} cost {cost} < previous {prev_cost}")
+    prev_cost = cost
+  }
+}
+
+// =============================================================================
+// Const fn Verification
+// =============================================================================
+
+@test
+fn test_precomputed_gaussian_kernel() {
+  // Verify the const-computed Gaussian kernel is correct
+  // BLUR_KERNEL_3 is a 3x3 kernel computed at compile time
+  let kernel = BLUR_KERNEL_3
+  assert_eq(kernel.len(), 3)
+  assert_eq(kernel[0].len(), 3)
+
+  // Sum should be approximately 1.0 (normalized)
+  let mut sum: f64 = 0.0
+  for row in kernel {
+    for val in row {
+      sum += val
+    }
+  }
+  assert((sum - 1.0).abs() < 0.001,
+    "Gaussian kernel sum should be ~1.0, got {sum}")
+
+  // Center value should be the largest
+  assert(kernel[1][1] > kernel[0][0])
+  assert(kernel[1][1] > kernel[0][1])
+}
+
+@test
+fn test_precomputed_lanczos_weights() {
+  // Verify const-computed Lanczos weights
+  let weights = LANCZOS3_WEIGHTS
+  assert_eq(weights.len(), 1024)
+
+  // First weight (at x=0) should be 1.0
+  assert((weights[0] - 1.0).abs() < 0.01,
+    "Lanczos weight at x=0 should be ~1.0, got {weights[0]}")
+
+  // Last weight (at x=3) should be ~0.0
+  assert(weights[weights.len() - 1].abs() < 0.01,
+    "Lanczos weight at x=3 should be ~0.0, got {weights[weights.len() - 1]}")
+}
+
+@test
+fn test_precomputed_gamma_lut() {
+  // Verify const-computed gamma lookup tables
+  // sRGB 0 -> linear 0
+  assert_eq(GAMMA_TO_LINEAR[0], 0.0)
+
+  // sRGB 255 -> linear ~1.0
+  assert((GAMMA_TO_LINEAR[255] - 1.0).abs() < 0.001)
+
+  // Round-trip: sRGB -> linear -> sRGB should be identity
+  for i in 0..256 {
+    let linear = GAMMA_TO_LINEAR[i]
+    let linear_byte = (linear * 255.0) as usize
+    let back = GAMMA_TO_SRGB[u32.min(linear_byte, 255) as usize]
+    // Allow +/- 1 for rounding
+    assert((back as i32 - i as i32).abs() <= 1,
+      "Gamma round-trip failed: {i} -> {linear_byte} -> {back}")
+  }
+}

@@ -1,0 +1,285 @@
+// =============================================================================
+// search.tb — Full-text search engine with TF-IDF relevance scoring
+//
+// Demonstrates:
+//   - Shared<T> for thread-safe inverted index
+//   - Complex data structures: inverted index, posting lists
+//   - Pattern matching and functional pipelines
+//   - Pipe operator for data transformation chains
+//   - Arrow functions in map/filter/reduce
+//   - Math operations for TF-IDF scoring
+//   - let mut for mutable local state
+//   - Guard statements for edge cases
+// =============================================================================
+
+import { Shared } from "turbo/sync"
+import { log } from "turbo/log"
+import { Bookmark } from "./models"
+
+// --- Internal Index Structures ---
+
+/// A posting records which bookmark contains a term and where
+@derive(Debug, Clone)
+struct Posting {
+  bookmark_id: u64
+  term_frequency: f64    // TF: count of term in this document
+  field: str             // which field the term came from ("title", "description", etc.)
+  field_boost: f64       // weight multiplier for this field
+}
+
+/// The inverted index state
+struct IndexState {
+  // term -> list of postings
+  index: {str: [Posting]}
+  // bookmark_id -> number of total terms (for normalization)
+  doc_lengths: {u64: u64}
+  // total number of indexed documents
+  doc_count: u64
+  // stop words to filter out
+  stop_words: {str}
+}
+
+// --- SearchEngine ---
+
+pub struct SearchEngine {
+  state: Shared<IndexState>
+}
+
+impl SearchEngine {
+  /// Create a new empty search engine
+  pub fn new() -> SearchEngine {
+    let stop_words = {
+      "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
+      "of", "with", "by", "is", "it", "this", "that", "from", "as", "be",
+      "was", "were", "are", "been", "being", "have", "has", "had", "do",
+      "does", "did", "will", "would", "could", "should", "may", "might",
+      "not", "no", "so", "if", "then", "than", "too", "very",
+    }
+
+    SearchEngine {
+      state: Shared.new(IndexState {
+        index: {:},
+        doc_lengths: {:},
+        doc_count: 0,
+        stop_words,
+      })
+    }
+  }
+
+  /// Index a single bookmark into the search engine
+  pub fn index_bookmark(self, bookmark: Bookmark) {
+    let mut s = self.state.write()
+
+    // Remove old entries for this bookmark if re-indexing
+    self.remove_from_index_internal(s, bookmark.id)
+
+    // Tokenize and index each field with different boosts
+    let fields = [
+      (bookmark.title,       "title",       3.0),  // titles are most important
+      (bookmark.description, "description", 1.5),
+      (bookmark.notes,       "notes",       1.0),
+      (bookmark.url,         "url",         0.5),
+    ]
+
+    let mut total_terms: u64 = 0
+
+    for (text, field_name, boost) in fields {
+      let tokens = tokenize(text, s.stop_words)
+      total_terms += tokens.len() as u64
+
+      // Count term frequencies in this field
+      let term_counts = tokens
+        |> group_by((t) => t)
+        |> map_values((group) => group.len())
+
+      for (term, count) in term_counts {
+        let posting = Posting {
+          bookmark_id: bookmark.id,
+          term_frequency: count as f64,
+          field: field_name,
+          field_boost: boost,
+        }
+
+        match s.index.get(term) {
+          some(postings) => postings.push(posting)
+          none           => s.index[term] = [posting]
+        }
+      }
+    }
+
+    // Index tags with high boost
+    for tag in bookmark.tags {
+      let tag_lower = tag.to_lowercase()
+      total_terms += 1
+
+      let posting = Posting {
+        bookmark_id: bookmark.id,
+        term_frequency: 1.0,
+        field: "tag",
+        field_boost: 4.0,   // tags have highest boost
+      }
+
+      match s.index.get(tag_lower) {
+        some(postings) => postings.push(posting)
+        none           => s.index[tag_lower] = [posting]
+      }
+    }
+
+    s.doc_lengths[bookmark.id] = total_terms
+    s.doc_count += 1
+  }
+
+  /// Remove a bookmark from the index
+  pub fn remove_bookmark(self, bookmark_id: u64) {
+    let mut s = self.state.write()
+    self.remove_from_index_internal(s, bookmark_id)
+  }
+
+  /// Internal helper to remove all postings for a bookmark
+  fn remove_from_index_internal(self, s: &mut IndexState, bookmark_id: u64) {
+    // Remove postings from all terms
+    for (term, postings) in s.index {
+      s.index[term] = postings.filter((p) => p.bookmark_id != bookmark_id)
+    }
+
+    // Clean up empty term entries
+    s.index.retain((_, postings) => !postings.is_empty())
+
+    // Remove document length entry
+    if s.doc_lengths.remove(bookmark_id).is_some() {
+      s.doc_count -= 1
+    }
+  }
+
+  /// Re-index all bookmarks (bulk operation)
+  pub fn reindex_all(self, bookmarks: [Bookmark]) {
+    // Clear the entire index
+    {
+      let mut s = self.state.write()
+      s.index = {:}
+      s.doc_lengths = {:}
+      s.doc_count = 0
+    }
+
+    // Index each bookmark
+    for bookmark in bookmarks {
+      self.index_bookmark(bookmark)
+    }
+
+    log.info("Search index rebuilt", { doc_count: bookmarks.len() })
+  }
+
+  /// Search the index and return scored results
+  /// Returns a list of (bookmark_id, relevance_score) sorted by score descending
+  pub fn search(self, query: str) -> [SearchResult] {
+    let s = self.state.read()
+
+    guard s.doc_count > 0 else {
+      return []
+    }
+
+    let query_tokens = tokenize(query, s.stop_words)
+
+    guard !query_tokens.is_empty() else {
+      return []
+    }
+
+    // Accumulate scores per document using TF-IDF
+    let mut scores: {u64: f64} = {:}
+
+    for token in query_tokens {
+      match s.index.get(token) {
+        some(postings) => {
+          // IDF: log(N / df) where N = total docs, df = docs containing term
+          let doc_freq = postings
+            .map((p) => p.bookmark_id)
+            |> unique()
+            |> len()
+          let idf = (s.doc_count as f64 / doc_freq as f64).ln() + 1.0
+
+          for posting in postings {
+            // TF-IDF with field boost and length normalization
+            let doc_len = s.doc_lengths.get(posting.bookmark_id) ?? 1
+            let tf = posting.term_frequency / (doc_len as f64).sqrt()
+            let score = tf * idf * posting.field_boost
+
+            scores[posting.bookmark_id] = (scores.get(posting.bookmark_id) ?? 0.0) + score
+          }
+        }
+        none => {
+          // Term not in index — try prefix matching for partial queries
+          let prefix_matches = s.index.keys()
+            .filter((k) => k.starts_with(token))
+
+          for matched_term in prefix_matches {
+            let postings = s.index[matched_term]
+            let doc_freq = postings
+              .map((p) => p.bookmark_id)
+              |> unique()
+              |> len()
+            let idf = (s.doc_count as f64 / doc_freq as f64).ln() + 1.0
+
+            for posting in postings {
+              let doc_len = s.doc_lengths.get(posting.bookmark_id) ?? 1
+              let tf = posting.term_frequency / (doc_len as f64).sqrt()
+              // Prefix matches get a 50% discount
+              let score = tf * idf * posting.field_boost * 0.5
+
+              scores[posting.bookmark_id] = (scores.get(posting.bookmark_id) ?? 0.0) + score
+            }
+          }
+        }
+      }
+    }
+
+    // Convert to SearchResult list and sort by score descending
+    scores
+      .entries()
+      .map((id, score) => SearchResult { bookmark_id: id, score })
+      .sort_by((a, b) => b.score.partial_cmp(a.score))
+  }
+
+  /// Get index statistics
+  pub fn stats(self) -> SearchIndexStats {
+    let s = self.state.read()
+    SearchIndexStats {
+      total_documents: s.doc_count,
+      total_terms: s.index.len() as u64,
+      avg_doc_length: if s.doc_count > 0 {
+        s.doc_lengths.values().sum() as f64 / s.doc_count as f64
+      } else {
+        0.0
+      },
+    }
+  }
+}
+
+// --- Search Result ---
+
+@derive(Debug, Clone, Schema, Serialize)
+pub struct SearchResult {
+  bookmark_id: u64
+  score: f64
+}
+
+// --- Index Stats ---
+
+@derive(Debug, Clone, Schema, Serialize)
+pub struct SearchIndexStats {
+  total_documents: u64
+  total_terms: u64
+  avg_doc_length: f64
+}
+
+// --- Tokenizer ---
+
+/// Tokenize a string into lowercase, de-punctuated terms, filtering stop words
+fn tokenize(text: str, stop_words: {str}) -> [str] {
+  text
+    .to_lowercase()
+    .replace_regex("[^a-z0-9\\s-]", "")
+    .split_whitespace()
+    .filter((t) => t.len() >= 2)
+    .filter((t) => !stop_words.contains(t))
+    .collect()
+}

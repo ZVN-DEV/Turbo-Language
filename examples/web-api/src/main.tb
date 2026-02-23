@@ -1,0 +1,219 @@
+// =============================================================================
+// main.tb — Entry point for the Social Bookmarking API
+//
+// Demonstrates:
+//   - Top-level await (like modern JavaScript modules)
+//   - Structured logging with turbo/log
+//   - Configuration loading with defaults and environment overrides
+//   - Server startup with middleware stack composition
+//   - Graceful shutdown with defer
+//   - Error handling with T ! E and match
+//   - Router composition from multiple route modules
+//   - Shared<T> for thread-safe application state
+//   - Health check and metrics endpoints
+//   - Periodic background tasks with spawn
+// =============================================================================
+
+import { Server, Router, Response, Request } from "turbo/http"
+import { log } from "turbo/log"
+import { env } from "turbo/env"
+import { Shared } from "turbo/sync"
+import { DateTime, Duration } from "std/time"
+import { BookmarkStore, bookmark_routes } from "./routes/bookmarks"
+import { UserStore, user_routes } from "./routes/users"
+import { SyncBroadcaster, ws_routes } from "./routes/ws"
+import { SearchEngine } from "./search"
+import { TokenBlacklist, auth_required } from "./auth"
+import { HealthStatus } from "./models"
+import {
+  rate_limiter, cors, request_logger, metrics_collector, Metrics,
+} from "./middleware"
+
+// --- Configuration ---
+
+@derive(Debug, Clone)
+struct Config {
+  host: str
+  port: u16
+  log_level: str
+  rate_limit_rpm: u32
+  cors_origins: [str]
+  jwt_secret: str
+  enable_metrics: bool
+}
+
+fn load_config() -> Config {
+  Config {
+    host:           env.get("BOOKMARK_HOST")       ?? "0.0.0.0",
+    port:           env.get("BOOKMARK_PORT")?.parse<u16>() ?? 8080,
+    log_level:      env.get("BOOKMARK_LOG_LEVEL")  ?? "info",
+    rate_limit_rpm: env.get("BOOKMARK_RATE_LIMIT")?.parse<u32>() ?? 100,
+    cors_origins:   env.get("BOOKMARK_CORS_ORIGINS")
+                      ?.split(",")
+                      ?.collect() ?? ["*"],
+    jwt_secret:     env.get("JWT_SECRET") ?? "bookmark-api-dev-secret-change-in-production",
+    enable_metrics: env.get("BOOKMARK_METRICS")?.parse<bool>() ?? true,
+  }
+}
+
+// --- Application State ---
+
+struct AppState {
+  user_store: Shared<UserStore>
+  bookmark_store: Shared<BookmarkStore>
+  search_engine: SearchEngine
+  broadcaster: Shared<SyncBroadcaster>
+  blacklist: Shared<TokenBlacklist>
+  metrics: Shared<Metrics>
+  start_time: DateTime
+}
+
+// --- Application entry point ---
+
+async fn main() -> () ! Error {
+  // Load configuration
+  let config = load_config()
+
+  // Set up structured logging
+  log.init(level: config.log_level, format: "json")
+  log.info("Starting BookmarkAPI", {
+    version: "0.1.0",
+    host: config.host,
+    port: config.port,
+  })
+
+  // Initialize shared state
+  let metrics = Shared.new(Metrics.new())
+  let search_engine = SearchEngine.new()
+  let blacklist = Shared.new(TokenBlacklist.new())
+  let user_store = Shared.new(UserStore.new())
+  let bookmark_store = Shared.new(BookmarkStore.new(search_engine))
+  let broadcaster = Shared.new(SyncBroadcaster.new(metrics.clone()))
+
+  let app = AppState {
+    user_store: user_store.clone(),
+    bookmark_store: bookmark_store.clone(),
+    search_engine,
+    broadcaster: broadcaster.clone(),
+    blacklist: blacklist.clone(),
+    metrics: metrics.clone(),
+    start_time: DateTime.now(),
+  }
+
+  // --- Build Router ---
+
+  let router = Router.new()
+
+  // ── Health Check (no auth) ──
+
+  router.get("/health", async (req) => {
+    let status = HealthStatus {
+      status: "healthy",
+      version: "0.1.0",
+      uptime_seconds: DateTime.now().duration_since(app.start_time).as_secs(),
+      total_bookmarks: await bookmark_store.read().total_count(),
+      total_users: await user_store.read().count(),
+      active_ws_connections: broadcaster.read().connection_count(),
+    }
+    Response.json(status)
+  })
+
+  // ── Metrics endpoint (no auth, optionally enabled) ──
+
+  if config.enable_metrics {
+    router.get("/metrics", async (req) => {
+      let snapshot = metrics.read().snapshot()
+      Response.json(snapshot)
+    })
+  }
+
+  // ── Public auth routes (no auth required) ──
+
+  let auth_router = user_routes(user_store.clone(), blacklist.clone())
+  router.mount("/", auth_router)
+
+  // ── Protected routes (auth required) ──
+
+  let protected = Router.new()
+  protected.use(auth_required(blacklist.clone()))
+
+  // Mount bookmark CRUD routes
+  let bm_router = bookmark_routes(bookmark_store.clone(), broadcaster.clone())
+  protected.mount("/", bm_router)
+
+  // Mount user profile/settings routes (already behind auth)
+  let profile_router = user_routes(user_store.clone(), blacklist.clone())
+  protected.mount("/", profile_router)
+
+  router.mount("/api/v1", protected)
+
+  // ── WebSocket routes ──
+
+  let ws_router = ws_routes(broadcaster.clone())
+  router.mount("/", ws_router)
+
+  // --- Middleware Stack ---
+
+  let server = Server.new(router, middleware: [
+    request_logger(),
+    cors(CorsConfig {
+      allowed_origins: config.cors_origins,
+      allowed_methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+      allowed_headers: ["Content-Type", "Authorization", "X-Request-ID"],
+      expose_headers: ["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-Request-ID", "X-Response-Time"],
+      max_age: 86400,
+      allow_credentials: true,
+    }),
+    rate_limiter(config.rate_limit_rpm, window_seconds: 60),
+    metrics_collector(metrics.clone()),
+  ])
+
+  // --- Background Tasks ---
+
+  // Periodic token blacklist cleanup (every 5 minutes)
+  let cleanup_handle = spawn async {
+    loop {
+      await sleep(Duration.minutes(5))
+      blacklist.write().cleanup()
+      log.debug("Token blacklist cleaned up")
+    }
+  }
+
+  // Periodic search index stats logging (every 10 minutes)
+  let stats_handle = spawn async {
+    loop {
+      await sleep(Duration.minutes(10))
+      let stats = search_engine.stats()
+      log.info("Search index stats", {
+        documents: stats.total_documents,
+        terms: stats.total_terms,
+        avg_doc_length: stats.avg_doc_length,
+      })
+    }
+  }
+
+  // --- Graceful Shutdown ---
+
+  defer {
+    log.info("Shutting down gracefully")
+    cleanup_handle.cancel()
+    stats_handle.cancel()
+    await server.shutdown()
+    log.info("Server stopped")
+  }
+
+  // --- Start ---
+
+  log.info("Server ready", {
+    url: "http://{config.host}:{config.port}",
+    health: "http://{config.host}:{config.port}/health",
+    metrics: if config.enable_metrics {
+      "http://{config.host}:{config.port}/metrics"
+    } else {
+      "disabled"
+    },
+    websocket: "ws://{config.host}:{config.port}/ws",
+  })
+
+  await server.listen(config.port, host: config.host)
+}

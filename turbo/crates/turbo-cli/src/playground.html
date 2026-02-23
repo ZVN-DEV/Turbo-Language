@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Turbo Playground</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-primary:#0e0e12;
+  --bg-secondary:#16161e;
+  --bg-tertiary:#1e1e2a;
+  --bg-hover:#252536;
+  --border:#2a2a3c;
+  --text-primary:#e4e4ef;
+  --text-secondary:#9090a8;
+  --text-muted:#5c5c72;
+  --accent:#a855f7;
+  --accent-dim:#7c3aed;
+  --accent-glow:rgba(168,85,247,0.15);
+  --success:#34d399;
+  --error:#f87171;
+  --warning:#fbbf24;
+  --font-mono:'Menlo','Cascadia Code','Fira Code','JetBrains Mono','Consolas',monospace;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',sans-serif;
+  --radius:8px;
+  --transition:150ms ease;
+}
+html,body{height:100%;overflow:hidden}
+body{
+  font-family:var(--font-sans);
+  background:var(--bg-primary);
+  color:var(--text-primary);
+  display:flex;
+  flex-direction:column;
+}
+
+/* ── Header ── */
+header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:0 20px;
+  height:52px;
+  min-height:52px;
+  background:var(--bg-secondary);
+  border-bottom:1px solid var(--border);
+  gap:12px;
+  flex-wrap:nowrap;
+}
+.brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.brand-logo{
+  width:28px;height:28px;
+  background:linear-gradient(135deg,var(--accent),var(--accent-dim));
+  border-radius:6px;
+  display:flex;align-items:center;justify-content:center;
+  font-weight:800;font-size:16px;color:#fff;
+  box-shadow:0 0 16px var(--accent-glow);
+}
+.brand-name{font-size:16px;font-weight:700;letter-spacing:-0.3px;color:var(--text-primary)}
+.brand-tag{
+  font-size:10px;font-weight:600;
+  background:var(--accent-glow);color:var(--accent);
+  padding:2px 7px;border-radius:10px;
+  letter-spacing:0.5px;text-transform:uppercase;
+}
+
+.header-controls{display:flex;align-items:center;gap:10px;flex-shrink:0}
+
+select,button{
+  font-family:var(--font-sans);
+  font-size:13px;
+  border:none;outline:none;
+  cursor:pointer;
+  transition:all var(--transition);
+}
+
+.examples-select{
+  background:var(--bg-tertiary);
+  color:var(--text-secondary);
+  padding:7px 12px;
+  border-radius:var(--radius);
+  border:1px solid var(--border);
+  min-width:160px;
+}
+.examples-select:hover{border-color:var(--accent-dim);color:var(--text-primary)}
+.examples-select:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-glow)}
+
+.btn-run{
+  display:flex;align-items:center;gap:6px;
+  background:linear-gradient(135deg,var(--accent),var(--accent-dim));
+  color:#fff;
+  padding:7px 18px;
+  border-radius:var(--radius);
+  font-weight:600;
+  letter-spacing:-0.2px;
+}
+.btn-run:hover{filter:brightness(1.15);transform:translateY(-1px);box-shadow:0 4px 16px var(--accent-glow)}
+.btn-run:active{transform:translateY(0);filter:brightness(0.95)}
+.btn-run:disabled{opacity:0.5;cursor:not-allowed;transform:none;filter:none}
+.btn-run .play-icon{font-size:11px}
+.btn-run .shortcut{
+  font-size:10px;opacity:0.7;
+  background:rgba(255,255,255,0.15);
+  padding:1px 5px;border-radius:4px;
+  font-weight:500;
+}
+
+.btn-hint{
+  background:transparent;
+  color:var(--text-muted);
+  padding:7px 10px;
+  border-radius:var(--radius);
+  border:1px solid var(--border);
+  font-size:12px;
+}
+.btn-hint:hover{color:var(--text-secondary);border-color:var(--text-muted)}
+
+/* ── Main Layout ── */
+.workspace{
+  flex:1;
+  display:flex;
+  overflow:hidden;
+  position:relative;
+}
+
+/* ── Panel ── */
+.panel{
+  display:flex;
+  flex-direction:column;
+  min-width:0;
+  overflow:hidden;
+}
+.panel-editor{flex:1 1 50%}
+.panel-output{flex:1 1 50%;border-left:1px solid var(--border)}
+
+.panel-bar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:0 16px;
+  height:36px;min-height:36px;
+  background:var(--bg-secondary);
+  border-bottom:1px solid var(--border);
+}
+.panel-title{
+  font-size:11px;font-weight:600;
+  text-transform:uppercase;letter-spacing:0.8px;
+  color:var(--text-muted);
+}
+.panel-meta{font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:8px}
+.status-dot{
+  width:7px;height:7px;border-radius:50%;
+  background:var(--text-muted);
+  display:inline-block;
+}
+.status-dot.success{background:var(--success)}
+.status-dot.error{background:var(--error)}
+.status-dot.running{background:var(--warning);animation:pulse 1s infinite}
+
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+
+/* ── Editor Area ── */
+.editor-wrap{
+  flex:1;
+  position:relative;
+  overflow:hidden;
+  background:var(--bg-primary);
+}
+.line-numbers{
+  position:absolute;
+  top:0;left:0;bottom:0;
+  width:48px;
+  background:var(--bg-secondary);
+  border-right:1px solid var(--border);
+  padding:16px 0;
+  overflow:hidden;
+  pointer-events:none;
+  z-index:2;
+  font-family:var(--font-mono);
+  font-size:13px;
+  line-height:1.6;
+  color:var(--text-muted);
+  text-align:right;
+  user-select:none;
+}
+.line-numbers span{display:block;padding-right:12px}
+
+#editor{
+  position:absolute;
+  top:0;left:0;right:0;bottom:0;
+  padding:16px 16px 16px 60px;
+  background:transparent;
+  color:var(--text-primary);
+  font-family:var(--font-mono);
+  font-size:13px;
+  line-height:1.6;
+  border:none;outline:none;
+  resize:none;
+  white-space:pre;
+  overflow:auto;
+  tab-size:4;
+  -moz-tab-size:4;
+  z-index:1;
+  caret-color:var(--accent);
+}
+#editor::placeholder{color:var(--text-muted)}
+#editor::selection{background:rgba(168,85,247,0.25)}
+
+/* ── Output Area ── */
+.output-wrap{
+  flex:1;
+  position:relative;
+  overflow:hidden;
+  background:var(--bg-primary);
+}
+#output{
+  position:absolute;
+  top:0;left:0;right:0;bottom:0;
+  padding:16px;
+  font-family:var(--font-mono);
+  font-size:13px;
+  line-height:1.6;
+  color:var(--text-primary);
+  overflow:auto;
+  white-space:pre-wrap;
+  word-break:break-word;
+}
+#output .stdout{color:var(--text-primary)}
+#output .stderr{color:var(--error)}
+#output .meta{color:var(--text-muted);font-style:italic;font-size:12px}
+#output .welcome{color:var(--text-secondary)}
+
+/* ── Loading Spinner ── */
+.spinner-overlay{
+  position:absolute;
+  top:0;left:0;right:0;bottom:0;
+  background:rgba(14,14,18,0.7);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  z-index:10;
+  backdrop-filter:blur(2px);
+}
+.spinner-overlay.hidden{display:none}
+.spinner{
+  width:32px;height:32px;
+  border:3px solid var(--border);
+  border-top-color:var(--accent);
+  border-radius:50%;
+  animation:spin 0.7s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Resize Handle ── */
+.resize-handle{
+  width:4px;
+  cursor:col-resize;
+  background:transparent;
+  position:relative;
+  z-index:5;
+  flex-shrink:0;
+}
+.resize-handle:hover,
+.resize-handle.active{background:var(--accent)}
+
+/* ── Syntax Hint Panel ── */
+.hint-overlay{
+  position:fixed;
+  top:0;left:0;right:0;bottom:0;
+  background:rgba(0,0,0,0.5);
+  z-index:100;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  backdrop-filter:blur(4px);
+}
+.hint-overlay.hidden{display:none}
+.hint-card{
+  background:var(--bg-secondary);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:28px 32px;
+  max-width:520px;
+  width:90%;
+  max-height:80vh;
+  overflow-y:auto;
+  box-shadow:0 20px 60px rgba(0,0,0,0.5);
+}
+.hint-card h2{
+  font-size:16px;
+  color:var(--accent);
+  margin-bottom:16px;
+  display:flex;align-items:center;gap:8px;
+}
+.hint-card h3{font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin:14px 0 6px}
+.hint-card code{
+  display:block;
+  font-family:var(--font-mono);
+  font-size:12px;
+  color:var(--text-secondary);
+  background:var(--bg-primary);
+  padding:6px 10px;
+  border-radius:6px;
+  margin:3px 0;
+  line-height:1.5;
+}
+.hint-card .close-hint{
+  float:right;
+  background:var(--bg-tertiary);
+  color:var(--text-secondary);
+  border:none;
+  padding:4px 12px;
+  border-radius:6px;
+  cursor:pointer;
+  font-size:12px;
+  font-family:var(--font-sans);
+}
+.hint-card .close-hint:hover{background:var(--bg-hover);color:var(--text-primary)}
+
+/* ── Footer ── */
+footer{
+  height:28px;min-height:28px;
+  background:var(--bg-secondary);
+  border-top:1px solid var(--border);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:0 16px;
+  font-size:11px;
+  color:var(--text-muted);
+}
+
+/* ── Responsive ── */
+@media(max-width:768px){
+  .workspace{flex-direction:column}
+  .panel-editor,.panel-output{flex:1 1 50%}
+  .panel-output{border-left:none;border-top:1px solid var(--border)}
+  .resize-handle{display:none}
+  header{padding:0 12px;gap:8px;flex-wrap:wrap;height:auto;min-height:52px;padding-top:8px;padding-bottom:8px}
+  .brand-tag{display:none}
+  .shortcut{display:none}
+  .examples-select{min-width:120px}
+}
+@media(max-width:480px){
+  .btn-hint{display:none}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-logo">T</div>
+    <span class="brand-name">Turbo Playground</span>
+    <span class="brand-tag">Beta</span>
+    <a href="/benchmarks" style="font-size:12px;color:var(--text-secondary);text-decoration:none;padding:4px 10px;border:1px solid var(--border);border-radius:6px;margin-left:8px;transition:all 150ms ease">Benchmarks</a>
+  </div>
+  <div class="header-controls">
+    <select class="examples-select" id="examples" aria-label="Load example">
+      <option value="">Load Example...</option>
+      <option value="hello">Hello World</option>
+      <option value="fizzbuzz">FizzBuzz</option>
+      <option value="fibonacci">Fibonacci</option>
+      <option value="prime">Prime Sieve</option>
+      <option value="math">Math Utils</option>
+      <option value="collatz">Collatz Conjecture</option>
+      <option value="typeerror">Type Error Demo</option>
+      <option value="gcd">GCD &amp; LCM</option>
+    </select>
+    <button class="btn-hint" id="btnHint" title="Syntax cheat sheet">? Syntax</button>
+    <button class="btn-run" id="btnRun">
+      <span class="play-icon">&#9654;</span>
+      Run
+      <span class="shortcut">&#8984;&#9166;</span>
+    </button>
+  </div>
+</header>
+
+<div class="workspace" id="workspace">
+  <div class="panel panel-editor" id="panelEditor">
+    <div class="panel-bar">
+      <span class="panel-title">Editor</span>
+      <span class="panel-meta"><span id="charCount">0 chars</span></span>
+    </div>
+    <div class="editor-wrap">
+      <div class="line-numbers" id="lineNumbers"></div>
+      <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="Write your Turbo code here..."></textarea>
+    </div>
+  </div>
+
+  <div class="resize-handle" id="resizeHandle"></div>
+
+  <div class="panel panel-output" id="panelOutput">
+    <div class="panel-bar">
+      <span class="panel-title">Output</span>
+      <span class="panel-meta">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Ready</span>
+        <span id="execTime"></span>
+      </span>
+    </div>
+    <div class="output-wrap">
+      <div id="output"><span class="welcome">Press Run or Cmd+Enter to execute your code.</span></div>
+      <div class="spinner-overlay hidden" id="spinner"><div class="spinner"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Syntax Hint Overlay -->
+<div class="hint-overlay hidden" id="hintOverlay">
+  <div class="hint-card">
+    <button class="close-hint" id="closeHint">Close</button>
+    <h2>Turbo Quick Reference</h2>
+
+    <h3>Functions</h3>
+    <code>fn greet(name: str) -> str { ... }</code>
+
+    <h3>Variables</h3>
+    <code>let x = 10</code>
+    <code>let mut count = 0</code>
+
+    <h3>Types</h3>
+    <code>i64, f64, bool, str</code>
+
+    <h3>Control Flow</h3>
+    <code>if cond { ... } else { ... }</code>
+    <code>while cond { ... }</code>
+
+    <h3>Optional Types</h3>
+    <code>let name: str? = none</code>
+    <code>let val = some(42)</code>
+
+    <h3>Result Types</h3>
+    <code>fn read() -> str ! Error { ... }</code>
+    <code>ok(value), err(reason)</code>
+
+    <h3>Printing &amp; Assertions</h3>
+    <code>print("Hello, {name}")</code>
+    <code>assert(x == 42)</code>
+
+    <h3>Collections</h3>
+    <code>[i64]  &mdash; arrays</code>
+    <code>{str: i64}  &mdash; maps</code>
+    <code>{i64}  &mdash; sets</code>
+
+    <h3>Imports</h3>
+    <code>import { sort } from "std/algo"</code>
+  </div>
+</div>
+
+<footer>
+  <span>Turbo Language &mdash; Design Phase</span>
+  <span id="footerRight">Tab inserts 4 spaces</span>
+</footer>
+
+<script>
+(function(){
+"use strict";
+
+// ── Example Programs ──
+const EXAMPLES = {
+hello: `fn main() {
+    print("Hello, world!")
+}`,
+
+fizzbuzz: `fn fizzbuzz(n: i64) {
+    let mut i = 1
+    while i <= n {
+        if i % 15 == 0 {
+            print("FizzBuzz")
+        } else {
+            if i % 3 == 0 {
+                print("Fizz")
+            } else {
+                if i % 5 == 0 {
+                    print("Buzz")
+                } else {
+                    print(i)
+                }
+            }
+        }
+        i += 1
+    }
+}
+
+fn main() {
+    fizzbuzz(20)
+}`,
+
+fibonacci: `fn fib(n: i64) -> i64 {
+    if n <= 1 {
+        n
+    } else {
+        fib(n - 1) + fib(n - 2)
+    }
+}
+
+fn main() {
+    let mut i = 0
+    while i <= 15 {
+        print(fib(i))
+        i += 1
+    }
+}`,
+
+prime: `fn is_prime(n: i64) -> bool {
+    if n < 2 { return false }
+    let mut i = 2
+    while i * i <= n {
+        if n % i == 0 {
+            return false
+        }
+        i += 1
+    }
+    true
+}
+
+fn main() {
+    let mut n = 2
+    let mut count = 0
+    while n <= 100 {
+        if is_prime(n) {
+            print(n)
+            count += 1
+        }
+        n += 1
+    }
+    print("Found 25 primes under 100!")
+}`,
+
+math: `fn abs(x: i64) -> i64 {
+    if x < 0 { 0 - x } else { x }
+}
+
+fn max(a: i64, b: i64) -> i64 {
+    if a > b { a } else { b }
+}
+
+fn min(a: i64, b: i64) -> i64 {
+    if a < b { a } else { b }
+}
+
+fn pow(base: i64, exp: i64) -> i64 {
+    let mut result = 1
+    let mut i = 0
+    while i < exp {
+        result = result * base
+        i += 1
+    }
+    result
+}
+
+fn main() {
+    assert(abs(-42) == 42)
+    assert(max(10, 20) == 20)
+    assert(min(10, 20) == 10)
+    assert(pow(2, 10) == 1024)
+    print("All math utils passed!")
+}`,
+
+collatz: `fn collatz_steps(n: i64) -> i64 {
+    let mut current = n
+    let mut steps = 0
+    while current != 1 {
+        if current % 2 == 0 {
+            current = current / 2
+        } else {
+            current = current * 3 + 1
+        }
+        steps += 1
+    }
+    steps
+}
+
+fn main() {
+    print(collatz_steps(27))
+    assert(collatz_steps(1) == 0)
+    assert(collatz_steps(27) == 111)
+    print("Collatz verified!")
+}`,
+
+typeerror: `fn main() {
+    let x = "hello"
+    let y = x + 1
+    print(y)
+}`,
+
+gcd: `fn gcd(a: i64, b: i64) -> i64 {
+    let mut x = a
+    let mut y = b
+    while y != 0 {
+        let temp = y
+        y = x % y
+        x = temp
+    }
+    x
+}
+
+fn lcm(a: i64, b: i64) -> i64 {
+    a / gcd(a, b) * b
+}
+
+fn main() {
+    assert(gcd(12, 8) == 4)
+    assert(gcd(100, 75) == 25)
+    assert(lcm(4, 6) == 12)
+    assert(lcm(12, 18) == 36)
+    print("GCD/LCM verified!")
+}`
+};
+
+// ── DOM Elements ──
+const editor = document.getElementById("editor");
+const output = document.getElementById("output");
+const lineNumbers = document.getElementById("lineNumbers");
+const btnRun = document.getElementById("btnRun");
+const examples = document.getElementById("examples");
+const spinner = document.getElementById("spinner");
+const statusDot = document.getElementById("statusDot");
+const statusText = document.getElementById("statusText");
+const execTime = document.getElementById("execTime");
+const charCount = document.getElementById("charCount");
+const btnHint = document.getElementById("btnHint");
+const hintOverlay = document.getElementById("hintOverlay");
+const closeHint = document.getElementById("closeHint");
+const resizeHandle = document.getElementById("resizeHandle");
+const panelEditor = document.getElementById("panelEditor");
+const workspace = document.getElementById("workspace");
+
+// ── Line Numbers ──
+function updateLineNumbers() {
+  const lines = editor.value.split("\n").length;
+  let html = "";
+  for (let i = 1; i <= lines; i++) {
+    html += "<span>" + i + "</span>";
+  }
+  lineNumbers.innerHTML = html;
+}
+
+function syncScroll() {
+  lineNumbers.style.transform = "translateY(" + (-editor.scrollTop) + "px)";
+}
+
+// ── Char Count ──
+function updateCharCount() {
+  const len = editor.value.length;
+  charCount.textContent = len + " char" + (len !== 1 ? "s" : "");
+}
+
+// ── Tab Support ──
+editor.addEventListener("keydown", function(e) {
+  if (e.key === "Tab") {
+    e.preventDefault();
+    const start = this.selectionStart;
+    const end = this.selectionEnd;
+    const val = this.value;
+    this.value = val.substring(0, start) + "    " + val.substring(end);
+    this.selectionStart = this.selectionEnd = start + 4;
+    updateLineNumbers();
+    updateCharCount();
+  }
+});
+
+editor.addEventListener("input", function() {
+  updateLineNumbers();
+  updateCharCount();
+});
+
+editor.addEventListener("scroll", syncScroll);
+
+// ── Examples Dropdown ──
+examples.addEventListener("change", function() {
+  const key = this.value;
+  if (key && EXAMPLES[key]) {
+    editor.value = EXAMPLES[key];
+    updateLineNumbers();
+    updateCharCount();
+    syncScroll();
+    editor.focus();
+  }
+  this.value = "";
+});
+
+// ── Run ──
+let isRunning = false;
+
+async function runCode() {
+  if (isRunning) return;
+  const source = editor.value.trim();
+  if (!source) {
+    output.innerHTML = '<span class="stderr">No code to run.</span>';
+    return;
+  }
+
+  isRunning = true;
+  btnRun.disabled = true;
+  spinner.classList.remove("hidden");
+  statusDot.className = "status-dot running";
+  statusText.textContent = "Running...";
+  execTime.textContent = "";
+  output.innerHTML = "";
+
+  const startTime = performance.now();
+
+  try {
+    const resp = await fetch("/api/run", {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: source
+    });
+
+    const elapsed = performance.now() - startTime;
+    const data = await resp.json();
+
+    let html = "";
+
+    if (data.stdout && data.stdout.trim()) {
+      html += '<span class="stdout">' + escapeHtml(data.stdout) + '</span>';
+    }
+
+    if (data.stderr && data.stderr.trim()) {
+      if (html) html += "\n";
+      html += '<span class="stderr">' + escapeHtml(data.stderr) + '</span>';
+    }
+
+    if (!html) {
+      html = '<span class="meta">Program finished with no output.</span>';
+    }
+
+    html += '\n<span class="meta">---\n';
+    if (data.success) {
+      html += 'Exited successfully';
+    } else {
+      html += 'Exited with error';
+    }
+    html += ' in ' + formatTime(elapsed) + '</span>';
+
+    output.innerHTML = html;
+
+    statusDot.className = "status-dot " + (data.success ? "success" : "error");
+    statusText.textContent = data.success ? "Success" : "Error";
+    execTime.textContent = formatTime(elapsed);
+
+  } catch (err) {
+    const elapsed = performance.now() - startTime;
+    output.innerHTML = '<span class="stderr">Failed to connect to server.\n' + escapeHtml(err.message) + '</span>';
+    statusDot.className = "status-dot error";
+    statusText.textContent = "Connection Error";
+    execTime.textContent = formatTime(elapsed);
+  } finally {
+    isRunning = false;
+    btnRun.disabled = false;
+    spinner.classList.add("hidden");
+  }
+}
+
+function formatTime(ms) {
+  if (ms < 1) return ms.toFixed(3) + "ms";
+  if (ms < 1000) return ms.toFixed(1) + "ms";
+  return (ms / 1000).toFixed(2) + "s";
+}
+
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+btnRun.addEventListener("click", runCode);
+
+// ── Keyboard Shortcut ──
+document.addEventListener("keydown", function(e) {
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    e.preventDefault();
+    runCode();
+  }
+  if (e.key === "Escape") {
+    hintOverlay.classList.add("hidden");
+  }
+});
+
+// ── Hint Panel ──
+btnHint.addEventListener("click", function() {
+  hintOverlay.classList.toggle("hidden");
+});
+closeHint.addEventListener("click", function() {
+  hintOverlay.classList.add("hidden");
+});
+hintOverlay.addEventListener("click", function(e) {
+  if (e.target === hintOverlay) {
+    hintOverlay.classList.add("hidden");
+  }
+});
+
+// ── Resize Handle ──
+let resizing = false;
+let startX = 0;
+let startWidth = 0;
+
+resizeHandle.addEventListener("mousedown", function(e) {
+  resizing = true;
+  startX = e.clientX;
+  startWidth = panelEditor.getBoundingClientRect().width;
+  resizeHandle.classList.add("active");
+  document.body.style.cursor = "col-resize";
+  document.body.style.userSelect = "none";
+  e.preventDefault();
+});
+
+document.addEventListener("mousemove", function(e) {
+  if (!resizing) return;
+  const totalWidth = workspace.getBoundingClientRect().width;
+  const delta = e.clientX - startX;
+  let newWidth = startWidth + delta;
+  const minW = 200;
+  const maxW = totalWidth - 200;
+  newWidth = Math.max(minW, Math.min(maxW, newWidth));
+  const pct = (newWidth / totalWidth) * 100;
+  panelEditor.style.flex = "0 0 " + pct + "%";
+});
+
+document.addEventListener("mouseup", function() {
+  if (!resizing) return;
+  resizing = false;
+  resizeHandle.classList.remove("active");
+  document.body.style.cursor = "";
+  document.body.style.userSelect = "";
+});
+
+// ── Detect OS for shortcut label ──
+(function() {
+  const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+  const shortcutSpans = document.querySelectorAll(".shortcut");
+  shortcutSpans.forEach(function(el) {
+    el.textContent = isMac ? "\u2318\u23CE" : "Ctrl\u23CE";
+  });
+  document.getElementById("footerRight").textContent = "Tab inserts 4 spaces \u00B7 " + (isMac ? "Cmd" : "Ctrl") + "+Enter to run";
+})();
+
+// ── Init ──
+editor.value = EXAMPLES.hello;
+updateLineNumbers();
+updateCharCount();
+editor.focus();
+
+})();
+</script>
+</body>
+</html>

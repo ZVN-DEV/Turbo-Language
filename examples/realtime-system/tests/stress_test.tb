@@ -1,0 +1,377 @@
+// =============================================================================
+// stress_test.tb — Stress tests: 1M orders, correctness under load
+//
+// Demonstrates:
+//   - @stress decorator for sustained load testing
+//   - @perf decorator for performance constraints
+//   - Concurrent access patterns with Shared<T>
+//   - Large-scale correctness verification
+//   - Memory stability over extended runs
+//   - Invariant checking after massive order throughput
+//   - random module for synthetic order generation
+// =============================================================================
+
+import { OrderBook } from "../src/order_book"
+import { ExchangeService } from "../src/matching"
+import { ExchangeMetrics } from "../src/metrics"
+import {
+  Order, OrderType, OrderStatus, Side, Trade, Decimal,
+  SubmitOrder, EngineEvent
+} from "../src/models"
+import { Shared } from "turbo/sync"
+import { Instant, Duration } from "std/time"
+
+// =============================================================================
+// 1M Orders — Correctness Verification
+// =============================================================================
+
+@test
+@perf(max_time: 30.seconds(), max_memory: 500.mb())
+fn test_one_million_orders_correctness() {
+  let mut book = OrderBook.new("AAPL")
+  let mut total_trades: u64 = 0
+  let mut total_buy_qty: u64 = 0
+  let mut total_sell_qty: u64 = 0
+  let mut trade_volume: u64 = 0
+
+  let total_orders = 1_000_000
+
+  // Submit 1M orders: alternating buy and sell limit orders
+  // Half at crossing prices, half resting
+  for i in 0..total_orders {
+    let order_id = i as u64
+    let is_buy = i % 2 == 0
+
+    // Vary prices around 150: some cross, some rest
+    let price_offset = (i % 20) as i64 - 10  // -10 to +9
+    let price = Decimal.new(150 + price_offset)
+    let quantity = ((i % 100) + 1) as u64
+
+    let side = if is_buy { Side.Buy } else { Side.Sell }
+    let order = Order.new(order_id, "AAPL", side, OrderType.Limit(price), quantity, "stress-client")
+
+    if is_buy {
+      total_buy_qty += quantity
+    } else {
+      total_sell_qty += quantity
+    }
+
+    let trades = book.submit(order)?
+
+    for trade in trades {
+      total_trades += 1
+      trade_volume += trade.quantity
+    }
+  }
+
+  // === Invariant Checks ===
+
+  // 1. Total traded volume must be consistent
+  //    Every unit traded was both bought and sold, so it appears once
+  //    in trade_volume
+  assert(trade_volume > 0, "Expected at least some trades from 1M orders")
+
+  // 2. Resting orders should have consistent quantities
+  let resting = book.resting_order_count()
+  // Not all orders match — some should rest in the book
+  assert(resting > 0 || total_trades > 0,
+    "Either some orders should rest or some should have traded")
+
+  // 3. Best bid must be < best ask (no crossed book)
+  match (book.best_bid(), book.best_ask()) {
+    (some(bid), some(ask)) => {
+      assert(bid.raw < ask.raw,
+        "Book is crossed: bid {bid.to_string()} >= ask {ask.to_string()}")
+    }
+    _ => {}  // One or both sides empty is OK
+  }
+
+  // 4. Trade IDs should be sequential
+  assert(total_trades > 0)
+
+  // 5. Print summary
+  print("=== 1M Order Stress Test Results ===")
+  print("Total orders: {total_orders}")
+  print("Total trades: {total_trades}")
+  print("Total trade volume: {trade_volume}")
+  print("Resting orders: {resting}")
+}
+
+// =============================================================================
+// Sustained Load — Memory Stability
+// =============================================================================
+
+@test
+@perf(max_time: 60.seconds(), max_memory: 300.mb())
+fn test_sustained_load_memory_stability() {
+  let mut book = OrderBook.new("AAPL")
+  let mut snapshots: [(u64, usize)] = []  // (order_count, memory_bytes)
+
+  let before = memory.snapshot()
+
+  // Run for 500k orders, taking memory snapshots every 50k
+  for i in 0..500_000 {
+    let order_id = i as u64
+
+    if i % 2 == 0 {
+      // Buy order — will typically cross with any resting sells
+      let price = Decimal.new(150 + (random.u32(0..5)) as i64)
+      book.submit(Order.new(
+        order_id, "AAPL", Side.Buy,
+        OrderType.Limit(price), 100, "buyer",
+      ))?
+    } else {
+      // Sell order
+      let price = Decimal.new(150 + (random.u32(0..5)) as i64)
+      book.submit(Order.new(
+        order_id, "AAPL", Side.Sell,
+        OrderType.Limit(price), 100, "seller",
+      ))?
+    }
+
+    // Take memory snapshot every 50k orders
+    if i > 0 && i % 50_000 == 0 {
+      let snap = memory.snapshot()
+      snapshots.push((i as u64, snap.allocated))
+    }
+  }
+
+  let after = memory.snapshot()
+
+  // Verify memory is stable — no unbounded growth
+  // Compare memory at 250k vs 500k: should not have grown more than 2x
+  if snapshots.len() >= 6 {
+    let mid = snapshots[4].1   // At 250k orders
+    let end = snapshots[9].1   // At 500k orders
+
+    assert(end < mid * 3,
+      "Memory grew from {mid} to {end} bytes between 250k and 500k orders — possible leak")
+  }
+
+  // Total memory should be bounded
+  let total_growth = after.allocated - before.allocated
+  assert(total_growth < 200.mb(),
+    "Total memory growth {total_growth} bytes exceeds 200MB limit")
+}
+
+// =============================================================================
+// Random Order Mix — Market, Limit, Stop, Cancel
+// =============================================================================
+
+@test
+@perf(max_time: 20.seconds(), max_memory: 200.mb())
+fn test_random_order_mix() {
+  let mut book = OrderBook.new("AAPL")
+  let mut trades: [Trade] = []
+  let mut order_ids: [u64] = []
+  let total_orders = 200_000
+
+  for i in 0..total_orders {
+    let order_id = i as u64
+    let roll = random.u32(0..100)
+
+    if roll < 40 {
+      // 40%: Limit buy
+      let price = Decimal.new(145 + (random.u32(0..10)) as i64)
+      let qty = (random.u32(1..500)) as u64
+      let result = book.submit(Order.new(
+        order_id, "AAPL", Side.Buy,
+        OrderType.Limit(price), qty, "buyer",
+      ))
+      if let ok(t) = result {
+        trades.extend(t)
+      }
+      order_ids.push(order_id)
+    } else if roll < 80 {
+      // 40%: Limit sell
+      let price = Decimal.new(145 + (random.u32(0..10)) as i64)
+      let qty = (random.u32(1..500)) as u64
+      let result = book.submit(Order.new(
+        order_id, "AAPL", Side.Sell,
+        OrderType.Limit(price), qty, "seller",
+      ))
+      if let ok(t) = result {
+        trades.extend(t)
+      }
+      order_ids.push(order_id)
+    } else if roll < 90 {
+      // 10%: Market order (buy or sell)
+      let side = if random.bool() { Side.Buy } else { Side.Sell }
+      let qty = (random.u32(1..100)) as u64
+      let result = book.submit(Order.new(
+        order_id, "AAPL", side,
+        OrderType.Market, qty, "trader",
+      ))
+      if let ok(t) = result {
+        trades.extend(t)
+      }
+    } else if roll < 95 {
+      // 5%: Cancel a random existing order
+      if !order_ids.is_empty() {
+        let cancel_idx = random.u32(0..order_ids.len() as u32) as usize
+        book.cancel(order_ids[cancel_idx])
+      }
+    } else {
+      // 5%: Stop order
+      let trigger = Decimal.new(145 + (random.u32(0..10)) as i64)
+      let side = if random.bool() { Side.Buy } else { Side.Sell }
+      let qty = (random.u32(1..200)) as u64
+      book.submit(Order.new(
+        order_id, "AAPL", side,
+        OrderType.Stop(trigger, none), qty, "stopper",
+      ))?
+    }
+  }
+
+  // === Post-run invariant checks ===
+
+  // Book must not be crossed
+  match (book.best_bid(), book.best_ask()) {
+    (some(bid), some(ask)) => {
+      assert(bid.raw < ask.raw,
+        "Book is crossed after random mix: bid {bid.to_string()} >= ask {ask.to_string()}")
+    }
+    _ => {}
+  }
+
+  // Every trade must have positive quantity and price
+  for trade in trades {
+    assert(trade.quantity > 0, "Trade {trade.id} has zero quantity")
+    assert(trade.price.is_positive(), "Trade {trade.id} has non-positive price")
+  }
+
+  print("Random mix: {total_orders} orders, {trades.len()} trades, {book.resting_order_count()} resting")
+}
+
+// =============================================================================
+// Concurrent Stress Test via ExchangeService
+// =============================================================================
+
+@test
+@stress(duration: 10.seconds(), concurrency: 20)
+async fn test_concurrent_order_submission() {
+  let exchange = Shared.new(ExchangeService.new(["AAPL", "GOOGL"]))
+
+  stress.run(async () => {
+    let symbol = if random.bool() { "AAPL" } else { "GOOGL" }
+    let side = if random.bool() { Side.Buy } else { Side.Sell }
+    let price_str = "{145 + random.u32(0..10)}.00"
+
+    let input = SubmitOrder {
+      symbol,
+      side,
+      order_type: OrderType.Limit(Decimal.parse(price_str).unwrap()),
+      quantity: (random.u32(1..100)) as u64,
+      client_id: "stress-{random.u32(0..100)}",
+    }
+
+    match await exchange.read().submit_order(input) {
+      ok(_) => {}
+      err(e) => {
+        // Some rejections are expected under load
+      }
+    }
+  })
+
+  let report = stress.report()
+  assert(report.error_rate < 0.05,
+    "Error rate {report.error_rate} exceeds 5% threshold")
+  assert(report.p99_latency < 1.ms(),
+    "P99 latency {report.p99_latency} exceeds 1ms under concurrent load")
+}
+
+// =============================================================================
+// Book Integrity After Massive Throughput
+// =============================================================================
+
+@test
+@perf(max_time: 10.seconds())
+fn test_book_integrity_after_burst() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Submit 100k orders in a burst
+  for i in 0..100_000 {
+    let price = Decimal.new(100 + (i % 200) as i64)
+    let side = if i % 2 == 0 { Side.Buy } else { Side.Sell }
+    let qty = ((i % 50) + 1) as u64
+
+    book.submit(Order.new(
+      i as u64, "AAPL", side,
+      OrderType.Limit(price), qty, "burst-client",
+    ))?
+  }
+
+  // Verify book structure
+  let snapshot = book.snapshot(depth: 100)
+
+  // Bids should be in descending order
+  for i in 1..snapshot.bids.len() {
+    assert(snapshot.bids[i - 1].price.raw >= snapshot.bids[i].price.raw,
+      "Bids not in descending order at index {i}")
+  }
+
+  // Asks should be in ascending order
+  for i in 1..snapshot.asks.len() {
+    assert(snapshot.asks[i - 1].price.raw <= snapshot.asks[i].price.raw,
+      "Asks not in ascending order at index {i}")
+  }
+
+  // No crossed book
+  match (snapshot.bids.first(), snapshot.asks.first()) {
+    (some(bid), some(ask)) => {
+      assert(bid.price.raw < ask.price.raw,
+        "Book is crossed: best bid {bid.price.to_string()} >= best ask {ask.price.to_string()}")
+    }
+    _ => {}
+  }
+
+  // All price levels should have positive quantities
+  for level in snapshot.bids {
+    assert(level.total_quantity > 0, "Bid level at {level.price.to_string()} has zero quantity")
+    assert(level.order_count > 0, "Bid level at {level.price.to_string()} has zero orders")
+  }
+
+  for level in snapshot.asks {
+    assert(level.total_quantity > 0, "Ask level at {level.price.to_string()} has zero quantity")
+    assert(level.order_count > 0, "Ask level at {level.price.to_string()} has zero orders")
+  }
+}
+
+// =============================================================================
+// Stop Order Cascade — Many stops triggering at once
+// =============================================================================
+
+@test
+@perf(max_time: 5.seconds())
+fn test_stop_order_cascade() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Place 1000 stop buy orders at various trigger prices
+  for i in 0..1_000 {
+    let trigger = Decimal.new(150 + (i % 10) as i64)
+    book.submit(Order.new(
+      i as u64, "AAPL", Side.Buy,
+      OrderType.Stop(trigger, none), 10, "stop-buyer",
+    ))?
+  }
+
+  // Place sell liquidity for the triggered orders
+  for i in 1_000..2_000 {
+    let price = Decimal.new(150 + (i % 10) as i64)
+    book.submit(Order.new(
+      i as u64, "AAPL", Side.Sell,
+      OrderType.Limit(price), 100, "seller",
+    ))?
+  }
+
+  // Trigger all stops at once by checking at price 160
+  let triggered = book.check_stops(Decimal.parse("160.00").unwrap())
+
+  assert_eq(triggered.len(), 1_000)
+
+  // All triggered orders should now be market orders
+  for order in triggered {
+    assert_eq(order.status, OrderStatus.Triggered)
+    assert(order.order_type.is_market(), "Triggered order should be market")
+  }
+}

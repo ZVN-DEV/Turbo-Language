@@ -1,0 +1,18 @@
+{
+  "name": "benchmarks-typescript",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TypeScript benchmark suite",
+  "scripts": {
+    "bench": "npx tsx benchmark.ts all",
+    "bench:fib": "npx tsx benchmark.ts fib",
+    "bench:trees": "npx tsx benchmark.ts trees",
+    "bench:matrix": "npx tsx benchmark.ts matrix",
+    "bench:strings": "npx tsx benchmark.ts strings",
+    "bench:concurrent": "npx tsx benchmark.ts concurrent"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

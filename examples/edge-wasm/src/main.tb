@@ -1,0 +1,382 @@
+// =============================================================================
+// main.tb — Edge handler entry point for the TurboEdge image processing service
+//
+// Demonstrates:
+//   - @wasm_export for the WASM module entry point
+//   - Edge HTTP request handling with streaming responses
+//   - Content negotiation and geo-based routing
+//   - Cache-aware request processing with conditional responses
+//   - Structured logging in WASM environments
+//   - Defer for per-request cleanup
+//   - Pipe operator for composing the request pipeline
+//   - Pattern matching on route paths and errors
+//   - The full edge request lifecycle
+// =============================================================================
+
+import { Request, Response } from "turbo/http"
+import { Stream } from "turbo/stream"
+import { log } from "turbo/log"
+import { time } from "std/time"
+import { env } from "turbo/env"
+import {
+  ProcessingConfig, PipelineError, TransformPipeline,
+  ImageFormat, EdgeContext, ProcessingResult,
+} from "./models"
+import { PipelineExecutor, process_image } from "./pipeline"
+import { EdgeCache, CacheStats, ConditionalResult } from "./cache"
+import {
+  parse_request, negotiate_format, extract_edge_context,
+  geo_route, apply_geo_routing,
+} from "./routing"
+import {
+  wasm_handle_request, wasm_handle_health, wasm_alloc, wasm_dealloc,
+  RequestArena, MemoryStats, GLOBAL_POOL,
+} from "./wasm_bindings"
+
+// --- Configuration ---
+
+/// Load configuration with sensible defaults for edge deployment.
+/// Uses const for values that are baked into the WASM binary.
+const DEFAULT_CONFIG: ProcessingConfig = ProcessingConfig {
+  max_width: 4096,
+  max_height: 4096,
+  max_file_size: 25 * 1024 * 1024,
+  default_quality: 85,
+  max_pipeline_cost: 50,
+  stream_chunk_size: 16_384,
+  wasm_memory_budget: 128 * 1024 * 1024,
+  allowed_origins: ["*"],
+  cache_ttl: Duration.hours(1),
+}
+
+// --- Global state (initialized once per WASM instance) ---
+
+static mut EXECUTOR: PipelineExecutor? = none
+static mut CACHE: EdgeCache? = none
+
+/// Initialize the service (called once when the WASM module loads)
+@wasm_export("init")
+pub fn init() {
+  let config = DEFAULT_CONFIG
+
+  let cache = EdgeCache.new(config, max_size: 50 * 1024 * 1024)
+  let executor = PipelineExecutor.new(config, cache.clone())
+
+  CACHE = some(cache)
+  EXECUTOR = some(executor)
+
+  log.info("TurboEdge initialized", {
+    max_width: config.max_width,
+    max_height: config.max_height,
+    max_file_size: config.max_file_size,
+    wasm_memory_budget: config.wasm_memory_budget,
+  })
+}
+
+// =============================================================================
+// Request Handler — the core of the edge service
+// =============================================================================
+
+/// Internal request handler with full error handling.
+/// Called by wasm_handle_request() from wasm_bindings.tb.
+pub async fn handle_request_internal(
+  req: Request,
+  arena: RequestArena,
+) -> Response ! PipelineError {
+  let start = time.now()
+  let config = DEFAULT_CONFIG
+  let executor = EXECUTOR ?? {
+    init()
+    EXECUTOR!
+  }
+
+  // Extract edge context (geo, client info, etc.)
+  let context = extract_edge_context(req)
+
+  log.info("Request received", {
+    method: req.method,
+    path: req.path,
+    edge_node: context.edge_node,
+    country: context.geo?.country ?? "unknown",
+    client_ip: context.client_ip,
+  })
+
+  // Route based on path
+  match req.path {
+    // ── Image processing endpoint ──
+    p if p.starts_with("/image/") => {
+      await handle_image_request(req, context, executor, config)
+    }
+
+    // ── Health check ──
+    "/health" | "/_health" => {
+      handle_health_check()
+    }
+
+    // ── Cache management ──
+    "/cache/stats" => {
+      handle_cache_stats()
+    }
+
+    "/cache/purge" if req.method == "POST" => {
+      await handle_cache_purge(req)
+    }
+
+    // ── Memory diagnostics ──
+    "/debug/memory" => {
+      handle_memory_stats()
+    }
+
+    // ── WASM module info ──
+    "/info" => {
+      handle_info()
+    }
+
+    // ── 404 ──
+    _ => {
+      Response.json(
+        { error: "Not found", path: req.path },
+        status: 404
+      )
+    }
+  }
+}
+
+// =============================================================================
+// Image Processing Request Handler
+// =============================================================================
+
+async fn handle_image_request(
+  req: Request,
+  context: EdgeContext,
+  executor: PipelineExecutor,
+  config: ProcessingConfig,
+) -> Response ! PipelineError {
+  // Parse the URL into a transform pipeline
+  let mut pipeline = parse_request(req, config)?
+
+  // Apply geo-based routing adjustments
+  let geo_decision = geo_route(context, config)
+  pipeline = apply_geo_routing(pipeline, geo_decision)
+
+  // Skip processing for bots (serve original or cached thumbnail)
+  if context.is_bot && pipeline.total_cost() > 10 {
+    log.info("Bot detected, simplifying pipeline", {
+      original_cost: pipeline.total_cost(),
+    })
+    pipeline = TransformPipeline.new(pipeline.source_url)
+      .add(TransformOp.Resize(800, 600, ResizeAlgorithm.default()))
+  }
+
+  // Check for conditional request (304 Not Modified)
+  let cache = CACHE!
+  let cache_key = pipeline.cache_key()
+
+  match await cache.handle_conditional(cache_key, req) {
+    NotModified(etag, ttl) => {
+      log.info("304 Not Modified", { etag })
+      let headers = cache.build_cache_headers(etag, ttl)
+      return Response {
+        status: 304,
+        headers,
+        body: [],
+        is_streaming: false,
+        body_stream: Stream.empty(),
+      }
+    }
+
+    Fresh(image, etag, ttl) => {
+      log.info("Cache hit", { etag })
+      let mut headers = cache.build_cache_headers(etag, ttl)
+      headers["Content-Type"] = image.format.mime_type()
+      headers["X-Cache"] = "HIT"
+      headers["X-Image-Width"] = "{image.dimensions.width}"
+      headers["X-Image-Height"] = "{image.dimensions.height}"
+
+      return Response {
+        status: 200,
+        headers,
+        body: [],
+        is_streaming: true,
+        body_stream: image.data,
+      }
+    }
+
+    Stale(image, etag) => {
+      // Serve stale while revalidating in the background
+      log.info("Serving stale, revalidating", { etag })
+
+      // Trigger background revalidation
+      spawn {
+        match await executor.execute(pipeline, context) {
+          ok(_) => log.debug("Background revalidation complete")
+          err(e) => log.warn("Background revalidation failed", { error: e.message() })
+        }
+      }
+
+      let headers = {
+        "Content-Type": image.format.mime_type(),
+        "X-Cache": "STALE",
+        "X-Image-Width": "{image.dimensions.width}",
+        "X-Image-Height": "{image.dimensions.height}",
+      }
+
+      return Response {
+        status: 200,
+        headers,
+        body: [],
+        is_streaming: true,
+        body_stream: image.data,
+      }
+    }
+
+    Miss => {
+      // Cache miss — process the image
+    }
+  }
+
+  // Execute the pipeline
+  let result = await executor.execute(pipeline, context)?
+
+  // Build response with appropriate caching headers
+  let etag = generate_etag(cache_key.hash)
+  let mut headers = cache.build_cache_headers(etag, config.cache_ttl)
+  headers["Content-Type"] = result.format.mime_type()
+  headers["X-Cache"] = "MISS"
+  headers["X-Processing-Time"] = "{result.processing_time_ms}ms"
+  headers["X-Image-Width"] = "{result.dimensions.width}"
+  headers["X-Image-Height"] = "{result.dimensions.height}"
+  headers["X-Edge-Node"] = result.edge_node
+
+  // Add CORS headers
+  for origin in config.allowed_origins {
+    headers["Access-Control-Allow-Origin"] = origin
+  }
+
+  Response {
+    status: 200,
+    headers,
+    body: [],
+    is_streaming: true,
+    body_stream: result.data,
+  }
+}
+
+// =============================================================================
+// Utility Endpoints
+// =============================================================================
+
+fn handle_health_check() -> Response {
+  let mem = GLOBAL_POOL.stats()
+  let cache_stats = CACHE?.stats() ?? CacheStats {
+    entries: 0, byte_size: 0, max_size: 0, utilization: 0.0,
+  }
+
+  Response.json({
+    status: "healthy",
+    memory: {
+      allocated: mem.total_allocated,
+      peak: mem.peak_allocated,
+      slabs: mem.total_slabs,
+    },
+    cache: {
+      entries: cache_stats.entries,
+      size: cache_stats.byte_size,
+      utilization: cache_stats.utilization,
+    },
+  })
+}
+
+fn handle_cache_stats() -> Response {
+  let stats = CACHE?.stats() ?? CacheStats {
+    entries: 0, byte_size: 0, max_size: 0, utilization: 0.0,
+  }
+
+  Response.json(stats)
+}
+
+async fn handle_cache_purge(req: Request) -> Response ! PipelineError {
+  let cache = CACHE ?? {
+    return Response.json({ error: "Cache not initialized" }, status: 500)
+  }
+
+  let body = req.json<{str: str}>() ?? {:}
+  let pattern = body.get("pattern") ?? "*"
+
+  if pattern == "*" {
+    await cache.clear()
+    Response.json({ purged: "all", status: "ok" })
+  } else {
+    let count = await cache.purge_by_source(pattern)
+    Response.json({ purged: count, pattern, status: "ok" })
+  }
+}
+
+fn handle_memory_stats() -> Response {
+  let pool_stats = GLOBAL_POOL.stats()
+  let wasm_pages = __wasm_memory_size(0)
+  let wasm_total = wasm_pages * 65_536
+
+  Response.json({
+    pool: pool_stats,
+    wasm: {
+      pages: wasm_pages,
+      total_bytes: wasm_total,
+      total_mb: wasm_total as f64 / (1024.0 * 1024.0),
+    },
+  })
+}
+
+fn handle_info() -> Response {
+  Response.json({
+    name: "TurboEdge",
+    version: "0.1.0",
+    runtime: "wasm32-wasi",
+    features: [
+      "streaming-pipeline",
+      "smart-crop",
+      "face-detection",
+      "watermarking",
+      "format-conversion",
+      "geo-routing",
+      "edge-caching",
+      "conditional-requests",
+    ],
+    supported_formats: ["png", "jpeg", "webp", "avif"],
+    max_dimensions: "{DEFAULT_CONFIG.max_width}x{DEFAULT_CONFIG.max_height}",
+    max_file_size: DEFAULT_CONFIG.max_file_size,
+  })
+}
+
+/// Generate an ETag from a hash string
+fn generate_etag(hash: str) -> str {
+  "W/\"{hash[..16]}\""
+}
+
+// External ref to WASM memory intrinsic
+extern fn __wasm_memory_size(memory_idx: u32) -> usize
+
+// =============================================================================
+// Usage Examples (for documentation)
+// =============================================================================
+//
+// Resize an image to 800x600, convert to WebP:
+//   GET /image/resize/800x600/format/webp?url=https://example.com/photo.jpg
+//
+// Smart crop with face detection, output as AVIF:
+//   GET /image/smart-crop/400x400/format/avif?url=https://example.com/portrait.jpg&anchor=face
+//
+// Full pipeline: resize, sharpen, watermark, convert:
+//   GET /image/resize/1200x800/sharpen/0.5/watermark/br/format/webp?url=...&wm=https://brand.com/logo.png
+//
+// Fluent API (in Turbo code):
+//   let result = await process_image("https://example.com/photo.jpg")
+//     |> resize(800, 600)
+//     |> sharpen(0.5)
+//     |> watermark("https://brand.com/logo.png", position: .BottomRight)
+//     |> convert(.webp)
+//     |> execute(executor, context)
+//
+// Deploy:
+//   turbo build --target wasm32-wasi
+//   turbo deploy --edge

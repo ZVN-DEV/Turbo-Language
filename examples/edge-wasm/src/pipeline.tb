@@ -1,0 +1,586 @@
+// =============================================================================
+// pipeline.tb — Streams-based image processing pipeline
+//
+// Demonstrates:
+//   - Stream<T> for lazy, chunk-based processing
+//   - Pipe operator |> for composing transform chains
+//   - async gen for creating streams from generators
+//   - for await for consuming streams
+//   - Memory-efficient processing: never loads the full image
+//   - Pipeline pattern: image |> resize(800, 600) |> sharpen(0.5) |> convert(.webp)
+//   - Guard statements for validation
+//   - Defer for cleanup
+// =============================================================================
+
+import { Stream } from "turbo/stream"
+import { log } from "turbo/log"
+import { time } from "std/time"
+import {
+  TransformPipeline, TransformOp, ImageFormat, ProcessingConfig,
+  ProcessingResult, Dimensions, PipelineError, EdgeContext,
+} from "./models"
+import {
+  apply_resize, apply_crop, apply_smart_crop, apply_blur,
+  apply_sharpen, apply_watermark, apply_convert, apply_rotate,
+  apply_flip, apply_grayscale, apply_brightness, apply_contrast,
+} from "./transforms"
+import { EdgeCache } from "./cache"
+
+// --- ImageChunk: a piece of the image being processed ---
+
+@derive(Debug, Clone)
+struct ImageChunk {
+  data: [u8]
+  row_start: u32
+  row_end: u32
+  width: u32
+  channels: u8            // 3 for RGB, 4 for RGBA
+  is_last: bool
+}
+
+impl ImageChunk {
+  /// Size of this chunk in bytes
+  fn byte_size(self) -> usize {
+    self.data.len()
+  }
+
+  /// Number of rows in this chunk
+  fn row_count(self) -> u32 {
+    self.row_end - self.row_start
+  }
+}
+
+// --- StreamDecoder: reads raw bytes and emits ImageChunks ---
+
+struct StreamDecoder {
+  format: ImageFormat
+  config: ProcessingConfig
+  header_parsed: bool
+  dimensions: Dimensions?
+  bytes_read: u64
+}
+
+impl StreamDecoder {
+  fn new(format: ImageFormat, config: ProcessingConfig) -> StreamDecoder {
+    StreamDecoder {
+      format,
+      config,
+      header_parsed: false,
+      dimensions: none,
+      bytes_read: 0,
+    }
+  }
+
+  /// Decode a raw byte stream into image chunks
+  /// Reads only the header first, then streams rows in configurable chunks
+  async fn decode(self, input: Stream<[u8]>) -> Stream<ImageChunk> ! PipelineError {
+    let mut decoder = self
+    let chunk_rows = 64  // Process 64 rows at a time
+
+    async gen {
+      let mut buffer: [u8] = []
+      let mut current_row: u32 = 0
+
+      for await raw_bytes in input {
+        decoder.bytes_read += raw_bytes.len() as u64
+
+        // Check file size limit
+        guard decoder.bytes_read <= decoder.config.max_file_size else {
+          return err(PipelineError.FileTooLarge(
+            decoder.bytes_read, decoder.config.max_file_size
+          ))
+        }
+
+        buffer = buffer + raw_bytes
+
+        // Parse header on first chunk to get dimensions
+        if !decoder.header_parsed {
+          match parse_image_header(buffer, decoder.format) {
+            some(dims) => {
+              // Validate dimensions
+              guard dims.width <= decoder.config.max_width &&
+                    dims.height <= decoder.config.max_height else {
+                return err(PipelineError.DimensionsTooLarge(
+                  dims.width, dims.height,
+                  u32.max(decoder.config.max_width, decoder.config.max_height)
+                ))
+              }
+              decoder.dimensions = some(dims)
+              decoder.header_parsed = true
+              log.debug("Image header parsed", { width: dims.width, height: dims.height })
+            }
+            none => {
+              // Need more data for header
+              continue
+            }
+          }
+        }
+
+        let dims = decoder.dimensions!
+
+        // Emit complete rows as chunks
+        let row_bytes = dims.width as usize * 4  // RGBA
+        while buffer.len() >= row_bytes * chunk_rows as usize {
+          let chunk_size = row_bytes * chunk_rows as usize
+          let chunk_data = buffer[..chunk_size]
+          buffer = buffer[chunk_size..]
+
+          let row_end = u32.min(current_row + chunk_rows, dims.height)
+
+          yield ImageChunk {
+            data: chunk_data,
+            row_start: current_row,
+            row_end,
+            width: dims.width,
+            channels: 4,
+            is_last: row_end >= dims.height,
+          }
+
+          current_row = row_end
+        }
+      }
+
+      // Flush remaining buffer as the final chunk
+      if buffer.len() > 0 {
+        let dims = decoder.dimensions ?? return err(
+          PipelineError.InvalidSource("stream", "incomplete image data")
+        )
+
+        yield ImageChunk {
+          data: buffer,
+          row_start: current_row,
+          row_end: dims.height,
+          width: dims.width,
+          channels: 4,
+          is_last: true,
+        }
+      }
+    }
+  }
+}
+
+// --- StreamEncoder: converts ImageChunks back to raw bytes ---
+
+struct StreamEncoder {
+  format: ImageFormat
+  dimensions: Dimensions
+}
+
+impl StreamEncoder {
+  fn new(format: ImageFormat, dimensions: Dimensions) -> StreamEncoder {
+    StreamEncoder { format, dimensions }
+  }
+
+  /// Encode image chunks back to the output format as a byte stream
+  async fn encode(self, chunks: Stream<ImageChunk>) -> Stream<[u8]> {
+    let encoder = self
+
+    async gen {
+      // Emit format header
+      let header = encode_header(encoder.format, encoder.dimensions)
+      yield header
+
+      // Stream-encode each chunk
+      for await chunk in chunks {
+        let encoded = encode_chunk(chunk, encoder.format)
+        yield encoded
+      }
+
+      // Emit format footer/trailer
+      let footer = encode_footer(encoder.format)
+      if footer.len() > 0 {
+        yield footer
+      }
+    }
+  }
+}
+
+// --- Pipeline Executor: the core processing engine ---
+
+pub struct PipelineExecutor {
+  config: ProcessingConfig
+  cache: EdgeCache
+}
+
+impl PipelineExecutor {
+  pub fn new(config: ProcessingConfig, cache: EdgeCache) -> PipelineExecutor {
+    PipelineExecutor { config, cache }
+  }
+
+  /// Execute a full transform pipeline on a source image stream
+  ///
+  /// This is the main entry point. It:
+  /// 1. Checks the cache
+  /// 2. Fetches the source image as a stream
+  /// 3. Decodes into chunks
+  /// 4. Applies each transform as a stream transformer
+  /// 5. Encodes the result
+  /// 6. Caches and returns the output stream
+  pub async fn execute(
+    self,
+    pipeline: TransformPipeline,
+    context: EdgeContext,
+  ) -> ProcessingResult ! PipelineError {
+    let start = time.now()
+
+    // Validate pipeline cost
+    let cost = pipeline.total_cost()
+    guard cost <= self.config.max_pipeline_cost else {
+      return err(PipelineError.PipelineTooExpensive(cost, self.config.max_pipeline_cost))
+    }
+
+    // Check cache first
+    let cache_key = pipeline.cache_key()
+    if let some(cached) = await self.cache.get(cache_key) {
+      log.debug("Cache hit", { key: cache_key.hash })
+      return ProcessingResult {
+        data: cached.data,
+        format: cached.format,
+        dimensions: cached.dimensions,
+        file_size: cached.file_size,
+        processing_time_ms: time.since(start).as_ms(),
+        cache_hit: true,
+        edge_node: context.edge_node,
+      }
+    }
+
+    log.info("Processing image", {
+      source: pipeline.source_url,
+      operations: pipeline.operations.len(),
+      cost,
+    })
+
+    // Fetch source image as a stream (never load fully into memory)
+    let (source_stream, source_format) = await fetch_image_stream(pipeline.source_url)?
+
+    // Decode the raw stream into image chunks
+    let decoder = StreamDecoder.new(source_format, self.config)
+    let mut chunk_stream = await decoder.decode(source_stream)?
+
+    // Track dimensions as transforms modify them
+    let mut current_dims = decoder.dimensions ?? Dimensions { width: 0, height: 0 }
+
+    // Apply each transform operation as a stream transformer
+    // This is where the pipe operator really shines:
+    //   chunk_stream |> resize(800, 600) |> sharpen(0.5) |> convert(.webp)
+    for op in pipeline.operations {
+      let op_start = time.now()
+
+      let (transformed, new_dims) = match op {
+        Resize(w, h, algo) => {
+          let target = current_dims.fit_within(w, h)
+          (chunk_stream |> apply_resize(target, algo), target)
+        }
+
+        Crop(box) => {
+          let clamped = box.clamp_to(current_dims)
+          let new_dims = Dimensions { width: clamped.width, height: clamped.height }
+          (chunk_stream |> apply_crop(clamped), new_dims)
+        }
+
+        SmartCrop(w, h, anchor) => {
+          (chunk_stream |> apply_smart_crop(w, h, anchor, current_dims), Dimensions { width: w, height: h })
+        }
+
+        Blur(sigma) => {
+          (chunk_stream |> apply_blur(sigma), current_dims)
+        }
+
+        Sharpen(amount, radius, threshold) => {
+          (chunk_stream |> apply_sharpen(amount, radius, threshold), current_dims)
+        }
+
+        Watermark(url, position, opacity, scale) => {
+          (chunk_stream |> apply_watermark(url, position, opacity, scale, current_dims), current_dims)
+        }
+
+        Convert(fmt) => {
+          // Format conversion happens at the encode stage
+          (chunk_stream, current_dims)
+        }
+
+        Rotate(degrees) => {
+          let new_dims = if degrees == 90 || degrees == 270 || degrees == -90 {
+            Dimensions { width: current_dims.height, height: current_dims.width }
+          } else {
+            current_dims
+          }
+          (chunk_stream |> apply_rotate(degrees), new_dims)
+        }
+
+        Flip(horizontal) => {
+          (chunk_stream |> apply_flip(horizontal), current_dims)
+        }
+
+        Grayscale => {
+          (chunk_stream |> apply_grayscale(), current_dims)
+        }
+
+        Brightness(factor) => {
+          (chunk_stream |> apply_brightness(factor), current_dims)
+        }
+
+        Contrast(factor) => {
+          (chunk_stream |> apply_contrast(factor), current_dims)
+        }
+      }
+
+      chunk_stream = transformed
+      current_dims = new_dims
+
+      log.debug("Transform applied", {
+        op: op.name(),
+        time_ms: time.since(op_start).as_ms(),
+      })
+    }
+
+    // Determine output format
+    let output_format = pipeline.output_format ?? source_format
+
+    // Encode back to the output format
+    let encoder = StreamEncoder.new(output_format, current_dims)
+    let output_stream = await encoder.encode(chunk_stream)
+
+    // Tee the stream: one copy goes to cache, one to the response
+    let (response_stream, cache_stream) = output_stream.tee()
+
+    // Cache the result in the background (fire-and-forget)
+    spawn {
+      let cached_bytes = await cache_stream.collect_bytes()
+      await self.cache.put(cache_key, CachedImage {
+        data: Stream.from_bytes(cached_bytes),
+        format: output_format,
+        dimensions: current_dims,
+        file_size: cached_bytes.len() as u64,
+      })
+      log.debug("Result cached", { key: cache_key.hash, size: cached_bytes.len() })
+    }
+
+    let elapsed = time.since(start).as_ms()
+    log.info("Processing complete", {
+      source: pipeline.source_url,
+      format: output_format.extension(),
+      dimensions: "{current_dims.width}x{current_dims.height}",
+      time_ms: elapsed,
+    })
+
+    ProcessingResult {
+      data: response_stream,
+      format: output_format,
+      dimensions: current_dims,
+      file_size: 0,  // Unknown until stream is consumed
+      processing_time_ms: elapsed,
+      cache_hit: false,
+      edge_node: context.edge_node,
+    }
+  }
+}
+
+// --- Fluent pipeline builder using pipe operator ---
+
+/// Build and execute a pipeline in a single fluent expression.
+/// Usage:
+///   let result = await process_image("https://example.com/photo.jpg")
+///     |> resize(800, 600)
+///     |> sharpen(0.5)
+///     |> convert(.webp)
+///     |> execute(context)
+
+pub fn process_image(source_url: str) -> PipelineBuilder {
+  PipelineBuilder {
+    pipeline: TransformPipeline.new(source_url),
+  }
+}
+
+pub struct PipelineBuilder {
+  pipeline: TransformPipeline
+}
+
+impl PipelineBuilder {
+  /// Add a resize operation
+  pub fn resize(self, width: u32, height: u32, algorithm: ResizeAlgorithm = ResizeAlgorithm.default()) -> PipelineBuilder {
+    PipelineBuilder {
+      pipeline: self.pipeline.add(TransformOp.Resize(width, height, algorithm)),
+    }
+  }
+
+  /// Add a crop operation
+  pub fn crop(self, x: u32, y: u32, width: u32, height: u32) -> PipelineBuilder {
+    PipelineBuilder {
+      pipeline: self.pipeline.add(TransformOp.Crop(BoundingBox { x, y, width, height })),
+    }
+  }
+
+  /// Add a smart crop operation with face detection
+  pub fn smart_crop(self, width: u32, height: u32, anchor: CropAnchor = CropAnchor.SmartFace) -> PipelineBuilder {
+    PipelineBuilder {
+      pipeline: self.pipeline.add(TransformOp.SmartCrop(width, height, anchor)),
+    }
+  }
+
+  /// Add a blur operation
+  pub fn blur(self, sigma: f32) -> PipelineBuilder {
+    PipelineBuilder {
+      pipeline: self.pipeline.add(TransformOp.Blur(sigma)),
+    }
+  }
+
+  /// Add a sharpen operation
+  pub fn sharpen(self, amount: f32, radius: f32 = 1.0, threshold: f32 = 0.0) -> PipelineBuilder {
+    PipelineBuilder {
+      pipeline: self.pipeline.add(TransformOp.Sharpen(amount, radius, threshold)),
+    }
+  }
+
+  /// Add a watermark
+  pub fn watermark(self, image_url: str, position: CropAnchor = CropAnchor.BottomRight, opacity: f32 = 0.5, scale: f32 = 0.15) -> PipelineBuilder {
+    PipelineBuilder {
+      pipeline: self.pipeline.add(TransformOp.Watermark(image_url, position, opacity, scale)),
+    }
+  }
+
+  /// Set output format
+  pub fn convert(self, format: ImageFormat) -> PipelineBuilder {
+    PipelineBuilder {
+      pipeline: self.pipeline.format(format),
+    }
+  }
+
+  /// Add a rotate operation
+  pub fn rotate(self, degrees: i16) -> PipelineBuilder {
+    PipelineBuilder {
+      pipeline: self.pipeline.add(TransformOp.Rotate(degrees)),
+    }
+  }
+
+  /// Add a grayscale conversion
+  pub fn grayscale(self) -> PipelineBuilder {
+    PipelineBuilder {
+      pipeline: self.pipeline.add(TransformOp.Grayscale),
+    }
+  }
+
+  /// Execute the built pipeline
+  pub async fn execute(self, executor: PipelineExecutor, context: EdgeContext) -> ProcessingResult ! PipelineError {
+    await executor.execute(self.pipeline, context)
+  }
+}
+
+// --- Internal helpers ---
+
+/// Parse image header to extract dimensions without reading the full image
+fn parse_image_header(data: [u8], format: ImageFormat) -> Dimensions? {
+  match format {
+    PNG => {
+      // PNG: width at offset 16, height at offset 20 (big-endian u32)
+      guard data.len() >= 24 else { return none }
+      guard data[0..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] else { return none }
+      let width = u32.from_be_bytes(data[16..20])
+      let height = u32.from_be_bytes(data[20..24])
+      some(Dimensions { width, height })
+    }
+
+    JPEG(_) => {
+      // JPEG: scan for SOF0 marker (0xFF 0xC0) to find dimensions
+      guard data.len() >= 11 else { return none }
+      for i in 0..data.len() - 10 {
+        if data[i] == 0xFF && data[i + 1] == 0xC0 {
+          let height = u16.from_be_bytes(data[i + 5..i + 7]) as u32
+          let width = u16.from_be_bytes(data[i + 7..i + 9]) as u32
+          return some(Dimensions { width, height })
+        }
+      }
+      none
+    }
+
+    WebP(_) => {
+      // WebP: RIFF header, then VP8 chunk with dimensions
+      guard data.len() >= 30 else { return none }
+      guard data[0..4] == [0x52, 0x49, 0x46, 0x46] else { return none }  // "RIFF"
+      guard data[8..12] == [0x57, 0x45, 0x42, 0x50] else { return none } // "WEBP"
+      let width = u16.from_le_bytes(data[26..28]) as u32
+      let height = u16.from_le_bytes(data[28..30]) as u32
+      some(Dimensions { width, height })
+    }
+
+    AVIF(_, _) => {
+      // AVIF: ISOBMFF container — simplified header parsing
+      guard data.len() >= 32 else { return none }
+      // Look for ispe box (image spatial extents)
+      for i in 0..data.len() - 12 {
+        if data[i..i + 4] == [0x69, 0x73, 0x70, 0x65] {  // "ispe"
+          let width = u32.from_be_bytes(data[i + 4..i + 8])
+          let height = u32.from_be_bytes(data[i + 8..i + 12])
+          return some(Dimensions { width, height })
+        }
+      }
+      none
+    }
+  }
+}
+
+/// Fetch a remote image as a byte stream
+async fn fetch_image_stream(url: str) -> (Stream<[u8]>, ImageFormat) ! PipelineError {
+  let response = await fetch(url, stream: true) ?? {
+    return err(PipelineError.FetchFailed(url, 0))
+  }
+
+  guard response.status >= 200 && response.status < 300 else {
+    return err(PipelineError.FetchFailed(url, response.status))
+  }
+
+  let format = match response.headers.get("content-type") {
+    some("image/png")  => ImageFormat.PNG
+    some("image/jpeg") => ImageFormat.JPEG(quality: 85)
+    some("image/webp") => ImageFormat.WebP(quality: 80)
+    some("image/avif") => ImageFormat.AVIF(quality: 75, speed: 6)
+    some(ct)           => return err(PipelineError.UnsupportedFormat(ct))
+    none               => {
+      // Try to detect from URL extension
+      let ext = url.split(".").last() ?? ""
+      ImageFormat.from_string(ext) ?? return err(
+        PipelineError.UnsupportedFormat("unknown")
+      )
+    }
+  }
+
+  (response.body_stream, format)
+}
+
+/// Encode a format-specific file header
+fn encode_header(format: ImageFormat, dims: Dimensions) -> [u8] {
+  match format {
+    PNG       => encode_png_header(dims)
+    JPEG(q)   => encode_jpeg_header(dims, q)
+    WebP(q)   => encode_webp_header(dims, q)
+    AVIF(q, s) => encode_avif_header(dims, q, s)
+  }
+}
+
+/// Encode a single image chunk in the target format
+fn encode_chunk(chunk: ImageChunk, format: ImageFormat) -> [u8] {
+  match format {
+    PNG       => encode_png_chunk(chunk)
+    JPEG(q)   => encode_jpeg_chunk(chunk, q)
+    WebP(q)   => encode_webp_chunk(chunk, q)
+    AVIF(q, s) => encode_avif_chunk(chunk, q, s)
+  }
+}
+
+/// Encode format-specific footer
+fn encode_footer(format: ImageFormat) -> [u8] {
+  match format {
+    PNG => [0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44]  // IEND chunk
+    _   => []
+  }
+}
+
+// External format encode functions (implemented by turbo-image)
+extern fn encode_png_header(dims: Dimensions) -> [u8]
+extern fn encode_png_chunk(chunk: ImageChunk) -> [u8]
+extern fn encode_jpeg_header(dims: Dimensions, quality: u8) -> [u8]
+extern fn encode_jpeg_chunk(chunk: ImageChunk, quality: u8) -> [u8]
+extern fn encode_webp_header(dims: Dimensions, quality: u8) -> [u8]
+extern fn encode_webp_chunk(chunk: ImageChunk, quality: u8) -> [u8]
+extern fn encode_avif_header(dims: Dimensions, quality: u8, speed: u8) -> [u8]
+extern fn encode_avif_chunk(chunk: ImageChunk, quality: u8, speed: u8) -> [u8]

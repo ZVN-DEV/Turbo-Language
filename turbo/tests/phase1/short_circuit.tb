@@ -1,0 +1,13 @@
+fn main() {
+    let x = 0
+    // This should NOT divide by zero thanks to short-circuit
+    if x == 0 || 100 / x > 5 {
+        print("Short circuit works!")
+    }
+
+    // Test && short circuit too
+    let y = 10
+    if y > 5 && y < 20 {
+        print("AND works!")
+    }
+}

@@ -1,0 +1,490 @@
+// =============================================================================
+// perf_test.tb — Load testing, memory leak checks, concurrent access stress
+//
+// Demonstrates:
+//   - @perf decorator with max_memory and max_time constraints
+//   - @stress decorator for concurrent load testing
+//   - memory.snapshot() for memory leak detection
+//   - Bulk operations and scaling tests
+//   - Stress testing with concurrent access patterns
+//   - Performance assertions with .ms(), .mb(), .kb() unit helpers
+//   - MockServer under load
+//   - Search engine indexing performance
+//   - WebSocket connection stress testing
+// =============================================================================
+
+import { MockServer, TestClient } from "turbo/test"
+import { Shared } from "turbo/sync"
+import { BookmarkStore, bookmark_routes } from "../src/routes/bookmarks"
+import { UserStore, user_routes } from "../src/routes/users"
+import { SyncBroadcaster } from "../src/routes/ws"
+import { SearchEngine } from "../src/search"
+import { TokenBlacklist, auth_required, sign_token } from "../src/auth"
+import { Metrics } from "../src/middleware"
+import { CreateBookmark, Bookmark, Visibility } from "../src/models"
+import { DateTime } from "std/time"
+
+// --- Shared Test Setup ---
+
+async fn create_test_store() -> (Shared<BookmarkStore>, SearchEngine) {
+  let search = SearchEngine.new()
+  let store = Shared.new(BookmarkStore.new(search))
+  (store, search)
+}
+
+async fn create_user_and_token(user_store: Shared<UserStore>, username: str) -> (u64, str) {
+  let user = await user_store.write().register(CreateUser {
+    username: username,
+    email: "{username}@perf-test.com",
+    password: "performance_test_123",
+  })?
+  let token = sign_token(user.id, username)?
+  (user.id, token.access_token)
+}
+
+// =============================================================================
+// Bookmark Store Performance
+// =============================================================================
+
+@test
+@perf(max_memory: 100.mb(), max_time: 2.seconds())
+async fn test_bulk_bookmark_creation() {
+  let (store, _) = await create_test_store()
+
+  for i in 0..10_000 {
+    await store.write().create(1, CreateBookmark {
+      url: "https://example.com/page/{i}",
+      title: "Bookmark {i}",
+      description: "Description for page {i} with some content",
+      tags: ["tag-{i % 10}", "bulk", "perf"],
+    })?
+  }
+
+  let count = await store.read().count(1)
+  assert_eq(count, 10_000)
+}
+
+@test
+@perf(max_memory: 50.mb(), max_time: 500.ms())
+async fn test_bulk_reads_with_pagination() {
+  let (store, _) = await create_test_store()
+
+  // Create 1000 bookmarks
+  for i in 0..1_000 {
+    await store.write().create(1, CreateBookmark {
+      url: "https://example.com/{i}",
+      title: "Bookmark {i}",
+      tags: ["batch"],
+    })?
+  }
+
+  // Paginate through all bookmarks 10 times
+  for _ in 0..10 {
+    for page in 1..=50 {
+      let result = await store.read().list(1, page: page, per_page: 20)
+      assert(result.items.len() <= 20)
+    }
+  }
+}
+
+@test
+@perf(max_memory: 50.mb(), max_time: 1.seconds())
+async fn test_bulk_updates() {
+  let (store, _) = await create_test_store()
+
+  // Create 1000 bookmarks
+  let mut ids: [u64] = []
+  for i in 0..1_000 {
+    let bookmark = await store.write().create(1, CreateBookmark {
+      url: "https://example.com/{i}",
+      title: "Bookmark {i}",
+    })?
+    ids.push(bookmark.id)
+  }
+
+  // Update all of them
+  for id in ids {
+    await store.write().update(id, 1, UpdateBookmark {
+      title: some("Updated title"),
+      is_starred: some(true),
+      tags: some(["updated", "bulk"]),
+    })?
+  }
+
+  // Verify updates
+  let result = await store.read().list(1, page: 1, per_page: 1000)
+  let starred = result.items.filter((b) => b.is_starred)
+  assert_eq(starred.len(), 1_000)
+}
+
+// =============================================================================
+// Search Engine Performance
+// =============================================================================
+
+@test
+@perf(max_memory: 200.mb(), max_time: 3.seconds())
+async fn test_search_index_bulk_insert() {
+  let search = SearchEngine.new()
+
+  for i in 0..10_000 {
+    let bookmark = Bookmark {
+      id: i as u64,
+      user_id: 1,
+      url: "https://example.com/{i}",
+      title: "Article about topic {i % 100} with interesting content",
+      description: "This is a detailed description about subject {i} covering various aspects of technology and programming",
+      tags: ["tag-{i % 20}", "tag-{i % 50}", "perf"],
+      notes: "Personal note {i}",
+      visibility: Visibility.Public,
+      is_starred: i % 5 == 0,
+      read_count: 0,
+      created_at: DateTime.now(),
+      updated_at: DateTime.now(),
+    }
+    search.index_bookmark(bookmark)
+  }
+
+  let stats = search.stats()
+  assert_eq(stats.total_documents, 10_000)
+  assert(stats.total_terms > 0)
+}
+
+@test
+@perf(max_time: 100.ms())
+async fn test_search_query_performance() {
+  let search = SearchEngine.new()
+
+  // Index 5000 documents
+  for i in 0..5_000 {
+    let bookmark = Bookmark {
+      id: i as u64,
+      user_id: 1,
+      url: "https://example.com/{i}",
+      title: if i % 3 == 0 { "Rust programming tutorial {i}" }
+             else if i % 3 == 1 { "JavaScript framework review {i}" }
+             else { "Python machine learning guide {i}" },
+      description: "Detailed content about topic {i}",
+      tags: ["programming", "tag-{i % 10}"],
+      notes: "",
+      visibility: Visibility.Public,
+      is_starred: false,
+      read_count: 0,
+      created_at: DateTime.now(),
+      updated_at: DateTime.now(),
+    }
+    search.index_bookmark(bookmark)
+  }
+
+  // Run 100 search queries
+  let queries = ["rust programming", "javascript", "python machine", "tutorial", "framework"]
+  for _ in 0..20 {
+    for q in queries {
+      let results = search.search(q)
+      assert(results.len() > 0, "Should find results for '{q}'")
+    }
+  }
+}
+
+@test
+@perf(max_time: 200.ms())
+async fn test_search_reindex_performance() {
+  let search = SearchEngine.new()
+
+  let bookmarks: [Bookmark] = (0..2_000).map((i) => Bookmark {
+    id: i as u64,
+    user_id: 1,
+    url: "https://example.com/{i}",
+    title: "Bookmark {i}",
+    description: "Content {i}",
+    tags: ["tag-{i % 5}"],
+    notes: "",
+    visibility: Visibility.Public,
+    is_starred: false,
+    read_count: 0,
+    created_at: DateTime.now(),
+    updated_at: DateTime.now(),
+  }).collect()
+
+  // Full reindex should be fast
+  search.reindex_all(bookmarks)
+
+  let stats = search.stats()
+  assert_eq(stats.total_documents, 2_000)
+}
+
+// =============================================================================
+// Memory Leak Detection
+// =============================================================================
+
+@test
+async fn test_no_memory_leaks_on_bookmark_delete() {
+  let before = memory.snapshot()
+  let (store, _) = await create_test_store()
+
+  // Create and delete many bookmarks
+  for i in 0..1_000 {
+    let bookmark = await store.write().create(1, CreateBookmark {
+      url: "https://example.com/temp/{i}",
+      title: "Temporary {i}",
+      description: "This will be deleted shortly with all its content",
+      tags: ["temp", "leak-test"],
+      notes: "Some notes that should be freed",
+    })?
+    await store.write().delete(bookmark.id, 1)?
+  }
+
+  let after = memory.snapshot()
+
+  assert_eq(await store.read().count(1), 0)
+  assert(after.allocated - before.allocated < 50.kb(),
+    "Memory leak: {after.allocated - before.allocated} bytes retained after deleting all bookmarks")
+}
+
+@test
+async fn test_no_memory_leaks_on_search_remove() {
+  let before = memory.snapshot()
+  let search = SearchEngine.new()
+
+  // Index and remove many bookmarks
+  for i in 0..500 {
+    let bookmark = Bookmark {
+      id: i as u64,
+      user_id: 1,
+      url: "https://example.com/{i}",
+      title: "Temporary bookmark {i} with long title to use memory",
+      description: "Description with enough text to matter for memory tracking purposes",
+      tags: ["temp-{i}", "leak", "test"],
+      notes: "Notes for bookmark {i}",
+      visibility: Visibility.Public,
+      is_starred: false,
+      read_count: 0,
+      created_at: DateTime.now(),
+      updated_at: DateTime.now(),
+    }
+    search.index_bookmark(bookmark)
+    search.remove_bookmark(i as u64)
+  }
+
+  let after = memory.snapshot()
+  let stats = search.stats()
+
+  assert_eq(stats.total_documents, 0)
+  assert(after.allocated - before.allocated < 50.kb(),
+    "Search index memory leak: {after.allocated - before.allocated} bytes retained")
+}
+
+// =============================================================================
+// Concurrent Access Stress Tests
+// =============================================================================
+
+@test
+@stress(duration: 10.seconds(), concurrency: 50)
+async fn test_concurrent_bookmark_operations() {
+  let (store, _) = await create_test_store()
+
+  stress.run(async () => {
+    // Each worker creates, reads, updates, and deletes a bookmark
+    let bookmark = await store.write().create(1, CreateBookmark {
+      url: "https://concurrent.example.com/{random.u64()}",
+      title: "Concurrent bookmark",
+      tags: ["stress"],
+    })?
+
+    let fetched = await store.read().get(bookmark.id)?
+    assert_eq(fetched.title, "Concurrent bookmark")
+
+    await store.write().update(bookmark.id, 1, UpdateBookmark {
+      title: some("Updated concurrent"),
+    })?
+
+    await store.write().delete(bookmark.id, 1)?
+  })
+
+  let report = stress.report()
+  assert(report.error_rate == 0.0,
+    "Errors during concurrent access: {report.error_rate}")
+  assert(report.p99_latency < 20.ms(),
+    "P99 latency too high: {report.p99_latency}")
+}
+
+@test
+@stress(duration: 5.seconds(), concurrency: 30)
+async fn test_concurrent_search_under_writes() {
+  let (store, search) = await create_test_store()
+
+  // Pre-populate with data
+  for i in 0..100 {
+    await store.write().create(1, CreateBookmark {
+      url: "https://seed.example.com/{i}",
+      title: "Seed bookmark {i} about programming and technology",
+      tags: ["seed", "programming"],
+    })?
+  }
+
+  stress.run(async () => {
+    let roll = random.u32(0..100)
+
+    if roll < 70 {
+      // 70% reads: search queries
+      let results = search.search("programming")
+      assert(results.len() >= 0)  // should not crash
+    } else if roll < 90 {
+      // 20% reads: list with pagination
+      let result = await store.read().list(1, page: 1, per_page: 20)
+      assert(result.items.len() >= 0)
+    } else {
+      // 10% writes: create and delete
+      let bookmark = await store.write().create(1, CreateBookmark {
+        url: "https://stress.example.com/{random.u64()}",
+        title: "Stress test bookmark",
+        tags: ["stress"],
+      })?
+      await store.write().delete(bookmark.id, 1)?
+    }
+  })
+
+  let report = stress.report()
+  assert(report.error_rate == 0.0, "Errors during mixed workload")
+  assert(report.p99_latency < 50.ms(),
+    "P99 too high for mixed workload: {report.p99_latency}")
+}
+
+// =============================================================================
+// HTTP Endpoint Load Test
+// =============================================================================
+
+@test
+@perf(max_time: 5.seconds())
+async fn test_api_endpoint_throughput() {
+  let metrics = Shared.new(Metrics.new())
+  let search = SearchEngine.new()
+  let blacklist = Shared.new(TokenBlacklist.new())
+  let user_store = Shared.new(UserStore.new())
+  let bookmark_store = Shared.new(BookmarkStore.new(search))
+  let broadcaster = Shared.new(SyncBroadcaster.new(metrics))
+
+  let router = Router.new()
+  let auth_router = user_routes(user_store.clone(), blacklist.clone())
+  router.mount("/", auth_router)
+
+  let protected = Router.new()
+  protected.use(auth_required(blacklist.clone()))
+  let bm_router = bookmark_routes(bookmark_store.clone(), broadcaster.clone())
+  protected.mount("/", bm_router)
+  router.mount("/api/v1", protected)
+
+  let server = MockServer.new(router)
+  let client = server.client()
+
+  // Register a user
+  let resp = await client.post("/auth/register", json: {
+    "username": "loadtest",
+    "email": "load@test.com",
+    "password": "load_test_password_123",
+  })
+  let body = resp.json<{str: any}>()
+  let token = body["token"]["access_token"] as str
+
+  // Create some initial bookmarks
+  for i in 0..50 {
+    await client.post("/api/v1/bookmarks", json: {
+      "url": "https://loadtest.com/{i}",
+      "title": "Load test bookmark {i}",
+      "tags": ["load", "test", "tag-{i % 5}"],
+    }, headers: { "Authorization": "Bearer {token}" })
+  }
+
+  // Hammer the list endpoint
+  let futures = (0..500).map((_) => {
+    client.get("/api/v1/bookmarks?page=1&per_page=20", headers: {
+      "Authorization": "Bearer {token}"
+    })
+  })
+
+  let responses = await all(futures)
+  let success_count = responses.filter((r) => r.status == 200).len()
+
+  assert_eq(success_count, 500, "All requests should succeed")
+}
+
+// =============================================================================
+// Scaling Characteristics
+// =============================================================================
+
+@test
+@perf(max_time: 5.seconds())
+async fn test_search_scaling_with_corpus_size() {
+  let search = SearchEngine.new()
+  let mut timings: [f64] = []
+
+  // Measure search time as corpus grows
+  for batch in 0..10 {
+    // Add 500 documents per batch
+    for i in 0..500 {
+      let idx = batch * 500 + i
+      search.index_bookmark(Bookmark {
+        id: idx as u64,
+        user_id: 1,
+        url: "https://example.com/{idx}",
+        title: "Article about topic {idx % 50}",
+        description: "Content for document {idx}",
+        tags: ["tag-{idx % 10}"],
+        notes: "",
+        visibility: Visibility.Public,
+        is_starred: false,
+        read_count: 0,
+        created_at: DateTime.now(),
+        updated_at: DateTime.now(),
+      })
+    }
+
+    // Time 50 search queries
+    let start = time.now()
+    for _ in 0..50 {
+      search.search("article topic")
+    }
+    let elapsed = time.since(start).as_ms()
+    timings.push(elapsed)
+  }
+
+  // Search time should scale sublinearly — last batch should not be
+  // dramatically slower than first
+  let first = timings[0]
+  let last = timings[9]
+
+  assert(last < first * 5.0,
+    "Search scaling issue: {last}ms at 5000 docs vs {first}ms at 500 docs (>5x slower)")
+}
+
+@test
+@perf(max_time: 3.seconds())
+async fn test_pagination_performance_at_scale() {
+  let (store, _) = await create_test_store()
+
+  // Create 5000 bookmarks
+  for i in 0..5_000 {
+    await store.write().create(1, CreateBookmark {
+      url: "https://scale.example.com/{i}",
+      title: "Scale bookmark {i}",
+      tags: ["scale", "tag-{i % 20}"],
+    })?
+  }
+
+  // Accessing first page should be fast
+  let start_first = time.now()
+  for _ in 0..100 {
+    await store.read().list(1, page: 1, per_page: 20)
+  }
+  let first_page_time = time.since(start_first).as_ms()
+
+  // Accessing last page should also be reasonably fast
+  let start_last = time.now()
+  for _ in 0..100 {
+    await store.read().list(1, page: 250, per_page: 20)
+  }
+  let last_page_time = time.since(start_last).as_ms()
+
+  // Last page access should not be dramatically slower
+  assert(last_page_time < first_page_time * 3.0,
+    "Late page access too slow: {last_page_time}ms vs first page {first_page_time}ms")
+}

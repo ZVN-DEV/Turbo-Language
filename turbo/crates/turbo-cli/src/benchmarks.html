@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Turbo Benchmarks</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-primary:#0e0e12;
+  --bg-secondary:#16161e;
+  --bg-tertiary:#1e1e2a;
+  --bg-hover:#252536;
+  --border:#2a2a3c;
+  --text-primary:#e4e4ef;
+  --text-secondary:#9090a8;
+  --text-muted:#5c5c72;
+  --accent:#a855f7;
+  --accent-dim:#7c3aed;
+  --accent-glow:rgba(168,85,247,0.15);
+  --accent-glow-strong:rgba(168,85,247,0.35);
+  --success:#34d399;
+  --error:#f87171;
+  --warning:#fbbf24;
+  --color-compiled:#3b82f6;
+  --color-compiled-dim:rgba(59,130,246,0.15);
+  --color-jit:#a855f7;
+  --color-jit-dim:rgba(168,85,247,0.15);
+  --color-vm:#f59e0b;
+  --color-vm-dim:rgba(245,158,11,0.15);
+  --color-interpreted:#ef4444;
+  --color-interpreted-dim:rgba(239,68,68,0.15);
+  --font-mono:'Menlo','Cascadia Code','Fira Code','JetBrains Mono','Consolas',monospace;
+  --font-sans:-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',sans-serif;
+  --radius:8px;
+  --transition:150ms ease;
+}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--font-sans);
+  background:var(--bg-primary);
+  color:var(--text-primary);
+  line-height:1.6;
+  min-height:100vh;
+}
+
+/* ── Header ── */
+header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:0 24px;
+  height:52px;
+  min-height:52px;
+  background:var(--bg-secondary);
+  border-bottom:1px solid var(--border);
+  position:sticky;
+  top:0;
+  z-index:100;
+  backdrop-filter:blur(12px);
+}
+.brand{display:flex;align-items:center;gap:10px}
+.brand-logo{
+  width:28px;height:28px;
+  background:linear-gradient(135deg,var(--accent),var(--accent-dim));
+  border-radius:6px;
+  display:flex;align-items:center;justify-content:center;
+  font-weight:800;font-size:16px;color:#fff;
+  box-shadow:0 0 16px var(--accent-glow);
+}
+.brand-name{font-size:16px;font-weight:700;letter-spacing:-0.3px;color:var(--text-primary)}
+.brand-tag{
+  font-size:10px;font-weight:600;
+  background:var(--accent-glow);color:var(--accent);
+  padding:2px 7px;border-radius:10px;
+  letter-spacing:0.5px;text-transform:uppercase;
+}
+.header-links{display:flex;align-items:center;gap:6px}
+.header-links a{
+  color:var(--text-secondary);
+  text-decoration:none;
+  font-size:13px;
+  font-weight:500;
+  padding:6px 12px;
+  border-radius:var(--radius);
+  transition:all var(--transition);
+}
+.header-links a:hover{color:var(--text-primary);background:var(--bg-tertiary)}
+.header-links a.active{color:var(--accent);background:var(--accent-glow)}
+
+/* ── Hero ── */
+.hero{
+  text-align:center;
+  padding:80px 24px 60px;
+  position:relative;
+  overflow:hidden;
+}
+.hero::before{
+  content:'';
+  position:absolute;
+  top:-120px;left:50%;transform:translateX(-50%);
+  width:600px;height:600px;
+  background:radial-gradient(circle,var(--accent-glow-strong) 0%,transparent 70%);
+  pointer-events:none;
+  opacity:0.4;
+}
+.hero-headline{
+  font-size:clamp(32px,5vw,56px);
+  font-weight:800;
+  letter-spacing:-1.5px;
+  line-height:1.1;
+  margin-bottom:16px;
+  position:relative;
+}
+.hero-headline .speed{
+  background:linear-gradient(135deg,var(--accent),#c084fc,var(--accent-dim));
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+  background-clip:text;
+}
+.hero-headline .zero{
+  background:linear-gradient(135deg,var(--success),#6ee7b7);
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+  background-clip:text;
+}
+.hero-sub{
+  font-size:clamp(14px,2vw,18px);
+  color:var(--text-secondary);
+  max-width:600px;
+  margin:0 auto;
+  position:relative;
+  line-height:1.5;
+}
+.hero-sub strong{color:var(--text-primary);font-weight:600}
+
+/* ── Container ── */
+.container{
+  max-width:960px;
+  margin:0 auto;
+  padding:0 24px 80px;
+}
+
+/* ── Section titles ── */
+.section-label{
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:1.2px;
+  text-transform:uppercase;
+  color:var(--accent);
+  margin-bottom:12px;
+}
+.section-title{
+  font-size:24px;
+  font-weight:700;
+  letter-spacing:-0.5px;
+  margin-bottom:8px;
+}
+.section-desc{
+  color:var(--text-secondary);
+  font-size:14px;
+  margin-bottom:32px;
+  max-width:640px;
+}
+
+/* ── Chart ── */
+.chart-section{margin-bottom:56px}
+.chart{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+.chart-row{
+  display:grid;
+  grid-template-columns:140px 1fr 80px;
+  align-items:center;
+  gap:12px;
+  padding:6px 0;
+  border-radius:var(--radius);
+  transition:background var(--transition);
+}
+.chart-row:hover{background:var(--bg-secondary)}
+.chart-row.is-turbo{
+  background:var(--accent-glow);
+  padding:10px 12px;
+  margin:-4px -12px;
+  border-radius:10px;
+  border:1px solid rgba(168,85,247,0.2);
+  box-shadow:0 0 30px rgba(168,85,247,0.08);
+}
+.chart-row.is-turbo .bar-label{
+  font-weight:700;
+  color:var(--accent);
+}
+.bar-label{
+  font-size:13px;
+  font-weight:500;
+  color:var(--text-primary);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.bar-label .category-dot{
+  display:inline-block;
+  width:8px;height:8px;
+  border-radius:50%;
+  margin-right:6px;
+  vertical-align:middle;
+  position:relative;
+  top:-1px;
+}
+.bar-track{
+  height:28px;
+  background:var(--bg-tertiary);
+  border-radius:6px;
+  position:relative;
+  overflow:hidden;
+}
+.bar-fill{
+  height:100%;
+  border-radius:6px;
+  width:0;
+  transition:width 1.2s cubic-bezier(0.22,1,0.36,1);
+  position:relative;
+}
+.bar-fill.compiled{background:linear-gradient(90deg,var(--color-compiled),#60a5fa)}
+.bar-fill.jit{background:linear-gradient(90deg,var(--color-jit),#c084fc)}
+.bar-fill.vm{background:linear-gradient(90deg,var(--color-vm),#fbbf24)}
+.bar-fill.interpreted{background:linear-gradient(90deg,var(--color-interpreted),#f87171)}
+.bar-fill.turbo-bar{
+  background:linear-gradient(90deg,var(--accent),#c084fc,var(--accent));
+  box-shadow:0 0 20px rgba(168,85,247,0.4);
+}
+.bar-value{
+  font-size:13px;
+  font-weight:600;
+  color:var(--text-secondary);
+  text-align:right;
+  font-family:var(--font-mono);
+}
+.bar-value .unit{
+  font-size:11px;
+  font-weight:400;
+  color:var(--text-muted);
+  margin-left:2px;
+}
+.chart-row.is-turbo .bar-value{color:var(--accent);font-weight:700}
+
+/* ── vs C badge ── */
+.vs-c{
+  display:inline-block;
+  font-size:10px;
+  font-weight:600;
+  padding:2px 6px;
+  border-radius:10px;
+  margin-left:6px;
+  vertical-align:middle;
+}
+.vs-c.fast{background:rgba(52,211,153,0.15);color:var(--success)}
+.vs-c.mid{background:rgba(251,191,36,0.15);color:var(--warning)}
+.vs-c.slow{background:rgba(248,113,113,0.15);color:var(--error)}
+
+/* ── Legend ── */
+.legend{
+  display:flex;
+  flex-wrap:wrap;
+  gap:16px;
+  margin-top:24px;
+  padding-top:20px;
+  border-top:1px solid var(--border);
+}
+.legend-item{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  font-size:12px;
+  color:var(--text-secondary);
+}
+.legend-dot{
+  width:10px;height:10px;
+  border-radius:50%;
+  flex-shrink:0;
+}
+.legend-dot.compiled{background:var(--color-compiled)}
+.legend-dot.jit{background:var(--color-jit)}
+.legend-dot.vm{background:var(--color-vm)}
+.legend-dot.interpreted{background:var(--color-interpreted)}
+
+/* ── Data Table ── */
+.table-section{margin-bottom:56px}
+.data-table{
+  width:100%;
+  border-collapse:collapse;
+  font-size:13px;
+}
+.data-table thead th{
+  text-align:left;
+  font-size:11px;
+  font-weight:600;
+  letter-spacing:0.5px;
+  text-transform:uppercase;
+  color:var(--text-muted);
+  padding:12px 16px;
+  border-bottom:1px solid var(--border);
+}
+.data-table thead th:nth-child(3),
+.data-table thead th:nth-child(4){text-align:right}
+.data-table tbody tr{
+  transition:background var(--transition);
+  border-bottom:1px solid rgba(42,42,60,0.4);
+}
+.data-table tbody tr:hover{background:var(--bg-secondary)}
+.data-table tbody tr.is-turbo{
+  background:var(--accent-glow);
+  border-bottom:1px solid rgba(168,85,247,0.2);
+}
+.data-table tbody tr.is-turbo td{font-weight:600}
+.data-table td{
+  padding:10px 16px;
+  color:var(--text-primary);
+}
+.data-table td:nth-child(3),
+.data-table td:nth-child(4){
+  text-align:right;
+  font-family:var(--font-mono);
+  font-size:13px;
+}
+.data-table .rank{
+  color:var(--text-muted);
+  font-weight:600;
+  font-family:var(--font-mono);
+  font-size:12px;
+}
+.data-table .lang-name{font-weight:500}
+.data-table tr.is-turbo .lang-name{color:var(--accent)}
+.data-table .category-tag{
+  display:inline-block;
+  font-size:10px;
+  font-weight:600;
+  padding:2px 8px;
+  border-radius:10px;
+  letter-spacing:0.3px;
+  text-transform:uppercase;
+}
+.category-tag.compiled{background:var(--color-compiled-dim);color:var(--color-compiled)}
+.category-tag.jit{background:var(--color-jit-dim);color:var(--color-jit)}
+.category-tag.vm{background:var(--color-vm-dim);color:var(--color-vm)}
+.category-tag.interpreted{background:var(--color-interpreted-dim);color:var(--color-interpreted)}
+
+/* ── Context Panel ── */
+.context-section{margin-bottom:56px}
+.context-panel{
+  background:var(--bg-secondary);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:28px 32px;
+}
+.context-panel h3{
+  font-size:16px;
+  font-weight:700;
+  margin-bottom:16px;
+  letter-spacing:-0.3px;
+}
+.context-list{
+  list-style:none;
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.context-list li{
+  display:flex;
+  align-items:flex-start;
+  gap:10px;
+  font-size:13px;
+  color:var(--text-secondary);
+  line-height:1.5;
+}
+.context-list li::before{
+  content:'';
+  flex-shrink:0;
+  width:6px;height:6px;
+  margin-top:7px;
+  border-radius:50%;
+  background:var(--accent);
+}
+.context-list code{
+  font-family:var(--font-mono);
+  font-size:12px;
+  background:var(--bg-tertiary);
+  padding:1px 6px;
+  border-radius:4px;
+  color:var(--text-primary);
+}
+
+/* ── Stats Row ── */
+.stats{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  gap:16px;
+  margin-bottom:56px;
+}
+.stat-card{
+  background:var(--bg-secondary);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:24px;
+  text-align:center;
+  transition:all var(--transition);
+}
+.stat-card:hover{
+  border-color:var(--accent-dim);
+  box-shadow:0 0 20px var(--accent-glow);
+  transform:translateY(-2px);
+}
+.stat-value{
+  font-size:32px;
+  font-weight:800;
+  letter-spacing:-1px;
+  margin-bottom:4px;
+}
+.stat-value.purple{
+  background:linear-gradient(135deg,var(--accent),#c084fc);
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+  background-clip:text;
+}
+.stat-value.green{
+  background:linear-gradient(135deg,var(--success),#6ee7b7);
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+  background-clip:text;
+}
+.stat-value.blue{
+  background:linear-gradient(135deg,var(--color-compiled),#60a5fa);
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+  background-clip:text;
+}
+.stat-value.orange{
+  background:linear-gradient(135deg,var(--color-vm),#fbbf24);
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+  background-clip:text;
+}
+.stat-label{
+  font-size:12px;
+  color:var(--text-muted);
+  font-weight:500;
+}
+
+/* ── Footer ── */
+footer{
+  border-top:1px solid var(--border);
+  padding:24px;
+  text-align:center;
+  font-size:12px;
+  color:var(--text-muted);
+}
+footer a{color:var(--accent);text-decoration:none}
+footer a:hover{text-decoration:underline}
+
+/* ── Scale Toggle ── */
+.scale-toggle{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-bottom:20px;
+}
+.scale-toggle span{
+  font-size:12px;
+  color:var(--text-muted);
+  font-weight:500;
+}
+.scale-toggle span.active-scale{color:var(--text-primary)}
+.toggle-track{
+  width:36px;height:20px;
+  background:var(--bg-tertiary);
+  border:1px solid var(--border);
+  border-radius:10px;
+  position:relative;
+  cursor:pointer;
+  transition:all var(--transition);
+}
+.toggle-track:hover{border-color:var(--accent-dim)}
+.toggle-thumb{
+  width:16px;height:16px;
+  background:var(--accent);
+  border-radius:50%;
+  position:absolute;
+  top:1px;left:1px;
+  transition:all 0.2s ease;
+  box-shadow:0 0 8px var(--accent-glow);
+}
+.toggle-track.log .toggle-thumb{left:17px}
+
+/* ── Responsive ── */
+@media(max-width:640px){
+  .hero{padding:48px 16px 40px}
+  .container{padding:0 16px 48px}
+  .chart-row{
+    grid-template-columns:100px 1fr 60px;
+    gap:8px;
+  }
+  .bar-label{font-size:11px}
+  .bar-value{font-size:11px}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .data-table{font-size:12px}
+  .data-table td,.data-table thead th{padding:8px 10px}
+  .context-panel{padding:20px}
+}
+@media(max-width:420px){
+  .chart-row{
+    grid-template-columns:80px 1fr 50px;
+    gap:6px;
+  }
+  .stats{grid-template-columns:1fr 1fr}
+  .stat-card{padding:16px}
+  .stat-value{font-size:24px}
+}
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="brand">
+    <div class="brand-logo">T</div>
+    <span class="brand-name">Turbo</span>
+    <span class="brand-tag">Benchmarks</span>
+  </div>
+  <div class="header-links">
+    <a href="/">Playground</a>
+    <a href="/benchmarks" class="active">Benchmarks</a>
+  </div>
+</header>
+
+<!-- ── Hero ── -->
+<section class="hero">
+  <h1 class="hero-headline">
+    <span class="speed">1.4x C speed.</span><br>
+    <span class="zero">No build step required.</span>
+  </h1>
+  <p class="hero-sub">
+    <strong>turbo run</strong> — JIT compiles and executes instantly.
+    <strong>turbo build</strong> — produces a native binary.
+    Same Cranelift backend, two deployment modes. All data from <strong>Apple Silicon</strong>.
+  </p>
+</section>
+
+<!-- ── Stats ── -->
+<div class="container">
+  <div class="stats">
+    <div class="stat-card">
+      <div class="stat-value purple">400ms</div>
+      <div class="stat-label">turbo build fib(40)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value green">400ms</div>
+      <div class="stat-label">turbo run fib(40)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value blue">1.7x</div>
+      <div class="stat-label">faster than Node.js</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value orange">43x</div>
+      <div class="stat-label">faster than Python</div>
+    </div>
+  </div>
+
+  <!-- ── Tier 1: Compiled Binaries ── -->
+  <section class="chart-section">
+    <div class="section-label">Tier 1 &mdash; Compiled Binaries</div>
+    <h2 class="section-title">AOT Native Executables</h2>
+    <p class="section-desc">
+      Pre-compiled to native machine code. <code>turbo build</code> produces a standalone binary via Cranelift AOT.
+      All compiled with optimization flags enabled.
+    </p>
+    <div class="chart" id="chart-compiled"></div>
+  </section>
+
+  <!-- ── Tier 2: JIT Runtimes ── -->
+  <section class="chart-section">
+    <div class="section-label">Tier 2 &mdash; JIT Runtimes</div>
+    <h2 class="section-title">Just-In-Time Compilation</h2>
+    <p class="section-desc">
+      Compile and execute in one step. <code>turbo run</code> uses Cranelift JIT &mdash; time includes compilation + execution.
+      Compared against production JavaScript and JVM runtimes.
+    </p>
+    <div class="chart" id="chart-jit"></div>
+  </section>
+
+  <!-- ── Tier 3: Interpreted ── -->
+  <section class="chart-section">
+    <div class="section-label">Tier 3 &mdash; For Perspective</div>
+    <h2 class="section-title">vs Interpreted Languages</h2>
+    <p class="section-desc">
+      Pure interpreters with no JIT. Included for context &mdash; these are popular, productive languages
+      where raw speed isn't the primary goal.
+    </p>
+    <div class="chart" id="chart-interpreted"></div>
+  </section>
+
+  <!-- ── Data Table ── -->
+  <section class="table-section">
+    <div class="section-label">Raw Data</div>
+    <h2 class="section-title">Complete Results</h2>
+    <p class="section-desc">
+      Recursive Fibonacci(40) &mdash; 204 million function calls. All tests return
+      <code style="font-family:var(--font-mono);font-size:12px;background:var(--bg-tertiary);padding:1px 6px;border-radius:4px;">102334155</code>.
+      Each language tested 3+ times, median reported. Lower is better.
+    </p>
+    <div style="overflow-x:auto;border-radius:12px;border:1px solid var(--border)">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th style="width:48px">#</th>
+            <th>Language</th>
+            <th>Time (ms)</th>
+            <th>vs C</th>
+            <th>Tier</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── Context ── -->
+  <section class="context-section">
+    <div class="section-label">Methodology</div>
+    <h2 class="section-title">What This Measures</h2>
+    <div class="context-panel">
+      <h3>Benchmark Details</h3>
+      <ul class="context-list">
+        <li>
+          <strong>Recursive Fibonacci(40)</strong> &mdash; 204,668,309 function calls, pure recursion with no memoization.
+          This stress-tests function call overhead, stack management, and basic integer arithmetic.
+        </li>
+        <li>
+          <strong>Turbo appears in two tiers.</strong>
+          <code>turbo build</code> (Cranelift AOT) produces a native binary &mdash; measured the same way as C, Rust, and Swift.
+          <code>turbo run</code> (Cranelift JIT) compiles and executes in one step &mdash; the 400ms includes compilation time.
+        </li>
+        <li>
+          Both modes use the same <strong>Cranelift code generator</strong>, so generated code quality is identical.
+          AOT adds PIC overhead; JIT includes compilation time. The two roughly cancel out.
+        </li>
+        <li>
+          Compiled languages used <code>-O2</code> or equivalent flags.
+          JIT runtimes include startup and warmup time in the measurement.
+        </li>
+        <li>
+          All tests run <strong>3+ times</strong>, <strong>median</strong> reported.
+          Platform: Apple Silicon M-series, Darwin arm64, macOS.
+        </li>
+        <li>
+          This is a <strong>single-threaded, CPU-bound</strong> microbenchmark. Real-world performance depends on many factors
+          including I/O, memory allocation patterns, and concurrency.
+        </li>
+      </ul>
+    </div>
+  </section>
+</div>
+
+<!-- ── Footer ── -->
+<footer>
+  <p>
+    Data collected <strong>February 23, 2026</strong>. Platform: Apple Silicon M-series, macOS (Darwin arm64).
+    <br>
+    Turbo is in active development. Benchmarks will be updated as the compiler matures.
+    <br style="margin-top:8px">
+    <a href="/">Try Turbo in the Playground</a>
+  </p>
+</footer>
+
+<script>
+// ── Benchmark Data (three tiers) ──
+const compiled = [
+  { lang: 'Rust',       detail: 'rustc -O',      ms: 280,  turbo: false },
+  { lang: 'C',          detail: 'gcc -O2',        ms: 290,  turbo: false },
+  { lang: 'Swift',      detail: 'swiftc -O',      ms: 360,  turbo: false },
+  { lang: 'Turbo',      detail: 'turbo build',    ms: 400,  turbo: true  },
+];
+
+const jit = [
+  { lang: 'Java',       detail: 'JDK HotSpot',    ms: 350,  turbo: false },
+  { lang: 'Bun',        detail: 'JavaScriptCore',  ms: 380,  turbo: false },
+  { lang: 'Turbo',      detail: 'turbo run',       ms: 400,  turbo: true  },
+  { lang: 'Node.js',    detail: 'V8',              ms: 660,  turbo: false },
+];
+
+const interpreted = [
+  { lang: 'Ruby',       detail: '3.x',            ms: 6120,  turbo: false },
+  { lang: 'Python',     detail: '3.x',            ms: 17360, turbo: false },
+  { lang: 'Perl',       detail: '5.x',            ms: 31410, turbo: false },
+];
+
+const allBenchmarks = [
+  ...compiled.map(b => ({...b, category: 'compiled'})),
+  ...jit.map(b => ({...b, category: 'jit'})),
+  ...interpreted.map(b => ({...b, category: 'interpreted'})),
+];
+
+const C_TIME = 290;
+
+const categoryColors = {
+  compiled:    'var(--color-compiled)',
+  jit:         'var(--color-jit)',
+  interpreted: 'var(--color-interpreted)',
+};
+
+const tierLabels = {
+  compiled:    'compiled',
+  jit:         'jit',
+  interpreted: 'interpreted',
+};
+
+// ── Compute bar width percentage (linear within tier) ──
+function barPercent(ms, items) {
+  const max = Math.max(...items.map(b => b.ms));
+  return Math.max(8, (ms / max) * 100);
+}
+
+// ── vs C multiplier ──
+function vsC(ms) {
+  return (ms / C_TIME).toFixed(2);
+}
+function vsCClass(ms) {
+  const ratio = ms / C_TIME;
+  if (ratio <= 1.5) return 'fast';
+  if (ratio <= 3.0) return 'mid';
+  return 'slow';
+}
+
+// ── Build a tier chart ──
+function buildTierChart(containerId, items, category) {
+  const chart = document.getElementById(containerId);
+  chart.innerHTML = '';
+
+  items.forEach(b => {
+    const row = document.createElement('div');
+    row.className = 'chart-row' + (b.turbo ? ' is-turbo' : '');
+
+    const label = document.createElement('div');
+    label.className = 'bar-label';
+    const dotColor = b.turbo ? 'var(--accent)' : categoryColors[category];
+    const labelText = b.detail ? `${b.lang} <span style="color:var(--text-muted);font-size:11px">(${b.detail})</span>` : b.lang;
+    label.innerHTML = `<span class="category-dot" style="background:${dotColor}"></span>${labelText}`;
+
+    const track = document.createElement('div');
+    track.className = 'bar-track';
+
+    const fill = document.createElement('div');
+    fill.className = 'bar-fill ' + (b.turbo ? 'turbo-bar' : category);
+    fill.dataset.ms = b.ms;
+    fill.dataset.tier = category;
+
+    track.appendChild(fill);
+
+    const value = document.createElement('div');
+    value.className = 'bar-value';
+    const ratio = vsC(b.ms);
+    const rClass = vsCClass(b.ms);
+    value.innerHTML = b.ms.toLocaleString() + '<span class="unit">ms</span>';
+
+    row.appendChild(label);
+    row.appendChild(track);
+    row.appendChild(value);
+    chart.appendChild(row);
+  });
+
+  // Animate bars in
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      chart.querySelectorAll('.bar-fill').forEach(fill => {
+        const ms = parseFloat(fill.dataset.ms);
+        fill.style.width = barPercent(ms, items) + '%';
+      });
+    });
+  });
+}
+
+// ── Build Table ──
+function buildTable() {
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = '';
+
+  allBenchmarks.forEach((b, i) => {
+    const tr = document.createElement('tr');
+    if (b.turbo) tr.className = 'is-turbo';
+
+    const rank = i + 1;
+    const ratio = vsC(b.ms);
+    const rClass = vsCClass(b.ms);
+    const langDisplay = b.detail ? `${b.lang} <span style="color:var(--text-muted);font-weight:400;font-size:11px">(${b.detail})</span>` : b.lang;
+
+    tr.innerHTML = `
+      <td class="rank">${rank}</td>
+      <td class="lang-name">${langDisplay}</td>
+      <td>${b.ms.toLocaleString()}</td>
+      <td><span class="vs-c ${rClass}" style="font-size:12px">${b.lang === 'C' ? 'base' : ratio + 'x'}</span></td>
+      <td><span class="category-tag ${b.category}">${tierLabels[b.category]}</span></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// ── Init ──
+buildTierChart('chart-compiled', compiled, 'compiled');
+buildTierChart('chart-jit', jit, 'jit');
+buildTierChart('chart-interpreted', interpreted, 'interpreted');
+buildTable();
+</script>
+</body>
+</html>

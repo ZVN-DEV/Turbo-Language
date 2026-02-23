@@ -1,0 +1,457 @@
+// =============================================================================
+// perf_test.tb — Performance, memory, and stress tests for TurboNotes
+//
+// Demonstrates:
+//   - @perf decorator with max_memory and max_time constraints
+//   - @stress decorator for concurrent load testing
+//   - memory.snapshot() for memory leak detection
+//   - Large document handling (100K+ lines)
+//   - Search index performance at scale
+//   - Editor operation throughput during simulated typing
+//   - .ms(), .mb(), .kb() unit helpers for readable thresholds
+//   - Deterministic memory: no GC pauses measured during editing
+// =============================================================================
+
+import { Editor } from "../src/editor"
+import { NoteStore } from "../src/storage"
+import { SearchIndex } from "../src/search"
+import { MarkdownParser, MarkdownRenderer } from "../src/markdown"
+import { Note, SearchQuery, Direction, EditorState } from "../src/models"
+import { TempDir } from "turbo/test-utils"
+import { Path } from "std/fs"
+import { Shared } from "turbo/sync"
+
+// =============================================================================
+// Editor Performance
+// =============================================================================
+
+@test
+@perf(max_memory: 50.mb(), max_time: 200.ms())
+fn test_editor_large_document_load() {
+  // Simulate loading a 100K line document
+  let lines = (0..100_000).map((i) => "Line {i}: This is a line of markdown text with some **bold** and *italic* content.")
+  let large_doc = lines.collect::<[str]>().join("\n")
+
+  let editor = Editor.from_content(large_doc)
+
+  let state = editor.snapshot()
+  assert_eq(state.content.lines().count(), 100_000)
+  assert_eq(state.cursor.line, 0)
+  assert_eq(state.cursor.offset, 0)
+}
+
+@test
+@perf(max_memory: 20.mb(), max_time: 500.ms())
+fn test_editor_typing_throughput() {
+  let editor = Editor.new()
+
+  // Simulate typing 10,000 characters as fast as possible
+  for i in 0..10_000 {
+    editor.insert_text("{(i % 26 + 65) as char}")  // A-Z cycling
+    if i % 80 == 79 {
+      editor.insert_text("\n")
+    }
+  }
+
+  assert(editor.content().len() >= 10_000)
+  assert(editor.is_modified())
+}
+
+@test
+@perf(max_time: 100.ms())
+fn test_editor_cursor_movement_in_large_document() {
+  let lines = (0..10_000).map((i) => "Line {i} with some content here")
+  let doc = lines.collect::<[str]>().join("\n")
+  let editor = Editor.from_content(doc)
+
+  // Move cursor to the middle of the document
+  for _ in 0..5_000 {
+    editor.move_cursor(Direction.Down, false)
+  }
+
+  assert_eq(editor.snapshot().cursor.line, 5_000)
+
+  // Move back to the start
+  editor.move_cursor(Direction.DocStart, false)
+  assert_eq(editor.snapshot().cursor.line, 0)
+
+  // Move to the end
+  editor.move_cursor(Direction.DocEnd, false)
+  assert_eq(editor.snapshot().cursor.line, 9_999)
+}
+
+@test
+@perf(max_time: 300.ms())
+fn test_editor_undo_redo_deep_stack() {
+  let editor = Editor.new()
+
+  // Create 500 undo entries (the maximum before trimming)
+  for i in 0..500 {
+    editor.insert_text("Entry {i}\n")
+  }
+
+  // Undo all of them
+  let mut undo_count = 0
+  while editor.undo() {
+    undo_count += 1
+  }
+
+  assert(undo_count > 0, "Should have undone at least some entries")
+
+  // Redo all of them
+  let mut redo_count = 0
+  while editor.redo() {
+    redo_count += 1
+  }
+
+  assert_eq(redo_count, undo_count, "Should redo the same number of operations")
+}
+
+// =============================================================================
+// Memory Leak Detection
+// =============================================================================
+
+@test
+async fn test_no_memory_leak_on_repeated_load_unload() {
+  let before = memory.snapshot()
+  let editor = Editor.new()
+
+  // Simulate opening and closing 100 documents
+  for i in 0..100 {
+    let content = "# Document {i}\n\n" ++ "Lorem ipsum dolor sit amet. ".repeat(100)
+    editor.load_content(content)
+
+    // Simulate some editing
+    editor.insert_text("Added text.\n")
+    editor.delete(false)
+
+    // Simulate closing (load empty)
+    editor.load_content("")
+  }
+
+  let after = memory.snapshot()
+
+  // The editor should not retain old document content
+  assert(after.allocated - before.allocated < 100.kb(),
+    "Memory leak: {after.allocated - before.allocated} bytes retained after 100 load/unload cycles")
+}
+
+@test
+async fn test_no_memory_leak_on_search_index_updates() {
+  let before = memory.snapshot()
+  let index = SearchIndex.new()
+
+  // Add and remove 200 documents
+  for i in 0..200 {
+    let note = Note {
+      id: "note-{i}",
+      title: "Test Note {i}",
+      content: "Content for note {i} with various keywords: programming, turbo, rust, typescript, markdown.",
+      metadata: NoteMetadata {},
+      path: Path.new("/tmp/note-{i}.md"),
+      created_at: DateTime.now(),
+      updated_at: DateTime.now(),
+    }
+    index.add_document(note)
+  }
+
+  // Remove all documents
+  for i in 0..200 {
+    index.remove_document("note-{i}")
+  }
+
+  let after = memory.snapshot()
+
+  assert(after.allocated - before.allocated < 50.kb(),
+    "Search index memory leak: {after.allocated - before.allocated} bytes retained")
+}
+
+@test
+async fn test_no_memory_leak_on_note_store_churn() {
+  let tmp = TempDir.new("turbo-notes-memleak")
+  let before = memory.snapshot()
+
+  let store = await NoteStore.new(tmp.path())?
+
+  // Create and delete 50 notes
+  for i in 0..50 {
+    let note = await store.create_note("Temp Note {i}")?
+    await store.save_note(note.id, "# Temp Note {i}\n\n" ++ "x".repeat(1_000))?
+    await store.delete_note(note.id)?
+  }
+
+  let after = memory.snapshot()
+
+  assert(after.allocated - before.allocated < 200.kb(),
+    "NoteStore memory leak: {after.allocated - before.allocated} bytes after create/delete churn")
+}
+
+// =============================================================================
+// Search Performance
+// =============================================================================
+
+@test
+@perf(max_time: 500.ms())
+fn test_search_index_build_1000_notes() {
+  let notes = (0..1_000).map((i) => {
+    Note {
+      id: "note-{i}",
+      title: "Note about topic {i % 50}",
+      content: "# Note about topic {i % 50}\n\nThis is note number {i}. It discusses various subjects including programming, design patterns, and software architecture. Keywords: turbo, rust, typescript, markdown, editor, search, performance.",
+      metadata: NoteMetadata { tags: ["topic-{i % 50}"] },
+      path: Path.new("/notes/note-{i}.md"),
+      created_at: DateTime.now(),
+      updated_at: DateTime.now(),
+    }
+  }).collect()
+
+  let index = SearchIndex.build(notes)
+
+  // Verify the index was built
+  let results = index.search(SearchQuery { text: "programming" })?
+  assert(results.len() > 0, "Should find results for 'programming'")
+}
+
+@test
+@perf(max_time: 50.ms())
+fn test_search_query_performance() {
+  // Build a large index first
+  let notes = (0..5_000).map((i) => {
+    Note {
+      id: "note-{i}",
+      title: "Document {i}",
+      content: "# Document {i}\n\n" ++ if i % 10 == 0 {
+        "This document discusses machine learning and artificial intelligence."
+      } else if i % 7 == 0 {
+        "An overview of database design patterns and query optimization."
+      } else if i % 3 == 0 {
+        "Notes on frontend development with React and TypeScript."
+      } else {
+        "General notes about software engineering practices and principles."
+      },
+      metadata: NoteMetadata {},
+      path: Path.new("/notes/doc-{i}.md"),
+      created_at: DateTime.now(),
+      updated_at: DateTime.now(),
+    }
+  }).collect()
+
+  let index = SearchIndex.build(notes)
+
+  // Time the actual search
+  let start = time.now()
+
+  let results = index.search(SearchQuery {
+    text: "machine learning artificial intelligence",
+    max_results: 20,
+  })?
+
+  let elapsed = time.since(start).as_ms()
+
+  assert(results.len() > 0, "Should find ML-related documents")
+  assert(results.len() <= 20, "Should respect max_results")
+  assert(elapsed < 50.0, "Search took {elapsed}ms — should be under 50ms")
+}
+
+@test
+@perf(max_time: 20.ms())
+fn test_prefix_search_performance() {
+  let notes = (0..1_000).map((i) => {
+    Note {
+      id: "note-{i}",
+      title: "Note {i}: {["Alpha", "Beta", "Gamma", "Delta", "Epsilon"][i % 5]} topic",
+      content: "Content for note {i}.",
+      metadata: NoteMetadata {},
+      path: Path.new("/notes/note-{i}.md"),
+      created_at: DateTime.now(),
+      updated_at: DateTime.now(),
+    }
+  }).collect()
+
+  let index = SearchIndex.build(notes)
+
+  let results = index.prefix_search("Alpha", max_results: 10)
+
+  assert_eq(results.len(), 10)
+  assert(results[0].title.contains("Alpha"))
+}
+
+// =============================================================================
+// Markdown Parser Performance
+// =============================================================================
+
+@test
+@perf(max_memory: 30.mb(), max_time: 200.ms())
+fn test_markdown_parse_large_document() {
+  // Build a complex markdown document
+  let mut parts: [str] = ["# Large Document\n"]
+
+  for i in 0..500 {
+    parts.push("## Section {i}\n\n")
+    parts.push("This is paragraph text with **bold**, *italic*, and `code` inline formatting.\n\n")
+    parts.push("- List item 1 with [a link](https://example.com)\n")
+    parts.push("- List item 2 with ~~strikethrough~~\n")
+    parts.push("- List item 3\n\n")
+
+    if i % 10 == 0 {
+      parts.push("```rust\nfn example() {\n    println!(\"Hello, world!\");\n}\n```\n\n")
+    }
+
+    if i % 20 == 0 {
+      parts.push("| Col A | Col B | Col C |\n|-------|-------|-------|\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n\n")
+    }
+  }
+
+  let markdown = parts.join("")
+  let doc = MarkdownParser.parse(markdown)
+
+  assert(doc.blocks.len() > 1_000, "Should parse many blocks: {doc.blocks.len()}")
+}
+
+@test
+@perf(max_time: 100.ms())
+fn test_markdown_render_large_document() {
+  let mut parts: [str] = ["# Render Test\n"]
+  for i in 0..200 {
+    parts.push("## Heading {i}\n\nParagraph with **bold** and *italic* text.\n\n")
+    parts.push("- Item A\n- Item B\n- Item C\n\n")
+  }
+
+  let markdown = parts.join("")
+  let doc = MarkdownParser.parse(markdown)
+  let html = MarkdownRenderer.render(doc)
+
+  assert(html.len() > 10_000, "HTML output should be substantial")
+  assert(html.contains("<h1"), "Should contain h1 heading")
+  assert(html.contains("<strong>"), "Should contain bold text")
+}
+
+// =============================================================================
+// Stress Tests
+// =============================================================================
+
+@test
+@stress(duration: 5.seconds(), concurrency: 10)
+fn test_concurrent_editor_operations() {
+  let editor = Shared.new(Editor.from_content("# Stress Test\n\nInitial content.\n"))
+
+  stress.run(async () => {
+    let roll = random.u32(0..100)
+
+    if roll < 40 {
+      // Insert
+      editor.write().insert_text("x")
+    } else if roll < 60 {
+      // Delete
+      editor.write().delete(false)
+    } else if roll < 80 {
+      // Move cursor
+      let dir = match random.u32(0..4) {
+        0 => Direction.Up
+        1 => Direction.Down
+        2 => Direction.Left
+        _ => Direction.Right
+      }
+      editor.write().move_cursor(dir, false)
+    } else if roll < 90 {
+      // Undo
+      editor.write().undo()
+    } else {
+      // Read snapshot
+      let _ = editor.read().snapshot()
+    }
+  })
+
+  let report = stress.report()
+  assert(report.error_rate == 0.0, "Errors during concurrent editing: {report.error_rate}")
+}
+
+@test
+@stress(duration: 5.seconds(), concurrency: 20)
+async fn test_concurrent_search_queries() {
+  let notes = (0..500).map((i) => {
+    Note {
+      id: "note-{i}",
+      title: "Concurrent Search Note {i}",
+      content: "Content about {["programming", "design", "testing", "deployment", "monitoring"][i % 5]} topic {i}.",
+      metadata: NoteMetadata {},
+      path: Path.new("/notes/note-{i}.md"),
+      created_at: DateTime.now(),
+      updated_at: DateTime.now(),
+    }
+  }).collect()
+
+  let index = Shared.new(SearchIndex.build(notes))
+
+  stress.run(async () => {
+    let query_terms = ["programming", "design", "testing", "deployment", "monitoring"]
+    let term = query_terms[random.u32(0..5) as usize]
+
+    let results = index.read().search(SearchQuery { text: term, max_results: 10 })?
+    assert(results.len() > 0, "Search for '{term}' should return results")
+  })
+
+  let report = stress.report()
+  assert(report.error_rate == 0.0, "Errors during concurrent search: {report.error_rate}")
+  assert(report.p99_latency < 20.ms(), "P99 search latency too high: {report.p99_latency}")
+}
+
+// =============================================================================
+// Scaling Characteristics
+// =============================================================================
+
+@test
+@perf(max_time: 3.seconds())
+fn test_editor_insert_scaling() {
+  let editor = Editor.new()
+  let mut timings: [f64] = []
+
+  // Measure insert performance as document grows
+  for batch in 0..10 {
+    let start = time.now()
+    for _ in 0..1_000 {
+      editor.insert_text("Word ")
+    }
+    let elapsed = time.since(start).as_ms()
+    timings.push(elapsed)
+  }
+
+  // Insert time should not degrade dramatically (no O(n^2) behavior)
+  let first = timings[0]
+  let last = timings[9]
+
+  assert(last < first * 5.0,
+    "Scaling issue: last batch ({last}ms) >5x slower than first ({first}ms)")
+}
+
+@test
+@perf(max_time: 2.seconds())
+fn test_search_index_scaling() {
+  let index = SearchIndex.new()
+  let mut timings: [f64] = []
+
+  // Measure index build time as corpus grows
+  for batch in 0..10 {
+    let start = time.now()
+    for i in 0..100 {
+      let id = batch * 100 + i
+      index.add_document(Note {
+        id: "note-{id}",
+        title: "Scaling Note {id}",
+        content: "Content for scaling test note {id} with various searchable keywords.",
+        metadata: NoteMetadata {},
+        path: Path.new("/notes/note-{id}.md"),
+        created_at: DateTime.now(),
+        updated_at: DateTime.now(),
+      })
+    }
+    let elapsed = time.since(start).as_ms()
+    timings.push(elapsed)
+  }
+
+  let first = timings[0]
+  let last = timings[9]
+
+  assert(last < first * 4.0,
+    "Index scaling issue: batch 10 ({last}ms) >4x slower than batch 1 ({first}ms)")
+}

@@ -1,0 +1,391 @@
+// =============================================================================
+// shortcuts.tb — Keyboard shortcut handler
+//
+// Demonstrates:
+//   - const fn for compile-time shortcut table generation
+//   - Pattern matching on key events (modifiers + key combinations)
+//   - Algebraic data types for key modifiers and actions
+//   - {K: V} map for dynamic shortcut registry
+//   - Pipe operator for chaining shortcut lookups
+//   - Closures stored as values in maps
+//   - Clean separation of input handling from business logic
+// =============================================================================
+
+import { log } from "turbo/log"
+import { AppEvent, Direction, EditorMode, ExportConfig, ExportFormat } from "./models"
+
+// =============================================================================
+// Key Event Types
+// =============================================================================
+
+/// A raw keyboard event from the window system
+@derive(Debug, Clone, Eq, Hash)
+struct KeyEvent {
+  key: Key
+  modifiers: Modifiers
+}
+
+/// Physical keys on the keyboard
+@derive(Debug, Clone, Eq, Hash)
+type Key {
+  Char(char)
+  Enter
+  Tab
+  Backspace
+  Delete
+  Escape
+  Up
+  Down
+  Left
+  Right
+  Home
+  End
+  PageUp
+  PageDown
+  F(u8)       // Function keys F1-F12
+}
+
+/// Modifier keys (bitmask-style, but as a struct for clarity)
+@derive(Debug, Clone, Eq, Hash)
+struct Modifiers {
+  ctrl: bool = false
+  shift: bool = false
+  alt: bool = false
+  meta: bool = false   // Cmd on macOS, Win on Windows
+}
+
+impl Modifiers {
+  fn none() -> Modifiers { Modifiers {} }
+  fn ctrl() -> Modifiers { Modifiers { ctrl: true } }
+  fn shift() -> Modifiers { Modifiers { shift: true } }
+  fn alt() -> Modifiers { Modifiers { alt: true } }
+  fn meta() -> Modifiers { Modifiers { meta: true } }
+  fn ctrl_shift() -> Modifiers { Modifiers { ctrl: true, shift: true } }
+  fn ctrl_alt() -> Modifiers { Modifiers { ctrl: true, alt: true } }
+
+  fn has_any(self) -> bool {
+    self.ctrl || self.shift || self.alt || self.meta
+  }
+}
+
+// =============================================================================
+// Shortcut Binding
+// =============================================================================
+
+/// A binding maps a key combination to an application event
+@derive(Debug, Clone)
+struct ShortcutBinding {
+  key_event: KeyEvent
+  action: AppEvent
+  description: str
+  category: str    // For grouping in the help overlay
+}
+
+// =============================================================================
+// Compile-Time Default Shortcut Table
+// =============================================================================
+
+/// Build the default shortcut bindings at compile time.
+/// These can be overridden at runtime via user configuration.
+const fn build_default_shortcuts() -> [ShortcutBinding] {
+  [
+    // ── File Operations ──
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('n'), modifiers: Modifiers.ctrl() },
+      action: AppEvent.NewNote,
+      description: "New note",
+      category: "File",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('o'), modifiers: Modifiers.ctrl() },
+      action: AppEvent.OpenNote(Path.new("")),  // Path filled at runtime via dialog
+      description: "Open note",
+      category: "File",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('s'), modifiers: Modifiers.ctrl() },
+      action: AppEvent.SaveNote,
+      description: "Save note",
+      category: "File",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('s'), modifiers: Modifiers.ctrl_shift() },
+      action: AppEvent.SaveNoteAs(Path.new("")),  // Path filled at runtime via dialog
+      description: "Save note as...",
+      category: "File",
+    },
+
+    // ── Edit Operations ──
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('z'), modifiers: Modifiers.ctrl() },
+      action: AppEvent.Undo,
+      description: "Undo",
+      category: "Edit",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('z'), modifiers: Modifiers.ctrl_shift() },
+      action: AppEvent.Redo,
+      description: "Redo",
+      category: "Edit",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('y'), modifiers: Modifiers.ctrl() },
+      action: AppEvent.Redo,
+      description: "Redo (alt)",
+      category: "Edit",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('x'), modifiers: Modifiers.ctrl() },
+      action: AppEvent.Cut,
+      description: "Cut",
+      category: "Edit",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('c'), modifiers: Modifiers.ctrl() },
+      action: AppEvent.Copy,
+      description: "Copy",
+      category: "Edit",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('a'), modifiers: Modifiers.ctrl() },
+      action: AppEvent.SelectAll,
+      description: "Select all",
+      category: "Edit",
+    },
+
+    // ── View ──
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('p'), modifiers: Modifiers.ctrl() },
+      action: AppEvent.OpenCommandPalette,
+      description: "Command palette",
+      category: "View",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('\\'), modifiers: Modifiers.ctrl() },
+      action: AppEvent.ToggleSplitView,
+      description: "Toggle split view",
+      category: "View",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('e'), modifiers: Modifiers.ctrl_shift() },
+      action: AppEvent.SetMode(EditorMode.Preview),
+      description: "Preview mode",
+      category: "View",
+    },
+
+    // ── Search ──
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('f'), modifiers: Modifiers.ctrl() },
+      action: AppEvent.StartSearch,
+      description: "Find in note",
+      category: "Search",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('f'), modifiers: Modifiers.ctrl_shift() },
+      action: AppEvent.StartSearch,  // Global search across all notes
+      description: "Find in all notes",
+      category: "Search",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.F(3), modifiers: Modifiers.none() },
+      action: AppEvent.SearchNext,
+      description: "Find next",
+      category: "Search",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.F(3), modifiers: Modifiers.shift() },
+      action: AppEvent.SearchPrevious,
+      description: "Find previous",
+      category: "Search",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Escape, modifiers: Modifiers.none() },
+      action: AppEvent.CloseSearch,
+      description: "Close search / cancel",
+      category: "Search",
+    },
+
+    // ── AI ──
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('i'), modifiers: Modifiers.ctrl() },
+      action: AppEvent.AiSummarize,
+      description: "AI: Summarize",
+      category: "AI",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('i'), modifiers: Modifiers.ctrl_shift() },
+      action: AppEvent.AiExpand,
+      description: "AI: Expand section",
+      category: "AI",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('g'), modifiers: Modifiers.ctrl_shift() },
+      action: AppEvent.AiFixGrammar,
+      description: "AI: Fix grammar",
+      category: "AI",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('l'), modifiers: Modifiers.ctrl_shift() },
+      action: AppEvent.AiGenerateOutline,
+      description: "AI: Generate outline",
+      category: "AI",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('t'), modifiers: Modifiers.ctrl_shift() },
+      action: AppEvent.AiSuggestTags,
+      description: "AI: Suggest tags",
+      category: "AI",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char(' '), modifiers: Modifiers.ctrl() },
+      action: AppEvent.AiCustomPrompt(""),
+      description: "AI: Custom prompt",
+      category: "AI",
+    },
+
+    // ── Export ──
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('e'), modifiers: Modifiers.ctrl() },
+      action: AppEvent.ExportHtml(Path.new("")),
+      description: "Export to HTML",
+      category: "Export",
+    },
+    ShortcutBinding {
+      key_event: KeyEvent { key: Key.Char('e'), modifiers: Modifiers.ctrl_alt() },
+      action: AppEvent.ExportPdf(ExportConfig {
+        format: ExportFormat.Pdf,
+        output_path: Path.new(""),
+      }),
+      description: "Export to PDF",
+      category: "Export",
+    },
+  ]
+}
+
+const DEFAULT_SHORTCUTS: [ShortcutBinding] = build_default_shortcuts()
+
+// =============================================================================
+// ShortcutHandler — runtime shortcut dispatcher
+// =============================================================================
+
+pub struct ShortcutHandler {
+  bindings: {KeyEvent: ShortcutBinding}
+  enabled: bool
+}
+
+impl ShortcutHandler {
+  /// Create a handler loaded with default shortcuts
+  pub fn new() -> ShortcutHandler {
+    let mut bindings: {KeyEvent: ShortcutBinding} = {:}
+
+    for binding in DEFAULT_SHORTCUTS {
+      bindings[binding.key_event] = binding
+    }
+
+    ShortcutHandler { bindings, enabled: true }
+  }
+
+  /// Process a key event and return the corresponding AppEvent, if any
+  pub fn handle(self, event: KeyEvent) -> AppEvent? {
+    guard self.enabled else { return none }
+
+    match self.bindings.get(event) {
+      some(binding) => {
+        log.debug("Shortcut matched", {
+          key: "{event.key}",
+          action: binding.description,
+        })
+        some(binding.action)
+      }
+      none => {
+        // Not a shortcut — if it is a printable character with no modifiers
+        // (or only shift), pass it through as text input
+        match event.key {
+          Key.Char(ch) if !event.modifiers.ctrl && !event.modifiers.alt && !event.modifiers.meta => {
+            some(AppEvent.TextInput("{ch}"))
+          }
+          Key.Enter if !event.modifiers.has_any() => {
+            some(AppEvent.TextInput("\n"))
+          }
+          Key.Tab if !event.modifiers.has_any() => {
+            some(AppEvent.TextInput("    "))  // Insert spaces for tab
+          }
+          Key.Backspace if !event.modifiers.has_any() => {
+            some(AppEvent.DeleteSelection)
+          }
+          Key.Delete if !event.modifiers.has_any() => {
+            some(AppEvent.DeleteSelection)
+          }
+          // Arrow keys for cursor movement
+          Key.Up => some(AppEvent.CursorMove(Direction.Up, event.modifiers.shift))
+          Key.Down => some(AppEvent.CursorMove(Direction.Down, event.modifiers.shift))
+          Key.Left => some(AppEvent.CursorMove(Direction.Left, event.modifiers.shift))
+          Key.Right => some(AppEvent.CursorMove(Direction.Right, event.modifiers.shift))
+          Key.Home => some(AppEvent.CursorMove(Direction.Home, event.modifiers.shift))
+          Key.End => some(AppEvent.CursorMove(Direction.End, event.modifiers.shift))
+          Key.PageUp => some(AppEvent.CursorMove(Direction.PageUp, event.modifiers.shift))
+          Key.PageDown => some(AppEvent.CursorMove(Direction.PageDown, event.modifiers.shift))
+          _ => none
+        }
+      }
+    }
+  }
+
+  /// Register a custom shortcut binding, overriding any existing one
+  pub fn register(self, binding: ShortcutBinding) {
+    self.bindings[binding.key_event] = binding
+    log.info("Registered custom shortcut", {
+      key: "{binding.key_event.key}",
+      action: binding.description,
+    })
+  }
+
+  /// Remove a shortcut binding
+  pub fn unregister(self, key_event: KeyEvent) -> bool {
+    self.bindings.remove(key_event).is_some()
+  }
+
+  /// Temporarily disable all shortcut processing (e.g., during text input overlays)
+  pub fn set_enabled(self, enabled: bool) {
+    self.enabled = enabled
+  }
+
+  /// Get all bindings grouped by category for display in a help overlay
+  pub fn grouped_bindings(self) -> {str: [ShortcutBinding]} {
+    self.bindings.values()
+      .cloned()
+      .collect()
+      |> group_by((b) => b.category)
+  }
+
+  /// Format a key event as a human-readable string (e.g., "Ctrl+Shift+S")
+  pub fn format_key(event: KeyEvent) -> str {
+    let mut parts: [str] = []
+
+    if event.modifiers.ctrl  { parts.push("Ctrl") }
+    if event.modifiers.alt   { parts.push("Alt") }
+    if event.modifiers.shift { parts.push("Shift") }
+    if event.modifiers.meta  { parts.push("Cmd") }
+
+    let key_name = match event.key {
+      Char(c) => c.to_uppercase()
+      Enter   => "Enter"
+      Tab     => "Tab"
+      Backspace => "Backspace"
+      Delete  => "Delete"
+      Escape  => "Esc"
+      Up      => "Up"
+      Down    => "Down"
+      Left    => "Left"
+      Right   => "Right"
+      Home    => "Home"
+      End     => "End"
+      PageUp  => "PageUp"
+      PageDown => "PageDown"
+      F(n)    => "F{n}"
+    }
+
+    parts.push(key_name)
+    parts.join("+")
+  }
+}

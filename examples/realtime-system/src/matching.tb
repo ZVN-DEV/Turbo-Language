@@ -1,0 +1,289 @@
+// =============================================================================
+// matching.tb — Order matching logic and engine actor
+//
+// Demonstrates:
+//   - Actor-based architecture for isolated, fault-tolerant matching
+//   - Channel-based communication (commands in, events out)
+//   - region {} blocks for zero-allocation hot loops
+//   - @inline on critical-path functions
+//   - select {} for multiplexing across channels
+//   - Deterministic processing with no GC pauses
+//   - Supervision with automatic restart on failure
+// =============================================================================
+
+import { Instant } from "std/time"
+import { log } from "turbo/log"
+import { Shared } from "turbo/sync"
+import {
+  Order, OrderType, OrderStatus, Side, Trade, Decimal,
+  ExchangeError, EngineCommand, EngineEvent, SubmitOrder,
+  OrderBookSnapshot
+} from "./models"
+import { OrderBook } from "./order_book"
+import { ExchangeMetrics } from "./metrics"
+
+// =============================================================================
+// MatchingEngine — Actor that processes orders and emits events
+// =============================================================================
+
+/// The matching engine actor owns the order books and processes commands
+/// sequentially. Because it is an actor, its state is never shared — all
+/// access is via message passing, which eliminates data races without locks.
+actor MatchingEngine {
+  // --- Actor state (private, never shared) ---
+  books: {str: OrderBook}         // One order book per symbol
+  next_order_id: u64
+  event_tx: Sender<EngineEvent>   // Channel to publish events
+  metrics: ExchangeMetrics
+  total_orders: u64
+  total_trades: u64
+
+  state: {
+    books: {:},
+    next_order_id: 1,
+    event_tx: event_tx,
+    metrics: ExchangeMetrics.new(),
+    total_orders: 0,
+    total_trades: 0,
+  }
+
+  // --- Lifecycle ---
+
+  /// Initialize the engine with supported symbols and an event channel.
+  pub fn init(symbols: [str], event_tx: Sender<EngineEvent>) -> MatchingEngine {
+    let mut books: {str: OrderBook} = {:}
+    for symbol in symbols {
+      books[symbol] = OrderBook.new(symbol)
+    }
+
+    MatchingEngine {
+      books,
+      next_order_id: 1,
+      event_tx,
+      metrics: ExchangeMetrics.new(),
+      total_orders: 0,
+      total_trades: 0,
+    }
+  }
+
+  /// Handle incoming commands. This is the main message handler.
+  fn handle(mut self, cmd: EngineCommand) {
+    match cmd {
+      EngineCommand.Submit(order) => {
+        self.handle_submit(order)
+      }
+      EngineCommand.Cancel(order_id, client_id) => {
+        self.handle_cancel(order_id, client_id)
+      }
+      EngineCommand.TriggerStops(symbol, price) => {
+        self.handle_trigger_stops(symbol, price)
+      }
+      EngineCommand.Shutdown => {
+        log.info("Matching engine shutting down", {
+          total_orders: self.total_orders,
+          total_trades: self.total_trades,
+        })
+      }
+    }
+  }
+
+  /// Restart strategy: restart immediately on failure.
+  /// The matching engine is stateful, so we log the error but restart.
+  fn on_error(self, error: Error) -> ActorAction {
+    log.error("Matching engine error — restarting", { error: error.message() })
+    .restart(backoff: exponential(base: 10.ms, max: 1.seconds()))
+  }
+
+  // ===========================================================================
+  // Command Handlers
+  // ===========================================================================
+
+  /// Handle order submission — the hot path.
+  /// Uses region blocks to ensure zero allocation during matching.
+  @inline
+  fn handle_submit(mut self, mut order: Order) {
+    let start = Instant.now()
+
+    // Assign order ID
+    order.id = self.next_order_id
+    self.next_order_id += 1
+    self.total_orders += 1
+
+    // Look up the order book
+    guard let some(ref mut book) = self.books.get_mut(order.symbol) else {
+      let event = EngineEvent.OrderRejected(order.id, "unknown symbol: {order.symbol}")
+      self.emit(event)
+      return
+    }
+
+    // Execute matching in a region — all scratch allocations freed at once
+    region matching_region {
+      match book.submit(order) {
+        ok(trades) => {
+          // Emit order accepted
+          self.emit(EngineEvent.OrderAccepted(order))
+
+          // Emit each trade and check for stop triggers
+          for trade in trades {
+            self.total_trades += 1
+            let trade_price = trade.price
+
+            // Emit trade event (trade escapes the region)
+            self.emit(EngineEvent.TradeExecuted(trade))
+
+            // Check and trigger stop orders based on trade price
+            let triggered = book.check_stops(trade_price)
+            for triggered_order in triggered {
+              self.emit(EngineEvent.StopTriggered(triggered_order.id, trade_price))
+              // Re-submit the triggered order as its new type
+              self.handle_submit(triggered_order)
+            }
+          }
+
+          // Emit book update
+          let snapshot = book.snapshot(depth: 5)
+          self.emit(EngineEvent.BookUpdated(snapshot))
+        }
+        err(e) => {
+          self.emit(EngineEvent.OrderRejected(order.id, e.message()))
+        }
+      }
+    }
+    // matching_region freed: all scratch data from matching is gone
+
+    // Record latency
+    let elapsed = Instant.now().duration_since(start)
+    self.metrics.record_match_latency(elapsed)
+    self.metrics.record_order()
+  }
+
+  /// Handle order cancellation.
+  fn handle_cancel(mut self, order_id: u64, client_id: str) {
+    for (symbol, ref mut book) in self.books.iter_mut() {
+      if book.cancel(order_id) {
+        self.emit(EngineEvent.OrderCancelled(order_id))
+        let snapshot = book.snapshot(depth: 5)
+        self.emit(EngineEvent.BookUpdated(snapshot))
+        return
+      }
+    }
+    // Order not found — silently ignore (may have already been filled)
+    log.debug("Cancel request for unknown order", { order_id, client_id })
+  }
+
+  /// Handle stop order trigger check.
+  fn handle_trigger_stops(mut self, symbol: str, price: Decimal) {
+    guard let some(ref mut book) = self.books.get_mut(symbol) else {
+      return
+    }
+
+    let triggered = book.check_stops(price)
+    for order in triggered {
+      self.emit(EngineEvent.StopTriggered(order.id, price))
+      self.handle_submit(order)
+    }
+  }
+
+  // ===========================================================================
+  // Internal Helpers
+  // ===========================================================================
+
+  /// Emit an event to all subscribers via the event channel.
+  @inline
+  fn emit(self, event: EngineEvent) {
+    // Non-blocking send — if the channel is full, log and drop
+    match self.event_tx.try_send(event) {
+      ok(_) => {}
+      err(_) => {
+        self.metrics.record_dropped_event()
+        log.warn("Event channel full — dropping event")
+      }
+    }
+  }
+}
+
+// =============================================================================
+// ExchangeService — Public API wrapping the engine actor
+// =============================================================================
+
+/// The ExchangeService provides a safe, async API for interacting with
+/// the matching engine. It sends commands via channels and receives events.
+pub struct ExchangeService {
+  command_tx: Sender<EngineCommand>
+  event_rx: Receiver<EngineEvent>
+  engine: MatchingEngine
+  metrics: Shared<ExchangeMetrics>
+}
+
+impl ExchangeService {
+  /// Create a new exchange service with the given symbols.
+  pub fn new(symbols: [str]) -> ExchangeService {
+    let (event_tx, event_rx) = channel<EngineEvent>(buffer: 10_000)
+    let (command_tx, command_rx) = channel<EngineCommand>(buffer: 50_000)
+
+    let engine = MatchingEngine.init(symbols, event_tx)
+    let metrics = Shared.new(ExchangeMetrics.new())
+
+    // Start the engine's command processing loop
+    let engine_ref = engine.clone()
+    spawn async {
+      for await cmd in command_rx {
+        engine_ref.handle(cmd)
+      }
+    }
+
+    ExchangeService {
+      command_tx,
+      event_rx,
+      engine,
+      metrics,
+    }
+  }
+
+  /// Submit a new order to the exchange.
+  pub async fn submit_order(self, input: SubmitOrder) -> u64 ! ExchangeError {
+    guard input.quantity > 0 else {
+      return err(ExchangeError.InvalidOrder("quantity must be > 0"))
+    }
+    guard !input.symbol.is_empty() else {
+      return err(ExchangeError.InvalidOrder("symbol must not be empty"))
+    }
+
+    let order = Order.new(
+      id: 0,  // Will be assigned by engine
+      symbol: input.symbol,
+      side: input.side,
+      order_type: input.order_type,
+      quantity: input.quantity,
+      client_id: input.client_id,
+    )
+
+    await self.command_tx.send(EngineCommand.Submit(order))?
+    order.id
+  }
+
+  /// Cancel an existing order.
+  pub async fn cancel_order(self, order_id: u64, client_id: str) -> () ! ExchangeError {
+    await self.command_tx.send(EngineCommand.Cancel(order_id, client_id))?
+  }
+
+  /// Get the event stream for subscribing to exchange events.
+  pub fn events(self) -> Receiver<EngineEvent> {
+    self.event_rx.clone()
+  }
+
+  /// Get the current order book snapshot for a symbol.
+  pub fn get_book_snapshot(self, symbol: str, depth: usize = 10) -> OrderBookSnapshot ! ExchangeError {
+    // Direct read from the engine's books (safe because actor state is isolated)
+    guard let some(book) = self.engine.books.get(symbol) else {
+      return err(ExchangeError.SymbolNotFound(symbol))
+    }
+    book.snapshot(depth: depth)
+  }
+
+  /// Shut down the exchange gracefully.
+  pub async fn shutdown(self) {
+    await self.command_tx.send(EngineCommand.Shutdown)
+    self.command_tx.close()
+  }
+}

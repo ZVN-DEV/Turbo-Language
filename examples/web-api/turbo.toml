@@ -1,0 +1,26 @@
+[package]
+name = "bookmark-api"
+version = "0.1.0"
+edition = "2026"
+description = "Production-quality social bookmarking REST API with real-time sync"
+license = "MIT"
+authors = ["Turbo Examples"]
+
+[dependencies]
+turbo-http = "0.1"
+turbo-ws = "0.1"
+turbo-crypto = "0.1"
+turbo-db = "0.1"
+
+[dev-dependencies]
+turbo-test-utils = "0.1"
+
+[build]
+target = "native"
+opt-level = "release"
+
+[server]
+default-port = 8080
+max-connections = 10_000
+request-timeout = "30s"
+websocket-ping-interval = "15s"

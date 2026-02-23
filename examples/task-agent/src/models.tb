@@ -1,0 +1,152 @@
+// =============================================================================
+// models.tb — Data types for the Task Management API
+//
+// Demonstrates:
+//   - @derive decorators for automatic trait implementations
+//   - Algebraic data types (type keyword for sum types)
+//   - Structs with default field values
+//   - T? optional types
+//   - T ! E error types (custom error enum implementing Error)
+//   - Pattern matching on status variants
+// =============================================================================
+
+import { DateTime } from "std/time"
+
+// --- Task Status (algebraic data type / sum type) ---
+
+@derive(Debug, Eq, Clone, Schema, Serialize)
+type TaskStatus {
+  Todo
+  InProgress
+  Done
+  Blocked(reason: str)
+}
+
+impl TaskStatus {
+  /// Convert status to a human-readable string
+  fn to_string(self) -> str {
+    match self {
+      Todo        => "todo"
+      InProgress  => "in_progress"
+      Done        => "done"
+      Blocked(r)  => "blocked: {r}"
+    }
+  }
+
+  /// Parse a status string back into a TaskStatus
+  fn from_string(s: str) -> TaskStatus? {
+    match s {
+      "todo"        => Todo
+      "in_progress" => InProgress
+      "done"        => Done
+      s if s.starts_with("blocked:") => {
+        let reason = s.strip_prefix("blocked:").trim()
+        Blocked(reason)
+      }
+      _ => none
+    }
+  }
+
+  /// Check if a task is considered "open" (not done)
+  fn is_open(self) -> bool {
+    match self {
+      Done => false
+      _    => true
+    }
+  }
+}
+
+// --- Task (the core data model) ---
+
+@derive(Debug, Clone, Schema, Serialize)
+struct Task {
+  id: u64
+  title: str
+  description: str
+  status: TaskStatus
+  priority: u8           // 1 = highest, 5 = lowest
+  tags: [str]
+  assignee: str?         // T? optional — may or may not have an assignee
+  created_at: DateTime
+  due_date: DateTime?    // T? optional — not all tasks have a due date
+}
+
+impl Task {
+  /// Check if a task is overdue
+  fn is_overdue(self) -> bool {
+    match self.due_date {
+      some(due) => DateTime.now() > due && self.status.is_open()
+      none      => false
+    }
+  }
+
+  /// Create a short summary string for display
+  fn summary(self) -> str {
+    let status_icon = match self.status {
+      Todo       => "[ ]"
+      InProgress => "[~]"
+      Done       => "[x]"
+      Blocked(_) => "[!]"
+    }
+    let assignee_str = self.assignee ?? "unassigned"
+    "{status_icon} P{self.priority} {self.title} ({assignee_str})"
+  }
+}
+
+// --- CreateTask (input DTO with defaults) ---
+
+@derive(Schema, Debug)
+struct CreateTask {
+  title: str
+  description: str = ""
+  priority: u8 = 3
+  tags: [str] = []
+  assignee: str? = none
+  due_date: DateTime? = none
+}
+
+// --- UpdateTask (partial update — all fields optional) ---
+
+@derive(Schema, Debug)
+struct UpdateTask {
+  title: str? = none
+  description: str? = none
+  status: TaskStatus? = none
+  priority: u8? = none
+  tags: [str]? = none
+  assignee: str? = none
+  due_date: DateTime? = none
+}
+
+// --- TaskError (typed error enum implementing Error) ---
+
+type TaskError: Error {
+  NotFound(id: u64)
+  InvalidPriority(value: u8)
+  DatabaseError(source: str)
+  AgentError(message: str)
+  ValidationError(field: str, reason: str)
+}
+
+impl TaskError {
+  fn message(self) -> str {
+    match self {
+      NotFound(id)               => "Task not found: {id}"
+      InvalidPriority(v)         => "Invalid priority {v}: must be 1-5"
+      DatabaseError(src)         => "Database error: {src}"
+      AgentError(msg)            => "Agent error: {msg}"
+      ValidationError(field, r)  => "Validation error on '{field}': {r}"
+    }
+  }
+}
+
+// --- TaskFilter (for querying tasks) ---
+
+@derive(Schema, Debug)
+struct TaskFilter {
+  status: str? = none
+  priority: u8? = none
+  assignee: str? = none
+  tag: str? = none
+  overdue: bool? = none
+}

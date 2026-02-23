@@ -1,0 +1,1564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Turbo Programming Language</title>
+<style>
+  /* ========== Reset & Base ========== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; font-size: 16px; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: #0a0a0b;
+    color: #e4e4e7;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+  a { color: #3B82F6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ========== Utility ========== */
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+  .section-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #3B82F6;
+    margin-bottom: 12px;
+  }
+  .section-title {
+    font-size: 2.25rem;
+    font-weight: 700;
+    color: #fafafa;
+    line-height: 1.2;
+    margin-bottom: 12px;
+  }
+  .section-subtitle {
+    font-size: 1.1rem;
+    color: #a1a1aa;
+    max-width: 640px;
+    margin-bottom: 48px;
+  }
+  section { padding: 100px 0; }
+  section:nth-child(even) { background: #0f0f12; }
+
+  code, .code {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Menlo', 'Consolas', monospace;
+  }
+
+  /* ========== Navigation ========== */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(10, 10, 11, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  nav .container {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 56px;
+  }
+  nav .logo {
+    font-weight: 800; font-size: 1.15rem; color: #fafafa;
+    letter-spacing: -0.02em;
+  }
+  nav .logo a { color: inherit; text-decoration: none; }
+  nav .logo a:hover { text-decoration: none; }
+  nav .logo span { color: #3B82F6; }
+  nav ul { list-style: none; display: flex; gap: 28px; }
+  nav ul li a {
+    font-size: 0.85rem; color: #a1a1aa; transition: color 0.2s;
+    font-weight: 500;
+  }
+  nav ul li a:hover { color: #fafafa; text-decoration: none; }
+
+  /* ========== Hero ========== */
+  .hero {
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center;
+    padding-top: 56px;
+    background:
+      radial-gradient(ellipse 70% 50% at 50% 0%, rgba(59,130,246,0.10) 0%, transparent 70%),
+      #0a0a0b;
+  }
+  .hero-inner { max-width: 820px; }
+  .hero h1 {
+    font-size: clamp(3.5rem, 8vw, 6.5rem);
+    font-weight: 900;
+    letter-spacing: -0.04em;
+    background: linear-gradient(135deg, #fafafa 0%, #a1a1aa 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 16px;
+  }
+  .hero h1 .accent {
+    background: linear-gradient(135deg, #3B82F6 0%, #60a5fa 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+  }
+  .hero .tagline {
+    font-size: clamp(1.1rem, 2.5vw, 1.4rem);
+    color: #a1a1aa;
+    margin-bottom: 56px;
+    font-weight: 400;
+    line-height: 1.5;
+  }
+  .hero .tagline em {
+    font-style: normal; color: #e4e4e7; font-weight: 500;
+  }
+  .hero-cta {
+    display: flex; align-items: center; justify-content: center;
+    gap: 24px; margin-bottom: 56px; flex-wrap: wrap;
+  }
+  .btn-primary {
+    display: inline-flex; align-items: center;
+    padding: 14px 36px;
+    background: #3B82F6;
+    color: #fff;
+    font-size: 1.05rem;
+    font-weight: 600;
+    border-radius: 10px;
+    transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+    box-shadow: 0 0 24px rgba(59,130,246,0.25);
+  }
+  .btn-primary:hover {
+    background: #2563eb;
+    transform: translateY(-1px);
+    box-shadow: 0 0 32px rgba(59,130,246,0.4);
+    text-decoration: none;
+  }
+  .btn-secondary {
+    display: inline-flex; align-items: center;
+    padding: 14px 28px;
+    color: #a1a1aa;
+    font-size: 1rem;
+    font-weight: 500;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  .btn-secondary:hover {
+    color: #fafafa;
+    border-color: rgba(255,255,255,0.25);
+    text-decoration: none;
+  }
+
+  /* Design Score Badge */
+  .design-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 20px;
+    background: rgba(59,130,246,0.06);
+    border: 1px solid rgba(59,130,246,0.18);
+    border-radius: 100px;
+    margin-bottom: 48px;
+    font-size: 0.82rem;
+    color: #a1a1aa;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+  }
+  .design-badge .score {
+    color: #60a5fa;
+    font-weight: 700;
+    font-size: 0.88rem;
+  }
+  .design-badge .dot-sep {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #3f3f46;
+  }
+
+  /* Pillar Cards */
+  .pillars {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+    text-align: left;
+  }
+  .pillar {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px;
+    padding: 28px 24px;
+    transition: border-color 0.25s, background 0.25s;
+  }
+  .pillar:hover {
+    border-color: rgba(59,130,246,0.3);
+    background: rgba(59,130,246,0.04);
+  }
+  .pillar-icon {
+    width: 40px; height: 40px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.25rem; margin-bottom: 16px;
+    background: rgba(59,130,246,0.1);
+    color: #3B82F6;
+  }
+  .pillar h3 { font-size: 1rem; font-weight: 600; color: #fafafa; margin-bottom: 8px; }
+  .pillar p { font-size: 0.875rem; color: #a1a1aa; line-height: 1.55; }
+
+  /* ========== Code Examples ========== */
+  .code-examples .example-group { margin-bottom: 56px; }
+  .code-examples .example-group:last-child { margin-bottom: 0; }
+  .example-label {
+    font-size: 0.8rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.08em; color: #71717a; margin-bottom: 12px;
+  }
+  .side-by-side {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  }
+  .code-panel {
+    background: #111114;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .code-panel-header {
+    padding: 10px 16px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #71717a;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .code-panel-header .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+  }
+  .code-panel-header .dot.js { background: #f7df1e; }
+  .code-panel-header .dot.turbo { background: #3B82F6; }
+  .code-panel pre {
+    padding: 16px 20px;
+    font-size: 0.82rem;
+    line-height: 1.65;
+    overflow-x: auto;
+    color: #d4d4d8;
+    tab-size: 2;
+  }
+  .code-panel.full-width {
+    grid-column: 1 / -1;
+  }
+
+  /* Syntax highlights (lightweight) */
+  .kw { color: #c084fc; }
+  .fn-name { color: #60a5fa; }
+  .str { color: #34d399; }
+  .comment { color: #52525b; font-style: italic; }
+  .type { color: #fbbf24; }
+  .num { color: #fb923c; }
+  .op { color: #f472b6; }
+
+  /* ========== Syntax Comparison ========== */
+  .syntax-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 0.88rem; margin-top: 8px;
+  }
+  .syntax-table th {
+    text-align: left; padding: 14px 20px;
+    font-weight: 600; color: #71717a;
+    border-bottom: 2px solid rgba(255,255,255,0.08);
+    font-size: 0.78rem; text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .syntax-table th.rust-col { color: #e45c27; }
+  .syntax-table th.turbo-col { color: #3B82F6; }
+  .syntax-table td {
+    padding: 13px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    color: #d4d4d8;
+  }
+  .syntax-table td:first-child {
+    font-weight: 500; color: #a1a1aa;
+  }
+  .syntax-table td code {
+    background: rgba(255,255,255,0.05);
+    padding: 2px 8px; border-radius: 4px;
+    font-size: 0.84rem;
+  }
+  .syntax-table td.turbo-cell code {
+    background: rgba(59,130,246,0.1);
+    color: #60a5fa;
+  }
+  .syntax-table tr:hover td {
+    background: rgba(255,255,255,0.02);
+  }
+
+  /* ========== Benchmark Charts ========== */
+  .benchmarks-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 32px;
+  }
+  .bench-card {
+    background: #111114;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px;
+    padding: 28px;
+  }
+  .bench-card-header {
+    margin-bottom: 20px;
+  }
+  .bench-card-header h4 {
+    font-size: 1rem; font-weight: 600; color: #fafafa;
+    margin-bottom: 4px;
+  }
+  .bench-card-desc {
+    font-size: 0.75rem; color: #71717a; font-weight: 400;
+    letter-spacing: 0.01em;
+  }
+  .bar-row {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 8px;
+    font-size: 0.78rem;
+  }
+  .bar-lang {
+    width: 84px; text-align: right; color: #a1a1aa;
+    font-weight: 500; flex-shrink: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 0.78rem;
+  }
+  .bar-track {
+    flex: 1; height: 26px; background: rgba(255,255,255,0.03);
+    border-radius: 5px; overflow: visible; position: relative;
+  }
+  .bar-fill {
+    height: 100%; border-radius: 5px;
+    transition: width 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+    display: flex; align-items: center; justify-content: flex-end;
+    padding-right: 8px;
+    font-size: 0.7rem; font-weight: 600; color: #fafafa;
+    position: relative;
+    min-width: 0;
+  }
+  .bar-value {
+    position: absolute; right: 8px;
+    white-space: nowrap;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.92);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+  }
+  .bar-value-outside {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    white-space: nowrap;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #a1a1aa;
+    pointer-events: none;
+  }
+
+  /* Language-specific bar colors */
+  .bar-fill.turbo {
+    background: linear-gradient(90deg, #3B82F6, #60a5fa);
+    box-shadow: 0 0 12px rgba(59,130,246,0.4), 0 0 24px rgba(59,130,246,0.15);
+    animation: turboGlow 2.5s ease-in-out infinite alternate;
+  }
+  @keyframes turboGlow {
+    0% { box-shadow: 0 0 10px rgba(59,130,246,0.3), 0 0 20px rgba(59,130,246,0.1); }
+    100% { box-shadow: 0 0 16px rgba(59,130,246,0.5), 0 0 32px rgba(59,130,246,0.2); }
+  }
+  .bar-fill.rust { background: #E45C27; }
+  .bar-fill.cpp { background: #9333EA; }
+  .bar-fill.swift { background: #F97316; }
+  .bar-fill.java { background: #DC2626; }
+  .bar-fill.typescript { background: #2563EB; }
+  .bar-fill.python { background: #EAB308; }
+  .bar-fill.ruby { background: #EF4444; }
+  .bar-fill.elixir { background: #7C3AED; }
+
+  .bench-legend {
+    display: flex; flex-wrap: wrap; gap: 18px; margin-top: 36px;
+    justify-content: center;
+  }
+  .bench-legend-item {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 0.78rem; color: #a1a1aa;
+  }
+  .bench-legend-dot {
+    width: 10px; height: 10px; border-radius: 3px;
+  }
+  .bench-note {
+    text-align: center; margin-top: 16px;
+    font-size: 0.75rem; color: #52525b;
+    font-style: italic;
+  }
+
+  /* ========== Memory Ladder ========== */
+  .ladder { display: flex; flex-direction: column; gap: 24px; }
+  .ladder-step {
+    display: grid; grid-template-columns: 200px 1fr; gap: 24px;
+    align-items: start;
+    background: #111114;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px;
+    padding: 28px;
+    position: relative;
+    overflow: hidden;
+  }
+  .ladder-step::before {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px;
+  }
+  .ladder-step.level-0::before { background: #22c55e; }
+  .ladder-step.level-1::before { background: #eab308; }
+  .ladder-step.level-2::before { background: #f97316; }
+  .ladder-step.level-3::before { background: #ef4444; }
+  .ladder-meta {}
+  .ladder-level {
+    font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.1em; margin-bottom: 6px;
+  }
+  .level-0 .ladder-level { color: #22c55e; }
+  .level-1 .ladder-level { color: #eab308; }
+  .level-2 .ladder-level { color: #f97316; }
+  .level-3 .ladder-level { color: #ef4444; }
+  .ladder-name {
+    font-size: 1.1rem; font-weight: 600; color: #fafafa; margin-bottom: 6px;
+  }
+  .ladder-desc { font-size: 0.85rem; color: #a1a1aa; line-height: 1.5; }
+  .ladder-who {
+    font-size: 0.75rem; color: #71717a; margin-top: 8px;
+  }
+  .ladder-code pre {
+    font-size: 0.78rem; line-height: 1.6;
+    background: rgba(0,0,0,0.3);
+    border-radius: 8px; padding: 16px;
+    overflow-x: auto;
+    color: #d4d4d8;
+  }
+
+  /* ========== Comparison Table ========== */
+  .comparison-table-wrap { overflow-x: auto; }
+  .comparison-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+  .comparison-table th {
+    text-align: left; padding: 14px 16px;
+    font-weight: 600; color: #a1a1aa;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    white-space: nowrap;
+  }
+  .comparison-table th:first-child { color: #71717a; }
+  .comparison-table th.turbo-col { color: #3B82F6; }
+  .comparison-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    color: #d4d4d8;
+  }
+  .comparison-table tr:hover td {
+    background: rgba(255,255,255,0.02);
+  }
+  .comparison-table td:first-child {
+    font-weight: 500; color: #a1a1aa;
+    white-space: nowrap;
+  }
+  .check { color: #22c55e; font-weight: 700; }
+  .cross { color: #ef4444; font-weight: 700; }
+  .partial { color: #eab308; font-weight: 600; font-size: 0.78rem; }
+
+  /* ========== Toolchain ========== */
+  .toolchain-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px;
+  }
+  .tool-card {
+    background: #111114;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 20px;
+    transition: border-color 0.2s;
+  }
+  .tool-card:hover { border-color: rgba(59,130,246,0.25); }
+  .tool-cmd {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #3B82F6;
+    margin-bottom: 8px;
+  }
+  .tool-desc { font-size: 0.82rem; color: #a1a1aa; line-height: 1.5; }
+
+  /* ========== Footer ========== */
+  footer {
+    padding: 64px 0 48px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    text-align: center;
+    color: #52525b;
+    font-size: 0.8rem;
+  }
+  footer .tagline-small {
+    color: #a1a1aa; margin-bottom: 20px; font-size: 0.95rem;
+    font-weight: 500;
+  }
+  footer .footer-links {
+    display: flex; justify-content: center; gap: 32px;
+    margin-bottom: 24px; flex-wrap: wrap;
+  }
+  footer .footer-links a {
+    color: #71717a; font-size: 0.85rem; font-weight: 500;
+    transition: color 0.2s;
+  }
+  footer .footer-links a:hover {
+    color: #3B82F6; text-decoration: none;
+  }
+  footer .footer-copyright {
+    color: #3f3f46; font-size: 0.78rem;
+  }
+
+  /* ========== Example Apps ========== */
+  .examples-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 20px;
+  }
+  .example-card {
+    background: #111114;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px;
+    padding: 28px 24px;
+    transition: border-color 0.25s, background 0.25s, transform 0.2s;
+    display: flex;
+    flex-direction: column;
+  }
+  .example-card:hover {
+    border-color: rgba(59,130,246,0.3);
+    background: rgba(59,130,246,0.04);
+    transform: translateY(-2px);
+  }
+  .example-card-icon {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #3B82F6;
+    margin-bottom: 12px;
+  }
+  .example-card h3 {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #fafafa;
+    margin-bottom: 4px;
+  }
+  .example-card-name {
+    font-size: 0.82rem;
+    color: #60a5fa;
+    font-weight: 500;
+    margin-bottom: 10px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+  }
+  .example-card p {
+    font-size: 0.88rem;
+    color: #a1a1aa;
+    line-height: 1.55;
+    margin-bottom: 16px;
+  }
+  .example-card-features {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: auto;
+    margin-bottom: 16px;
+  }
+  .example-card-features li {
+    font-size: 0.72rem;
+    font-weight: 500;
+    padding: 4px 10px;
+    background: rgba(59,130,246,0.08);
+    border: 1px solid rgba(59,130,246,0.12);
+    border-radius: 100px;
+    color: #93c5fd;
+    white-space: nowrap;
+  }
+  .example-card-path {
+    font-size: 0.78rem;
+    color: #52525b;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255,255,255,0.04);
+  }
+
+  /* ========== Roadmap ========== */
+  .roadmap-timeline {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .roadmap-timeline::before {
+    content: '';
+    position: absolute;
+    left: 22px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: linear-gradient(180deg, #3B82F6 0%, rgba(59,130,246,0.15) 100%);
+  }
+  .roadmap-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+    padding: 20px 0;
+    position: relative;
+  }
+  .roadmap-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #3B82F6;
+    border: 3px solid #0a0a0b;
+    flex-shrink: 0;
+    margin-top: 4px;
+    position: relative;
+    z-index: 1;
+    margin-left: 17px;
+  }
+  .roadmap-item.current .roadmap-dot {
+    background: #3B82F6;
+    box-shadow: 0 0 12px rgba(59,130,246,0.6), 0 0 24px rgba(59,130,246,0.25);
+    width: 14px;
+    height: 14px;
+    margin-left: 16px;
+  }
+  .roadmap-item.future .roadmap-dot {
+    background: #27272a;
+    border-color: #3f3f46;
+  }
+  .roadmap-content {
+    flex: 1;
+    background: #111114;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 20px 24px;
+    transition: border-color 0.2s;
+  }
+  .roadmap-item.current .roadmap-content {
+    border-color: rgba(59,130,246,0.25);
+    background: rgba(59,130,246,0.04);
+  }
+  .roadmap-content:hover {
+    border-color: rgba(59,130,246,0.2);
+  }
+  .roadmap-version {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #3B82F6;
+    margin-bottom: 4px;
+  }
+  .roadmap-item.future .roadmap-version {
+    color: #71717a;
+  }
+  .roadmap-content h4 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #fafafa;
+    margin-bottom: 6px;
+  }
+  .roadmap-item.future .roadmap-content h4 {
+    color: #a1a1aa;
+  }
+  .roadmap-content p {
+    font-size: 0.85rem;
+    color: #a1a1aa;
+    line-height: 1.5;
+  }
+  .roadmap-item.future .roadmap-content p {
+    color: #71717a;
+  }
+
+  /* ========== Responsive ========== */
+  @media (max-width: 768px) {
+    .pillars { grid-template-columns: 1fr; }
+    .side-by-side { grid-template-columns: 1fr; }
+    .benchmarks-grid { grid-template-columns: 1fr; }
+    .ladder-step { grid-template-columns: 1fr; }
+    .examples-grid { grid-template-columns: 1fr; }
+    nav ul { display: none; }
+    .section-title { font-size: 1.75rem; }
+    section { padding: 64px 0; }
+    .bar-lang { width: 64px; font-size: 0.7rem; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ========== Navigation ========== -->
+<nav>
+  <div class="container">
+    <div class="logo"><a href="index.html"><span>turbo</span></a></div>
+    <ul>
+      <li><a href="index.html" style="color: #fafafa;">Showcase</a></li>
+      <li><a href="getting-started.html">Getting Started</a></li>
+      <li><a href="docs.html">Docs</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ========== Hero ========== -->
+<section class="hero">
+  <div class="hero-inner">
+    <h1><span class="accent">Turbo</span></h1>
+    <p class="tagline">
+      <em>JavaScript's soul.</em> &nbsp;<em>Rust's speed.</em><br>
+      Built for the AI age.
+    </p>
+    <div class="hero-cta">
+      <a href="getting-started.html" class="btn-primary">Get Started &rarr;</a>
+      <a href="docs.html" class="btn-secondary">Read the Docs &rarr;</a>
+    </div>
+    <div class="design-badge">
+      <span class="score">Design Score: 8.7 / 10</span>
+      <span class="dot-sep"></span>
+      <span>Across 5 review cycles</span>
+    </div>
+    <div class="pillars">
+      <div class="pillar">
+        <div class="pillar-icon">&#9889;</div>
+        <h3>Performance</h3>
+        <p>Compiles to native code via LLVM. Matches Rust and C++ on real benchmarks. Zero-cost abstractions, no garbage collector, no runtime overhead.</p>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">&#9998;</div>
+        <h3>Developer Experience</h3>
+        <p>If you know JavaScript, you can write Turbo in 10 minutes. Familiar syntax, type inference, arrow functions, destructuring, async/await &mdash; all built in.</p>
+      </div>
+      <div class="pillar">
+        <div class="pillar-icon">&#9881;</div>
+        <h3>Agentic AI</h3>
+        <p>First language with native <code class="code">agent</code> and <code class="code">tool</code> keywords. Compile-time schema generation, typed streaming, built-in observability.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Code Examples ========== -->
+<section id="code" class="code-examples">
+  <div class="container">
+    <p class="section-label">Syntax</p>
+    <h2 class="section-title">Write Like JavaScript, Run Like Rust</h2>
+    <p class="section-subtitle">Turbo takes the syntax you already know and gives it the performance of a systems language. No new mental model required.</p>
+
+    <!-- Example 1: Hello World -->
+    <div class="example-group">
+      <p class="example-label">Hello World</p>
+      <div class="side-by-side">
+        <div class="code-panel">
+          <div class="code-panel-header"><span class="dot js"></span> JavaScript</div>
+          <pre><span class="kw">const</span> <span class="fn-name">greet</span> = (<span class="op">name</span>) => {
+  <span class="kw">return</span> <span class="str">`Hello, ${name}!`</span>
+}</pre>
+        </div>
+        <div class="code-panel">
+          <div class="code-panel-header"><span class="dot turbo"></span> Turbo</div>
+          <pre><span class="kw">let</span> <span class="fn-name">greet</span> = (<span class="op">name</span>: <span class="type">str</span>) => {
+  <span class="str">"Hello, {name}!"</span>
+}</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Example 2: Async/Await -->
+    <div class="example-group">
+      <p class="example-label">Async / Await</p>
+      <div class="side-by-side">
+        <div class="code-panel">
+          <div class="code-panel-header"><span class="dot js"></span> JavaScript</div>
+          <pre><span class="kw">const</span> data = <span class="kw">await</span> <span class="fn-name">fetch</span>(url)
+<span class="kw">const</span> json = <span class="kw">await</span> data.<span class="fn-name">json</span>()</pre>
+        </div>
+        <div class="code-panel">
+          <div class="code-panel-header"><span class="dot turbo"></span> Turbo</div>
+          <pre><span class="kw">let</span> data = <span class="kw">await</span> <span class="fn-name">fetch</span>(url)<span class="op">?</span>
+<span class="kw">let</span> users = data.<span class="fn-name">json</span>&lt;<span class="type">[User]</span>&gt;()<span class="op">?</span></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Example 3: Agentic AI -->
+    <div class="example-group">
+      <p class="example-label">Agentic AI &mdash; Turbo Only</p>
+      <div class="side-by-side">
+        <div class="code-panel full-width">
+          <div class="code-panel-header"><span class="dot turbo"></span> Turbo</div>
+          <pre><span class="comment">// Define a tool &mdash; the compiler generates JSON Schema automatically</span>
+<span class="kw">tool fn</span> <span class="fn-name">get_weather</span>(city: <span class="type">str</span>) -> <span class="type">WeatherData</span> {
+  <span class="kw">await</span> weather_api.<span class="fn-name">fetch</span>(city)
+}
+
+<span class="comment">// Create an agent in two lines</span>
+<span class="kw">let</span> agent = <span class="type">Agent</span>.<span class="fn-name">new</span>(<span class="str">"claude-sonnet"</span>, tools: [get_weather])
+
+<span class="comment">// Stream the response token-by-token</span>
+<span class="kw">for await</span> token <span class="kw">in</span> agent.<span class="fn-name">stream</span>(<span class="str">"Weather in Tokyo?"</span>) {
+  <span class="fn-name">print</span>(token)
+}</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Example 4: Pattern Matching + Pipe -->
+    <div class="example-group">
+      <p class="example-label">Pattern Matching &amp; Pipes</p>
+      <div class="side-by-side">
+        <div class="code-panel">
+          <div class="code-panel-header"><span class="dot turbo"></span> Pattern Matching</div>
+          <pre><span class="kw">fn</span> <span class="fn-name">area</span>(shape: <span class="type">Shape</span>) -> <span class="type">f64</span> {
+  <span class="kw">match</span> shape {
+    <span class="type">Circle</span>(r) => <span class="num">PI</span> * r * r
+    <span class="type">Rectangle</span>(w, h) => w * h
+    <span class="type">Triangle</span>(a, b, c) => {
+      <span class="kw">let</span> s = (a + b + c) / <span class="num">2.0</span>
+      <span class="fn-name">sqrt</span>(s * (s-a) * (s-b) * (s-c))
+    }
+  }
+}</pre>
+        </div>
+        <div class="code-panel">
+          <div class="code-panel-header"><span class="dot turbo"></span> Pipe Operator</div>
+          <pre><span class="kw">let</span> result = raw_data
+  <span class="op">|></span> <span class="fn-name">parse</span>
+  <span class="op">|></span> <span class="fn-name">validate</span><span class="op">?</span>
+  <span class="op">|></span> <span class="fn-name">transform</span>
+  <span class="op">|></span> <span class="fn-name">serialize</span>
+
+<span class="kw">let</span> top = users
+  <span class="op">|></span> <span class="fn-name">filter</span>((u) => u.age > <span class="num">18</span>)
+  <span class="op">|></span> <span class="fn-name">sort_by</span>((u) => u.name)
+  <span class="op">|></span> <span class="fn-name">take</span>(<span class="num">10</span>)</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Example 5: Concurrency -->
+    <div class="example-group">
+      <p class="example-label">Structured Concurrency</p>
+      <div class="side-by-side">
+        <div class="code-panel">
+          <div class="code-panel-header"><span class="dot turbo"></span> Concurrent Fetch</div>
+          <pre><span class="comment">// Like Promise.all, but with structured scoping</span>
+<span class="kw">async fn</span> <span class="fn-name">fetch_all</span>(urls: <span class="type">[str]</span>) -> <span class="type">[Data]</span> <span class="op">!</span> <span class="type">Error</span> {
+  <span class="kw">scope</span> (s) => {
+    <span class="kw">let</span> tasks = urls.<span class="fn-name">map</span>((url) =>
+      s.<span class="fn-name">spawn</span>(<span class="kw">async</span> { <span class="kw">await</span> <span class="fn-name">fetch</span>(url)<span class="op">?</span> })
+    )
+    <span class="kw">await</span> tasks.<span class="fn-name">collect</span>()<span class="op">?</span>
+  }
+}</pre>
+        </div>
+        <div class="code-panel">
+          <div class="code-panel-header"><span class="dot turbo"></span> Channels &amp; Select</div>
+          <pre><span class="kw">let</span> (tx, rx) = <span class="fn-name">channel</span>&lt;<span class="type">Message</span>&gt;(buffer: <span class="num">32</span>)
+
+<span class="kw">spawn async</span> {
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="num">0</span>..<span class="num">100</span> {
+    <span class="kw">await</span> tx.<span class="fn-name">send</span>(<span class="type">Message</span> { id: i })
+  }
+}
+
+<span class="kw">select</span> {
+  msg = rx1.<span class="fn-name">recv</span>() => <span class="fn-name">handle_a</span>(msg)
+  msg = rx2.<span class="fn-name">recv</span>() => <span class="fn-name">handle_b</span>(msg)
+  _ = <span class="fn-name">timeout</span>(<span class="num">5</span>.seconds()) => <span class="fn-name">fallback</span>()
+}</pre>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ========== Elegant by Design ========== -->
+<section id="elegant">
+  <div class="container">
+    <p class="section-label">Elegant by Design</p>
+    <h2 class="section-title">Turbo vs Rust: Same Power, Better Syntax</h2>
+    <p class="section-subtitle">Turbo inherits Rust's safety guarantees but strips away the verbosity. Every type has a cleaner spelling.</p>
+
+    <div class="comparison-table-wrap">
+      <table class="syntax-table">
+        <thead>
+          <tr>
+            <th>Concept</th>
+            <th class="rust-col">Rust</th>
+            <th class="turbo-col">Turbo</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Optional</td>
+            <td><code>Option&lt;T&gt;</code></td>
+            <td class="turbo-cell"><code>T?</code></td>
+          </tr>
+          <tr>
+            <td>No value</td>
+            <td><code>None</code></td>
+            <td class="turbo-cell"><code>none</code></td>
+          </tr>
+          <tr>
+            <td>Wrap value</td>
+            <td><code>Some(42)</code></td>
+            <td class="turbo-cell"><code>42</code> (auto-wrap)</td>
+          </tr>
+          <tr>
+            <td>Result</td>
+            <td><code>Result&lt;T, E&gt;</code></td>
+            <td class="turbo-cell"><code>T ! E</code></td>
+          </tr>
+          <tr>
+            <td>Success</td>
+            <td><code>Ok(value)</code></td>
+            <td class="turbo-cell"><code>ok(value)</code></td>
+          </tr>
+          <tr>
+            <td>Failure</td>
+            <td><code>Err(e)</code></td>
+            <td class="turbo-cell"><code>err(e)</code></td>
+          </tr>
+          <tr>
+            <td>Array type</td>
+            <td><code>Vec&lt;T&gt;</code></td>
+            <td class="turbo-cell"><code>[T]</code></td>
+          </tr>
+          <tr>
+            <td>Map type</td>
+            <td><code>HashMap&lt;K, V&gt;</code></td>
+            <td class="turbo-cell"><code>{K: V}</code></td>
+          </tr>
+          <tr>
+            <td>String</td>
+            <td><code>String</code> / <code>&amp;str</code></td>
+            <td class="turbo-cell"><code>str</code></td>
+          </tr>
+          <tr>
+            <td>Print</td>
+            <td><code>println!("{}", x)</code></td>
+            <td class="turbo-cell"><code>print("{x}")</code></td>
+          </tr>
+          <tr>
+            <td>Decorators</td>
+            <td><code>#[derive(Debug)]</code></td>
+            <td class="turbo-cell"><code>@derive(Debug)</code></td>
+          </tr>
+          <tr>
+            <td>Generics call</td>
+            <td><code>foo::&lt;T&gt;()</code></td>
+            <td class="turbo-cell"><code>foo&lt;T&gt;()</code></td>
+          </tr>
+          <tr>
+            <td>Shared ref</td>
+            <td><code>Rc&lt;T&gt;</code></td>
+            <td class="turbo-cell"><code>Shared&lt;T&gt;</code></td>
+          </tr>
+          <tr>
+            <td>Compile-time</td>
+            <td><code>const fn</code></td>
+            <td class="turbo-cell"><code>const fn</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Benchmarks ========== -->
+<section id="performance">
+  <div class="container">
+    <p class="section-label">Benchmarks</p>
+    <h2 class="section-title">Performance That Speaks for Itself</h2>
+    <p class="section-subtitle">Real benchmark results from the same hardware. Turbo targets Rust-level performance via LLVM compilation. Lower is better &mdash; times in milliseconds.</p>
+
+    <div class="benchmarks-grid" id="bench-grid">
+      <!-- Charts are rendered by JS below -->
+    </div>
+
+    <div class="bench-legend">
+      <div class="bench-legend-item"><div class="bench-legend-dot" style="background: linear-gradient(90deg, #3B82F6, #60a5fa);"></div> Turbo (projected)</div>
+      <div class="bench-legend-item"><div class="bench-legend-dot" style="background: #E45C27;"></div> Rust</div>
+      <div class="bench-legend-item"><div class="bench-legend-dot" style="background: #9333EA;"></div> C++</div>
+      <div class="bench-legend-item"><div class="bench-legend-dot" style="background: #DC2626;"></div> Java</div>
+      <div class="bench-legend-item"><div class="bench-legend-dot" style="background: #F97316;"></div> Swift</div>
+      <div class="bench-legend-item"><div class="bench-legend-dot" style="background: #2563EB;"></div> TypeScript</div>
+      <div class="bench-legend-item"><div class="bench-legend-dot" style="background: #EAB308;"></div> Python</div>
+      <div class="bench-legend-item"><div class="bench-legend-dot" style="background: #EF4444;"></div> Ruby</div>
+      <div class="bench-legend-item"><div class="bench-legend-dot" style="background: #7C3AED;"></div> Elixir</div>
+    </div>
+    <p class="bench-note">Turbo (projected) uses Rust's measured time as the target baseline. All other numbers are real, measured on identical hardware.</p>
+  </div>
+</section>
+
+<!-- ========== Memory Model ========== -->
+<section id="memory">
+  <div class="container">
+    <p class="section-label">Memory Model</p>
+    <h2 class="section-title">The Escape Hatches Ladder</h2>
+    <p class="section-subtitle">Start writing code like JavaScript. The compiler manages memory for you. Only opt into complexity when your profiler says you need it.</p>
+
+    <div class="ladder">
+
+      <!-- Level 0 -->
+      <div class="ladder-step level-0">
+        <div class="ladder-meta">
+          <p class="ladder-level">Level 0</p>
+          <p class="ladder-name">Just Write Code</p>
+          <p class="ladder-desc">Auto-clone, auto-manage. No memory annotations. The compiler handles everything &mdash; identical DX to JavaScript.</p>
+          <p class="ladder-who">For: Web devs, scripting, prototyping</p>
+        </div>
+        <div class="ladder-code">
+          <pre><span class="comment">// Pure JavaScript-style Turbo. No annotations.</span>
+<span class="kw">fn</span> <span class="fn-name">handle_request</span>(req: <span class="type">Request</span>) -> <span class="type">Response</span> {
+  <span class="kw">let</span> user = <span class="kw">await</span> auth.<span class="fn-name">verify</span>(req.token)
+  <span class="kw">let</span> data = <span class="kw">await</span> db.<span class="fn-name">query</span>(
+    <span class="str">"SELECT * FROM posts WHERE author = ?"</span>,
+    user.id
+  )
+  <span class="kw">let</span> html = template.<span class="fn-name">render</span>(<span class="str">"posts.html"</span>,
+    { user: user, posts: data }
+  )
+  <span class="type">Response</span>.<span class="fn-name">ok</span>(html)
+}
+<span class="comment">// Everything freed automatically at scope end.</span></pre>
+        </div>
+      </div>
+
+      <!-- Level 1 -->
+      <div class="ladder-step level-1">
+        <div class="ladder-meta">
+          <p class="ladder-level">Level 1</p>
+          <p class="ladder-name">Explicit Borrows</p>
+          <p class="ladder-desc">Use <code class="code">let ref</code> for zero-copy access when you know a value is large and you only need to read it. One keyword, big savings.</p>
+          <p class="ladder-who">For: Performance-aware app devs</p>
+        </div>
+        <div class="ladder-code">
+          <pre><span class="kw">fn</span> <span class="fn-name">analyze</span>(dataset: <span class="type">[Record]</span>) -> <span class="type">Summary</span> {
+  <span class="kw">let ref</span> first = dataset[<span class="num">0</span>]
+  <span class="kw">let ref</span> last  = dataset[dataset.<span class="fn-name">len</span>() - <span class="num">1</span>]
+
+  <span class="fn-name">print</span>(<span class="str">"Range: {first.date} to {last.date}"</span>)
+  <span class="fn-name">compute_summary</span>(dataset)
+}
+<span class="comment">// Zero-copy reads. No cloning 10GB datasets.</span></pre>
+        </div>
+      </div>
+
+      <!-- Level 2 -->
+      <div class="ladder-step level-2">
+        <div class="ladder-meta">
+          <p class="ladder-level">Level 2</p>
+          <p class="ladder-name">Region Blocks</p>
+          <p class="ladder-desc">Batch allocations that live and die together. One pointer reset frees everything. Ideal for request handling, per-frame game logic, compilation passes.</p>
+          <p class="ladder-who">For: Server devs, game devs</p>
+        </div>
+        <div class="ladder-code">
+          <pre><span class="kw">fn</span> <span class="fn-name">render_frame</span>(world: &amp;<span class="type">World</span>) -> <span class="type">FrameBuffer</span> {
+  <span class="kw">region</span> frame {
+    <span class="kw">let</span> visible  = <span class="fn-name">cull</span>(world.entities, world.camera)
+    <span class="kw">let</span> sorted   = <span class="fn-name">depth_sort</span>(visible)
+    <span class="kw">let</span> commands = <span class="fn-name">generate_draw_calls</span>(sorted)
+    <span class="fn-name">execute_commands</span>(commands)
+  }
+  <span class="comment">// All temporaries freed in one O(1) reset.</span>
+}</pre>
+        </div>
+      </div>
+
+      <!-- Level 3 -->
+      <div class="ladder-step level-3">
+        <div class="ladder-meta">
+          <p class="ladder-level">Level 3</p>
+          <p class="ladder-name">Manual Control</p>
+          <p class="ladder-desc">Full control over every byte. Explicit alloc/free with <code class="code">defer</code>. Strict ownership checking &mdash; like Rust, but opt-in.</p>
+          <p class="ladder-who">For: Engine devs, embedded, kernel, FFI</p>
+        </div>
+        <div class="ladder-code">
+          <pre><span class="kw">@manual</span>
+<span class="kw">fn</span> <span class="fn-name">process_audio</span>(input: &amp;[<span class="type">f32</span>], output: &amp;<span class="kw">mut</span> [<span class="type">f32</span>]) {
+  <span class="kw">let</span> scratch = <span class="fn-name">alloc</span>&lt;<span class="type">f32</span>&gt;(input.<span class="fn-name">len</span>())
+  <span class="kw">defer</span> <span class="fn-name">free</span>(scratch)
+
+  dsp.<span class="fn-name">filter</span>(input, scratch)
+  dsp.<span class="fn-name">normalize</span>(scratch, output)
+}
+<span class="comment">// You control every allocation. The compiler enforces safety.</span></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Comparison Table ========== -->
+<section id="comparison">
+  <div class="container">
+    <p class="section-label">How It Compares</p>
+    <h2 class="section-title">Feature Comparison</h2>
+    <p class="section-subtitle">Turbo combines the best features of modern languages into a single, cohesive design.</p>
+
+    <div class="comparison-table-wrap">
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th class="turbo-col">Turbo</th>
+            <th>JavaScript</th>
+            <th>Rust</th>
+            <th>Go</th>
+            <th>Python</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Null safety</td>
+            <td><span class="check">&#10003;</span> T?</td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="check">&#10003;</span> Option&lt;T&gt;</td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+          </tr>
+          <tr>
+            <td>Type inference</td>
+            <td><span class="check">&#10003;</span> Full</td>
+            <td><span class="partial">partial</span></td>
+            <td><span class="check">&#10003;</span> Local</td>
+            <td><span class="partial">partial</span></td>
+            <td><span class="partial">hints only</span></td>
+          </tr>
+          <tr>
+            <td>Async / Await</td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="cross">&#10005;</span> goroutines</td>
+            <td><span class="check">&#10003;</span></td>
+          </tr>
+          <tr>
+            <td>Pattern matching</td>
+            <td><span class="check">&#10003;</span> Exhaustive</td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="check">&#10003;</span> Exhaustive</td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="partial">3.10+ basic</span></td>
+          </tr>
+          <tr>
+            <td>Memory safety (no GC)</td>
+            <td><span class="check">&#10003;</span> Compile-time</td>
+            <td><span class="cross">&#10005;</span> GC</td>
+            <td><span class="check">&#10003;</span> Borrow checker</td>
+            <td><span class="cross">&#10005;</span> GC</td>
+            <td><span class="cross">&#10005;</span> GC</td>
+          </tr>
+          <tr>
+            <td>AI agent primitives</td>
+            <td><span class="check">&#10003;</span> Native keywords</td>
+            <td><span class="cross">&#10005;</span> Libraries</td>
+            <td><span class="cross">&#10005;</span> Libraries</td>
+            <td><span class="cross">&#10005;</span> Libraries</td>
+            <td><span class="cross">&#10005;</span> Libraries</td>
+          </tr>
+          <tr>
+            <td>Compile to native</td>
+            <td><span class="check">&#10003;</span> LLVM</td>
+            <td><span class="cross">&#10005;</span> JIT</td>
+            <td><span class="check">&#10003;</span> LLVM</td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="cross">&#10005;</span> Interpreted</td>
+          </tr>
+          <tr>
+            <td>Compile to WASM</td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="cross">&#10005;</span> Runs in browser</td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+          </tr>
+          <tr>
+            <td>Package manager built-in</td>
+            <td><span class="check">&#10003;</span> turbo add</td>
+            <td><span class="partial">npm (separate)</span></td>
+            <td><span class="check">&#10003;</span> cargo</td>
+            <td><span class="check">&#10003;</span> go mod</td>
+            <td><span class="partial">pip (separate)</span></td>
+          </tr>
+          <tr>
+            <td>Sub-second dev builds</td>
+            <td><span class="check">&#10003;</span> Target</td>
+            <td><span class="check">&#10003;</span> No compile</td>
+            <td><span class="cross">&#10005;</span> Slow builds</td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="check">&#10003;</span> No compile</td>
+          </tr>
+          <tr>
+            <td>Pipe operator</td>
+            <td><span class="check">&#10003;</span> |&gt;</td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+          </tr>
+          <tr>
+            <td>Structured concurrency</td>
+            <td><span class="check">&#10003;</span> scope</td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="partial">library</span></td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="partial">3.11+ TaskGroup</span></td>
+          </tr>
+          <tr>
+            <td>Supervision trees</td>
+            <td><span class="check">&#10003;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Toolchain ========== -->
+<section id="toolchain">
+  <div class="container">
+    <p class="section-label">Toolchain</p>
+    <h2 class="section-title">One CLI. Everything Included.</h2>
+    <p class="section-subtitle">No separate installs for formatting, linting, testing, or benchmarking. The <code class="code">turbo</code> CLI ships everything as a unified experience.</p>
+
+    <div class="toolchain-grid">
+      <div class="tool-card">
+        <p class="tool-cmd">turbo build</p>
+        <p class="tool-desc">Compile to a native binary via LLVM. Supports cross-compilation, WASM, and release profiles. Incremental by default.</p>
+      </div>
+      <div class="tool-card">
+        <p class="tool-cmd">turbo run</p>
+        <p class="tool-desc">Build and execute in one step. Hot-reload in dev mode. Top-level await works out of the box &mdash; great for scripts.</p>
+      </div>
+      <div class="tool-card">
+        <p class="tool-cmd">turbo test</p>
+        <p class="tool-desc">Built-in test runner with <code class="code">@test</code> attribute. Parallel execution, snapshot testing, and coverage reports.</p>
+      </div>
+      <div class="tool-card">
+        <p class="tool-cmd">turbo fmt</p>
+        <p class="tool-desc">Opinionated formatter. Zero config. Consistent style across every Turbo codebase, enforced automatically.</p>
+      </div>
+      <div class="tool-card">
+        <p class="tool-cmd">turbo bench</p>
+        <p class="tool-desc">Micro-benchmarking with statistical analysis. Use <code class="code">@bench</code> to mark benchmarks. Reports p50, p99, and throughput.</p>
+      </div>
+      <div class="tool-card">
+        <p class="tool-cmd">turbo profile</p>
+        <p class="tool-desc">Built-in CPU and memory profiler. Attach to running processes. Generates flame graphs and allocation timelines.</p>
+      </div>
+      <div class="tool-card">
+        <p class="tool-cmd">turbo doc</p>
+        <p class="tool-desc">Generate browseable documentation from doc comments. Includes type signatures, examples, and cross-references.</p>
+      </div>
+      <div class="tool-card">
+        <p class="tool-cmd">turbo add</p>
+        <p class="tool-desc">Built-in package manager. Add dependencies, resolve versions, and lock files. No separate tooling required.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Example Applications ========== -->
+<section id="examples">
+  <div class="container">
+    <p class="section-label">Examples</p>
+    <h2 class="section-title">See Turbo In Action</h2>
+    <p class="section-subtitle">Five complete applications that demonstrate Turbo's range &mdash; from web APIs to AI agents, each built with real-world patterns.</p>
+
+    <div class="examples-grid">
+
+      <div class="example-card">
+        <div class="example-card-icon">Web API</div>
+        <h3>BookmarkAPI</h3>
+        <div class="example-card-name">Production Web Service</div>
+        <p>Production web API with JWT auth, WebSocket sync, full-text search, and rate limiting.</p>
+        <ul class="example-card-features">
+          <li>REST routes</li>
+          <li>Middleware stack</li>
+          <li>Structured logging</li>
+          <li>Metrics</li>
+        </ul>
+        <div class="example-card-path">examples/web-api/</div>
+      </div>
+
+      <div class="example-card">
+        <div class="example-card-icon">Desktop App</div>
+        <h3>TurboNotes</h3>
+        <div class="example-card-name">Native Desktop Editor</div>
+        <p>Native markdown editor with AI writing assistant, auto-save, and multi-format export.</p>
+        <ul class="example-card-features">
+          <li>Event-driven architecture</li>
+          <li>File I/O</li>
+          <li>Deterministic memory</li>
+        </ul>
+        <div class="example-card-path">examples/desktop-app/</div>
+      </div>
+
+      <div class="example-card">
+        <div class="example-card-icon">Real-Time System</div>
+        <h3>TurboExchange</h3>
+        <div class="example-card-name">Order Matching Engine</div>
+        <p>Order matching engine with sub-microsecond latency and zero-allocation hot path.</p>
+        <ul class="example-card-features">
+          <li>region {} memory</li>
+          <li>Actors</li>
+          <li>@inline</li>
+          <li>Decimal math</li>
+        </ul>
+        <div class="example-card-path">examples/realtime-system/</div>
+      </div>
+
+      <div class="example-card">
+        <div class="example-card-icon">Edge WASM</div>
+        <h3>TurboEdge</h3>
+        <div class="example-card-name">CDN Edge Pipeline</div>
+        <p>Image processing pipeline on CDN edge nodes via WebAssembly.</p>
+        <ul class="example-card-features">
+          <li>@wasm_export</li>
+          <li>Streaming</li>
+          <li>const fn kernels</li>
+          <li>Geo-routing</li>
+        </ul>
+        <div class="example-card-path">examples/edge-wasm/</div>
+      </div>
+
+      <div class="example-card">
+        <div class="example-card-icon">AI Agent</div>
+        <h3>TaskAgent</h3>
+        <div class="example-card-name">AI-Powered Task Manager</div>
+        <p>Task management API powered by an AI assistant with 7 tools.</p>
+        <ul class="example-card-features">
+          <li>tool fn</li>
+          <li>agent keyword</li>
+          <li>MockModel testing</li>
+          <li>Streaming</li>
+        </ul>
+        <div class="example-card-path">examples/task-agent/</div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ========== Roadmap ========== -->
+<section id="roadmap">
+  <div class="container">
+    <p class="section-label">Roadmap</p>
+    <h2 class="section-title">Growing With You</h2>
+    <p class="section-subtitle">Progressive disclosure &mdash; start simple, unlock power as you need it.</p>
+
+    <div class="roadmap-timeline">
+
+      <div class="roadmap-item current">
+        <div class="roadmap-dot"></div>
+        <div class="roadmap-content">
+          <div class="roadmap-version">v1.0</div>
+          <h4>Core Language</h4>
+          <p>Native + WASM compilation, agentic AI primitives, full toolchain. Everything you need to build production software from day one.</p>
+        </div>
+      </div>
+
+      <div class="roadmap-item future">
+        <div class="roadmap-dot"></div>
+        <div class="roadmap-content">
+          <div class="roadmap-version">v1.1</div>
+          <h4>Script Mode</h4>
+          <p>Zero-config single-file execution. Write a <code class="code">.turbo</code> file, run it directly &mdash; no project setup, no boilerplate. Perfect for scripting and automation.</p>
+        </div>
+      </div>
+
+      <div class="roadmap-item future">
+        <div class="roadmap-dot"></div>
+        <div class="roadmap-content">
+          <div class="roadmap-version">v1.2</div>
+          <h4>GPU Compute</h4>
+          <p><code class="code">@gpu</code> kernels, <code class="code">turbo/tensor</code> library, and SIMD intrinsics. Write GPU shaders and compute kernels in pure Turbo &mdash; no separate shader language.</p>
+        </div>
+      </div>
+
+      <div class="roadmap-item future">
+        <div class="roadmap-dot"></div>
+        <div class="roadmap-content">
+          <div class="roadmap-version">v1.3</div>
+          <h4>Mobile</h4>
+          <p>iOS and Android compilation targets with cross-platform UI primitives. Build native mobile apps with the same language and toolchain.</p>
+        </div>
+      </div>
+
+      <div class="roadmap-item future">
+        <div class="roadmap-dot"></div>
+        <div class="roadmap-content">
+          <div class="roadmap-version">v1.4</div>
+          <h4>Distributed</h4>
+          <p>Cluster actors, service mesh integration, and distributed tracing. Scale from a single binary to a fleet of services without changing your programming model.</p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ========== Footer ========== -->
+<footer>
+  <div class="container">
+    <p class="tagline-small">Turbo is an open-source programming language.</p>
+    <div class="footer-links">
+      <a href="getting-started.html">Get Started</a>
+      <a href="docs.html">Docs</a>
+      <a href="#">GitHub</a>
+    </div>
+    <p class="footer-copyright">&copy; 2026 Turbo Programming Language</p>
+  </div>
+</footer>
+
+<!-- ========== Inline JavaScript for Charts ========== -->
+<script>
+(function() {
+  // ---- Real benchmark data from results.csv ----
+  // Sorted fastest-to-slowest within each group.
+  // Turbo (projected) = Rust's measured time (targeting Rust-level perf via LLVM).
+  // For Binary Trees, Turbo targets Java's time since Java was fastest.
+  // For String Processing, Turbo targets C++'s time since C++ was fastest.
+  // For Concurrent, Turbo targets Rust's time.
+  var benchmarks = [
+    {
+      title: "Fibonacci",
+      desc: "Recursive computation (CPU-bound)",
+      data: [
+        { lang: "Turbo",      time: 283,       css: "turbo" },
+        { lang: "Rust",       time: 283,       css: "rust" },
+        { lang: "C++",        time: 289,       css: "cpp" },
+        { lang: "Java",       time: 299,       css: "java" },
+        { lang: "Swift",      time: 481,       css: "swift" },
+        { lang: "TypeScript", time: 690,       css: "typescript" },
+        { lang: "Elixir",     time: 712,       css: "elixir" },
+        { lang: "Ruby",       time: 6390,      css: "ruby" },
+        { lang: "Python",     time: 18581,     css: "python" }
+      ]
+    },
+    {
+      title: "Binary Trees",
+      desc: "Allocation-heavy tree operations",
+      data: [
+        { lang: "Turbo",      time: 83,        css: "turbo" },
+        { lang: "Java",       time: 83,        css: "java" },
+        { lang: "C++",        time: 93,        css: "cpp" },
+        { lang: "Rust",       time: 104,       css: "rust" },
+        { lang: "Swift",      time: 104,       css: "swift" },
+        { lang: "TypeScript", time: 154,       css: "typescript" },
+        { lang: "Elixir",     time: 171,       css: "elixir" },
+        { lang: "Python",     time: 745,       css: "python" },
+        { lang: "Ruby",       time: 1636,      css: "ruby" }
+      ]
+    },
+    {
+      title: "String Processing",
+      desc: "Text parsing and manipulation",
+      data: [
+        { lang: "Turbo",      time: 2.88,      css: "turbo" },
+        { lang: "C++",        time: 2.88,      css: "cpp" },
+        { lang: "Rust",       time: 3.81,      css: "rust" },
+        { lang: "Python",     time: 10.6,      css: "python" },
+        { lang: "Ruby",       time: 30.6,      css: "ruby" },
+        { lang: "TypeScript", time: 35.8,      css: "typescript" },
+        { lang: "Java",       time: 42.3,      css: "java" },
+        { lang: "Swift",      time: 51.7,      css: "swift" },
+        { lang: "Elixir",     time: 144,       css: "elixir" }
+      ]
+    },
+    {
+      title: "Concurrent",
+      desc: "Fan-out/fan-in parallel workload",
+      data: [
+        { lang: "Elixir",     time: 6,         css: "elixir" },
+        { lang: "Ruby",       time: 40,        css: "ruby" },
+        { lang: "Python",     time: 103,       css: "python" },
+        { lang: "C++",        time: 235,       css: "cpp" },
+        { lang: "Rust",       time: 431,       css: "rust" },
+        { lang: "Turbo",      time: 431,       css: "turbo" },
+        { lang: "Swift",      time: 445,       css: "swift" },
+        { lang: "Java",       time: 603,       css: "java" },
+        { lang: "TypeScript", time: 5266,      css: "typescript" }
+      ]
+    }
+  ];
+
+  var grid = document.getElementById("bench-grid");
+
+  // Format time as a readable label
+  function fmtTime(t) {
+    if (t >= 1000) return (t / 1000).toFixed(2) + "s";
+    if (t >= 10) return Math.round(t) + "ms";
+    return t.toFixed(2) + "ms";
+  }
+
+  benchmarks.forEach(function(bench) {
+    var card = document.createElement("div");
+    card.className = "bench-card";
+
+    // Find the max time in this benchmark group for relative scaling
+    var maxTime = 0;
+    bench.data.forEach(function(d) { if (d.time > maxTime) maxTime = d.time; });
+
+    // Build the card HTML
+    var html = '<div class="bench-card-header">'
+      + '<h4>' + bench.title + '</h4>'
+      + '<span class="bench-card-desc">' + bench.desc + '</span>'
+      + '</div>';
+
+    // Sort data fastest to slowest (ascending time = fastest first at top)
+    var sorted = bench.data.slice().sort(function(a, b) { return a.time - b.time; });
+
+    sorted.forEach(function(d) {
+      // Use square-root scaling to compress extreme ranges while
+      // keeping proportional differences visible.
+      // sqrt(max)/sqrt(max) = 100%, sqrt(min)/sqrt(max) = sqrt(min/max)*100
+      // This makes a 65x range (Fibonacci) show as ~8x visual range instead.
+      // Scale to max 82% so there's always room for the label to the right.
+      var pct = (Math.sqrt(d.time) / Math.sqrt(maxTime)) * 82;
+      // Enforce a minimum of 5%
+      pct = Math.max(pct, 5);
+      var label = fmtTime(d.time);
+
+      // Always put label outside the bar to avoid overlap.
+      // The label sits to the right of the bar fill.
+      html += '<div class="bar-row">'
+        + '<span class="bar-lang">' + d.lang + '</span>'
+        + '<div class="bar-track">'
+        + '<div class="bar-fill ' + d.css + '" style="width: 0%" data-width="' + pct.toFixed(1) + '%">'
+        + '</div>'
+        + '<span class="bar-value-outside" style="left: calc(' + pct.toFixed(1) + '% + 8px);">' + label + '</span>'
+        + '</div></div>';
+    });
+
+    card.innerHTML = html;
+    grid.appendChild(card);
+  });
+
+  // Animate bars on scroll into view
+  function animateBars() {
+    var bars = document.querySelectorAll(".bar-fill[data-width]");
+    bars.forEach(function(bar) {
+      var rect = bar.getBoundingClientRect();
+      if (rect.top < window.innerHeight && rect.bottom > 0) {
+        bar.style.width = bar.getAttribute("data-width");
+      }
+    });
+  }
+
+  // Run once on load and then on scroll
+  setTimeout(animateBars, 200);
+  window.addEventListener("scroll", animateBars, { passive: true });
+})();
+</script>
+
+</body>
+</html>

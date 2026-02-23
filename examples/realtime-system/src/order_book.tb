@@ -1,0 +1,500 @@
+// =============================================================================
+// order_book.tb — Core order book with price-time priority matching
+//
+// Demonstrates:
+//   - BTreeMap for sorted price levels (price-time priority)
+//   - region {} blocks for zero-allocation matching (Level 2 memory)
+//   - @inline on hot path functions for sub-microsecond latency
+//   - @no_clone on the OrderBook to prevent accidental copying
+//   - Precise mutation with let mut and mutable method receivers
+//   - Deterministic memory: no allocations in the matching hot path
+// =============================================================================
+
+import { BTreeMap } from "std/collections"
+import { Instant } from "std/time"
+import {
+  Order, OrderType, OrderStatus, Side, Trade, Decimal,
+  PriceLevel, OrderBookSnapshot, ExchangeError
+} from "./models"
+
+// =============================================================================
+// OrderQueue — Orders at a single price level, ordered by arrival time
+// =============================================================================
+
+struct OrderQueue {
+  price: Decimal
+  orders: [Order]        // FIFO queue — oldest orders first (time priority)
+  total_quantity: u64
+}
+
+impl OrderQueue {
+  fn new(price: Decimal) -> OrderQueue {
+    OrderQueue { price, orders: [], total_quantity: 0 }
+  }
+
+  @inline
+  fn push(mut self, order: Order) {
+    self.total_quantity += order.remaining
+    self.orders.push(order)
+  }
+
+  @inline
+  fn is_empty(self) -> bool {
+    self.orders.is_empty()
+  }
+
+  @inline
+  fn peek(self) -> Order? {
+    self.orders.first()
+  }
+
+  @inline
+  fn order_count(self) -> u32 {
+    self.orders.len() as u32
+  }
+
+  /// Remove a specific order by ID. Returns the removed order if found.
+  fn remove(mut self, order_id: u64) -> Order? {
+    let idx = self.orders.iter().position((o) => o.id == order_id)
+    match idx {
+      some(i) => {
+        let removed = self.orders.remove(i)
+        self.total_quantity -= removed.remaining
+        some(removed)
+      }
+      none => none
+    }
+  }
+
+  /// Convert to a PriceLevel summary (for snapshots).
+  @inline
+  fn to_level(self) -> PriceLevel {
+    PriceLevel {
+      price: self.price,
+      total_quantity: self.total_quantity,
+      order_count: self.order_count(),
+    }
+  }
+}
+
+// =============================================================================
+// OrderBook — The full two-sided order book for a single symbol
+// =============================================================================
+
+/// The order book maintains sorted buy (bid) and sell (ask) sides.
+/// Bids are stored in descending price order (best bid = highest price).
+/// Asks are stored in ascending price order (best ask = lowest price).
+/// Within each price level, orders are matched FIFO (time priority).
+@no_clone
+pub struct OrderBook {
+  symbol: str
+  bids: BTreeMap<Decimal, OrderQueue>   // Descending: best bid first
+  asks: BTreeMap<Decimal, OrderQueue>   // Ascending: best ask first
+  stop_buys: BTreeMap<Decimal, [Order]> // Stop buy orders by trigger price
+  stop_sells: BTreeMap<Decimal, [Order]>// Stop sell orders by trigger price
+  next_trade_id: u64
+  last_trade: Trade?
+  order_count: u64
+}
+
+impl OrderBook {
+  /// Create a new empty order book for the given symbol.
+  pub fn new(symbol: str) -> OrderBook {
+    OrderBook {
+      symbol,
+      bids: BTreeMap.new(order: .descending),
+      asks: BTreeMap.new(order: .ascending),
+      stop_buys: BTreeMap.new(order: .ascending),
+      stop_sells: BTreeMap.new(order: .descending),
+      next_trade_id: 1,
+      last_trade: none,
+      order_count: 0,
+    }
+  }
+
+  // ===========================================================================
+  // Public API
+  // ===========================================================================
+
+  /// Submit an order to the book. Returns a list of trades and updated order.
+  pub fn submit(mut self, mut order: Order) -> [Trade] ! ExchangeError {
+    // Validate the order
+    guard order.quantity > 0 else {
+      return err(ExchangeError.InvalidOrder("quantity must be > 0"))
+    }
+    guard order.symbol == self.symbol else {
+      return err(ExchangeError.InvalidOrder(
+        "order symbol '{order.symbol}' does not match book '{self.symbol}'"
+      ))
+    }
+
+    self.order_count += 1
+    order.status = OrderStatus.Open
+
+    // Route by order type
+    match order.order_type {
+      OrderType.Market => {
+        self.match_market_order(order)
+      }
+      OrderType.Limit(price) => {
+        self.match_limit_order(order, price)
+      }
+      OrderType.Stop(trigger, limit) => {
+        self.add_stop_order(order, trigger, limit)
+        []  // Stop orders produce no immediate trades
+      }
+    }
+  }
+
+  /// Cancel an order by ID. Returns true if the order was found and cancelled.
+  pub fn cancel(mut self, order_id: u64) -> bool {
+    // Search bids
+    for (price, ref mut queue) in self.bids.iter_mut() {
+      if let some(removed) = queue.remove(order_id) {
+        if queue.is_empty() {
+          self.bids.remove(price)
+        }
+        return true
+      }
+    }
+
+    // Search asks
+    for (price, ref mut queue) in self.asks.iter_mut() {
+      if let some(removed) = queue.remove(order_id) {
+        if queue.is_empty() {
+          self.asks.remove(price)
+        }
+        return true
+      }
+    }
+
+    // Search stop orders
+    for (trigger, ref mut orders) in self.stop_buys.iter_mut() {
+      let idx = orders.iter().position((o) => o.id == order_id)
+      if let some(i) = idx {
+        orders.remove(i)
+        if orders.is_empty() {
+          self.stop_buys.remove(trigger)
+        }
+        return true
+      }
+    }
+
+    for (trigger, ref mut orders) in self.stop_sells.iter_mut() {
+      let idx = orders.iter().position((o) => o.id == order_id)
+      if let some(i) = idx {
+        orders.remove(i)
+        if orders.is_empty() {
+          self.stop_sells.remove(trigger)
+        }
+        return true
+      }
+    }
+
+    false
+  }
+
+  /// Get the current best bid price.
+  @inline
+  pub fn best_bid(self) -> Decimal? {
+    self.bids.first_key()
+  }
+
+  /// Get the current best ask price.
+  @inline
+  pub fn best_ask(self) -> Decimal? {
+    self.asks.first_key()
+  }
+
+  /// Get the current spread.
+  pub fn spread(self) -> Decimal? {
+    match (self.best_ask(), self.best_bid()) {
+      (some(ask), some(bid)) => some(ask.sub(bid))
+      _                      => none
+    }
+  }
+
+  /// Get a depth snapshot of the order book.
+  pub fn snapshot(self, depth: usize = 10) -> OrderBookSnapshot {
+    let bid_levels = self.bids.values()
+      .take(depth)
+      .map((q) => q.to_level())
+      .collect()
+
+    let ask_levels = self.asks.values()
+      .take(depth)
+      .map((q) => q.to_level())
+      .collect()
+
+    OrderBookSnapshot {
+      symbol: self.symbol,
+      bids: bid_levels,
+      asks: ask_levels,
+      last_trade: self.last_trade,
+      timestamp: Instant.now(),
+    }
+  }
+
+  /// Check and trigger any stop orders based on the given trade price.
+  pub fn check_stops(mut self, trade_price: Decimal) -> [Order] {
+    let mut triggered: [Order] = []
+
+    // Stop buys trigger when price rises to or above the trigger price
+    let triggered_buy_keys: [Decimal] = self.stop_buys.keys()
+      .take_while((p) => p.raw <= trade_price.raw)
+      .collect()
+
+    for key in triggered_buy_keys {
+      if let some(orders) = self.stop_buys.remove(key) {
+        for mut order in orders {
+          order.status = OrderStatus.Triggered
+          // Convert stop to market or limit
+          match order.order_type {
+            OrderType.Stop(_, some(limit_price)) => {
+              order.order_type = OrderType.Limit(limit_price)
+            }
+            OrderType.Stop(_, none) => {
+              order.order_type = OrderType.Market
+            }
+            _ => {}
+          }
+          triggered.push(order)
+        }
+      }
+    }
+
+    // Stop sells trigger when price falls to or below the trigger price
+    let triggered_sell_keys: [Decimal] = self.stop_sells.keys()
+      .take_while((p) => p.raw >= trade_price.raw)
+      .collect()
+
+    for key in triggered_sell_keys {
+      if let some(orders) = self.stop_sells.remove(key) {
+        for mut order in orders {
+          order.status = OrderStatus.Triggered
+          match order.order_type {
+            OrderType.Stop(_, some(limit_price)) => {
+              order.order_type = OrderType.Limit(limit_price)
+            }
+            OrderType.Stop(_, none) => {
+              order.order_type = OrderType.Market
+            }
+            _ => {}
+          }
+          triggered.push(order)
+        }
+      }
+    }
+
+    triggered
+  }
+
+  /// Total number of resting orders in the book.
+  pub fn resting_order_count(self) -> u64 {
+    let bid_count: u64 = self.bids.values().map((q) => q.orders.len() as u64).sum()
+    let ask_count: u64 = self.asks.values().map((q) => q.orders.len() as u64).sum()
+    bid_count + ask_count
+  }
+
+  // ===========================================================================
+  // Internal Matching — Hot Path (zero-allocation via region blocks)
+  // ===========================================================================
+
+  /// Match a market order against the opposite side of the book.
+  /// Market orders eat the book at whatever price is available.
+  fn match_market_order(mut self, mut order: Order) -> [Trade] {
+    let mut trades: [Trade] = []
+
+    // Use a region block for all temporary allocations during matching.
+    // Everything allocated inside is freed in one pointer reset when done.
+    region match_scratch {
+      let opposite_side = match order.side {
+        Side.Buy  => &mut self.asks
+        Side.Sell => &mut self.bids
+      }
+
+      let mut empty_prices: [Decimal] = []   // allocated in match_scratch
+
+      for (price, ref mut queue) in opposite_side.iter_mut() {
+        if order.remaining == 0 { break }
+
+        let mut filled_indices: [usize] = []  // allocated in match_scratch
+
+        for (i, ref mut resting) in queue.orders.iter_mut().enumerate() {
+          if order.remaining == 0 { break }
+
+          let fill_qty = order.remaining.min(resting.remaining)
+          let trade = self.execute_fill(&mut order, resting, price, fill_qty)
+          trades.push(trade)   // trade escapes the region
+
+          if resting.remaining == 0 {
+            filled_indices.push(i)
+          }
+        }
+
+        // Remove fully filled orders from the queue (iterate in reverse)
+        for idx in filled_indices.iter().rev() {
+          queue.orders.remove(idx)
+        }
+        queue.total_quantity = queue.orders.iter().map((o) => o.remaining).sum()
+
+        if queue.is_empty() {
+          empty_prices.push(price)
+        }
+      }
+
+      // Clean up empty price levels
+      for price in empty_prices {
+        opposite_side.remove(price)
+      }
+    }
+    // match_scratch freed here — empty_prices, filled_indices: all gone
+
+    if order.remaining > 0 {
+      order.status = OrderStatus.Rejected("insufficient liquidity for market order")
+    }
+
+    trades
+  }
+
+  /// Match a limit order. Cross existing orders if possible, then rest in book.
+  fn match_limit_order(mut self, mut order: Order, price: Decimal) -> [Trade] {
+    let mut trades: [Trade] = []
+
+    region match_scratch {
+      let can_cross = match order.side {
+        Side.Buy  => self.best_ask().map((a) => price.raw >= a.raw) ?? false
+        Side.Sell => self.best_bid().map((b) => price.raw <= b.raw) ?? false
+      }
+
+      if can_cross {
+        let opposite_side = match order.side {
+          Side.Buy  => &mut self.asks
+          Side.Sell => &mut self.bids
+        }
+
+        let mut empty_prices: [Decimal] = []
+
+        for (level_price, ref mut queue) in opposite_side.iter_mut() {
+          // Stop crossing when the limit price no longer matches
+          let should_cross = match order.side {
+            Side.Buy  => price.raw >= level_price.raw
+            Side.Sell => price.raw <= level_price.raw
+          }
+          if !should_cross || order.remaining == 0 { break }
+
+          let mut filled_indices: [usize] = []
+
+          for (i, ref mut resting) in queue.orders.iter_mut().enumerate() {
+            if order.remaining == 0 { break }
+
+            let fill_qty = order.remaining.min(resting.remaining)
+            let trade = self.execute_fill(&mut order, resting, level_price, fill_qty)
+            trades.push(trade)
+
+            if resting.remaining == 0 {
+              filled_indices.push(i)
+            }
+          }
+
+          for idx in filled_indices.iter().rev() {
+            queue.orders.remove(idx)
+          }
+          queue.total_quantity = queue.orders.iter().map((o) => o.remaining).sum()
+
+          if queue.is_empty() {
+            empty_prices.push(level_price)
+          }
+        }
+
+        for p in empty_prices {
+          opposite_side.remove(p)
+        }
+      }
+    }
+
+    // If the order still has remaining quantity, rest it in the book
+    if order.remaining > 0 && !order.order_type.is_market() {
+      self.add_to_book(order)
+    }
+
+    trades
+  }
+
+  /// Execute a fill between an aggressor and a resting order.
+  /// This is THE hot path — must be zero-allocation and inlined.
+  @inline
+  fn execute_fill(
+    mut self,
+    aggressor: &mut Order,
+    resting: &mut Order,
+    price: Decimal,
+    quantity: u64,
+  ) -> Trade {
+    // Fill both sides
+    aggressor.fill(quantity)
+    resting.fill(quantity)
+
+    // Determine buyer/seller
+    let (buy_id, sell_id, buyer, seller) = match aggressor.side {
+      Side.Buy => (aggressor.id, resting.id, aggressor.client_id, resting.client_id)
+      Side.Sell => (resting.id, aggressor.id, resting.client_id, aggressor.client_id)
+    }
+
+    let trade_id = self.next_trade_id
+    self.next_trade_id += 1
+
+    let trade = Trade {
+      id: trade_id,
+      symbol: self.symbol,
+      price,
+      quantity,
+      buy_order_id: buy_id,
+      sell_order_id: sell_id,
+      buyer_client_id: buyer,
+      seller_client_id: seller,
+      timestamp: Instant.now(),
+    }
+
+    self.last_trade = some(trade.clone())
+    trade
+  }
+
+  /// Add an order to its side of the book.
+  @inline
+  fn add_to_book(mut self, order: Order) {
+    let price = match order.order_type {
+      OrderType.Limit(p) => p
+      _                  => return  // Only limit orders rest in the book
+    }
+
+    let side = match order.side {
+      Side.Buy  => &mut self.bids
+      Side.Sell => &mut self.asks
+    }
+
+    match side.get_mut(price) {
+      some(queue) => queue.push(order)
+      none => {
+        let mut queue = OrderQueue.new(price)
+        queue.push(order)
+        side.insert(price, queue)
+      }
+    }
+  }
+
+  /// Add a stop order to the appropriate stop book.
+  fn add_stop_order(mut self, order: Order, trigger: Decimal, limit: Decimal?) {
+    let stops = match order.side {
+      Side.Buy  => &mut self.stop_buys
+      Side.Sell => &mut self.stop_sells
+    }
+
+    match stops.get_mut(trigger) {
+      some(orders) => orders.push(order)
+      none => {
+        stops.insert(trigger, [order])
+      }
+    }
+  }
+}

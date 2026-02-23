@@ -1,0 +1,245 @@
+// =============================================================================
+// perf_test.tb — Performance, memory, and stress tests
+//
+// Demonstrates:
+//   - @perf decorator with max_memory and max_time constraints
+//   - @stress decorator for concurrent load testing
+//   - memory.snapshot() for memory leak detection
+//   - Bulk operations and scaling tests
+//   - Stress testing with concurrent access patterns
+//   - Performance assertions with .ms(), .mb(), .kb() unit helpers
+// =============================================================================
+
+import { TaskStore } from "../src/store"
+import { CreateTask, UpdateTask, TaskStatus } from "../src/models"
+import { Shared } from "turbo/sync"
+
+// ── Bulk Operations ──
+
+@test
+@perf(max_memory: 100.mb(), max_time: 500.ms())
+async fn test_bulk_task_creation() {
+  let store = TaskStore.new()
+
+  for i in 0..10_000 {
+    await store.create(CreateTask {
+      title: "Task {i}",
+      priority: (i % 5 + 1) as u8,
+    })?
+  }
+
+  assert_eq(await store.count(), 10_000)
+}
+
+@test
+@perf(max_memory: 50.mb(), max_time: 200.ms())
+async fn test_bulk_reads_after_creation() {
+  let store = TaskStore.new()
+
+  // Create 1000 tasks
+  for i in 0..1_000 {
+    await store.create(CreateTask {
+      title: "Task {i}",
+      priority: (i % 5 + 1) as u8,
+      tags: ["batch", "perf"],
+    })?
+  }
+
+  // Read all tasks 100 times
+  for _ in 0..100 {
+    let tasks = await store.list()
+    assert_eq(tasks.len(), 1_000)
+  }
+}
+
+@test
+@perf(max_memory: 50.mb(), max_time: 1.seconds())
+async fn test_bulk_updates() {
+  let store = TaskStore.new()
+
+  // Create 1000 tasks
+  let ids = []
+  for i in 0..1_000 {
+    let id = await store.create(CreateTask {
+      title: "Task {i}",
+      priority: 3,
+    })?
+    ids.push(id)
+  }
+
+  // Update all of them
+  for id in ids {
+    await store.update(id, UpdateTask {
+      status: some(TaskStatus.InProgress),
+      priority: some(1),
+    })?
+  }
+
+  // Verify updates
+  let tasks = await store.list()
+  let in_progress = tasks.filter((t) => t.status == TaskStatus.InProgress)
+  assert_eq(in_progress.len(), 1_000)
+}
+
+// ── Memory Leak Detection ──
+
+@test
+async fn test_no_memory_leaks_on_delete() {
+  let before = memory.snapshot()
+  let store = TaskStore.new()
+
+  // Create and delete many tasks
+  for i in 0..1_000 {
+    let id = await store.create(CreateTask { title: "Temp {i}" })?
+    await store.delete(id)?
+  }
+
+  let after = memory.snapshot()
+
+  // Store should be empty
+  assert_eq(await store.count(), 0)
+
+  // No significant memory retained (allow some overhead for the store struct itself)
+  assert(after.allocated - before.allocated < 10.kb(),
+    "Memory leak: {after.allocated - before.allocated} bytes retained")
+}
+
+@test
+async fn test_no_memory_leaks_on_overwrite() {
+  let before = memory.snapshot()
+  let store = TaskStore.new()
+
+  // Create a task and update it many times with large descriptions
+  let id = await store.create(CreateTask { title: "Rewritten" })?
+
+  for i in 0..500 {
+    let big_description = "x".repeat(1_000)
+    await store.update(id, UpdateTask {
+      description: some("Iteration {i}: {big_description}"),
+    })?
+  }
+
+  let after = memory.snapshot()
+
+  // Should only retain the latest description, not all 500
+  assert(after.allocated - before.allocated < 100.kb(),
+    "Old descriptions not being freed: {after.allocated - before.allocated} bytes")
+}
+
+// ── Filtering Performance ──
+
+@test
+@perf(max_time: 100.ms())
+async fn test_filter_performance() {
+  let store = TaskStore.new()
+
+  // Create tasks with varied properties
+  for i in 0..5_000 {
+    await store.create(CreateTask {
+      title: "Task {i}",
+      priority: (i % 5 + 1) as u8,
+      tags: if i % 3 == 0 { ["urgent"] } else { ["normal"] },
+      assignee: if i % 2 == 0 { some("Alice") } else { some("Bob") },
+    })?
+  }
+
+  // Filter operations should be fast even on large datasets
+  let urgent = await store.list(TaskFilter { tag: some("urgent") })
+  assert(urgent.len() > 0)
+
+  let alice_tasks = await store.list(TaskFilter { assignee: some("Alice") })
+  assert_eq(alice_tasks.len(), 2_500)
+
+  let high_priority = await store.list(TaskFilter { priority: some(1) })
+  assert_eq(high_priority.len(), 1_000)
+}
+
+// ── Stress Tests ──
+
+@test
+@stress(duration: 10.seconds(), concurrency: 50)
+async fn test_concurrent_access() {
+  let store = Shared.new(TaskStore.new())
+
+  stress.run(async () => {
+    // Each concurrent worker creates, reads, and deletes a task
+    let id = await store.write().create(CreateTask {
+      title: "Concurrent task",
+      priority: 3,
+    })?
+
+    let task = await store.read().get(id)?
+    assert(task != none)
+    assert_eq(task.title, "Concurrent task")
+
+    await store.write().delete(id)?
+  })
+
+  let report = stress.report()
+  assert(report.error_rate == 0.0, "Errors during concurrent access: {report.error_rate}")
+  assert(report.p99_latency < 10.ms(), "P99 latency too high: {report.p99_latency}")
+}
+
+@test
+@stress(duration: 5.seconds(), concurrency: 20)
+async fn test_concurrent_reads_under_writes() {
+  let store = Shared.new(TaskStore.new())
+
+  // Pre-populate with data
+  for i in 0..100 {
+    await store.write().create(CreateTask { title: "Seed {i}" })?
+  }
+
+  stress.run(async () => {
+    // Mix of reads (80%) and writes (20%)
+    let roll = random.u32(0..100)
+
+    if roll < 80 {
+      // Read operation
+      let tasks = await store.read().list()
+      assert(tasks.len() >= 100, "Should always have at least seed data")
+    } else {
+      // Write operation
+      let id = await store.write().create(CreateTask {
+        title: "Stress task",
+      })?
+      await store.write().delete(id)?
+    }
+  })
+
+  let report = stress.report()
+  assert(report.error_rate == 0.0, "Errors during mixed workload")
+  assert(report.p99_latency < 50.ms(), "P99 too high for mixed workload: {report.p99_latency}")
+}
+
+// ── Scalability ──
+
+@test
+@perf(max_time: 2.seconds())
+async fn test_scaling_characteristics() {
+  let store = TaskStore.new()
+  let mut timings: [f64] = []
+
+  // Measure time to create batches of 1000 tasks
+  for batch in 0..10 {
+    let start = time.now()
+    for i in 0..1_000 {
+      await store.create(CreateTask {
+        title: "Batch {batch} Task {i}",
+        priority: (i % 5 + 1) as u8,
+      })?
+    }
+    let elapsed = time.since(start).as_ms()
+    timings.push(elapsed)
+  }
+
+  // Later batches should not be dramatically slower than earlier ones
+  // (i.e., no O(n^2) behavior on insert)
+  let first_batch = timings[0]
+  let last_batch = timings[9]
+
+  assert(last_batch < first_batch * 3.0,
+    "Scaling issue: last batch ({last_batch}ms) >3x slower than first ({first_batch}ms)")
+
+  assert_eq(await store.count(), 10_000)
+}

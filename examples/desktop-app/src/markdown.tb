@@ -1,0 +1,859 @@
+// =============================================================================
+// markdown.tb — Markdown parser and renderer
+//
+// Demonstrates:
+//   - const fn for compile-time lookup table generation
+//   - Algebraic data types for the AST (sum types as tree nodes)
+//   - Recursive descent parsing with pattern matching
+//   - Pipe operator for text transformation chains
+//   - [T] array methods (map, filter, join, collect)
+//   - String interpolation in template-style HTML output
+//   - Zero-allocation parsing of inline spans via byte offsets
+//   - Progressive disclosure: simple API surface, deep internals
+// =============================================================================
+
+import { log } from "turbo/log"
+
+// =============================================================================
+// Compile-Time Lookup Tables — const fn evaluates at build time
+// =============================================================================
+
+/// Build an ASCII lookup table marking which bytes can start inline formatting.
+/// This runs at compile time — the table is baked into the binary.
+const fn build_inline_trigger_table() -> [bool; 256] {
+  let mut table = [false; 256]
+  table['*' as usize] = true    // bold, italic
+  table['_' as usize] = true    // bold, italic (alt)
+  table['`' as usize] = true    // inline code
+  table['[' as usize] = true    // links
+  table['!' as usize] = true    // images
+  table['~' as usize] = true    // strikethrough
+  table['\n' as usize] = true   // line break
+  table['\\' as usize] = true   // escape
+  table
+}
+
+/// The trigger table — computed at compile time, zero runtime cost
+const INLINE_TRIGGERS: [bool; 256] = build_inline_trigger_table()
+
+/// HTML entity map for characters that must be escaped in output.
+/// Also computed at compile time.
+const fn build_html_escape_table() -> [str; 256] {
+  let mut table = [""; 256]
+  table['&' as usize] = "&amp;"
+  table['<' as usize] = "&lt;"
+  table['>' as usize] = "&gt;"
+  table['"' as usize] = "&quot;"
+  table['\'' as usize] = "&#39;"
+  table
+}
+
+const HTML_ESCAPES: [str; 256] = build_html_escape_table()
+
+// =============================================================================
+// Markdown AST — the parsed representation
+// =============================================================================
+
+/// A complete markdown document as a sequence of blocks
+@derive(Debug, Clone)
+struct MarkdownDoc {
+  blocks: [Block]
+  footnotes: {str: [Inline]}
+}
+
+/// Block-level elements
+@derive(Debug, Clone)
+type Block {
+  Heading(level: u8, content: [Inline])
+  Paragraph(content: [Inline])
+  CodeBlock(language: str?, code: str)
+  BlockQuote(blocks: [Block])
+  UnorderedList(items: [ListItem])
+  OrderedList(start: u32, items: [ListItem])
+  Table(headers: [TableCell], rows: [[TableCell]], alignments: [Alignment])
+  ThematicBreak
+  HtmlBlock(html: str)
+  FrontMatter(yaml: str)
+}
+
+/// Inline-level elements
+@derive(Debug, Clone)
+type Inline {
+  Text(str)
+  Bold(content: [Inline])
+  Italic(content: [Inline])
+  BoldItalic(content: [Inline])
+  Code(str)
+  Link(text: [Inline], url: str, title: str?)
+  Image(alt: str, url: str, title: str?)
+  Strikethrough(content: [Inline])
+  LineBreak
+  SoftBreak
+  HtmlInline(html: str)
+  FootnoteRef(label: str)
+}
+
+/// A list item can contain multiple blocks (for nested lists)
+@derive(Debug, Clone)
+struct ListItem {
+  content: [Block]
+  checked: bool? = none  // For task lists: some(true) = checked, some(false) = unchecked
+}
+
+/// A table cell
+@derive(Debug, Clone)
+struct TableCell {
+  content: [Inline]
+}
+
+/// Table column alignment
+@derive(Debug, Eq, Clone)
+type Alignment {
+  Left
+  Center
+  Right
+  Default
+}
+
+// =============================================================================
+// Parser — converts markdown text to AST
+// =============================================================================
+
+pub struct MarkdownParser {
+  source: str
+  pos: usize
+  footnotes: {str: [Inline]}
+}
+
+impl MarkdownParser {
+  /// Parse a complete markdown document
+  pub fn parse(source: str) -> MarkdownDoc {
+    let mut parser = MarkdownParser {
+      source,
+      pos: 0,
+      footnotes: {:},
+    }
+
+    let blocks = parser.parse_blocks()
+
+    MarkdownDoc {
+      blocks,
+      footnotes: parser.footnotes,
+    }
+  }
+
+  /// Parse all blocks until end of input
+  fn parse_blocks(self) -> [Block] {
+    let mut blocks: [Block] = []
+
+    while self.pos < self.source.len() {
+      // Skip blank lines
+      if self.current_line().trim().is_empty() {
+        self.advance_line()
+        continue
+      }
+
+      let block = self.parse_block()
+      blocks.push(block)
+    }
+
+    blocks
+  }
+
+  /// Parse a single block element
+  fn parse_block(self) -> Block {
+    let line = self.current_line()
+    let trimmed = line.trim_start()
+
+    // --- YAML Frontmatter ---
+    if self.pos == 0 && trimmed == "---" {
+      return self.parse_frontmatter()
+    }
+
+    // --- Headings: # to ###### ---
+    if trimmed.starts_with("#") {
+      let level = trimmed.chars().take_while((c) => c == '#').count()
+      if level <= 6 && trimmed.len() > level && trimmed[level..level+1] == " " {
+        self.advance_line()
+        let heading_text = trimmed[level + 1..].trim()
+        return Block.Heading(level as u8, self.parse_inline(heading_text))
+      }
+    }
+
+    // --- Fenced Code Block: ``` ---
+    if trimmed.starts_with("```") {
+      return self.parse_code_block()
+    }
+
+    // --- Block Quote: > ---
+    if trimmed.starts_with("> ") || trimmed == ">" {
+      return self.parse_block_quote()
+    }
+
+    // --- Thematic Break: ---, ***, ___ ---
+    if self.is_thematic_break(trimmed) {
+      self.advance_line()
+      return Block.ThematicBreak
+    }
+
+    // --- Unordered List: -, *, + ---
+    if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
+      return self.parse_unordered_list()
+    }
+
+    // --- Ordered List: 1. ---
+    if trimmed.len() >= 3 && trimmed[0..1].parse::<u32>().is_ok() && trimmed.contains(". ") {
+      return self.parse_ordered_list()
+    }
+
+    // --- Table: | --- |
+    if trimmed.starts_with("|") && self.peek_line(1).map((l) => l.trim().contains("---")) == some(true) {
+      return self.parse_table()
+    }
+
+    // --- Default: Paragraph ---
+    self.parse_paragraph()
+  }
+
+  /// Parse YAML frontmatter delimited by ---
+  fn parse_frontmatter(self) -> Block {
+    self.advance_line()  // Skip opening ---
+    let mut yaml_lines: [str] = []
+
+    while self.pos < self.source.len() {
+      let line = self.current_line()
+      if line.trim() == "---" {
+        self.advance_line()
+        return Block.FrontMatter(yaml_lines.join("\n"))
+      }
+      yaml_lines.push(line)
+      self.advance_line()
+    }
+
+    Block.FrontMatter(yaml_lines.join("\n"))
+  }
+
+  /// Parse a fenced code block with optional language identifier
+  fn parse_code_block(self) -> Block {
+    let first_line = self.current_line().trim_start()
+    let language = {
+      let after_fence = first_line[3..].trim()
+      if after_fence.is_empty() { none } else { some(after_fence) }
+    }
+
+    self.advance_line()
+    let mut code_lines: [str] = []
+
+    while self.pos < self.source.len() {
+      let line = self.current_line()
+      if line.trim_start().starts_with("```") {
+        self.advance_line()
+        return Block.CodeBlock(language, code_lines.join("\n"))
+      }
+      code_lines.push(line)
+      self.advance_line()
+    }
+
+    Block.CodeBlock(language, code_lines.join("\n"))
+  }
+
+  /// Parse a blockquote (possibly multi-line, possibly nested)
+  fn parse_block_quote(self) -> Block {
+    let mut inner_lines: [str] = []
+
+    while self.pos < self.source.len() {
+      let line = self.current_line()
+      let trimmed = line.trim_start()
+      if trimmed.starts_with("> ") {
+        inner_lines.push(trimmed[2..])
+      } else if trimmed == ">" {
+        inner_lines.push("")
+      } else {
+        break
+      }
+      self.advance_line()
+    }
+
+    // Recursively parse the inner content
+    let inner_source = inner_lines.join("\n")
+    let mut inner_parser = MarkdownParser {
+      source: inner_source,
+      pos: 0,
+      footnotes: {:},
+    }
+    let blocks = inner_parser.parse_blocks()
+
+    Block.BlockQuote(blocks)
+  }
+
+  /// Parse an unordered list
+  fn parse_unordered_list(self) -> Block {
+    let mut items: [ListItem] = []
+
+    while self.pos < self.source.len() {
+      let line = self.current_line()
+      let trimmed = line.trim_start()
+
+      guard trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") else {
+        break
+      }
+
+      let item_text = trimmed[2..]
+
+      // Check for task list syntax: - [ ] or - [x]
+      let checked = if item_text.starts_with("[ ] ") {
+        some(false)
+      } else if item_text.starts_with("[x] ") || item_text.starts_with("[X] ") {
+        some(true)
+      } else {
+        none
+      }
+
+      let content_text = match checked {
+        some(_) => item_text[4..]
+        none    => item_text
+      }
+
+      items.push(ListItem {
+        content: [Block.Paragraph(self.parse_inline(content_text))],
+        checked,
+      })
+
+      self.advance_line()
+    }
+
+    Block.UnorderedList(items)
+  }
+
+  /// Parse an ordered list
+  fn parse_ordered_list(self) -> Block {
+    let mut items: [ListItem] = []
+    let mut start_num: u32 = 1
+
+    while self.pos < self.source.len() {
+      let line = self.current_line()
+      let trimmed = line.trim_start()
+
+      let dot_pos = trimmed.find(". ")
+      guard let some(dot) = dot_pos else { break }
+
+      let num_str = trimmed[..dot]
+      guard let ok(num) = num_str.parse::<u32>() else { break }
+
+      if items.is_empty() { start_num = num }
+
+      let content_text = trimmed[dot + 2..]
+      items.push(ListItem {
+        content: [Block.Paragraph(self.parse_inline(content_text))],
+      })
+
+      self.advance_line()
+    }
+
+    Block.OrderedList(start_num, items)
+  }
+
+  /// Parse a table with header, alignment row, and body rows
+  fn parse_table(self) -> Block {
+    // Parse header row
+    let header_line = self.current_line().trim()
+    let headers = self.parse_table_row(header_line)
+    self.advance_line()
+
+    // Parse alignment row
+    let align_line = self.current_line().trim()
+    let alignments = self.parse_alignment_row(align_line)
+    self.advance_line()
+
+    // Parse body rows
+    let mut rows: [[TableCell]] = []
+    while self.pos < self.source.len() {
+      let line = self.current_line().trim()
+      guard line.starts_with("|") else { break }
+      rows.push(self.parse_table_row(line))
+      self.advance_line()
+    }
+
+    Block.Table(headers, rows, alignments)
+  }
+
+  /// Parse a single table row into cells
+  fn parse_table_row(self, line: str) -> [TableCell] {
+    line
+      .trim_start_matches('|').trim_end_matches('|')
+      .split('|')
+      .map((cell) => TableCell {
+        content: self.parse_inline(cell.trim()),
+      })
+      .collect()
+  }
+
+  /// Parse the alignment indicator row (e.g., |:---|:---:|---:|)
+  fn parse_alignment_row(self, line: str) -> [Alignment] {
+    line
+      .trim_start_matches('|').trim_end_matches('|')
+      .split('|')
+      .map((cell) => {
+        let trimmed = cell.trim()
+        let left = trimmed.starts_with(":")
+        let right = trimmed.ends_with(":")
+        match (left, right) {
+          (true, true)   => Alignment.Center
+          (true, false)  => Alignment.Left
+          (false, true)  => Alignment.Right
+          (false, false) => Alignment.Default
+        }
+      })
+      .collect()
+  }
+
+  /// Parse a paragraph (collects lines until a blank line or block starter)
+  fn parse_paragraph(self) -> Block {
+    let mut lines: [str] = []
+
+    while self.pos < self.source.len() {
+      let line = self.current_line()
+      if line.trim().is_empty() { break }
+      // Stop if the next line starts a new block
+      let trimmed = line.trim_start()
+      if lines.len() > 0 && (
+        trimmed.starts_with("#") ||
+        trimmed.starts_with("```") ||
+        trimmed.starts_with("> ") ||
+        trimmed.starts_with("- ") ||
+        trimmed.starts_with("* ") ||
+        self.is_thematic_break(trimmed)
+      ) {
+        break
+      }
+      lines.push(line)
+      self.advance_line()
+    }
+
+    let text = lines.join("\n")
+    Block.Paragraph(self.parse_inline(text))
+  }
+
+  // ===========================================================================
+  // Inline Parsing
+  // ===========================================================================
+
+  /// Parse inline content: bold, italic, code, links, images, etc.
+  /// Uses the compile-time trigger table for fast scanning.
+  fn parse_inline(self, text: str) -> [Inline] {
+    let mut result: [Inline] = []
+    let mut pos = 0
+    let mut plain_start = 0
+
+    while pos < text.len() {
+      let byte = text[pos] as u8
+
+      // Fast path: skip non-trigger bytes
+      if !INLINE_TRIGGERS[byte as usize] {
+        pos += 1
+        continue
+      }
+
+      // Flush accumulated plain text
+      if plain_start < pos {
+        result.push(Inline.Text(text[plain_start..pos]))
+      }
+
+      // Handle each trigger character
+      match byte as char {
+        '*' | '_' => {
+          let (inline, consumed) = self.parse_emphasis(text, pos)
+          result.push(inline)
+          pos += consumed
+          plain_start = pos
+        }
+
+        '`' => {
+          let (inline, consumed) = self.parse_inline_code(text, pos)
+          result.push(inline)
+          pos += consumed
+          plain_start = pos
+        }
+
+        '[' => {
+          let (inline, consumed) = self.parse_link(text, pos)
+          result.push(inline)
+          pos += consumed
+          plain_start = pos
+        }
+
+        '!' if pos + 1 < text.len() && text[pos + 1] == '[' => {
+          let (inline, consumed) = self.parse_image(text, pos)
+          result.push(inline)
+          pos += consumed
+          plain_start = pos
+        }
+
+        '~' if pos + 1 < text.len() && text[pos + 1] == '~' => {
+          let (inline, consumed) = self.parse_strikethrough(text, pos)
+          result.push(inline)
+          pos += consumed
+          plain_start = pos
+        }
+
+        '\\' if pos + 1 < text.len() => {
+          // Escape: emit the next character as literal text
+          result.push(Inline.Text(text[pos + 1..pos + 2]))
+          pos += 2
+          plain_start = pos
+        }
+
+        '\n' => {
+          // Two spaces before newline = hard line break
+          if pos >= 2 && text[pos - 2..pos] == "  " {
+            result.push(Inline.LineBreak)
+          } else {
+            result.push(Inline.SoftBreak)
+          }
+          pos += 1
+          plain_start = pos
+        }
+
+        _ => {
+          pos += 1
+          plain_start = pos
+        }
+      }
+    }
+
+    // Flush remaining text
+    if plain_start < text.len() {
+      result.push(Inline.Text(text[plain_start..]))
+    }
+
+    result
+  }
+
+  /// Parse emphasis (bold, italic, bold+italic)
+  fn parse_emphasis(self, text: str, start: usize) -> (Inline, usize) {
+    let marker = text[start]
+    let double = start + 1 < text.len() && text[start + 1] == marker
+    let triple = double && start + 2 < text.len() && text[start + 2] == marker
+
+    if triple {
+      // ***bold italic*** or ___bold italic___
+      let close = text[start + 3..].find("{marker}{marker}{marker}")
+      match close {
+        some(pos) => {
+          let inner = text[start + 3..start + 3 + pos]
+          (Inline.BoldItalic(self.parse_inline(inner)), 3 + pos + 3)
+        }
+        none => (Inline.Text("{marker}{marker}{marker}"), 3)
+      }
+    } else if double {
+      // **bold** or __bold__
+      let close = text[start + 2..].find("{marker}{marker}")
+      match close {
+        some(pos) => {
+          let inner = text[start + 2..start + 2 + pos]
+          (Inline.Bold(self.parse_inline(inner)), 2 + pos + 2)
+        }
+        none => (Inline.Text("{marker}{marker}"), 2)
+      }
+    } else {
+      // *italic* or _italic_
+      let close = text[start + 1..].find(marker)
+      match close {
+        some(pos) => {
+          let inner = text[start + 1..start + 1 + pos]
+          (Inline.Italic(self.parse_inline(inner)), 1 + pos + 1)
+        }
+        none => (Inline.Text("{marker}"), 1)
+      }
+    }
+  }
+
+  /// Parse inline code: `code` or ``code with backticks``
+  fn parse_inline_code(self, text: str, start: usize) -> (Inline, usize) {
+    // Count opening backticks
+    let mut ticks = 0
+    while start + ticks < text.len() && text[start + ticks] == '`' {
+      ticks += 1
+    }
+
+    let delimiter = "`".repeat(ticks)
+    let close = text[start + ticks..].find(delimiter)
+
+    match close {
+      some(pos) => {
+        let code = text[start + ticks..start + ticks + pos].trim()
+        (Inline.Code(code), ticks + pos + ticks)
+      }
+      none => (Inline.Text(delimiter), ticks)
+    }
+  }
+
+  /// Parse a link: [text](url "title")
+  fn parse_link(self, text: str, start: usize) -> (Inline, usize) {
+    let close_bracket = text[start + 1..].find(']')
+    guard let some(cb) = close_bracket else {
+      return (Inline.Text("["), 1)
+    }
+
+    let link_text = text[start + 1..start + 1 + cb]
+
+    // Expect ( immediately after ]
+    let paren_start = start + 1 + cb + 1
+    guard paren_start < text.len() && text[paren_start] == '(' else {
+      return (Inline.Text("["), 1)
+    }
+
+    let close_paren = text[paren_start..].find(')')
+    guard let some(cp) = close_paren else {
+      return (Inline.Text("["), 1)
+    }
+
+    let url_part = text[paren_start + 1..paren_start + cp].trim()
+
+    // Check for optional title: url "title"
+    let (url, title) = if url_part.contains('"') {
+      let quote_start = url_part.find('"').unwrap()
+      let url = url_part[..quote_start].trim()
+      let title = url_part[quote_start + 1..].trim_end_matches('"')
+      (url, some(title))
+    } else {
+      (url_part, none)
+    }
+
+    let inline = Inline.Link(self.parse_inline(link_text), url, title)
+    (inline, paren_start + cp + 1 - start)
+  }
+
+  /// Parse an image: ![alt](url "title")
+  fn parse_image(self, text: str, start: usize) -> (Inline, usize) {
+    // Skip the ! and parse like a link
+    let (link, consumed) = self.parse_link(text, start + 1)
+    match link {
+      Link(text_inlines, url, title) => {
+        // Convert link text inlines back to a plain string for the alt
+        let alt = text_inlines
+          .map((i) => match i { Text(t) => t, _ => "" })
+          .join("")
+        (Inline.Image(alt, url, title), consumed + 1)
+      }
+      _ => (Inline.Text("!"), 1)
+    }
+  }
+
+  /// Parse strikethrough: ~~text~~
+  fn parse_strikethrough(self, text: str, start: usize) -> (Inline, usize) {
+    let close = text[start + 2..].find("~~")
+    match close {
+      some(pos) => {
+        let inner = text[start + 2..start + 2 + pos]
+        (Inline.Strikethrough(self.parse_inline(inner)), 2 + pos + 2)
+      }
+      none => (Inline.Text("~~"), 2)
+    }
+  }
+
+  // ===========================================================================
+  // Scanner Helpers
+  // ===========================================================================
+
+  /// Get the current line without advancing
+  fn current_line(self) -> str {
+    let end = self.source[self.pos..].find('\n')
+    match end {
+      some(pos) => self.source[self.pos..self.pos + pos]
+      none      => self.source[self.pos..]
+    }
+  }
+
+  /// Peek at a line relative to the current position
+  fn peek_line(self, offset: usize) -> str? {
+    let mut line_count = 0
+    let mut pos = self.pos
+
+    while pos < self.source.len() && line_count < offset {
+      match self.source[pos..].find('\n') {
+        some(p) => { pos = pos + p + 1; line_count += 1 }
+        none    => return none
+      }
+    }
+
+    if pos >= self.source.len() { return none }
+
+    let end = self.source[pos..].find('\n')
+    match end {
+      some(p) => some(self.source[pos..pos + p])
+      none    => some(self.source[pos..])
+    }
+  }
+
+  /// Advance past the current line
+  fn advance_line(self) {
+    match self.source[self.pos..].find('\n') {
+      some(pos) => self.pos = self.pos + pos + 1
+      none      => self.pos = self.source.len()
+    }
+  }
+
+  /// Check if a line is a thematic break (---, ***, ___)
+  fn is_thematic_break(self, line: str) -> bool {
+    let stripped = line.replace(" ", "")
+    (stripped.len() >= 3) && (
+      stripped.chars().all((c) => c == '-') ||
+      stripped.chars().all((c) => c == '*') ||
+      stripped.chars().all((c) => c == '_')
+    )
+  }
+}
+
+// =============================================================================
+// Renderer — converts AST to HTML
+// =============================================================================
+
+pub struct MarkdownRenderer {}
+
+impl MarkdownRenderer {
+  /// Render a complete document to HTML
+  pub fn render(doc: MarkdownDoc) -> str {
+    doc.blocks
+      .map((block) => MarkdownRenderer.render_block(block))
+      .join("\n")
+  }
+
+  /// Render a single block to HTML
+  fn render_block(block: Block) -> str {
+    match block {
+      Heading(level, content) => {
+        let inner = MarkdownRenderer.render_inlines(content)
+        let id = inner.to_lowercase().replace(" ", "-")
+          .chars().filter((c) => c.is_alphanumeric() || c == '-').collect::<str>()
+        "<h{level} id=\"{id}\">{inner}</h{level}>"
+      }
+
+      Paragraph(content) => {
+        "<p>{MarkdownRenderer.render_inlines(content)}</p>"
+      }
+
+      CodeBlock(language, code) => {
+        let escaped = MarkdownRenderer.escape_html(code)
+        let lang_attr = match language {
+          some(lang) => " class=\"language-{lang}\""
+          none       => ""
+        }
+        "<pre><code{lang_attr}>{escaped}</code></pre>"
+      }
+
+      BlockQuote(blocks) => {
+        let inner = blocks.map((b) => MarkdownRenderer.render_block(b)).join("\n")
+        "<blockquote>\n{inner}\n</blockquote>"
+      }
+
+      UnorderedList(items) => {
+        let item_html = items.map((item) => {
+          let checkbox = match item.checked {
+            some(true)  => "<input type=\"checkbox\" checked disabled> "
+            some(false) => "<input type=\"checkbox\" disabled> "
+            none        => ""
+          }
+          let content = item.content.map((b) => MarkdownRenderer.render_block(b)).join("")
+          "<li>{checkbox}{content}</li>"
+        }).join("\n")
+        "<ul>\n{item_html}\n</ul>"
+      }
+
+      OrderedList(start, items) => {
+        let start_attr = if start != 1 { " start=\"{start}\"" } else { "" }
+        let item_html = items.map((item) => {
+          let content = item.content.map((b) => MarkdownRenderer.render_block(b)).join("")
+          "<li>{content}</li>"
+        }).join("\n")
+        "<ol{start_attr}>\n{item_html}\n</ol>"
+      }
+
+      Table(headers, rows, alignments) => {
+        let header_cells = headers.enumerate().map((i, cell) => {
+          let align = alignments.get(i).unwrap_or(Alignment.Default)
+          let style = match align {
+            Left    => " style=\"text-align:left\""
+            Center  => " style=\"text-align:center\""
+            Right   => " style=\"text-align:right\""
+            Default => ""
+          }
+          "<th{style}>{MarkdownRenderer.render_inlines(cell.content)}</th>"
+        }).join("")
+
+        let body_rows = rows.map((row) => {
+          let cells = row.enumerate().map((i, cell) => {
+            let align = alignments.get(i).unwrap_or(Alignment.Default)
+            let style = match align {
+              Left    => " style=\"text-align:left\""
+              Center  => " style=\"text-align:center\""
+              Right   => " style=\"text-align:right\""
+              Default => ""
+            }
+            "<td{style}>{MarkdownRenderer.render_inlines(cell.content)}</td>"
+          }).join("")
+          "<tr>{cells}</tr>"
+        }).join("\n")
+
+        "<table>\n<thead><tr>{header_cells}</tr></thead>\n<tbody>\n{body_rows}\n</tbody>\n</table>"
+      }
+
+      ThematicBreak => "<hr>"
+
+      HtmlBlock(html) => html
+
+      FrontMatter(_) => ""  // Frontmatter is not rendered as HTML
+    }
+  }
+
+  /// Render a sequence of inline elements to HTML
+  fn render_inlines(inlines: [Inline]) -> str {
+    inlines.map((inline) => MarkdownRenderer.render_inline(inline)).join("")
+  }
+
+  /// Render a single inline element to HTML
+  fn render_inline(inline: Inline) -> str {
+    match inline {
+      Text(t)              => MarkdownRenderer.escape_html(t)
+      Bold(content)        => "<strong>{MarkdownRenderer.render_inlines(content)}</strong>"
+      Italic(content)      => "<em>{MarkdownRenderer.render_inlines(content)}</em>"
+      BoldItalic(content)  => "<strong><em>{MarkdownRenderer.render_inlines(content)}</em></strong>"
+      Code(c)              => "<code>{MarkdownRenderer.escape_html(c)}</code>"
+      Strikethrough(content) => "<del>{MarkdownRenderer.render_inlines(content)}</del>"
+      LineBreak            => "<br>"
+      SoftBreak            => "\n"
+      HtmlInline(html)     => html
+      FootnoteRef(label)   => "<sup><a href=\"#fn-{label}\">{label}</a></sup>"
+
+      Link(text, url, title) => {
+        let title_attr = match title {
+          some(t) => " title=\"{MarkdownRenderer.escape_html(t)}\""
+          none    => ""
+        }
+        "<a href=\"{MarkdownRenderer.escape_html(url)}\"{title_attr}>{MarkdownRenderer.render_inlines(text)}</a>"
+      }
+
+      Image(alt, url, title) => {
+        let title_attr = match title {
+          some(t) => " title=\"{MarkdownRenderer.escape_html(t)}\""
+          none    => ""
+        }
+        "<img src=\"{MarkdownRenderer.escape_html(url)}\" alt=\"{MarkdownRenderer.escape_html(alt)}\"{title_attr}>"
+      }
+    }
+  }
+
+  /// Escape HTML entities using the compile-time lookup table
+  fn escape_html(text: str) -> str {
+    let mut result = ""
+    for ch in text.chars() {
+      let code = ch as usize
+      if code < 256 && HTML_ESCAPES[code] != "" {
+        result = "{result}{HTML_ESCAPES[code]}"
+      } else {
+        result = "{result}{ch}"
+      }
+    }
+    result
+  }
+}

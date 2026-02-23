@@ -1,0 +1,567 @@
+// =============================================================================
+// routing.tb — Request routing, URL parsing, and content negotiation
+//
+// Demonstrates:
+//   - URL path parsing with pattern matching
+//   - Content negotiation (Accept header -> best format)
+//   - Geo-based routing decisions
+//   - Pipe operator for chaining parse steps
+//   - Guard statements for input validation
+//   - T? optional types throughout for safe parsing
+//   - Builder pattern for constructing TransformPipeline from URL
+// =============================================================================
+
+import { Request, Response } from "turbo/http"
+import { log } from "turbo/log"
+import {
+  ImageFormat, TransformOp, TransformPipeline, BoundingBox,
+  CropAnchor, ResizeAlgorithm, Dimensions, ProcessingConfig,
+  GeoLocation, EdgeContext, PipelineError,
+} from "./models"
+
+// =============================================================================
+// URL Route Parsing
+//
+// Supported URL formats:
+//   /image/resize/800x600/format/webp?url=https://example.com/photo.jpg
+//   /image/resize/800x600/blur/5/sharpen/0.5/format/webp?url=...
+//   /image/crop/100,100,400,300/format/png?url=...
+//   /image/smart-crop/800x600/format/avif?url=...
+//   /image/watermark/bottom-right/0.5?url=...&wm=https://...
+//   /image/grayscale/resize/200x200?url=...
+// =============================================================================
+
+/// Parse a full request into a TransformPipeline
+pub fn parse_request(req: Request, config: ProcessingConfig) -> TransformPipeline ! PipelineError {
+  // Extract source URL from query parameter
+  let source_url = req.query.get("url") ?? {
+    return err(PipelineError.InvalidSource("", "missing 'url' query parameter"))
+  }
+
+  // Validate source URL
+  guard source_url.starts_with("http://") || source_url.starts_with("https://") else {
+    return err(PipelineError.InvalidSource(source_url, "must be an HTTP(S) URL"))
+  }
+
+  // Parse the path segments into transform operations
+  let path = req.path.trim_prefix("/image") ?? req.path
+  let segments = path.split("/").filter((s) => !s.is_empty())
+
+  let mut pipeline = TransformPipeline.new(source_url)
+  let mut i: usize = 0
+
+  while i < segments.len() {
+    let segment = segments[i]
+    let op = match segment {
+      "resize" => {
+        i += 1
+        guard i < segments.len() else {
+          return err(PipelineError.InvalidSource(source_url, "resize requires dimensions (e.g., 800x600)"))
+        }
+        parse_resize(segments[i], config)?
+      }
+
+      "crop" => {
+        i += 1
+        guard i < segments.len() else {
+          return err(PipelineError.InvalidSource(source_url, "crop requires bounds (e.g., 100,100,400,300)"))
+        }
+        parse_crop(segments[i])?
+      }
+
+      "smart-crop" | "smartcrop" => {
+        i += 1
+        guard i < segments.len() else {
+          return err(PipelineError.InvalidSource(source_url, "smart-crop requires dimensions"))
+        }
+        let anchor_str = req.query.get("anchor") ?? "face"
+        parse_smart_crop(segments[i], anchor_str)?
+      }
+
+      "blur" => {
+        i += 1
+        guard i < segments.len() else {
+          return err(PipelineError.InvalidSource(source_url, "blur requires sigma value"))
+        }
+        let sigma = segments[i].parse<f32>() ?? {
+          return err(PipelineError.InvalidSource(source_url, "invalid blur sigma: {segments[i]}"))
+        }
+        TransformOp.Blur(sigma)
+      }
+
+      "sharpen" => {
+        i += 1
+        guard i < segments.len() else {
+          return err(PipelineError.InvalidSource(source_url, "sharpen requires amount"))
+        }
+        parse_sharpen(segments[i], req)?
+      }
+
+      "watermark" => {
+        let wm_url = req.query.get("wm") ?? req.query.get("watermark") ?? {
+          return err(PipelineError.InvalidSource(source_url, "watermark requires 'wm' query parameter"))
+        }
+        i += 1
+        let position_str = if i < segments.len() { segments[i] } else { "bottom-right" }
+        let opacity = req.query.get("opacity")?.parse<f32>() ?? 0.5
+        let scale = req.query.get("wm-scale")?.parse<f32>() ?? 0.15
+        parse_watermark(position_str, wm_url, opacity, scale)?
+      }
+
+      "format" | "fmt" | "f" => {
+        i += 1
+        guard i < segments.len() else {
+          return err(PipelineError.InvalidSource(source_url, "format requires type (e.g., webp, png)"))
+        }
+        let format = parse_format(segments[i])?
+        pipeline = pipeline.format(format)
+        i += 1
+        continue
+      }
+
+      "rotate" | "rot" => {
+        i += 1
+        guard i < segments.len() else {
+          return err(PipelineError.InvalidSource(source_url, "rotate requires degrees"))
+        }
+        let degrees = segments[i].parse<i16>() ?? {
+          return err(PipelineError.InvalidSource(source_url, "invalid rotation: {segments[i]}"))
+        }
+        TransformOp.Rotate(degrees)
+      }
+
+      "flip" => {
+        i += 1
+        let horizontal = if i < segments.len() {
+          segments[i] == "h" || segments[i] == "horizontal"
+        } else {
+          true
+        }
+        if i < segments.len() && (segments[i] == "h" || segments[i] == "v" ||
+           segments[i] == "horizontal" || segments[i] == "vertical") {
+          i += 1
+        }
+        TransformOp.Flip(horizontal)
+      }
+
+      "grayscale" | "greyscale" | "gray" | "grey" => {
+        TransformOp.Grayscale
+      }
+
+      "brightness" | "bright" => {
+        i += 1
+        guard i < segments.len() else {
+          return err(PipelineError.InvalidSource(source_url, "brightness requires a factor"))
+        }
+        let factor = segments[i].parse<f32>() ?? 1.0
+        TransformOp.Brightness(factor)
+      }
+
+      "contrast" => {
+        i += 1
+        guard i < segments.len() else {
+          return err(PipelineError.InvalidSource(source_url, "contrast requires a factor"))
+        }
+        let factor = segments[i].parse<f32>() ?? 1.0
+        TransformOp.Contrast(factor)
+      }
+
+      "quality" | "q" => {
+        i += 1
+        guard i < segments.len() else {
+          return err(PipelineError.InvalidSource(source_url, "quality requires a value (1-100)"))
+        }
+        // Quality modifies the output format; skip as a no-op transform
+        let q = segments[i].parse<u8>() ?? config.default_quality
+        // Apply quality to the current output format
+        if let some(fmt) = pipeline.output_format {
+          pipeline = pipeline.format(set_quality(fmt, q))
+        }
+        i += 1
+        continue
+      }
+
+      _ => {
+        // Unknown segment — skip with warning
+        log.warn("Unknown transform segment", { segment })
+        i += 1
+        continue
+      }
+    }
+
+    pipeline = pipeline.add(op)
+    i += 1
+  }
+
+  // If no explicit format was set, check content negotiation
+  if pipeline.output_format == none {
+    let best = negotiate_format(req)
+    if let some(fmt) = best {
+      pipeline = pipeline.format(fmt)
+    }
+  }
+
+  pipeline
+}
+
+// =============================================================================
+// Content Negotiation
+// =============================================================================
+
+/// Determine the best output format based on the Accept header
+pub fn negotiate_format(req: Request) -> ImageFormat? {
+  let accept = req.headers.get("accept") ?? return none
+
+  // Parse Accept header into weighted format preferences
+  let preferences = accept.split(",")
+    |> map((s) => s.trim())
+    |> map((s) => parse_accept_entry(s))
+    |> filter((entry) => entry.format != none)
+    |> sort_by((a, b) => b.quality.cmp(a.quality))
+
+  // Return the highest-quality supported format
+  for pref in preferences {
+    if let some(fmt) = pref.format {
+      return some(fmt)
+    }
+  }
+
+  none
+}
+
+@derive(Debug)
+struct AcceptEntry {
+  mime: str
+  quality: f32
+  format: ImageFormat?
+}
+
+/// Parse a single Accept header entry like "image/webp;q=0.9"
+fn parse_accept_entry(entry: str) -> AcceptEntry {
+  let parts = entry.split(";")
+  let mime = parts[0].trim()
+
+  // Parse quality parameter
+  let quality = parts.iter()
+    .skip(1)
+    .find((p) => p.trim().starts_with("q="))
+    .map((p) => p.trim().strip_prefix("q=").parse<f32>() ?? 1.0)
+    ?? 1.0
+
+  let format = match mime {
+    "image/avif"   => some(ImageFormat.AVIF(quality: 75, speed: 6))
+    "image/webp"   => some(ImageFormat.WebP(quality: 80))
+    "image/png"    => some(ImageFormat.PNG)
+    "image/jpeg"   => some(ImageFormat.JPEG(quality: 85))
+    "image/*"      => some(ImageFormat.WebP(quality: 80))  // default to WebP
+    _              => none
+  }
+
+  AcceptEntry { mime, quality, format }
+}
+
+// =============================================================================
+// Geo-based Routing
+// =============================================================================
+
+/// Make routing decisions based on client geo-location
+pub fn geo_route(context: EdgeContext, config: ProcessingConfig) -> GeoRoutingDecision {
+  let geo = match context.geo {
+    some(g) => g
+    none    => return GeoRoutingDecision.Default
+  }
+
+  // Region-specific format preferences
+  // Some regions have lower bandwidth; prefer smaller formats
+  let preferred_format = match geo.country {
+    // High-bandwidth regions: prefer quality
+    "US" | "CA" | "GB" | "DE" | "FR" | "JP" | "KR" | "AU" => {
+      none  // Use client preference
+    }
+
+    // Moderate bandwidth: prefer WebP
+    "BR" | "MX" | "IN" | "ID" | "PH" | "TH" => {
+      some(ImageFormat.WebP(quality: 70))
+    }
+
+    // Lower bandwidth: prefer AVIF (smallest) with lower quality
+    _ => {
+      some(ImageFormat.AVIF(quality: 60, speed: 8))
+    }
+  }
+
+  // Region-specific max dimensions
+  let max_dims = match geo.country {
+    "US" | "CA" | "GB" | "DE" | "FR" | "JP" | "KR" | "AU" => {
+      Dimensions { width: config.max_width, height: config.max_height }
+    }
+    _ => {
+      // Cap dimensions for bandwidth-constrained regions
+      Dimensions { width: 2048, height: 2048 }
+    }
+  }
+
+  GeoRoutingDecision.Custom(
+    preferred_format,
+    max_dims,
+    geo.colo,
+  )
+}
+
+/// Routing decision based on geo-location
+type GeoRoutingDecision {
+  /// Use default configuration (no geo-specific overrides)
+  Default
+
+  /// Apply region-specific settings
+  Custom(
+    preferred_format: ImageFormat?,
+    max_dimensions: Dimensions,
+    nearest_colo: str,
+  )
+}
+
+/// Apply geo-routing decisions to a pipeline
+pub fn apply_geo_routing(
+  pipeline: TransformPipeline,
+  decision: GeoRoutingDecision,
+) -> TransformPipeline {
+  match decision {
+    Default => pipeline
+
+    Custom(preferred_format, max_dims, _) => {
+      let mut p = pipeline
+
+      // Apply format preference if not explicitly set
+      if p.output_format == none {
+        if let some(fmt) = preferred_format {
+          p = p.format(fmt)
+        }
+      }
+
+      // Ensure dimensions don't exceed geo-based limits
+      let has_resize = p.operations.any((op) => match op {
+        Resize(_, _, _)    => true
+        SmartCrop(_, _, _) => true
+        _                  => false
+      })
+
+      if !has_resize {
+        // Add a constrained resize if no explicit resize was requested
+        p = p.add(TransformOp.Resize(max_dims.width, max_dims.height, ResizeAlgorithm.default()))
+      }
+
+      p
+    }
+  }
+}
+
+// =============================================================================
+// Edge context extraction
+// =============================================================================
+
+/// Extract edge context from the incoming request
+/// Works with Cloudflare Workers, Vercel Edge, and Deno Deploy headers
+pub fn extract_edge_context(req: Request) -> EdgeContext {
+  // Try Cloudflare-style headers first, then Vercel, then generic
+  let geo = extract_geo(req)
+
+  let client_ip = req.headers.get("cf-connecting-ip")
+    ?? req.headers.get("x-real-ip")
+    ?? req.headers.get("x-forwarded-for")?.split(",").first()?.trim()
+    ?? "unknown"
+
+  let ray_id = req.headers.get("cf-ray")
+    ?? req.headers.get("x-vercel-id")
+    ?? req.headers.get("x-request-id")
+    ?? "unknown"
+
+  let edge_node = req.headers.get("cf-ray")?.split("-").last()
+    ?? req.headers.get("x-vercel-proxy-region")
+    ?? "unknown"
+
+  let is_bot = req.headers.get("cf-bot-management-score")
+    .map((s) => s.parse<u32>() ?? 100 < 30)
+    ?? detect_bot(req.headers.get("user-agent") ?? "")
+
+  let accept_formats = parse_accept_formats(req.headers.get("accept") ?? "")
+
+  EdgeContext {
+    geo,
+    client_ip,
+    ray_id,
+    edge_node,
+    is_bot,
+    accept_formats,
+  }
+}
+
+/// Extract geo-location from edge runtime headers
+fn extract_geo(req: Request) -> GeoLocation? {
+  // Cloudflare headers
+  let country = req.headers.get("cf-ipcountry")
+    ?? req.headers.get("x-vercel-ip-country")
+
+  match country {
+    some(c) => some(GeoLocation {
+      country: c,
+      region: req.headers.get("cf-region")
+        ?? req.headers.get("x-vercel-ip-country-region"),
+      city: req.headers.get("cf-ipcity")
+        ?? req.headers.get("x-vercel-ip-city"),
+      latitude: req.headers.get("cf-iplatitude")?.parse<f64>() ?? 0.0,
+      longitude: req.headers.get("cf-iplongitude")?.parse<f64>() ?? 0.0,
+      colo: req.headers.get("cf-ray")?.split("-").last() ?? "unknown",
+    })
+    none => none
+  }
+}
+
+/// Detect bots from User-Agent string
+fn detect_bot(user_agent: str) -> bool {
+  let ua = user_agent.to_lowercase()
+  let bot_patterns = [
+    "bot", "crawler", "spider", "scraper", "wget", "curl",
+    "python-requests", "go-http-client", "java/", "libwww",
+  ]
+  bot_patterns.any((pattern) => ua.contains(pattern))
+}
+
+/// Parse supported formats from Accept header
+fn parse_accept_formats(accept: str) -> [ImageFormat] {
+  accept.split(",")
+    |> map((s) => s.trim().split(";").first() ?? "")
+    |> filter_map((mime) => match mime.trim() {
+      "image/avif" => some(ImageFormat.AVIF(quality: 75, speed: 6))
+      "image/webp" => some(ImageFormat.WebP(quality: 80))
+      "image/png"  => some(ImageFormat.PNG)
+      "image/jpeg" => some(ImageFormat.JPEG(quality: 85))
+      _            => none
+    })
+    |> collect()
+}
+
+// =============================================================================
+// URL segment parsers
+// =============================================================================
+
+/// Parse "800x600" or "800" into a Resize transform
+fn parse_resize(segment: str, config: ProcessingConfig) -> TransformOp ! PipelineError {
+  let algo_str = ""  // Could be extended with ?algo=lanczos
+  let algorithm = ResizeAlgorithm.default()
+
+  if segment.contains("x") {
+    let parts = segment.split("x")
+    guard parts.len() == 2 else {
+      return err(PipelineError.InvalidSource("", "invalid resize format: {segment}"))
+    }
+
+    let width = parts[0].parse<u32>() ?? {
+      return err(PipelineError.InvalidSource("", "invalid width: {parts[0]}"))
+    }
+    let height = parts[1].parse<u32>() ?? {
+      return err(PipelineError.InvalidSource("", "invalid height: {parts[1]}"))
+    }
+
+    guard width <= config.max_width && height <= config.max_height else {
+      return err(PipelineError.DimensionsTooLarge(width, height, config.max_width))
+    }
+
+    TransformOp.Resize(width, height, algorithm)
+  } else {
+    // Single dimension: scale proportionally
+    let width = segment.parse<u32>() ?? {
+      return err(PipelineError.InvalidSource("", "invalid width: {segment}"))
+    }
+    guard width <= config.max_width else {
+      return err(PipelineError.DimensionsTooLarge(width, 0, config.max_width))
+    }
+    // Height will be calculated during processing to preserve aspect ratio
+    TransformOp.Resize(width, 0, algorithm)
+  }
+}
+
+/// Parse "100,100,400,300" into a Crop transform
+fn parse_crop(segment: str) -> TransformOp ! PipelineError {
+  let parts = segment.split(",")
+  guard parts.len() == 4 else {
+    return err(PipelineError.InvalidSource("", "crop requires x,y,width,height (e.g., 100,100,400,300)"))
+  }
+
+  let x = parts[0].parse<u32>() ?? return err(PipelineError.InvalidSource("", "invalid crop x: {parts[0]}"))
+  let y = parts[1].parse<u32>() ?? return err(PipelineError.InvalidSource("", "invalid crop y: {parts[1]}"))
+  let w = parts[2].parse<u32>() ?? return err(PipelineError.InvalidSource("", "invalid crop width: {parts[2]}"))
+  let h = parts[3].parse<u32>() ?? return err(PipelineError.InvalidSource("", "invalid crop height: {parts[3]}"))
+
+  TransformOp.Crop(BoundingBox { x, y, width: w, height: h })
+}
+
+/// Parse smart crop dimensions and anchor
+fn parse_smart_crop(dims_segment: str, anchor_str: str) -> TransformOp ! PipelineError {
+  let parts = dims_segment.split("x")
+  guard parts.len() == 2 else {
+    return err(PipelineError.InvalidSource("", "smart-crop requires WxH dimensions"))
+  }
+
+  let w = parts[0].parse<u32>() ?? return err(PipelineError.InvalidSource("", "invalid width"))
+  let h = parts[1].parse<u32>() ?? return err(PipelineError.InvalidSource("", "invalid height"))
+
+  let anchor = match anchor_str.to_lowercase() {
+    "face" | "faces"   => CropAnchor.SmartFace
+    "entropy" | "auto" => CropAnchor.SmartEntropy
+    "center"           => CropAnchor.Center
+    "top"              => CropAnchor.TopCenter
+    "bottom"           => CropAnchor.BottomCenter
+    "left"             => CropAnchor.CenterLeft
+    "right"            => CropAnchor.CenterRight
+    _                  => CropAnchor.SmartFace  // default
+  }
+
+  TransformOp.SmartCrop(w, h, anchor)
+}
+
+/// Parse sharpen parameters
+fn parse_sharpen(amount_str: str, req: Request) -> TransformOp ! PipelineError {
+  let amount = amount_str.parse<f32>() ?? {
+    return err(PipelineError.InvalidSource("", "invalid sharpen amount: {amount_str}"))
+  }
+  let radius = req.query.get("sharpen-radius")?.parse<f32>() ?? 1.0
+  let threshold = req.query.get("sharpen-threshold")?.parse<f32>() ?? 0.0
+
+  TransformOp.Sharpen(amount, radius, threshold)
+}
+
+/// Parse watermark parameters
+fn parse_watermark(position_str: str, wm_url: str, opacity: f32, scale: f32) -> TransformOp ! PipelineError {
+  let position = match position_str.to_lowercase() {
+    "top-left" | "tl"      => CropAnchor.TopLeft
+    "top-center" | "tc"    => CropAnchor.TopCenter
+    "top-right" | "tr"     => CropAnchor.TopRight
+    "center-left" | "cl"   => CropAnchor.CenterLeft
+    "center" | "c"         => CropAnchor.Center
+    "center-right" | "cr"  => CropAnchor.CenterRight
+    "bottom-left" | "bl"   => CropAnchor.BottomLeft
+    "bottom-center" | "bc" => CropAnchor.BottomCenter
+    "bottom-right" | "br"  => CropAnchor.BottomRight
+    _                      => CropAnchor.BottomRight
+  }
+
+  TransformOp.Watermark(wm_url, position, opacity, scale)
+}
+
+/// Parse format string into ImageFormat
+fn parse_format(segment: str) -> ImageFormat ! PipelineError {
+  ImageFormat.from_string(segment) ?? {
+    err(PipelineError.UnsupportedFormat(segment))
+  }
+}
+
+/// Set quality on a format
+fn set_quality(format: ImageFormat, quality: u8) -> ImageFormat {
+  match format {
+    PNG         => PNG                           // PNG doesn't have a quality setting
+    JPEG(_)     => JPEG(quality)
+    WebP(_)     => WebP(quality)
+    AVIF(_, s)  => AVIF(quality, s)
+  }
+}

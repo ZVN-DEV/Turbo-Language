@@ -1,0 +1,287 @@
+// =============================================================================
+// routes/ws.tb — WebSocket handler for real-time bookmark sync across devices
+//
+// Demonstrates:
+//   - WebSocket upgrade from HTTP
+//   - Shared<T> for managing concurrent connections
+//   - for await on WebSocket message streams
+//   - Pattern matching on WebSocket message types
+//   - Channel-based broadcasting to multiple clients
+//   - Graceful connection cleanup with defer
+//   - JSON serialization/deserialization over WebSocket
+//   - Atomic counters for connection tracking
+//   - Async generators for heartbeat
+// =============================================================================
+
+import { Router, Response, Request } from "turbo/http"
+import { WebSocket, WsMessage } from "turbo/ws"
+import { Shared } from "turbo/sync"
+import { Channel } from "turbo/sync"
+import { DateTime, Duration } from "std/time"
+import { log } from "turbo/log"
+import { SyncEvent, ApiError } from "../models"
+import { verify_token } from "../auth"
+import { Metrics } from "../middleware"
+
+// --- Connection Registry ---
+
+/// A single connected client
+struct WsClient {
+  user_id: u64
+  device_id: str
+  socket: WebSocket
+  connected_at: DateTime
+}
+
+/// Manages all WebSocket connections and broadcasting
+pub struct SyncBroadcaster {
+  clients: Shared<{str: WsClient}>    // device_id -> client
+  metrics: Shared<Metrics>
+}
+
+impl SyncBroadcaster {
+  pub fn new(metrics: Shared<Metrics>) -> SyncBroadcaster {
+    SyncBroadcaster {
+      clients: Shared.new({:}),
+      metrics,
+    }
+  }
+
+  /// Register a new WebSocket connection
+  fn add_client(self, client: WsClient) {
+    let device_id = client.device_id
+    let user_id = client.user_id
+    self.clients.write()[device_id] = client
+    self.metrics.read().ws_connect()
+    log.info("WebSocket client connected", { user_id, device_id })
+  }
+
+  /// Remove a disconnected client
+  fn remove_client(self, device_id: str) {
+    let removed = self.clients.write().remove(device_id)
+    if let some(client) = removed {
+      self.metrics.read().ws_disconnect()
+      log.info("WebSocket client disconnected", {
+        user_id: client.user_id,
+        device_id,
+      })
+    }
+  }
+
+  /// Broadcast a sync event to all of a user's connected devices
+  /// except the originating device
+  pub fn broadcast(self, user_id: u64, event: SyncEvent, exclude_device: str? = none) {
+    let clients = self.clients.read()
+    let message = WsMessage.json({
+      "type": event.event_type(),
+      "data": event,
+      "timestamp": DateTime.now().to_iso8601(),
+    })
+
+    for (device_id, client) in clients {
+      if client.user_id == user_id {
+        // Skip the device that originated the change
+        if let some(excluded) = exclude_device {
+          if device_id == excluded {
+            continue
+          }
+        }
+
+        match client.socket.send(message.clone()) {
+          ok(_) => {}
+          err(e) => {
+            log.warn("Failed to send to WebSocket", {
+              device_id,
+              error: "{e}",
+            })
+          }
+        }
+      }
+    }
+  }
+
+  /// Get the number of active connections
+  pub fn connection_count(self) -> u32 {
+    self.clients.read().len() as u32
+  }
+
+  /// Get the number of connected devices for a specific user
+  pub fn user_device_count(self, user_id: u64) -> u32 {
+    let clients = self.clients.read()
+    clients.values()
+      .filter((c) => c.user_id == user_id)
+      .count() as u32
+  }
+}
+
+// --- WebSocket Route ---
+
+pub fn ws_routes(broadcaster: Shared<SyncBroadcaster>) -> Router {
+  let router = Router.new()
+
+  // ── GET /ws — WebSocket upgrade endpoint ──
+
+  router.ws("/ws", async (req, socket: WebSocket) => {
+    // Authenticate via query parameter (WebSocket can't use headers easily)
+    let token = match req.query.get("token") {
+      some(t) => t
+      none => {
+        await socket.close(4001, "Missing authentication token")
+        return
+      }
+    }
+
+    let claims = match verify_token(token) {
+      ok(c) => c
+      err(e) => {
+        await socket.close(4001, "Invalid token: {e.message()}")
+        return
+      }
+    }
+
+    let device_id = req.query.get("device_id")
+      ?? "device-{crypto.random_hex(8)}"
+
+    let client = WsClient {
+      user_id: claims.sub,
+      device_id: device_id,
+      socket: socket.clone(),
+      connected_at: DateTime.now(),
+    }
+
+    broadcaster.read().add_client(client)
+
+    // Cleanup on disconnect
+    defer {
+      broadcaster.read().remove_client(device_id)
+    }
+
+    // Send welcome message
+    await socket.send(WsMessage.json({
+      "type": "connected",
+      "user_id": claims.sub,
+      "device_id": device_id,
+      "message": "Connected to bookmark sync",
+    }))
+
+    // Spawn heartbeat task
+    let heartbeat_handle = spawn async {
+      loop {
+        await sleep(Duration.seconds(15))
+        match await socket.send(WsMessage.json({
+          "type": "ping",
+          "timestamp": DateTime.now().to_iso8601(),
+        })) {
+          ok(_)  => {}
+          err(_) => break   // connection closed
+        }
+      }
+    }
+
+    // Process incoming messages
+    for await msg in socket.messages() {
+      match msg {
+        WsMessage.Text(text) => {
+          match json.parse<WsClientMessage>(text) {
+            ok(client_msg) => {
+              await handle_client_message(
+                broadcaster,
+                claims.sub,
+                device_id,
+                client_msg,
+                socket,
+              )
+            }
+            err(e) => {
+              await socket.send(WsMessage.json({
+                "type": "error",
+                "message": "Invalid message format: {e}",
+              }))
+            }
+          }
+        }
+        WsMessage.Ping(data) => {
+          await socket.send(WsMessage.Pong(data))
+        }
+        WsMessage.Close(code, reason) => {
+          log.info("WebSocket close received", {
+            user_id: claims.sub,
+            device_id,
+            code,
+            reason,
+          })
+          break
+        }
+        _ => {}
+      }
+    }
+
+    // Cancel heartbeat when message loop ends
+    heartbeat_handle.cancel()
+  })
+
+  router
+}
+
+// --- Client Message Types ---
+
+@derive(Debug, Schema)
+type WsClientMessage {
+  Ping
+  Pong
+  Subscribe(tags: [str])
+  Unsubscribe(tags: [str])
+  RequestSync(since: DateTime?)
+}
+
+/// Handle an incoming message from a WebSocket client
+async fn handle_client_message(
+  broadcaster: Shared<SyncBroadcaster>,
+  user_id: u64,
+  device_id: str,
+  msg: WsClientMessage,
+  socket: WebSocket,
+) {
+  match msg {
+    Ping => {
+      await socket.send(WsMessage.json({
+        "type": "pong",
+        "timestamp": DateTime.now().to_iso8601(),
+      }))
+    }
+    Pong => {
+      // Client acknowledged our ping — connection is alive
+    }
+    Subscribe(tags) => {
+      log.debug("WebSocket subscribe", { user_id, device_id, tags })
+      await socket.send(WsMessage.json({
+        "type": "subscribed",
+        "tags": tags,
+      }))
+    }
+    Unsubscribe(tags) => {
+      log.debug("WebSocket unsubscribe", { user_id, device_id, tags })
+      await socket.send(WsMessage.json({
+        "type": "unsubscribed",
+        "tags": tags,
+      }))
+    }
+    RequestSync(since) => {
+      log.info("Sync requested", {
+        user_id,
+        device_id,
+        since: since?.to_iso8601() ?? "all",
+      })
+      // In a real app, this would fetch changed bookmarks since the given time
+      // and stream them to the client
+      await socket.send(WsMessage.json({
+        "type": "sync_start",
+        "since": since?.to_iso8601() ?? none,
+      }))
+      await socket.send(WsMessage.json({
+        "type": "sync_complete",
+        "timestamp": DateTime.now().to_iso8601(),
+      }))
+    }
+  }
+}

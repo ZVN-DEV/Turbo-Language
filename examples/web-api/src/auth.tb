@@ -1,0 +1,233 @@
+// =============================================================================
+// auth.tb — JWT Authentication, password hashing, and auth middleware
+//
+// Demonstrates:
+//   - const fn for compile-time constants
+//   - T ! E error propagation with ? operator
+//   - Shared<T> for thread-safe token blacklist
+//   - Middleware pattern with higher-order async functions
+//   - Guard statements for validation
+//   - Pattern matching on optional header values
+//   - String interpolation with "text {var}"
+//   - Arrow functions as callbacks
+// =============================================================================
+
+import { crypto } from "turbo/crypto"
+import { DateTime } from "std/time"
+import { Shared } from "turbo/sync"
+import { Request, Response, Middleware } from "turbo/http"
+import { log } from "turbo/log"
+import { env } from "turbo/env"
+import { TokenClaims, AuthToken, ApiError, User } from "./models"
+
+// --- Constants ---
+
+const fn JWT_SECRET() -> str {
+  env.get("JWT_SECRET") ?? "bookmark-api-dev-secret-change-in-production"
+}
+
+const fn TOKEN_EXPIRY_SECONDS() -> u64 {
+  3600  // 1 hour
+}
+
+const fn BCRYPT_COST() -> u32 {
+  12
+}
+
+// --- Password Hashing ---
+
+/// Hash a plaintext password using bcrypt
+pub fn hash_password(password: str) -> str ! ApiError {
+  guard password.len() >= 8 else {
+    return err(ApiError.BadRequest("password", "must be at least 8 characters"))
+  }
+
+  guard password.len() <= 128 else {
+    return err(ApiError.BadRequest("password", "must not exceed 128 characters"))
+  }
+
+  match crypto.bcrypt.hash(password, cost: BCRYPT_COST()) {
+    ok(hash)  => hash
+    err(e)    => err(ApiError.InternalError("Failed to hash password: {e}"))
+  }
+}
+
+/// Verify a password against a bcrypt hash
+pub fn verify_password(password: str, hash: str) -> bool ! ApiError {
+  match crypto.bcrypt.verify(password, hash) {
+    ok(valid) => valid
+    err(e)    => err(ApiError.InternalError("Failed to verify password: {e}"))
+  }
+}
+
+// --- JWT Token Management ---
+
+/// Sign a new JWT token for a user
+pub fn sign_token(user_id: u64, username: str) -> AuthToken ! ApiError {
+  let now = DateTime.now().timestamp()
+  let exp = now + TOKEN_EXPIRY_SECONDS()
+
+  let claims = TokenClaims {
+    sub: user_id,
+    exp,
+    iat: now,
+    username,
+  }
+
+  let token = match crypto.jwt.sign(claims, secret: JWT_SECRET(), algorithm: "HS256") {
+    ok(t)  => t
+    err(e) => return err(ApiError.InternalError("Failed to sign token: {e}"))
+  }
+
+  AuthToken {
+    access_token: token,
+    token_type: "Bearer",
+    expires_in: TOKEN_EXPIRY_SECONDS(),
+    user_id,
+  }
+}
+
+/// Verify and decode a JWT token, returning the claims
+pub fn verify_token(token: str) -> TokenClaims ! ApiError {
+  match crypto.jwt.verify<TokenClaims>(token, secret: JWT_SECRET(), algorithm: "HS256") {
+    ok(claims) => {
+      // Check expiration
+      let now = DateTime.now().timestamp()
+      guard claims.exp > now else {
+        return err(ApiError.Unauthorized("Token has expired"))
+      }
+      claims
+    }
+    err(e) => err(ApiError.Unauthorized("Invalid token: {e}"))
+  }
+}
+
+/// Extract the Bearer token from an Authorization header value
+fn extract_bearer_token(header_value: str) -> str? {
+  if header_value.starts_with("Bearer ") {
+    some(header_value[7..].trim())
+  } else {
+    none
+  }
+}
+
+// --- Token Blacklist (for logout) ---
+
+pub struct TokenBlacklist {
+  tokens: Shared<{str: u64}>   // token -> expiry timestamp
+}
+
+impl TokenBlacklist {
+  pub fn new() -> TokenBlacklist {
+    TokenBlacklist {
+      tokens: Shared.new({:}),
+    }
+  }
+
+  /// Add a token to the blacklist
+  pub fn revoke(self, token: str, expires_at: u64) {
+    let mut list = self.tokens.write()
+    list[token] = expires_at
+  }
+
+  /// Check if a token is blacklisted
+  pub fn is_revoked(self, token: str) -> bool {
+    let list = self.tokens.read()
+    list.contains_key(token)
+  }
+
+  /// Remove expired tokens from the blacklist (garbage collection)
+  pub fn cleanup(self) {
+    let now = DateTime.now().timestamp()
+    let mut list = self.tokens.write()
+    list.retain((_, exp) => exp > now)
+  }
+}
+
+// --- Auth Middleware ---
+
+/// Middleware that requires a valid JWT on every request
+/// Injects the authenticated user's claims into req.state
+pub fn auth_required(blacklist: Shared<TokenBlacklist>) -> Middleware {
+  async (req: Request, next: fn) -> Response {
+    // Extract Authorization header
+    let auth_header = match req.headers.get("Authorization") {
+      some(h) => h
+      none    => return Response.json(
+        { error: "Missing Authorization header" },
+        status: 401
+      )
+    }
+
+    // Extract Bearer token
+    let token = match extract_bearer_token(auth_header) {
+      some(t) => t
+      none    => return Response.json(
+        { error: "Invalid Authorization format. Expected: Bearer <token>" },
+        status: 401
+      )
+    }
+
+    // Check blacklist
+    if blacklist.read().is_revoked(token) {
+      return Response.json(
+        { error: "Token has been revoked" },
+        status: 401
+      )
+    }
+
+    // Verify token and extract claims
+    match verify_token(token) {
+      ok(claims) => {
+        // Inject claims into request state for downstream handlers
+        req.state.set("user_id", claims.sub)
+        req.state.set("username", claims.username)
+        req.state.set("token", token)
+        await next(req)
+      }
+      err(e) => {
+        log.warn("Auth failed", { error: e.message(), path: req.path })
+        Response.json(
+          { error: e.message() },
+          status: e.status_code()
+        )
+      }
+    }
+  }
+}
+
+/// Optional auth middleware — does not reject unauthenticated requests
+/// but injects user info if a valid token is present
+pub fn auth_optional() -> Middleware {
+  async (req: Request, next: fn) -> Response {
+    if let some(auth_header) = req.headers.get("Authorization") {
+      if let some(token) = extract_bearer_token(auth_header) {
+        if let ok(claims) = verify_token(token) {
+          req.state.set("user_id", claims.sub)
+          req.state.set("username", claims.username)
+        }
+      }
+    }
+    await next(req)
+  }
+}
+
+// --- Helpers for route handlers ---
+
+/// Extract the authenticated user_id from request state
+/// Returns ApiError.Unauthorized if not present
+pub fn get_authenticated_user(req: Request) -> u64 ! ApiError {
+  match req.state.get<u64>("user_id") {
+    some(id) => id
+    none     => err(ApiError.Unauthorized("Authentication required"))
+  }
+}
+
+/// Validate that the current user owns a resource
+pub fn require_ownership(req: Request, resource_user_id: u64) -> () ! ApiError {
+  let user_id = get_authenticated_user(req)?
+  guard user_id == resource_user_id else {
+    return err(ApiError.Forbidden("You do not own this resource"))
+  }
+  ok(())
+}

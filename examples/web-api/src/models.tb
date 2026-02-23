@@ -1,0 +1,337 @@
+// =============================================================================
+// models.tb — Data types for the Social Bookmarking API
+//
+// Demonstrates:
+//   - @derive decorators for automatic trait implementations
+//   - Generic structs: PaginatedResponse<T>
+//   - Algebraic data types (type keyword for sum types)
+//   - Structs with default field values
+//   - T? optional types
+//   - T ! E error types (custom error enum implementing Error)
+//   - Map types {K: V} and array types [T]
+// =============================================================================
+
+import { DateTime } from "std/time"
+
+// --- User ---
+
+@derive(Debug, Clone, Schema, Serialize)
+struct User {
+  id: u64
+  username: str
+  email: str
+  password_hash: str
+  display_name: str?
+  created_at: DateTime
+  updated_at: DateTime
+  settings: UserSettings
+}
+
+@derive(Debug, Clone, Schema, Serialize)
+struct UserSettings {
+  default_visibility: Visibility = Visibility.Public
+  bookmarks_per_page: u32 = 20
+  enable_sync: bool = true
+  theme: str = "system"
+}
+
+@derive(Debug, Eq, Clone, Schema, Serialize)
+type Visibility {
+  Public
+  Private
+  Unlisted
+}
+
+impl Visibility {
+  fn to_string(self) -> str {
+    match self {
+      Public   => "public"
+      Private  => "private"
+      Unlisted => "unlisted"
+    }
+  }
+
+  fn from_string(s: str) -> Visibility? {
+    match s {
+      "public"   => Visibility.Public
+      "private"  => Visibility.Private
+      "unlisted" => Visibility.Unlisted
+      _          => none
+    }
+  }
+}
+
+// --- Bookmark ---
+
+@derive(Debug, Clone, Schema, Serialize)
+struct Bookmark {
+  id: u64
+  user_id: u64
+  url: str
+  title: str
+  description: str
+  tags: [str]
+  notes: str
+  visibility: Visibility
+  is_starred: bool
+  read_count: u32
+  created_at: DateTime
+  updated_at: DateTime
+}
+
+impl Bookmark {
+  /// Create a short summary for display
+  fn summary(self) -> str {
+    let star = if self.is_starred { "*" } else { " " }
+    let vis = match self.visibility {
+      Public   => "pub"
+      Private  => "prv"
+      Unlisted => "unl"
+    }
+    "[{star}] [{vis}] {self.title} ({self.tags.join(", ")})"
+  }
+
+  /// Check if bookmark matches a set of tags (all must match)
+  fn has_all_tags(self, required: [str]) -> bool {
+    required.all((tag) => self.tags.contains(tag))
+  }
+
+  /// Check if bookmark matches any of the given tags
+  fn has_any_tag(self, candidates: [str]) -> bool {
+    candidates.any((tag) => self.tags.contains(tag))
+  }
+}
+
+// --- Tag with usage count (for tag cloud) ---
+
+@derive(Debug, Clone, Schema, Serialize)
+struct TagCount {
+  name: str
+  count: u64
+}
+
+// --- DTOs (Data Transfer Objects) ---
+
+@derive(Schema, Debug)
+struct CreateBookmark {
+  url: str
+  title: str
+  description: str = ""
+  tags: [str] = []
+  notes: str = ""
+  visibility: Visibility = Visibility.Public
+  is_starred: bool = false
+}
+
+@derive(Schema, Debug)
+struct UpdateBookmark {
+  url: str? = none
+  title: str? = none
+  description: str? = none
+  tags: [str]? = none
+  notes: str? = none
+  visibility: Visibility? = none
+  is_starred: bool? = none
+}
+
+@derive(Schema, Debug)
+struct CreateUser {
+  username: str
+  email: str
+  password: str
+  display_name: str? = none
+}
+
+@derive(Schema, Debug)
+struct LoginRequest {
+  username: str
+  password: str
+}
+
+@derive(Schema, Debug)
+struct UpdateSettings {
+  default_visibility: Visibility? = none
+  bookmarks_per_page: u32? = none
+  enable_sync: bool? = none
+  theme: str? = none
+}
+
+@derive(Schema, Debug)
+struct UpdateProfile {
+  display_name: str? = none
+  email: str? = none
+}
+
+// --- Authentication ---
+
+@derive(Debug, Clone, Schema, Serialize)
+struct AuthToken {
+  access_token: str
+  token_type: str = "Bearer"
+  expires_in: u64
+  user_id: u64
+}
+
+@derive(Debug, Clone, Schema)
+struct TokenClaims {
+  sub: u64        // user_id
+  exp: u64        // expiration timestamp
+  iat: u64        // issued at timestamp
+  username: str
+}
+
+// --- Search ---
+
+@derive(Schema, Debug)
+struct SearchQuery {
+  q: str
+  tags: [str] = []
+  visibility: Visibility? = none
+  is_starred: bool? = none
+  sort_by: SortField = SortField.Relevance
+  order: SortOrder = SortOrder.Desc
+  page: u32 = 1
+  per_page: u32 = 20
+}
+
+@derive(Debug, Eq, Clone, Schema, Serialize)
+type SortField {
+  Relevance
+  CreatedAt
+  UpdatedAt
+  Title
+  ReadCount
+}
+
+@derive(Debug, Eq, Clone, Schema, Serialize)
+type SortOrder {
+  Asc
+  Desc
+}
+
+// --- Pagination (generic) ---
+
+@derive(Debug, Clone, Schema, Serialize)
+struct PaginatedResponse<T> {
+  items: [T]
+  total: u64
+  page: u32
+  per_page: u32
+  total_pages: u32
+}
+
+impl<T> PaginatedResponse<T> {
+  /// Create a paginated response from a full list and pagination params
+  fn from_slice(all_items: [T], page: u32, per_page: u32) -> PaginatedResponse<T> {
+    let total = all_items.len() as u64
+    let total_pages = ((total as f64) / (per_page as f64)).ceil() as u32
+    let start = ((page - 1) * per_page) as usize
+    let end = (start + per_page as usize).min(all_items.len())
+    let items = if start < all_items.len() {
+      all_items[start..end].to_vec()
+    } else {
+      []
+    }
+
+    PaginatedResponse {
+      items,
+      total,
+      page,
+      per_page,
+      total_pages,
+    }
+  }
+
+  fn has_next(self) -> bool {
+    self.page < self.total_pages
+  }
+
+  fn has_prev(self) -> bool {
+    self.page > 1
+  }
+}
+
+// --- WebSocket Events ---
+
+@derive(Debug, Clone, Schema, Serialize)
+type SyncEvent {
+  BookmarkCreated(bookmark: Bookmark)
+  BookmarkUpdated(bookmark: Bookmark)
+  BookmarkDeleted(id: u64)
+  Ping
+  Pong
+}
+
+impl SyncEvent {
+  fn event_type(self) -> str {
+    match self {
+      BookmarkCreated(_) => "bookmark.created"
+      BookmarkUpdated(_) => "bookmark.updated"
+      BookmarkDeleted(_) => "bookmark.deleted"
+      Ping               => "ping"
+      Pong               => "pong"
+    }
+  }
+}
+
+// --- Errors ---
+
+type ApiError: Error {
+  NotFound(resource: str, id: u64)
+  Unauthorized(reason: str)
+  Forbidden(reason: str)
+  BadRequest(field: str, reason: str)
+  Conflict(reason: str)
+  RateLimited(retry_after: u64)
+  ValidationError(errors: [FieldError])
+  InternalError(source: str)
+}
+
+@derive(Debug, Clone, Schema, Serialize)
+struct FieldError {
+  field: str
+  message: str
+}
+
+impl ApiError {
+  fn message(self) -> str {
+    match self {
+      NotFound(resource, id)  => "{resource} not found: {id}"
+      Unauthorized(reason)    => "Unauthorized: {reason}"
+      Forbidden(reason)       => "Forbidden: {reason}"
+      BadRequest(field, r)    => "Bad request on '{field}': {r}"
+      Conflict(reason)        => "Conflict: {reason}"
+      RateLimited(retry)      => "Rate limited. Retry after {retry}s"
+      ValidationError(errors) => {
+        let msgs = errors.map((e) => "{e.field}: {e.message}").join(", ")
+        "Validation failed: {msgs}"
+      }
+      InternalError(src)      => "Internal error: {src}"
+    }
+  }
+
+  fn status_code(self) -> u16 {
+    match self {
+      NotFound(_, _)      => 404
+      Unauthorized(_)     => 401
+      Forbidden(_)        => 403
+      BadRequest(_, _)    => 400
+      Conflict(_)         => 409
+      RateLimited(_)      => 429
+      ValidationError(_)  => 422
+      InternalError(_)    => 500
+    }
+  }
+}
+
+// --- Health Check ---
+
+@derive(Debug, Clone, Schema, Serialize)
+struct HealthStatus {
+  status: str
+  version: str
+  uptime_seconds: u64
+  total_bookmarks: u64
+  total_users: u64
+  active_ws_connections: u32
+}

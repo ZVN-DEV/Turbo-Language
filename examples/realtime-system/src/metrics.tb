@@ -1,0 +1,360 @@
+// =============================================================================
+// metrics.tb — Real-time exchange metrics with OpenTelemetry export
+//
+// Demonstrates:
+//   - Atomic operations for lock-free metrics counters
+//   - region {} for zero-allocation percentile computation
+//   - @inline on hot recording functions
+//   - Duration and Instant for nanosecond-precision timing
+//   - Shared<T> for thread-safe metric reads
+//   - OpenTelemetry integration for observability
+//   - Histogram-style latency tracking (P50, P95, P99)
+// =============================================================================
+
+import { Atomic } from "turbo/sync"
+import { Instant, Duration } from "std/time"
+import { log } from "turbo/log"
+import { otel } from "turbo/otel"
+
+// =============================================================================
+// LatencyHistogram — Lock-free latency tracking with percentiles
+// =============================================================================
+
+/// A fixed-size circular buffer for latency samples.
+/// Computes percentiles without allocation using a region block.
+/// Max capacity: 100,000 samples before wrapping.
+struct LatencyHistogram {
+  samples: [u64]           // Stored as nanoseconds
+  head: Atomic<u64>        // Circular buffer write position
+  count: Atomic<u64>       // Total samples recorded
+  capacity: usize
+}
+
+impl LatencyHistogram {
+  fn new(capacity: usize = 100_000) -> LatencyHistogram {
+    LatencyHistogram {
+      samples: [0; capacity],   // Pre-allocated array — no runtime allocation
+      head: Atomic.new(0),
+      count: Atomic.new(0),
+      capacity,
+    }
+  }
+
+  /// Record a latency sample. Lock-free using atomic CAS.
+  @inline
+  fn record(mut self, duration: Duration) {
+    let nanos = duration.as_nanos() as u64
+    let idx = self.head.fetch_add(1) % self.capacity as u64
+    self.samples[idx as usize] = nanos
+    self.count.fetch_add(1)
+  }
+
+  /// Compute percentiles. Uses a region block so the sorted copy
+  /// is freed immediately after computation.
+  fn percentiles(self) -> LatencyPercentiles {
+    let total = self.count.load().min(self.capacity as u64) as usize
+
+    if total == 0 {
+      return LatencyPercentiles {
+        p50: Duration.zero(),
+        p95: Duration.zero(),
+        p99: Duration.zero(),
+        min: Duration.zero(),
+        max: Duration.zero(),
+        mean: Duration.zero(),
+      }
+    }
+
+    // Use a region for the sorted copy — freed at block end
+    region percentile_scratch {
+      let mut sorted: [u64] = self.samples[0..total].clone()
+      sorted.sort()
+
+      let p50_idx = (total as f64 * 0.50) as usize
+      let p95_idx = (total as f64 * 0.95) as usize
+      let p99_idx = (total as f64 * 0.99) as usize
+
+      let sum: u64 = sorted.iter().sum()
+      let mean_nanos = sum / total as u64
+
+      // These Duration values escape the region
+      LatencyPercentiles {
+        p50: Duration.from_nanos(sorted[p50_idx]),
+        p95: Duration.from_nanos(sorted[p95_idx]),
+        p99: Duration.from_nanos(sorted[p99_idx.min(total - 1)]),
+        min: Duration.from_nanos(sorted[0]),
+        max: Duration.from_nanos(sorted[total - 1]),
+        mean: Duration.from_nanos(mean_nanos),
+      }
+    }
+    // percentile_scratch freed — sorted array is gone
+  }
+
+  /// Reset the histogram.
+  fn reset(mut self) {
+    self.head.store(0)
+    self.count.store(0)
+  }
+}
+
+// =============================================================================
+// LatencyPercentiles — Computed percentile snapshot
+// =============================================================================
+
+@derive(Debug, Clone, Serialize)
+pub struct LatencyPercentiles {
+  p50: Duration
+  p95: Duration
+  p99: Duration
+  min: Duration
+  max: Duration
+  mean: Duration
+}
+
+// =============================================================================
+// ExchangeMetrics — All exchange-wide metrics
+// =============================================================================
+
+pub struct ExchangeMetrics {
+  // Counters (lock-free atomics)
+  orders_total: Atomic<u64>
+  trades_total: Atomic<u64>
+  orders_rejected: Atomic<u64>
+  orders_cancelled: Atomic<u64>
+  dropped_events: Atomic<u64>
+
+  // Latency tracking
+  match_latency: LatencyHistogram
+
+  // Timing
+  start_time: Instant
+
+  // Gauges (updated periodically)
+  queue_depth: Atomic<u64>
+  connected_clients: Atomic<u64>
+  resting_orders: Atomic<u64>
+}
+
+impl ExchangeMetrics {
+  pub fn new() -> ExchangeMetrics {
+    ExchangeMetrics {
+      orders_total: Atomic.new(0),
+      trades_total: Atomic.new(0),
+      orders_rejected: Atomic.new(0),
+      orders_cancelled: Atomic.new(0),
+      dropped_events: Atomic.new(0),
+      match_latency: LatencyHistogram.new(),
+      start_time: Instant.now(),
+      queue_depth: Atomic.new(0),
+      connected_clients: Atomic.new(0),
+      resting_orders: Atomic.new(0),
+    }
+  }
+
+  // --- Recording (hot path — all @inline and lock-free) ---
+
+  @inline
+  pub fn record_order(self) {
+    self.orders_total.fetch_add(1)
+  }
+
+  @inline
+  pub fn record_trade(self) {
+    self.trades_total.fetch_add(1)
+  }
+
+  @inline
+  pub fn record_rejection(self) {
+    self.orders_rejected.fetch_add(1)
+  }
+
+  @inline
+  pub fn record_cancellation(self) {
+    self.orders_cancelled.fetch_add(1)
+  }
+
+  @inline
+  pub fn record_dropped_event(self) {
+    self.dropped_events.fetch_add(1)
+  }
+
+  @inline
+  pub fn record_match_latency(self, duration: Duration) {
+    self.match_latency.record(duration)
+  }
+
+  @inline
+  pub fn set_queue_depth(self, depth: u64) {
+    self.queue_depth.store(depth)
+  }
+
+  @inline
+  pub fn set_connected_clients(self, count: u64) {
+    self.connected_clients.store(count)
+  }
+
+  @inline
+  pub fn set_resting_orders(self, count: u64) {
+    self.resting_orders.store(count)
+  }
+
+  // --- Queries ---
+
+  pub fn uptime(self) -> Duration {
+    Instant.now().duration_since(self.start_time)
+  }
+
+  pub fn orders_per_second(self) -> f64 {
+    let elapsed = self.uptime().as_secs_f64()
+    if elapsed > 0.0 {
+      self.orders_total.load() as f64 / elapsed
+    } else {
+      0.0
+    }
+  }
+
+  pub fn trades_per_second(self) -> f64 {
+    let elapsed = self.uptime().as_secs_f64()
+    if elapsed > 0.0 {
+      self.trades_total.load() as f64 / elapsed
+    } else {
+      0.0
+    }
+  }
+
+  /// Get a complete metrics snapshot.
+  pub fn snapshot(self) -> MetricsSnapshot {
+    let latency = self.match_latency.percentiles()
+
+    MetricsSnapshot {
+      uptime_seconds: self.uptime().as_secs(),
+      orders_total: self.orders_total.load(),
+      trades_total: self.trades_total.load(),
+      orders_rejected: self.orders_rejected.load(),
+      orders_cancelled: self.orders_cancelled.load(),
+      dropped_events: self.dropped_events.load(),
+      orders_per_second: self.orders_per_second(),
+      trades_per_second: self.trades_per_second(),
+      queue_depth: self.queue_depth.load(),
+      connected_clients: self.connected_clients.load(),
+      resting_orders: self.resting_orders.load(),
+      match_latency_p50_us: latency.p50.as_micros_f64(),
+      match_latency_p95_us: latency.p95.as_micros_f64(),
+      match_latency_p99_us: latency.p99.as_micros_f64(),
+      match_latency_min_us: latency.min.as_micros_f64(),
+      match_latency_max_us: latency.max.as_micros_f64(),
+      match_latency_mean_us: latency.mean.as_micros_f64(),
+    }
+  }
+}
+
+// =============================================================================
+// MetricsSnapshot — Serializable snapshot of all metrics
+// =============================================================================
+
+@derive(Debug, Clone, Serialize)
+pub struct MetricsSnapshot {
+  uptime_seconds: u64
+  orders_total: u64
+  trades_total: u64
+  orders_rejected: u64
+  orders_cancelled: u64
+  dropped_events: u64
+  orders_per_second: f64
+  trades_per_second: f64
+  queue_depth: u64
+  connected_clients: u64
+  resting_orders: u64
+  match_latency_p50_us: f64
+  match_latency_p95_us: f64
+  match_latency_p99_us: f64
+  match_latency_min_us: f64
+  match_latency_max_us: f64
+  match_latency_mean_us: f64
+}
+
+// =============================================================================
+// OpenTelemetry Exporter — Background task exporting to OTLP
+// =============================================================================
+
+/// Starts a background task that periodically exports metrics to OpenTelemetry.
+pub async fn start_otel_exporter(
+  metrics: Shared<ExchangeMetrics>,
+  endpoint: str = "http://localhost:4317",
+  interval: Duration = 10.seconds(),
+) {
+  log.info("Starting OpenTelemetry metrics exporter", { endpoint })
+
+  let meter = otel.meter("turbo-exchange")
+
+  // Register instruments
+  let orders_counter = meter.counter("exchange.orders.total", description: "Total orders submitted")
+  let trades_counter = meter.counter("exchange.trades.total", description: "Total trades executed")
+  let latency_hist = meter.histogram("exchange.match.latency",
+    description: "Order matching latency",
+    unit: "us",
+  )
+  let queue_gauge = meter.gauge("exchange.queue.depth", description: "Command queue depth")
+  let clients_gauge = meter.gauge("exchange.clients.connected", description: "Connected WebSocket clients")
+
+  loop {
+    await sleep(interval)
+
+    let snap = metrics.read().snapshot()
+
+    // Update counters
+    orders_counter.add(snap.orders_total)
+    trades_counter.add(snap.trades_total)
+
+    // Record latency histogram
+    latency_hist.record(snap.match_latency_p50_us, attributes: { "percentile": "p50" })
+    latency_hist.record(snap.match_latency_p95_us, attributes: { "percentile": "p95" })
+    latency_hist.record(snap.match_latency_p99_us, attributes: { "percentile": "p99" })
+
+    // Update gauges
+    queue_gauge.set(snap.queue_depth as f64)
+    clients_gauge.set(snap.connected_clients as f64)
+
+    log.debug("Metrics exported", {
+      orders_per_sec: snap.orders_per_second,
+      p99_latency_us: snap.match_latency_p99_us,
+    })
+  }
+}
+
+// =============================================================================
+// Console Dashboard — Prints metrics to stdout periodically
+// =============================================================================
+
+/// Start a simple console dashboard that prints metrics every N seconds.
+pub async fn start_console_dashboard(
+  metrics: Shared<ExchangeMetrics>,
+  interval: Duration = 5.seconds(),
+) {
+  loop {
+    await sleep(interval)
+
+    let snap = metrics.read().snapshot()
+
+    print("╔══════════════════════════════════════════════════════╗")
+    print("║         TurboExchange Metrics Dashboard             ║")
+    print("╠══════════════════════════════════════════════════════╣")
+    print("║  Uptime: {snap.uptime_seconds}s                     ")
+    print("║  Orders: {snap.orders_total} ({snap.orders_per_second:.1}/s)")
+    print("║  Trades: {snap.trades_total} ({snap.trades_per_second:.1}/s)")
+    print("║  Rejected: {snap.orders_rejected}  Cancelled: {snap.orders_cancelled}")
+    print("║  Dropped Events: {snap.dropped_events}")
+    print("╠══════════════════════════════════════════════════════╣")
+    print("║  Matching Latency:                                  ")
+    print("║    P50: {snap.match_latency_p50_us:.2}us            ")
+    print("║    P95: {snap.match_latency_p95_us:.2}us            ")
+    print("║    P99: {snap.match_latency_p99_us:.2}us            ")
+    print("║    Min: {snap.match_latency_min_us:.2}us  Max: {snap.match_latency_max_us:.2}us")
+    print("╠══════════════════════════════════════════════════════╣")
+    print("║  Queue Depth: {snap.queue_depth}                    ")
+    print("║  Resting Orders: {snap.resting_orders}              ")
+    print("║  Connected Clients: {snap.connected_clients}        ")
+    print("╚══════════════════════════════════════════════════════╝")
+    print("")
+  }
+}

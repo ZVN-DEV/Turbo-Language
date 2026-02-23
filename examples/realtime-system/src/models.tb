@@ -1,0 +1,386 @@
+// =============================================================================
+// models.tb — Core data types for TurboExchange
+//
+// Demonstrates:
+//   - Fixed-point Decimal type for financial precision (no floating point)
+//   - Algebraic data types for order types and sides
+//   - @derive decorators for automatic trait implementations
+//   - @no_clone on large structs to prevent accidental copies in hot paths
+//   - Compact struct layout with precise numeric types
+//   - Timestamp precision with nanosecond resolution
+// =============================================================================
+
+import { DateTime, Instant } from "std/time"
+
+// =============================================================================
+// Decimal — Fixed-point numeric type for money (no floating point)
+// =============================================================================
+
+/// Fixed-point decimal with 8 decimal places of precision.
+/// Internally stored as i64 scaled by 10^8.
+/// Example: 150.25 is stored as 15_025_000_000.
+/// This avoids all floating-point rounding errors in financial calculations.
+@derive(Debug, Eq, Ord, Clone, Hash, Serialize)
+pub struct Decimal {
+  raw: i64   // scaled integer: value * 10^8
+}
+
+const DECIMAL_SCALE: i64 = 100_000_000  // 10^8
+
+impl Decimal {
+  /// Create a Decimal from whole units and fractional cents.
+  /// Example: Decimal.new(150, 25_000_000) => 150.25
+  pub fn new(whole: i64, frac: i64 = 0) -> Decimal {
+    Decimal { raw: whole * DECIMAL_SCALE + frac }
+  }
+
+  /// Create a Decimal from a raw scaled integer.
+  pub fn from_raw(raw: i64) -> Decimal {
+    Decimal { raw }
+  }
+
+  /// Zero value.
+  pub fn zero() -> Decimal {
+    Decimal { raw: 0 }
+  }
+
+  /// Parse from string: "150.25" => Decimal
+  pub fn parse(s: str) -> Decimal ! ParseError {
+    let parts = s.split(".")
+    let whole = parts[0].parse<i64>()?
+    let frac = if parts.len() > 1 {
+      let frac_str = parts[1].pad_right(8, '0').truncate(8)
+      frac_str.parse<i64>()?
+    } else {
+      0
+    }
+    Decimal { raw: whole * DECIMAL_SCALE + frac }
+  }
+
+  pub fn add(self, other: Decimal) -> Decimal {
+    Decimal { raw: self.raw + other.raw }
+  }
+
+  pub fn sub(self, other: Decimal) -> Decimal {
+    Decimal { raw: self.raw - other.raw }
+  }
+
+  pub fn mul(self, qty: u64) -> Decimal {
+    Decimal { raw: self.raw * qty as i64 }
+  }
+
+  pub fn is_zero(self) -> bool {
+    self.raw == 0
+  }
+
+  pub fn is_positive(self) -> bool {
+    self.raw > 0
+  }
+
+  pub fn to_string(self) -> str {
+    let whole = self.raw / DECIMAL_SCALE
+    let frac = (self.raw % DECIMAL_SCALE).abs()
+    "{whole}.{frac:08}"
+  }
+
+  pub fn min(self, other: Decimal) -> Decimal {
+    if self.raw <= other.raw { self } else { other }
+  }
+
+  pub fn max(self, other: Decimal) -> Decimal {
+    if self.raw >= other.raw { self } else { other }
+  }
+}
+
+// =============================================================================
+// Side — Buy or Sell
+// =============================================================================
+
+@derive(Debug, Eq, Clone, Hash, Serialize)
+pub type Side {
+  Buy
+  Sell
+}
+
+impl Side {
+  pub fn opposite(self) -> Side {
+    match self {
+      Buy  => Sell
+      Sell => Buy
+    }
+  }
+
+  pub fn to_string(self) -> str {
+    match self {
+      Buy  => "BUY"
+      Sell => "SELL"
+    }
+  }
+}
+
+// =============================================================================
+// OrderType — Market, Limit, or Stop
+// =============================================================================
+
+@derive(Debug, Eq, Clone, Serialize)
+pub type OrderType {
+  Market                              // Execute immediately at best available price
+  Limit(price: Decimal)               // Execute at specified price or better
+  Stop(trigger: Decimal, limit: Decimal?)  // Trigger at price, then execute as market or limit
+}
+
+impl OrderType {
+  pub fn to_string(self) -> str {
+    match self {
+      Market            => "MARKET"
+      Limit(p)          => "LIMIT@{p.to_string()}"
+      Stop(t, none)     => "STOP@{t.to_string()}"
+      Stop(t, some(l))  => "STOP@{t.to_string()}/LIMIT@{l.to_string()}"
+    }
+  }
+
+  pub fn is_market(self) -> bool {
+    match self {
+      Market => true
+      _      => false
+    }
+  }
+}
+
+// =============================================================================
+// OrderStatus — Lifecycle of an order
+// =============================================================================
+
+@derive(Debug, Eq, Clone, Serialize)
+pub type OrderStatus {
+  New                    // Just submitted, not yet in the book
+  Open                   // Resting in the order book
+  PartiallyFilled(filled: u64)  // Some quantity has been filled
+  Filled                 // Fully filled
+  Cancelled              // Cancelled by user
+  Triggered              // Stop order triggered, converted to market/limit
+  Rejected(reason: str)  // Rejected by the engine
+}
+
+impl OrderStatus {
+  pub fn is_terminal(self) -> bool {
+    match self {
+      Filled | Cancelled | Rejected(_) => true
+      _                                => false
+    }
+  }
+
+  pub fn is_active(self) -> bool {
+    match self {
+      Open | PartiallyFilled(_) => true
+      _                         => false
+    }
+  }
+}
+
+// =============================================================================
+// Order — A single order submitted to the exchange
+// =============================================================================
+
+@derive(Debug, Clone, Serialize)
+pub struct Order {
+  id: u64
+  symbol: str
+  side: Side
+  order_type: OrderType
+  quantity: u64              // Total quantity requested
+  remaining: u64             // Remaining unfilled quantity
+  status: OrderStatus
+  timestamp: Instant         // Nanosecond-precision submission time
+  client_id: str             // Submitting client identifier
+}
+
+impl Order {
+  /// Create a new order with auto-assigned fields.
+  pub fn new(
+    id: u64,
+    symbol: str,
+    side: Side,
+    order_type: OrderType,
+    quantity: u64,
+    client_id: str,
+  ) -> Order {
+    Order {
+      id,
+      symbol,
+      side,
+      order_type,
+      quantity,
+      remaining: quantity,
+      status: OrderStatus.New,
+      timestamp: Instant.now(),
+      client_id,
+    }
+  }
+
+  /// Get the limit price for this order, if any.
+  pub fn limit_price(self) -> Decimal? {
+    match self.order_type {
+      Limit(p)         => some(p)
+      Stop(_, some(l)) => some(l)
+      _                => none
+    }
+  }
+
+  /// Fill a given quantity from this order. Returns the remaining quantity.
+  pub fn fill(self, qty: u64) -> u64 {
+    guard qty <= self.remaining else {
+      return 0
+    }
+    self.remaining -= qty
+    if self.remaining == 0 {
+      self.status = OrderStatus.Filled
+    } else {
+      self.status = OrderStatus.PartiallyFilled(self.quantity - self.remaining)
+    }
+    self.remaining
+  }
+
+  /// Summary string for logging.
+  pub fn summary(self) -> str {
+    "{self.side.to_string()} {self.remaining}/{self.quantity} {self.symbol} {self.order_type.to_string()} [{self.id}]"
+  }
+}
+
+// =============================================================================
+// Trade — A completed match between two orders
+// =============================================================================
+
+@derive(Debug, Clone, Serialize)
+pub struct Trade {
+  id: u64
+  symbol: str
+  price: Decimal
+  quantity: u64
+  buy_order_id: u64
+  sell_order_id: u64
+  buyer_client_id: str
+  seller_client_id: str
+  timestamp: Instant
+}
+
+impl Trade {
+  pub fn notional(self) -> Decimal {
+    self.price.mul(self.quantity)
+  }
+
+  pub fn summary(self) -> str {
+    "TRADE {self.symbol} {self.quantity}@{self.price.to_string()} buyer={self.buy_order_id} seller={self.sell_order_id}"
+  }
+}
+
+// =============================================================================
+// Tick — A single price data point from the feed
+// =============================================================================
+
+@derive(Debug, Clone, Serialize)
+pub struct Tick {
+  symbol: str
+  bid: Decimal
+  ask: Decimal
+  last: Decimal
+  volume: u64
+  timestamp: Instant
+}
+
+impl Tick {
+  pub fn spread(self) -> Decimal {
+    self.ask.sub(self.bid)
+  }
+
+  pub fn mid(self) -> Decimal {
+    Decimal.from_raw((self.bid.raw + self.ask.raw) / 2)
+  }
+}
+
+// =============================================================================
+// PriceLevel — A single price level in the order book
+// =============================================================================
+
+@derive(Debug, Clone, Serialize)
+pub struct PriceLevel {
+  price: Decimal
+  total_quantity: u64
+  order_count: u32
+}
+
+// =============================================================================
+// OrderBookSnapshot — Snapshot of order book depth
+// =============================================================================
+
+@derive(Debug, Clone, Serialize)
+pub struct OrderBookSnapshot {
+  symbol: str
+  bids: [PriceLevel]      // Sorted descending by price (best bid first)
+  asks: [PriceLevel]      // Sorted ascending by price (best ask first)
+  last_trade: Trade?
+  timestamp: Instant
+}
+
+// =============================================================================
+// SubmitOrder — Input DTO for order submission
+// =============================================================================
+
+@derive(Debug, Schema)
+pub struct SubmitOrder {
+  symbol: str
+  side: Side
+  order_type: OrderType
+  quantity: u64
+  client_id: str
+}
+
+// =============================================================================
+// ExchangeError — Typed error for exchange operations
+// =============================================================================
+
+pub type ExchangeError: Error {
+  InvalidOrder(reason: str)
+  OrderNotFound(id: u64)
+  SymbolNotFound(symbol: str)
+  InsufficientLiquidity(symbol: str, side: Side)
+  EngineOverloaded(queue_depth: usize)
+  InternalError(message: str)
+}
+
+impl ExchangeError {
+  pub fn message(self) -> str {
+    match self {
+      InvalidOrder(r)          => "Invalid order: {r}"
+      OrderNotFound(id)        => "Order not found: {id}"
+      SymbolNotFound(s)        => "Symbol not found: {s}"
+      InsufficientLiquidity(s, side) => "Insufficient liquidity for {side.to_string()} on {s}"
+      EngineOverloaded(d)      => "Engine overloaded: queue depth {d}"
+      InternalError(m)         => "Internal error: {m}"
+    }
+  }
+}
+
+// =============================================================================
+// EngineCommand — Internal commands sent to the matching engine actor
+// =============================================================================
+
+pub type EngineCommand {
+  Submit(order: Order)
+  Cancel(order_id: u64, client_id: str)
+  TriggerStops(symbol: str, price: Decimal)
+  Shutdown
+}
+
+// =============================================================================
+// EngineEvent — Events emitted by the matching engine
+// =============================================================================
+
+pub type EngineEvent {
+  OrderAccepted(order: Order)
+  OrderRejected(order_id: u64, reason: str)
+  OrderCancelled(order_id: u64)
+  TradeExecuted(trade: Trade)
+  StopTriggered(order_id: u64, trigger_price: Decimal)
+  BookUpdated(snapshot: OrderBookSnapshot)
+}

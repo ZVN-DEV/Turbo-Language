@@ -1,0 +1,20 @@
+Writing generated file: /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/settings.rs
+Writing generated file: /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/types.rs
+Writing generated file: /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/opcodes.rs
+Writing generated file: /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/inst_builder.rs
+Writing generated file: /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/settings-arm64.rs
+Writing generated file: /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/clif_opt.isle
+Writing generated file: /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/clif_lower.isle
+Rebuilding /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/isle_opt.rs
+Writing ISLE-generated Rust code to /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/isle_opt.rs
+Rebuilding /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/isle_x64.rs
+Writing ISLE-generated Rust code to /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/isle_x64.rs
+Rebuilding /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/isle_aarch64.rs
+Writing ISLE-generated Rust code to /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/isle_aarch64.rs
+Rebuilding /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/isle_s390x.rs
+Writing ISLE-generated Rust code to /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/isle_s390x.rs
+Rebuilding /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/isle_riscv64.rs
+Writing ISLE-generated Rust code to /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/isle_riscv64.rs
+Rebuilding /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/isle_pulley_shared.rs
+Writing ISLE-generated Rust code to /Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/debug/build/cranelift-codegen-c93ab13396bced4e/out/isle_pulley_shared.rs
+fatal: not a git repository (or any of the parent directories): .git

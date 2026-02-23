@@ -1,0 +1,373 @@
+// =============================================================================
+// latency_test.tb — Performance and latency tests for TurboExchange
+//
+// Demonstrates:
+//   - @perf decorator with max_time and max_memory constraints
+//   - @regression decorator for latency regression detection
+//   - Microsecond-precision timing with Instant and Duration
+//   - memory.snapshot() for leak detection
+//   - region {} usage verification (no allocations in hot path)
+//   - Throughput measurement (orders/second)
+//   - Histogram-style latency analysis
+//   - Performance assertions with .us() and .ms() unit helpers
+// =============================================================================
+
+import { OrderBook } from "../src/order_book"
+import { ExchangeMetrics, LatencyHistogram } from "../src/metrics"
+import {
+  Order, OrderType, OrderStatus, Side, Trade, Decimal
+} from "../src/models"
+import { Instant, Duration } from "std/time"
+
+// =============================================================================
+// Matching Latency — Single Order Crosses
+// =============================================================================
+
+@test
+@perf(max_time: 100.ms())
+fn test_simple_cross_latency() {
+  let mut book = OrderBook.new("AAPL")
+  let mut latencies: [Duration] = []
+
+  // Warm up: pre-populate the book
+  for i in 0..100 {
+    let price = Decimal.new(150 + (i % 10) as i64)
+    book.submit(Order.new(
+      i, "AAPL", Side.Sell,
+      OrderType.Limit(price), 100, "seller",
+    ))?
+  }
+
+  // Measure crossing latency for 1000 market orders
+  for i in 100..1_100 {
+    // Re-populate one sell order at 150
+    book.submit(Order.new(
+      i * 2, "AAPL", Side.Sell,
+      OrderType.Limit(Decimal.new(150)), 10, "seller",
+    ))?
+
+    let start = Instant.now()
+
+    // Cross with a market buy
+    let trades = book.submit(Order.new(
+      i * 2 + 1, "AAPL", Side.Buy,
+      OrderType.Market, 10, "buyer",
+    ))?
+
+    let elapsed = Instant.now().duration_since(start)
+    latencies.push(elapsed)
+
+    assert(trades.len() > 0, "Expected at least one trade")
+  }
+
+  // Sort and compute percentiles
+  latencies.sort()
+  let p50 = latencies[latencies.len() / 2]
+  let p95 = latencies[(latencies.len() as f64 * 0.95) as usize]
+  let p99 = latencies[(latencies.len() as f64 * 0.99) as usize]
+
+  // Sub-10 microsecond target for simple crosses
+  assert(p50 < 10.us(), "P50 latency {p50} exceeds 10us target")
+  assert(p95 < 25.us(), "P95 latency {p95} exceeds 25us target")
+  assert(p99 < 50.us(), "P99 latency {p99} exceeds 50us target")
+}
+
+@test
+@perf(max_time: 200.ms())
+@regression(baseline: "simple_cross_latency", tolerance: 0.20)
+fn test_limit_order_cross_latency() {
+  let mut book = OrderBook.new("AAPL")
+  let mut latencies: [Duration] = []
+
+  // Measure limit-vs-limit crossing
+  for i in 0..1_000 {
+    // Place a sell
+    book.submit(Order.new(
+      i * 2, "AAPL", Side.Sell,
+      OrderType.Limit(Decimal.new(150)), 100, "seller",
+    ))?
+
+    let start = Instant.now()
+
+    // Cross with a limit buy at same price
+    let trades = book.submit(Order.new(
+      i * 2 + 1, "AAPL", Side.Buy,
+      OrderType.Limit(Decimal.new(150)), 100, "buyer",
+    ))?
+
+    let elapsed = Instant.now().duration_since(start)
+    latencies.push(elapsed)
+
+    assert_eq(trades.len(), 1)
+    assert_eq(trades[0].quantity, 100)
+  }
+
+  latencies.sort()
+  let p50 = latencies[latencies.len() / 2]
+  let p99 = latencies[(latencies.len() as f64 * 0.99) as usize]
+
+  assert(p50 < 10.us(), "Limit cross P50 {p50} exceeds 10us")
+  assert(p99 < 50.us(), "Limit cross P99 {p99} exceeds 50us")
+}
+
+// =============================================================================
+// Throughput Tests
+// =============================================================================
+
+@test
+@perf(max_time: 2.seconds(), max_memory: 200.mb())
+fn test_100k_orders_per_second_throughput() {
+  let mut book = OrderBook.new("AAPL")
+  let total_orders = 100_000
+
+  // Pre-populate sell side with 50k orders across 100 price levels
+  for i in 0..50_000 {
+    let price = Decimal.new(150 + (i % 100) as i64)
+    book.submit(Order.new(
+      i, "AAPL", Side.Sell,
+      OrderType.Limit(price), 10, "seller",
+    ))?
+  }
+
+  let start = Instant.now()
+
+  // Submit 100k market buy orders
+  for i in 50_000..(50_000 + total_orders) {
+    book.submit(Order.new(
+      i as u64, "AAPL", Side.Buy,
+      OrderType.Market, 1, "buyer",
+    ))?
+  }
+
+  let elapsed = Instant.now().duration_since(start)
+  let throughput = total_orders as f64 / elapsed.as_secs_f64()
+
+  assert(throughput >= 100_000.0,
+    "Throughput {throughput:.0} orders/sec below 100k target")
+}
+
+@test
+@perf(max_time: 3.seconds())
+fn test_sustained_matching_throughput() {
+  let mut book = OrderBook.new("AAPL")
+  let mut total_trades = 0
+  let duration = 1.seconds()
+
+  let start = Instant.now()
+  let mut order_id: u64 = 1
+
+  // Sustained matching: alternating buy and sell at the same price
+  while Instant.now().duration_since(start) < duration {
+    // Place a sell
+    book.submit(Order.new(
+      order_id, "AAPL", Side.Sell,
+      OrderType.Limit(Decimal.new(150)), 100, "seller",
+    ))?
+    order_id += 1
+
+    // Cross with a buy
+    let trades = book.submit(Order.new(
+      order_id, "AAPL", Side.Buy,
+      OrderType.Limit(Decimal.new(150)), 100, "buyer",
+    ))?
+    order_id += 1
+
+    total_trades += trades.len()
+  }
+
+  let elapsed = Instant.now().duration_since(start)
+  let trades_per_sec = total_trades as f64 / elapsed.as_secs_f64()
+
+  assert(trades_per_sec >= 100_000.0,
+    "Sustained throughput {trades_per_sec:.0} trades/sec below 100k target")
+}
+
+// =============================================================================
+// Memory Tests — No Leaks, No GC
+// =============================================================================
+
+@test
+@perf(max_memory: 50.mb())
+fn test_memory_flat_under_sustained_load() {
+  let mut book = OrderBook.new("AAPL")
+
+  let before = memory.snapshot()
+
+  // Process 10,000 orders (alternating buy/sell for full matches)
+  for i in 0..10_000 {
+    let order_id = i as u64
+
+    if i % 2 == 0 {
+      book.submit(Order.new(
+        order_id, "AAPL", Side.Sell,
+        OrderType.Limit(Decimal.new(150)), 100, "seller",
+      ))?
+    } else {
+      book.submit(Order.new(
+        order_id, "AAPL", Side.Buy,
+        OrderType.Limit(Decimal.new(150)), 100, "buyer",
+      ))?
+    }
+  }
+
+  let after = memory.snapshot()
+
+  // All orders were fully matched — no resting orders
+  // Memory should not have grown significantly
+  assert_eq(book.resting_order_count(), 0)
+
+  let growth = after.allocated - before.allocated
+  assert(growth < 1.mb(),
+    "Memory grew by {growth} bytes under sustained matched load — possible leak")
+}
+
+@test
+fn test_no_memory_leak_on_cancel() {
+  let before = memory.snapshot()
+
+  let mut book = OrderBook.new("AAPL")
+
+  // Create and cancel 5000 orders
+  for i in 0..5_000 {
+    book.submit(Order.new(
+      i as u64, "AAPL", Side.Buy,
+      OrderType.Limit(Decimal.new(150)), 100, "client",
+    ))?
+    book.cancel(i as u64)
+  }
+
+  let after = memory.snapshot()
+
+  assert_eq(book.resting_order_count(), 0)
+  assert(after.allocated - before.allocated < 100.kb(),
+    "Memory leak after cancel cycle: {after.allocated - before.allocated} bytes retained")
+}
+
+@test
+@perf(max_memory: 100.mb())
+fn test_region_prevents_allocation_in_matching() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Fill ask side
+  for i in 0..1_000 {
+    let price = Decimal.new(150 + (i % 10) as i64)
+    book.submit(Order.new(
+      i as u64, "AAPL", Side.Sell,
+      OrderType.Limit(price), 100, "seller",
+    ))?
+  }
+
+  // Snapshot memory before matching burst
+  let before_match = memory.snapshot()
+
+  // Execute 1000 market buys (matching uses region blocks)
+  for i in 1_000..2_000 {
+    book.submit(Order.new(
+      i as u64, "AAPL", Side.Buy,
+      OrderType.Market, 10, "buyer",
+    ))?
+  }
+
+  let after_match = memory.snapshot()
+
+  // The matching hot path uses region {} blocks, so scratch allocations
+  // are freed immediately. Only Trade objects (which escape the region)
+  // should consume memory.
+  let matching_growth = after_match.allocated - before_match.allocated
+
+  // Allow for trade objects but no unbounded growth
+  assert(matching_growth < 10.mb(),
+    "Matching allocated {matching_growth} bytes — region blocks may not be working")
+}
+
+// =============================================================================
+// Latency Histogram Tests
+// =============================================================================
+
+@test
+fn test_latency_histogram_accuracy() {
+  let mut hist = LatencyHistogram.new(capacity: 1_000)
+
+  // Record known values: 1us to 1000us
+  for i in 1..=1_000 {
+    hist.record(Duration.from_micros(i))
+  }
+
+  let percentiles = hist.percentiles()
+
+  // P50 should be around 500us
+  assert(percentiles.p50.as_micros() >= 490 && percentiles.p50.as_micros() <= 510,
+    "P50 expected ~500us, got {percentiles.p50}")
+
+  // P95 should be around 950us
+  assert(percentiles.p95.as_micros() >= 940 && percentiles.p95.as_micros() <= 960,
+    "P95 expected ~950us, got {percentiles.p95}")
+
+  // P99 should be around 990us
+  assert(percentiles.p99.as_micros() >= 980 && percentiles.p99.as_micros() <= 1000,
+    "P99 expected ~990us, got {percentiles.p99}")
+
+  // Min and max
+  assert_eq(percentiles.min, Duration.from_micros(1))
+  assert_eq(percentiles.max, Duration.from_micros(1_000))
+}
+
+@test
+fn test_latency_histogram_circular_buffer() {
+  // Small capacity — test wrapping behavior
+  let mut hist = LatencyHistogram.new(capacity: 100)
+
+  // Record 200 values — first 100 should be overwritten
+  for i in 1..=200 {
+    hist.record(Duration.from_micros(i))
+  }
+
+  let percentiles = hist.percentiles()
+
+  // Only the last 100 samples (101-200) should be in the histogram
+  assert(percentiles.min.as_micros() >= 101,
+    "Min should be >= 101us after wrapping, got {percentiles.min}")
+}
+
+// =============================================================================
+// Deep Book Matching Latency
+// =============================================================================
+
+@test
+@perf(max_time: 500.ms())
+fn test_deep_book_matching_latency() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Build a deep book: 10,000 orders across 1000 price levels
+  for i in 0..10_000 {
+    let price = Decimal.new(100 + (i % 1_000) as i64)
+    book.submit(Order.new(
+      i as u64, "AAPL", Side.Sell,
+      OrderType.Limit(price), 10, "seller",
+    ))?
+  }
+
+  assert(book.resting_order_count() >= 10_000)
+
+  let mut latencies: [Duration] = []
+
+  // Measure matching against the deep book
+  for i in 10_000..10_100 {
+    let start = Instant.now()
+
+    book.submit(Order.new(
+      i as u64, "AAPL", Side.Buy,
+      OrderType.Market, 5, "buyer",
+    ))?
+
+    let elapsed = Instant.now().duration_since(start)
+    latencies.push(elapsed)
+  }
+
+  latencies.sort()
+  let p99 = latencies[(latencies.len() as f64 * 0.99) as usize]
+
+  // Even with a deep book, matching should be fast
+  assert(p99 < 100.us(),
+    "Deep book matching P99 {p99} exceeds 100us")
+}

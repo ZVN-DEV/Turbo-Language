@@ -1,0 +1,454 @@
+// =============================================================================
+// cache.tb — Edge caching layer with LRU eviction and conditional requests
+//
+// Demonstrates:
+//   - Generic struct with type parameter (LruCache<K, V>)
+//   - Shared<T> for thread-safe cache state
+//   - TTL-based expiration with Duration
+//   - HTTP caching: ETag, If-None-Match, Cache-Control
+//   - Pattern matching on cache results
+//   - Pipe operator for cache key generation
+//   - Defer for cleanup/eviction scheduling
+// =============================================================================
+
+import { Duration, Instant } from "std/time"
+import { Shared } from "turbo/sync"
+import { Hash } from "turbo/crypto"
+import { log } from "turbo/log"
+import { Stream } from "turbo/stream"
+import { Response, Request } from "turbo/http"
+import { CacheKey, ImageFormat, Dimensions, ProcessingConfig } from "./models"
+
+// --- Cached image entry ---
+
+@derive(Debug, Clone)
+pub struct CachedImage {
+  data: Stream<[u8]>
+  format: ImageFormat
+  dimensions: Dimensions
+  file_size: u64
+}
+
+// --- Cache entry with metadata ---
+
+@derive(Debug)
+struct CacheEntry {
+  image: CachedImage
+  etag: str
+  created_at: Instant
+  last_accessed: Instant
+  ttl: Duration
+  access_count: u64
+  byte_size: u64
+}
+
+impl CacheEntry {
+  /// Check if this entry has expired
+  fn is_expired(self) -> bool {
+    Instant.now().duration_since(self.created_at) > self.ttl
+  }
+
+  /// Check if this entry is still fresh (not expired)
+  fn is_fresh(self) -> bool {
+    !self.is_expired()
+  }
+
+  /// Remaining time before expiration
+  fn remaining_ttl(self) -> Duration {
+    let elapsed = Instant.now().duration_since(self.created_at)
+    if elapsed > self.ttl {
+      Duration.zero()
+    } else {
+      self.ttl - elapsed
+    }
+  }
+
+  /// Touch this entry (update last access time and count)
+  fn touch(mut self) {
+    self.last_accessed = Instant.now()
+    self.access_count += 1
+  }
+}
+
+// --- LRU Cache implementation ---
+
+struct LruNode<K, V> {
+  key: K
+  value: V
+  prev: usize?
+  next: usize?
+}
+
+struct LruState<K: Eq + Hash, V> {
+  nodes: [LruNode<K, V>]
+  index: {K: usize}            // key -> node index
+  head: usize?                 // most recently used
+  tail: usize?                 // least recently used
+  free_list: [usize]
+  current_size: u64            // total bytes stored
+  max_size: u64
+}
+
+pub struct LruCache<K: Eq + Hash, V> {
+  state: Shared<LruState<K, V>>
+}
+
+impl<K: Eq + Hash, V> LruCache<K, V> {
+  /// Create a new LRU cache with maximum byte size
+  pub fn new(max_size: u64) -> LruCache<K, V> {
+    LruCache {
+      state: Shared.new(LruState {
+        nodes: [],
+        index: {:},
+        head: none,
+        tail: none,
+        free_list: [],
+        current_size: 0,
+        max_size,
+      })
+    }
+  }
+
+  /// Get an item from the cache, moving it to the front (most recent)
+  pub fn get(self, key: K) -> V? {
+    let mut s = self.state.write()
+
+    match s.index.get(key) {
+      some(idx) => {
+        // Move to front (most recently used)
+        move_to_front(s, idx)
+        some(s.nodes[idx].value.clone())
+      }
+      none => none
+    }
+  }
+
+  /// Insert an item, evicting LRU entries if necessary
+  pub fn put(self, key: K, value: V, byte_size: u64) {
+    let mut s = self.state.write()
+
+    // If key already exists, update in place
+    if let some(idx) = s.index.get(key) {
+      s.current_size -= estimate_size(s.nodes[idx].value)
+      s.nodes[idx].value = value
+      s.current_size += byte_size
+      move_to_front(s, idx)
+      return
+    }
+
+    // Evict LRU entries until we have room
+    while s.current_size + byte_size > s.max_size && s.tail != none {
+      evict_lru(s)
+    }
+
+    // Insert new node
+    let node = LruNode { key: key.clone(), value, prev: none, next: s.head }
+    let idx = if s.free_list.len() > 0 {
+      let free_idx = s.free_list.pop()!
+      s.nodes[free_idx] = node
+      free_idx
+    } else {
+      s.nodes.push(node)
+      s.nodes.len() - 1
+    }
+
+    // Link into the doubly-linked list
+    if let some(old_head) = s.head {
+      s.nodes[old_head].prev = some(idx)
+    }
+    s.head = some(idx)
+    if s.tail == none {
+      s.tail = some(idx)
+    }
+
+    s.index[key] = idx
+    s.current_size += byte_size
+  }
+
+  /// Remove an item from the cache
+  pub fn remove(self, key: K) -> bool {
+    let mut s = self.state.write()
+
+    match s.index.remove(key) {
+      some(idx) => {
+        unlink_node(s, idx)
+        s.current_size -= estimate_size(s.nodes[idx].value)
+        s.free_list.push(idx)
+        true
+      }
+      none => false
+    }
+  }
+
+  /// Current number of items in the cache
+  pub fn len(self) -> usize {
+    self.state.read().index.len()
+  }
+
+  /// Current total byte size
+  pub fn byte_size(self) -> u64 {
+    self.state.read().current_size
+  }
+
+  /// Clear the entire cache
+  pub fn clear(self) {
+    let mut s = self.state.write()
+    s.nodes.clear()
+    s.index.clear()
+    s.head = none
+    s.tail = none
+    s.free_list.clear()
+    s.current_size = 0
+  }
+}
+
+/// Move a node to the front of the LRU list
+fn move_to_front<K, V>(s: mut LruState<K, V>, idx: usize) {
+  if s.head == some(idx) { return }  // Already at front
+
+  unlink_node(s, idx)
+
+  s.nodes[idx].prev = none
+  s.nodes[idx].next = s.head
+
+  if let some(old_head) = s.head {
+    s.nodes[old_head].prev = some(idx)
+  }
+  s.head = some(idx)
+}
+
+/// Unlink a node from the doubly-linked list
+fn unlink_node<K, V>(s: mut LruState<K, V>, idx: usize) {
+  let prev = s.nodes[idx].prev
+  let next = s.nodes[idx].next
+
+  match prev {
+    some(p) => s.nodes[p].next = next
+    none    => s.head = next
+  }
+
+  match next {
+    some(n) => s.nodes[n].prev = prev
+    none    => s.tail = prev
+  }
+}
+
+/// Evict the least recently used entry
+fn evict_lru<K: Eq + Hash, V>(s: mut LruState<K, V>) {
+  match s.tail {
+    some(tail_idx) => {
+      let key = s.nodes[tail_idx].key.clone()
+      unlink_node(s, tail_idx)
+      s.index.remove(key)
+      s.current_size -= estimate_size(s.nodes[tail_idx].value)
+      s.free_list.push(tail_idx)
+      log.debug("Cache eviction", { key: "{key}" })
+    }
+    none => {}
+  }
+}
+
+/// Estimate byte size of a value (type-specific)
+fn estimate_size<V>(value: V) -> u64 {
+  // Compiler generates size estimation based on type
+  std.mem.size_of_val(value) as u64
+}
+
+// =============================================================================
+// Edge Cache — high-level cache API for the image processing service
+// =============================================================================
+
+pub struct EdgeCache {
+  cache: LruCache<str, CacheEntry>
+  default_ttl: Duration
+  stale_while_revalidate: Duration
+}
+
+impl EdgeCache {
+  pub fn new(config: ProcessingConfig, max_size: u64 = 50 * 1024 * 1024) -> EdgeCache {
+    EdgeCache {
+      cache: LruCache.new(max_size),
+      default_ttl: config.cache_ttl,
+      stale_while_revalidate: Duration.minutes(5),
+    }
+  }
+
+  /// Get a cached image by cache key
+  pub async fn get(self, key: CacheKey) -> CachedImage? {
+    match self.cache.get(key.hash) {
+      some(entry) => {
+        if entry.is_fresh() {
+          entry.touch()
+          log.debug("Cache hit (fresh)", {
+            key: key.hash,
+            remaining_ttl_ms: entry.remaining_ttl().as_ms(),
+          })
+          some(entry.image)
+        } else if Instant.now().duration_since(entry.created_at) <
+                  entry.ttl + self.stale_while_revalidate {
+          // Stale but within stale-while-revalidate window
+          entry.touch()
+          log.debug("Cache hit (stale-while-revalidate)", { key: key.hash })
+          some(entry.image)
+        } else {
+          // Expired — remove and return miss
+          self.cache.remove(key.hash)
+          log.debug("Cache miss (expired)", { key: key.hash })
+          none
+        }
+      }
+      none => {
+        log.debug("Cache miss", { key: key.hash })
+        none
+      }
+    }
+  }
+
+  /// Store an image in the cache
+  pub async fn put(self, key: CacheKey, image: CachedImage) {
+    let etag = generate_etag(key.hash)
+    let byte_size = image.file_size
+
+    let entry = CacheEntry {
+      image,
+      etag,
+      created_at: Instant.now(),
+      last_accessed: Instant.now(),
+      ttl: self.default_ttl,
+      access_count: 1,
+      byte_size,
+    }
+
+    self.cache.put(key.hash, entry, byte_size)
+
+    log.debug("Cached image", {
+      key: key.hash,
+      size: byte_size,
+      ttl_ms: self.default_ttl.as_ms(),
+      cache_size: self.cache.byte_size(),
+    })
+  }
+
+  /// Remove a specific cache entry
+  pub async fn invalidate(self, key: CacheKey) -> bool {
+    self.cache.remove(key.hash)
+  }
+
+  /// Purge all cache entries matching a source URL pattern
+  pub async fn purge_by_source(self, source_pattern: str) -> u32 {
+    // This is O(n) — acceptable for an infrequent operation
+    let mut purged: u32 = 0
+    let keys_to_remove = self.cache.state.read().index.keys()
+      .filter((k) => k.contains(source_pattern))
+      .collect()
+
+    for key in keys_to_remove {
+      self.cache.remove(key)
+      purged += 1
+    }
+
+    log.info("Cache purge", { pattern: source_pattern, purged })
+    purged
+  }
+
+  /// Clear the entire cache
+  pub async fn clear(self) {
+    self.cache.clear()
+    log.info("Cache cleared")
+  }
+
+  /// Get cache statistics
+  pub fn stats(self) -> CacheStats {
+    let s = self.cache.state.read()
+    CacheStats {
+      entries: s.index.len() as u64,
+      byte_size: s.current_size,
+      max_size: s.max_size,
+      utilization: if s.max_size > 0 {
+        s.current_size as f64 / s.max_size as f64
+      } else {
+        0.0
+      },
+    }
+  }
+
+  /// Handle a conditional request (If-None-Match / ETag)
+  /// Returns a 304 Not Modified response if the client's cached version is still valid
+  pub async fn handle_conditional(
+    self,
+    key: CacheKey,
+    request: Request,
+  ) -> ConditionalResult {
+    let client_etag = request.headers.get("if-none-match")
+
+    match self.cache.get(key.hash) {
+      some(entry) if entry.is_fresh() => {
+        match client_etag {
+          some(tag) if tag == entry.etag || tag == "*" => {
+            // Client has the current version — 304
+            ConditionalResult.NotModified(entry.etag, entry.remaining_ttl())
+          }
+          _ => {
+            // Client has a stale or no cached version — send full response
+            entry.touch()
+            ConditionalResult.Fresh(entry.image, entry.etag, entry.remaining_ttl())
+          }
+        }
+      }
+      some(entry) => {
+        // Entry exists but is stale
+        ConditionalResult.Stale(entry.image, entry.etag)
+      }
+      none => {
+        ConditionalResult.Miss
+      }
+    }
+  }
+
+  /// Build Cache-Control and ETag response headers
+  pub fn build_cache_headers(self, etag: str, ttl: Duration) -> {str: str} {
+    let max_age = ttl.as_secs()
+    let swr = self.stale_while_revalidate.as_secs()
+
+    {
+      "Cache-Control": "public, max-age={max_age}, stale-while-revalidate={swr}",
+      "ETag": etag,
+      "Vary": "Accept, Accept-Encoding",
+      "X-Cache-TTL": "{max_age}",
+    }
+  }
+}
+
+// --- Conditional request result ---
+
+type ConditionalResult {
+  /// Client's version is current — respond with 304
+  NotModified(etag: str, remaining_ttl: Duration)
+
+  /// Fresh cache hit — respond with cached data
+  Fresh(image: CachedImage, etag: str, remaining_ttl: Duration)
+
+  /// Cache entry exists but is stale — may serve while revalidating
+  Stale(image: CachedImage, etag: str)
+
+  /// No cache entry found
+  Miss
+}
+
+// --- Cache statistics ---
+
+@derive(Debug, Serialize)
+pub struct CacheStats {
+  entries: u64
+  byte_size: u64
+  max_size: u64
+  utilization: f64
+}
+
+// --- Helper functions ---
+
+/// Generate an ETag from a cache key hash
+fn generate_etag(key_hash: str) -> str {
+  // Weak ETag (W/) because the image may be reprocessed identically
+  "W/\"{key_hash[..16]}\""
+}

@@ -1,0 +1,681 @@
+// =============================================================================
+// api_test.tb — Integration tests for all HTTP endpoints
+//
+// Demonstrates:
+//   - Integration testing with MockServer and TestClient
+//   - Full request/response cycle testing
+//   - JSON request body construction and response parsing
+//   - Testing error responses and status codes
+//   - Auth flow testing (register -> login -> use token)
+//   - Pagination and search endpoint testing
+//   - Test fixtures with helper functions
+//   - Destructuring in assertions
+// =============================================================================
+
+import { MockServer, TestClient } from "turbo/test"
+import { Router, Response, Request } from "turbo/http"
+import { Shared } from "turbo/sync"
+import { BookmarkStore, bookmark_routes } from "../src/routes/bookmarks"
+import { UserStore, user_routes } from "../src/routes/users"
+import { SyncBroadcaster, ws_routes } from "../src/routes/ws"
+import { SearchEngine } from "../src/search"
+import { TokenBlacklist, auth_required, sign_token } from "../src/auth"
+import { Metrics } from "../src/middleware"
+import { Visibility } from "../src/models"
+
+// --- Test Fixtures ---
+
+struct TestApp {
+  client: TestClient
+  user_store: Shared<UserStore>
+  bookmark_store: Shared<BookmarkStore>
+  blacklist: Shared<TokenBlacklist>
+}
+
+async fn setup() -> TestApp {
+  let metrics = Shared.new(Metrics.new())
+  let search = SearchEngine.new()
+  let blacklist = Shared.new(TokenBlacklist.new())
+  let user_store = Shared.new(UserStore.new())
+  let bookmark_store = Shared.new(BookmarkStore.new(search))
+  let broadcaster = Shared.new(SyncBroadcaster.new(metrics))
+
+  let router = Router.new()
+
+  // Public auth routes
+  let auth_router = user_routes(user_store.clone(), blacklist.clone())
+  router.mount("/", auth_router)
+
+  // Protected routes
+  let protected = Router.new()
+  protected.use(auth_required(blacklist.clone()))
+  let bm_router = bookmark_routes(bookmark_store.clone(), broadcaster.clone())
+  protected.mount("/", bm_router)
+
+  // Re-mount user profile routes under protected
+  let profile_router = user_routes(user_store.clone(), blacklist.clone())
+  protected.mount("/", profile_router)
+
+  router.mount("/api/v1", protected)
+
+  let server = MockServer.new(router)
+
+  TestApp {
+    client: server.client(),
+    user_store: user_store,
+    bookmark_store: bookmark_store,
+    blacklist: blacklist,
+  }
+}
+
+/// Register a user and return (user_id, auth_token_string)
+async fn register_user(app: TestApp, username: str, email: str) -> (u64, str) {
+  let resp = await app.client.post("/auth/register", json: {
+    "username": username,
+    "email": email,
+    "password": "test_password_123",
+    "display_name": username,
+  })
+  assert_eq(resp.status, 201)
+
+  let body = resp.json<{str: any}>()
+  let user_id = body["user"]["id"] as u64
+  let token = body["token"]["access_token"] as str
+  (user_id, token)
+}
+
+/// Create a bookmark using the API and return its ID
+async fn create_bookmark(
+  app: TestApp,
+  token: str,
+  url: str,
+  title: str,
+  tags: [str] = [],
+) -> u64 {
+  let resp = await app.client.post("/api/v1/bookmarks", json: {
+    "url": url,
+    "title": title,
+    "tags": tags,
+  }, headers: { "Authorization": "Bearer {token}" })
+
+  assert_eq(resp.status, 201)
+  let body = resp.json<{str: any}>()
+  body["id"] as u64
+}
+
+// =============================================================================
+// User Registration Tests
+// =============================================================================
+
+@test
+async fn test_register_user() {
+  let app = await setup()
+
+  let resp = await app.client.post("/auth/register", json: {
+    "username": "alice",
+    "email": "alice@example.com",
+    "password": "secure_password_123",
+    "display_name": "Alice",
+  })
+
+  assert_eq(resp.status, 201)
+  let body = resp.json<{str: any}>()
+  assert_eq(body["user"]["username"], "alice")
+  assert_eq(body["user"]["email"], "alice@example.com")
+  assert_eq(body["user"]["display_name"], "Alice")
+  assert(body["token"]["access_token"] != none, "Should include auth token")
+  assert_eq(body["token"]["token_type"], "Bearer")
+  // Password hash should NOT be in the response
+  assert_eq(body["user"]["password_hash"], none)
+}
+
+@test
+async fn test_register_duplicate_username() {
+  let app = await setup()
+
+  await app.client.post("/auth/register", json: {
+    "username": "alice",
+    "email": "alice@example.com",
+    "password": "secure_password_123",
+  })
+
+  let resp = await app.client.post("/auth/register", json: {
+    "username": "alice",
+    "email": "alice2@example.com",
+    "password": "another_password_123",
+  })
+
+  assert_eq(resp.status, 409)
+  let body = resp.json<{str: any}>()
+  assert(body["error"].contains("alice"), "Should mention the duplicate username")
+}
+
+@test
+async fn test_register_validation_errors() {
+  let app = await setup()
+
+  let resp = await app.client.post("/auth/register", json: {
+    "username": "ab",
+    "email": "not-an-email",
+    "password": "short",
+  })
+
+  assert_eq(resp.status, 422)
+  let body = resp.json<{str: any}>()
+  let errors = body["errors"] as [{str: any}]
+  assert(errors.len() >= 3, "Should have validation errors for username, email, and password")
+}
+
+// =============================================================================
+// Login Tests
+// =============================================================================
+
+@test
+async fn test_login_success() {
+  let app = await setup()
+  await register_user(app, "alice", "alice@example.com")
+
+  let resp = await app.client.post("/auth/login", json: {
+    "username": "alice",
+    "password": "test_password_123",
+  })
+
+  assert_eq(resp.status, 200)
+  let body = resp.json<{str: any}>()
+  assert_eq(body["user"]["username"], "alice")
+  assert(body["token"]["access_token"] != none)
+}
+
+@test
+async fn test_login_wrong_password() {
+  let app = await setup()
+  await register_user(app, "alice", "alice@example.com")
+
+  let resp = await app.client.post("/auth/login", json: {
+    "username": "alice",
+    "password": "wrong_password_entirely",
+  })
+
+  assert_eq(resp.status, 401)
+}
+
+@test
+async fn test_login_nonexistent_user() {
+  let app = await setup()
+
+  let resp = await app.client.post("/auth/login", json: {
+    "username": "nobody",
+    "password": "doesnt_matter_123",
+  })
+
+  assert_eq(resp.status, 401)
+}
+
+// =============================================================================
+// Logout Tests
+// =============================================================================
+
+@test
+async fn test_logout_revokes_token() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  // Token should work before logout
+  let resp1 = await app.client.get("/api/v1/bookmarks", headers: {
+    "Authorization": "Bearer {token}"
+  })
+  assert_eq(resp1.status, 200)
+
+  // Logout
+  let logout_resp = await app.client.post("/auth/logout", headers: {
+    "Authorization": "Bearer {token}"
+  })
+  assert_eq(logout_resp.status, 200)
+
+  // Token should be rejected after logout
+  let resp2 = await app.client.get("/api/v1/bookmarks", headers: {
+    "Authorization": "Bearer {token}"
+  })
+  assert_eq(resp2.status, 401)
+}
+
+// =============================================================================
+// Bookmark CRUD Tests
+// =============================================================================
+
+@test
+async fn test_create_bookmark() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  let resp = await app.client.post("/api/v1/bookmarks", json: {
+    "url": "https://turbo-lang.dev",
+    "title": "Turbo Language",
+    "description": "A modern programming language",
+    "tags": ["programming", "language"],
+    "notes": "Very interesting project",
+  }, headers: { "Authorization": "Bearer {token}" })
+
+  assert_eq(resp.status, 201)
+  let bookmark = resp.json<{str: any}>()
+  assert_eq(bookmark["url"], "https://turbo-lang.dev")
+  assert_eq(bookmark["title"], "Turbo Language")
+  assert_eq(bookmark["tags"], ["programming", "language"])
+  assert(bookmark["id"] != none)
+  assert(bookmark["created_at"] != none)
+}
+
+@test
+async fn test_create_bookmark_invalid_url() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  let resp = await app.client.post("/api/v1/bookmarks", json: {
+    "url": "not-a-url",
+    "title": "Bad URL",
+  }, headers: { "Authorization": "Bearer {token}" })
+
+  assert_eq(resp.status, 400)
+  let body = resp.json<{str: any}>()
+  assert_eq(body["field"], "url")
+}
+
+@test
+async fn test_create_bookmark_duplicate_url() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  await create_bookmark(app, token, "https://example.com", "First")
+
+  let resp = await app.client.post("/api/v1/bookmarks", json: {
+    "url": "https://example.com",
+    "title": "Duplicate",
+  }, headers: { "Authorization": "Bearer {token}" })
+
+  assert_eq(resp.status, 409)
+}
+
+@test
+async fn test_get_bookmark_by_id() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+  let id = await create_bookmark(app, token, "https://example.com", "Test Bookmark")
+
+  let resp = await app.client.get("/api/v1/bookmarks/{id}", headers: {
+    "Authorization": "Bearer {token}"
+  })
+
+  assert_eq(resp.status, 200)
+  let bookmark = resp.json<{str: any}>()
+  assert_eq(bookmark["id"], id)
+  assert_eq(bookmark["title"], "Test Bookmark")
+}
+
+@test
+async fn test_get_bookmark_not_found() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  let resp = await app.client.get("/api/v1/bookmarks/9999", headers: {
+    "Authorization": "Bearer {token}"
+  })
+
+  assert_eq(resp.status, 404)
+}
+
+@test
+async fn test_update_bookmark() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+  let id = await create_bookmark(app, token, "https://example.com", "Original Title")
+
+  let resp = await app.client.patch("/api/v1/bookmarks/{id}", json: {
+    "title": "Updated Title",
+    "tags": ["updated", "test"],
+    "is_starred": true,
+  }, headers: { "Authorization": "Bearer {token}" })
+
+  assert_eq(resp.status, 200)
+  let bookmark = resp.json<{str: any}>()
+  assert_eq(bookmark["title"], "Updated Title")
+  assert_eq(bookmark["tags"], ["updated", "test"])
+  assert_eq(bookmark["is_starred"], true)
+  // URL should remain unchanged
+  assert_eq(bookmark["url"], "https://example.com")
+}
+
+@test
+async fn test_update_bookmark_not_owned() {
+  let app = await setup()
+  let (_, alice_token) = await register_user(app, "alice", "alice@example.com")
+  let (_, bob_token) = await register_user(app, "bob", "bob@example.com")
+
+  let id = await create_bookmark(app, alice_token, "https://example.com", "Alice's Bookmark")
+
+  // Bob tries to update Alice's bookmark
+  let resp = await app.client.patch("/api/v1/bookmarks/{id}", json: {
+    "title": "Stolen!",
+  }, headers: { "Authorization": "Bearer {bob_token}" })
+
+  assert_eq(resp.status, 403)
+}
+
+@test
+async fn test_delete_bookmark() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+  let id = await create_bookmark(app, token, "https://example.com", "Delete Me")
+
+  let resp = await app.client.delete("/api/v1/bookmarks/{id}", headers: {
+    "Authorization": "Bearer {token}"
+  })
+
+  assert_eq(resp.status, 200)
+  let body = resp.json<{str: any}>()
+  assert_eq(body["deleted"], true)
+
+  // Confirm it is gone
+  let check = await app.client.get("/api/v1/bookmarks/{id}", headers: {
+    "Authorization": "Bearer {token}"
+  })
+  assert_eq(check.status, 404)
+}
+
+@test
+async fn test_delete_bookmark_not_owned() {
+  let app = await setup()
+  let (_, alice_token) = await register_user(app, "alice", "alice@example.com")
+  let (_, bob_token) = await register_user(app, "bob", "bob@example.com")
+
+  let id = await create_bookmark(app, alice_token, "https://example.com", "Alice's")
+
+  let resp = await app.client.delete("/api/v1/bookmarks/{id}", headers: {
+    "Authorization": "Bearer {bob_token}"
+  })
+
+  assert_eq(resp.status, 403)
+}
+
+// =============================================================================
+// Pagination Tests
+// =============================================================================
+
+@test
+async fn test_list_bookmarks_paginated() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  // Create 25 bookmarks
+  for i in 1..=25 {
+    await create_bookmark(app, token, "https://example.com/{i}", "Bookmark {i}")
+  }
+
+  // Page 1 (default per_page = 20)
+  let resp1 = await app.client.get("/api/v1/bookmarks?page=1&per_page=10", headers: {
+    "Authorization": "Bearer {token}"
+  })
+  assert_eq(resp1.status, 200)
+  let page1 = resp1.json<{str: any}>()
+  assert_eq(page1["items"].len(), 10)
+  assert_eq(page1["total"], 25)
+  assert_eq(page1["page"], 1)
+  assert_eq(page1["per_page"], 10)
+  assert_eq(page1["total_pages"], 3)
+
+  // Page 3 (should have 5 items)
+  let resp3 = await app.client.get("/api/v1/bookmarks?page=3&per_page=10", headers: {
+    "Authorization": "Bearer {token}"
+  })
+  assert_eq(resp3.status, 200)
+  let page3 = resp3.json<{str: any}>()
+  assert_eq(page3["items"].len(), 5)
+  assert_eq(page3["page"], 3)
+}
+
+@test
+async fn test_list_bookmarks_per_page_clamped() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  // Request per_page=500 — should be clamped to 100
+  let resp = await app.client.get("/api/v1/bookmarks?per_page=500", headers: {
+    "Authorization": "Bearer {token}"
+  })
+  assert_eq(resp.status, 200)
+  let body = resp.json<{str: any}>()
+  assert_eq(body["per_page"], 100)
+}
+
+@test
+async fn test_list_bookmarks_filter_by_tag() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  await create_bookmark(app, token, "https://rust-lang.org", "Rust", tags: ["programming"])
+  await create_bookmark(app, token, "https://turbo-lang.dev", "Turbo", tags: ["programming"])
+  await create_bookmark(app, token, "https://news.ycombinator.com", "HN", tags: ["news"])
+
+  let resp = await app.client.get("/api/v1/bookmarks?tag=programming", headers: {
+    "Authorization": "Bearer {token}"
+  })
+
+  assert_eq(resp.status, 200)
+  let body = resp.json<{str: any}>()
+  assert_eq(body["total"], 2)
+}
+
+@test
+async fn test_list_bookmarks_filter_starred() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  let id = await create_bookmark(app, token, "https://example.com/1", "Starred")
+  await create_bookmark(app, token, "https://example.com/2", "Not Starred")
+
+  // Star the first bookmark
+  await app.client.patch("/api/v1/bookmarks/{id}", json: {
+    "is_starred": true,
+  }, headers: { "Authorization": "Bearer {token}" })
+
+  let resp = await app.client.get("/api/v1/bookmarks?starred=true", headers: {
+    "Authorization": "Bearer {token}"
+  })
+
+  assert_eq(resp.status, 200)
+  let body = resp.json<{str: any}>()
+  assert_eq(body["total"], 1)
+  assert_eq(body["items"][0]["title"], "Starred")
+}
+
+// =============================================================================
+// Search Tests
+// =============================================================================
+
+@test
+async fn test_search_bookmarks() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  await create_bookmark(app, token, "https://rust-lang.org", "The Rust Programming Language", tags: ["rust"])
+  await create_bookmark(app, token, "https://turbo-lang.dev", "Turbo Language", tags: ["turbo"])
+  await create_bookmark(app, token, "https://example.com", "Random Site", tags: ["misc"])
+
+  let resp = await app.client.get("/api/v1/bookmarks/search?q=programming", headers: {
+    "Authorization": "Bearer {token}"
+  })
+
+  assert_eq(resp.status, 200)
+  let body = resp.json<{str: any}>()
+  assert(body["total"] >= 1, "Should find at least one result for 'programming'")
+}
+
+@test
+async fn test_search_requires_query() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  let resp = await app.client.get("/api/v1/bookmarks/search", headers: {
+    "Authorization": "Bearer {token}"
+  })
+
+  assert_eq(resp.status, 400)
+}
+
+// =============================================================================
+// Tag Cloud Tests
+// =============================================================================
+
+@test
+async fn test_tag_cloud() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  await create_bookmark(app, token, "https://a.com", "A", tags: ["rust", "programming"])
+  await create_bookmark(app, token, "https://b.com", "B", tags: ["rust", "web"])
+  await create_bookmark(app, token, "https://c.com", "C", tags: ["programming", "turbo"])
+
+  let resp = await app.client.get("/api/v1/bookmarks/tags", headers: {
+    "Authorization": "Bearer {token}"
+  })
+
+  assert_eq(resp.status, 200)
+  let tags = resp.json<[{str: any}]>()
+
+  // "rust" appears in 2 bookmarks, "programming" in 2, "web" in 1, "turbo" in 1
+  assert_eq(tags.len(), 4)
+  // Should be sorted by count descending
+  assert(tags[0]["count"] >= tags[1]["count"], "Tags should be sorted by count descending")
+}
+
+// =============================================================================
+// User Profile and Settings Tests
+// =============================================================================
+
+@test
+async fn test_get_profile() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  let resp = await app.client.get("/api/v1/users/me", headers: {
+    "Authorization": "Bearer {token}"
+  })
+
+  assert_eq(resp.status, 200)
+  let body = resp.json<{str: any}>()
+  assert_eq(body["username"], "alice")
+  assert_eq(body["email"], "alice@example.com")
+}
+
+@test
+async fn test_update_profile() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  let resp = await app.client.patch("/api/v1/users/me", json: {
+    "display_name": "Alice Wonderland",
+    "email": "alice.new@example.com",
+  }, headers: { "Authorization": "Bearer {token}" })
+
+  assert_eq(resp.status, 200)
+  let body = resp.json<{str: any}>()
+  assert_eq(body["display_name"], "Alice Wonderland")
+  assert_eq(body["email"], "alice.new@example.com")
+}
+
+@test
+async fn test_update_settings() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  let resp = await app.client.patch("/api/v1/users/me/settings", json: {
+    "bookmarks_per_page": 50,
+    "theme": "dark",
+    "default_visibility": "private",
+  }, headers: { "Authorization": "Bearer {token}" })
+
+  assert_eq(resp.status, 200)
+  let settings = resp.json<{str: any}>()
+  assert_eq(settings["bookmarks_per_page"], 50)
+  assert_eq(settings["theme"], "dark")
+}
+
+@test
+async fn test_update_settings_invalid_per_page() {
+  let app = await setup()
+  let (_, token) = await register_user(app, "alice", "alice@example.com")
+
+  let resp = await app.client.patch("/api/v1/users/me/settings", json: {
+    "bookmarks_per_page": 999,
+  }, headers: { "Authorization": "Bearer {token}" })
+
+  assert_eq(resp.status, 400)
+}
+
+// =============================================================================
+// Cross-User Isolation Tests
+// =============================================================================
+
+@test
+async fn test_users_see_only_own_bookmarks() {
+  let app = await setup()
+  let (_, alice_token) = await register_user(app, "alice", "alice@example.com")
+  let (_, bob_token) = await register_user(app, "bob", "bob@example.com")
+
+  // Alice creates 3 bookmarks
+  for i in 1..=3 {
+    await create_bookmark(app, alice_token, "https://alice.com/{i}", "Alice {i}")
+  }
+
+  // Bob creates 2 bookmarks
+  for i in 1..=2 {
+    await create_bookmark(app, bob_token, "https://bob.com/{i}", "Bob {i}")
+  }
+
+  // Alice sees only her 3
+  let alice_resp = await app.client.get("/api/v1/bookmarks", headers: {
+    "Authorization": "Bearer {alice_token}"
+  })
+  let alice_body = alice_resp.json<{str: any}>()
+  assert_eq(alice_body["total"], 3)
+
+  // Bob sees only his 2
+  let bob_resp = await app.client.get("/api/v1/bookmarks", headers: {
+    "Authorization": "Bearer {bob_token}"
+  })
+  let bob_body = bob_resp.json<{str: any}>()
+  assert_eq(bob_body["total"], 2)
+}
+
+// =============================================================================
+// Auth Required on All Protected Routes
+// =============================================================================
+
+@test
+async fn test_protected_routes_require_auth() {
+  let app = await setup()
+
+  let endpoints = [
+    ("GET", "/api/v1/bookmarks"),
+    ("POST", "/api/v1/bookmarks"),
+    ("GET", "/api/v1/bookmarks/1"),
+    ("PATCH", "/api/v1/bookmarks/1"),
+    ("DELETE", "/api/v1/bookmarks/1"),
+    ("GET", "/api/v1/bookmarks/search?q=test"),
+    ("GET", "/api/v1/bookmarks/tags"),
+    ("GET", "/api/v1/users/me"),
+    ("PATCH", "/api/v1/users/me"),
+  ]
+
+  for (method, path) in endpoints {
+    let resp = match method {
+      "GET"    => await app.client.get(path)
+      "POST"   => await app.client.post(path, json: {})
+      "PATCH"  => await app.client.patch(path, json: {})
+      "DELETE" => await app.client.delete(path)
+      _        => continue
+    }
+
+    assert_eq(resp.status, 401,
+      "Expected 401 for {method} {path}, got {resp.status}")
+  }
+}

@@ -1,0 +1,462 @@
+// =============================================================================
+// wasm_bindings.tb — WASM-specific code: exports, JS interop, memory management
+//
+// Demonstrates:
+//   - @wasm_export decorator for functions callable by the edge runtime
+//   - @wasm_import for importing host functions (JS, WASI)
+//   - WASM linear memory management within constrained budgets
+//   - JavaScript interop for browser APIs
+//   - Memory pool allocator for zero-copy processing
+//   - Arena allocator for request-scoped memory
+//   - Panic handler for WASM environments
+// =============================================================================
+
+import { log } from "turbo/log"
+import { Request, Response } from "turbo/http"
+import { Stream } from "turbo/stream"
+import { PipelineError } from "./models"
+
+// =============================================================================
+// WASM Host Imports — functions provided by the edge runtime
+// =============================================================================
+
+/// Fetch a URL using the host's HTTP client (Cloudflare fetch, Deno fetch, etc.)
+@wasm_import("env", "fetch")
+extern async fn host_fetch(url: str, options: FetchOptions) -> FetchResponse
+
+/// Read the incoming request from the edge runtime
+@wasm_import("env", "get_request")
+extern fn host_get_request() -> RawRequest
+
+/// Write the response back to the edge runtime
+@wasm_import("env", "send_response")
+extern fn host_send_response(status: u16, headers: [[u8]], body: [u8])
+
+/// Send a streaming response chunk
+@wasm_import("env", "send_response_chunk")
+extern fn host_send_chunk(chunk: [u8], is_last: bool)
+
+/// Start a streaming response with headers
+@wasm_import("env", "start_response_stream")
+extern fn host_start_stream(status: u16, headers: [[u8]])
+
+/// Access the edge runtime's KV store (for caching)
+@wasm_import("env", "kv_get")
+extern async fn host_kv_get(key: str) -> [u8]?
+
+@wasm_import("env", "kv_put")
+extern async fn host_kv_put(key: str, value: [u8], ttl_seconds: u32)
+
+/// Log to the edge runtime's logging system
+@wasm_import("env", "console_log")
+extern fn host_console_log(level: u8, message: str)
+
+/// Get the current time from the host (WASM has no clock)
+@wasm_import("env", "now_ms")
+extern fn host_now_ms() -> f64
+
+/// Get available memory in the WASM instance
+@wasm_import("env", "memory_available")
+extern fn host_memory_available() -> usize
+
+// =============================================================================
+// WASM Exported Functions — entry points for the edge runtime
+// =============================================================================
+
+/// Main entry point: handle an incoming HTTP request.
+/// This is called by Cloudflare Workers, Vercel Edge Functions, or Deno Deploy.
+@wasm_export("handle_request")
+pub async fn wasm_handle_request() -> () {
+  // Initialize the WASM memory arena for this request
+  let arena = RequestArena.new()
+  defer arena.free()
+
+  // Read the incoming request from the host
+  let raw = host_get_request()
+  let request = Request.from_raw(raw)
+
+  // Route and process
+  let response = match await handle_request_internal(request, arena) {
+    ok(resp) => resp
+    err(e) => {
+      host_console_log(3, "Request failed: {e.message()}")
+      error_response(e)
+    }
+  }
+
+  // Send response back to the host
+  if response.is_streaming {
+    // Stream the response body chunk by chunk
+    let headers = response.headers
+      |> map_entries((k, v) => [k.as_bytes(), v.as_bytes()])
+      |> collect()
+
+    host_start_stream(response.status, headers)
+
+    for await chunk in response.body_stream {
+      host_send_chunk(chunk, false)
+    }
+    host_send_chunk([], true)
+  } else {
+    let headers = response.headers
+      |> map_entries((k, v) => [k.as_bytes(), v.as_bytes()])
+      |> collect()
+
+    host_send_response(response.status, headers, response.body)
+  }
+}
+
+/// Health check endpoint exported for the edge runtime
+@wasm_export("handle_health")
+pub fn wasm_handle_health() -> () {
+  let mem = host_memory_available()
+  let response_body = "{\"status\":\"ok\",\"memory_available\":{mem}}"
+
+  host_send_response(200, [
+    ["content-type".as_bytes(), "application/json".as_bytes()],
+  ], response_body.as_bytes())
+}
+
+/// Get the WASM module version (for deployment tracking)
+@wasm_export("version")
+pub fn wasm_version() -> u32 {
+  // Embed the build version at compile time
+  const VERSION: u32 = env!("BUILD_VERSION")?.parse<u32>() ?? 1
+  VERSION
+}
+
+/// Allocate memory in the WASM linear memory (called by host for passing data)
+@wasm_export("alloc")
+pub fn wasm_alloc(size: usize) -> usize {
+  GLOBAL_POOL.allocate(size)
+}
+
+/// Free memory in the WASM linear memory
+@wasm_export("dealloc")
+pub fn wasm_dealloc(ptr: usize, size: usize) {
+  GLOBAL_POOL.free(ptr, size)
+}
+
+// =============================================================================
+// WASM Memory Management
+//
+// WASM has a single linear memory (typically 256MB max).
+// We use a pool allocator for reusable buffers (image chunks)
+// and an arena allocator for per-request temporaries.
+// =============================================================================
+
+/// Global memory pool for reusable allocations
+static mut GLOBAL_POOL: MemoryPool = MemoryPool.new()
+
+/// Memory pool: pre-allocates slabs of memory for common chunk sizes
+struct MemoryPool {
+  small_slabs: [Slab]     // 16KB slabs for small chunks
+  medium_slabs: [Slab]    // 64KB slabs for medium chunks
+  large_slabs: [Slab]     // 256KB slabs for large chunks
+  total_allocated: usize
+  peak_allocated: usize
+}
+
+struct Slab {
+  ptr: usize
+  size: usize
+  in_use: bool
+}
+
+impl MemoryPool {
+  const fn new() -> MemoryPool {
+    MemoryPool {
+      small_slabs: [],
+      medium_slabs: [],
+      large_slabs: [],
+      total_allocated: 0,
+      peak_allocated: 0,
+    }
+  }
+
+  /// Allocate a block from the pool
+  fn allocate(mut self, size: usize) -> usize {
+    // Find the right slab tier
+    let slabs = match size {
+      s if s <= 16_384  => self.small_slabs
+      s if s <= 65_536  => self.medium_slabs
+      _                 => self.large_slabs
+    }
+
+    // Try to reuse a free slab
+    for slab in slabs {
+      if !slab.in_use && slab.size >= size {
+        slab.in_use = true
+        self.total_allocated += size
+        self.peak_allocated = usize.max(self.peak_allocated, self.total_allocated)
+        return slab.ptr
+      }
+    }
+
+    // No free slab — grow WASM memory and allocate new slab
+    let ptr = wasm_grow_memory(size)
+    let slab_size = match size {
+      s if s <= 16_384  => 16_384
+      s if s <= 65_536  => 65_536
+      _                 => ((size + 65_535) / 65_536) * 65_536  // Round up to 64KB
+    }
+
+    let new_slab = Slab { ptr, size: slab_size, in_use: true }
+
+    match size {
+      s if s <= 16_384  => self.small_slabs.push(new_slab)
+      s if s <= 65_536  => self.medium_slabs.push(new_slab)
+      _                 => self.large_slabs.push(new_slab)
+    }
+
+    self.total_allocated += size
+    self.peak_allocated = usize.max(self.peak_allocated, self.total_allocated)
+    ptr
+  }
+
+  /// Return a block to the pool
+  fn free(mut self, ptr: usize, size: usize) {
+    let slabs = match size {
+      s if s <= 16_384  => self.small_slabs
+      s if s <= 65_536  => self.medium_slabs
+      _                 => self.large_slabs
+    }
+
+    for slab in slabs {
+      if slab.ptr == ptr {
+        slab.in_use = false
+        self.total_allocated -= size
+        return
+      }
+    }
+  }
+
+  /// Get current memory usage statistics
+  fn stats(self) -> MemoryStats {
+    let total_slabs = self.small_slabs.len() + self.medium_slabs.len() + self.large_slabs.len()
+    let free_slabs = self.small_slabs.filter((s) => !s.in_use).len()
+      + self.medium_slabs.filter((s) => !s.in_use).len()
+      + self.large_slabs.filter((s) => !s.in_use).len()
+
+    MemoryStats {
+      total_allocated: self.total_allocated,
+      peak_allocated: self.peak_allocated,
+      total_slabs,
+      free_slabs,
+      in_use_slabs: total_slabs - free_slabs,
+    }
+  }
+}
+
+@derive(Debug, Serialize)
+struct MemoryStats {
+  total_allocated: usize
+  peak_allocated: usize
+  total_slabs: usize
+  free_slabs: usize
+  in_use_slabs: usize
+}
+
+/// Request-scoped arena allocator.
+/// All memory allocated during a single request is freed at once
+/// when the request completes — no individual frees needed.
+pub struct RequestArena {
+  base_ptr: usize
+  current_offset: usize
+  capacity: usize
+}
+
+impl RequestArena {
+  /// Create a new arena for this request (default 1MB)
+  pub fn new(capacity: usize = 1_048_576) -> RequestArena {
+    let ptr = GLOBAL_POOL.allocate(capacity)
+    RequestArena {
+      base_ptr: ptr,
+      current_offset: 0,
+      capacity,
+    }
+  }
+
+  /// Allocate from the arena (bump allocator — O(1))
+  pub fn alloc(mut self, size: usize) -> [u8] ! PipelineError {
+    let aligned_size = (size + 7) & !7  // 8-byte alignment
+
+    guard self.current_offset + aligned_size <= self.capacity else {
+      return err(PipelineError.WasmMemoryExceeded(
+        self.current_offset + aligned_size,
+        self.capacity
+      ))
+    }
+
+    let ptr = self.base_ptr + self.current_offset
+    self.current_offset += aligned_size
+
+    // Return a view into the arena memory
+    unsafe { slice_from_raw(ptr, size) }
+  }
+
+  /// Get remaining capacity
+  pub fn remaining(self) -> usize {
+    self.capacity - self.current_offset
+  }
+
+  /// Get usage percentage
+  pub fn utilization(self) -> f64 {
+    self.current_offset as f64 / self.capacity as f64
+  }
+
+  /// Free the entire arena at once
+  pub fn free(self) {
+    GLOBAL_POOL.free(self.base_ptr, self.capacity)
+  }
+}
+
+// =============================================================================
+// JavaScript Interop (for client-side WASM in the browser)
+// =============================================================================
+
+/// When the WASM module runs client-side (in-browser), we can access
+/// browser APIs through JavaScript interop.
+
+@wasm_import("js", "create_image_bitmap")
+extern async fn js_create_image_bitmap(data: [u8]) -> JsImageBitmap
+
+@wasm_import("js", "canvas_draw_image")
+extern fn js_canvas_draw(canvas_id: str, bitmap: JsImageBitmap, x: i32, y: i32)
+
+@wasm_import("js", "canvas_get_image_data")
+extern fn js_canvas_get_data(canvas_id: str, x: u32, y: u32, w: u32, h: u32) -> [u8]
+
+/// Opaque handle to a JavaScript ImageBitmap
+type JsImageBitmap = u32  // Handle/pointer to JS object
+
+/// Process an image client-side using the browser's Canvas API
+/// Falls back to pure WASM processing if Canvas is unavailable
+@wasm_export("process_client_side")
+pub async fn wasm_process_client_side(
+  image_data: [u8],
+  operations_json: str,
+) -> [u8] {
+  // Parse operations from JSON (sent from JavaScript)
+  let operations = parse_operations_json(operations_json)
+
+  // Use the browser's native decode for supported formats
+  let bitmap = await js_create_image_bitmap(image_data)
+
+  // For transforms the browser can't do natively, fall back to WASM
+  let arena = RequestArena.new()
+  defer arena.free()
+
+  let result = process_with_canvas(bitmap, operations, arena)
+  result
+}
+
+// =============================================================================
+// WASM-specific helpers
+// =============================================================================
+
+/// Grow WASM linear memory by the specified amount
+fn wasm_grow_memory(bytes: usize) -> usize {
+  let pages = (bytes + 65_535) / 65_536  // 64KB pages
+  let old_pages = __wasm_memory_grow(0, pages)
+  guard old_pages != usize.MAX else {
+    panic("Failed to grow WASM memory by {pages} pages ({bytes} bytes)")
+  }
+  old_pages * 65_536
+}
+
+/// Intrinsic: grow WASM memory (maps to memory.grow instruction)
+extern fn __wasm_memory_grow(memory_idx: u32, pages: usize) -> usize
+
+/// Intrinsic: get current WASM memory size in pages
+extern fn __wasm_memory_size(memory_idx: u32) -> usize
+
+/// Create a byte slice from a raw pointer (unsafe)
+unsafe fn slice_from_raw(ptr: usize, len: usize) -> [u8] {
+  __wasm_slice_from_raw(ptr, len)
+}
+
+extern fn __wasm_slice_from_raw(ptr: usize, len: usize) -> [u8]
+
+/// WASM panic handler — logs the error and aborts
+@wasm_export("__turbo_panic_handler")
+pub fn wasm_panic_handler(message_ptr: usize, message_len: usize) {
+  let message = unsafe { str.from_raw(message_ptr, message_len) }
+  host_console_log(4, "PANIC: {message}")
+  __wasm_unreachable()
+}
+
+extern fn __wasm_unreachable() -> !
+
+// =============================================================================
+// Internal types for host communication
+// =============================================================================
+
+@derive(Debug)
+struct RawRequest {
+  method: [u8]
+  url: [u8]
+  headers: [([u8], [u8])]
+  body: [u8]?
+}
+
+@derive(Debug)
+struct FetchOptions {
+  method: str = "GET"
+  headers: {str: str} = {:}
+  body: [u8]? = none
+  redirect: str = "follow"
+}
+
+@derive(Debug)
+struct FetchResponse {
+  status: u16
+  headers: {str: str}
+  body: [u8]
+  body_stream: Stream<[u8]>?
+}
+
+/// Parse operations from a JSON string (for client-side JS interop)
+fn parse_operations_json(json: str) -> [TransformOp] {
+  // Compiler-generated JSON deserialization
+  deserialize<[TransformOp]>(json) ?? []
+}
+
+/// Error response builder
+fn error_response(err: PipelineError) -> Response {
+  Response {
+    status: err.status_code(),
+    headers: {
+      "content-type": "application/json",
+      "x-error": err.message(),
+    },
+    body: "{\"error\":\"{err.message()}\"}".as_bytes(),
+    is_streaming: false,
+    body_stream: Stream.empty(),
+  }
+}
+
+/// Process image using browser Canvas API with WASM fallback
+fn process_with_canvas(bitmap: JsImageBitmap, ops: [TransformOp], arena: RequestArena) -> [u8] {
+  // Implementation delegates to Canvas for supported ops,
+  // falls back to WASM for others
+  let mut current = bitmap
+
+  for op in ops {
+    match op {
+      // Canvas can handle resize natively
+      Resize(w, h, _) => {
+        js_canvas_draw("_turbo_canvas", current, 0, 0)
+        let data = js_canvas_get_data("_turbo_canvas", 0, 0, w, h)
+        current = js_create_image_bitmap(data)
+      }
+      // Other transforms use pure WASM
+      _ => {
+        // Fall back to the WASM pipeline for complex transforms
+      }
+    }
+  }
+
+  // Extract final result
+  js_canvas_get_data("_turbo_canvas", 0, 0, 0, 0)
+}

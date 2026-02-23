@@ -1,0 +1,41 @@
+language,benchmark,time_ms,result
+rust,fibonacci,283.23537500000003,102334155
+rust,binary_trees,104.34400000000001,0
+rust,matrix_multiply,146.592083,166416750000.000000
+rust,string_processing,3.8114999999999997,204092
+rust,concurrent_fanout,431.493167,832040000
+cpp,fib,289.259,102334155
+cpp,trees,93.188,4194303
+cpp,matrix,146.927,333333500500
+cpp,strings,2.881,224695
+cpp,concurrent,234.554,832040000
+swift,fib,481.432,102334155
+swift,trees,104.281,0
+swift,matrix,477.585,333333500500.000000
+swift,strings,51.737,217472
+swift,concurrent,444.689,832040000
+typescript,fib,689.9987,102334155
+typescript,trees,154.0549,4194303
+typescript,matrix,2349.932,3283500
+typescript,strings,35.7655,212122
+typescript,concurrent,5266.1532,832040000
+{"language": "python", "benchmark": "fib", "time_ms": 18580.6764, "result": "102334155"},{"language": "python", "benchmark": "fib", "time_ms": 18580.6764, "result": "102334155"},,{"language": "python", "benchmark": "fib", "time_ms": 18580.6764, "result": "102334155"}
+{"language": "python", "benchmark": "trees", "time_ms": 745.0369, "result": "4194303"},{"language": "python", "benchmark": "trees", "time_ms": 745.0369, "result": "4194303"},,{"language": "python", "benchmark": "trees", "time_ms": 745.0369, "result": "4194303"}
+{"language": "python", "benchmark": "matrix", "time_ms": 69042.4289, "result": "0.0003328334999999996"},{"language": "python", "benchmark": "matrix", "time_ms": 69042.4289, "result": "0.0003328334999999996"},,{"language": "python", "benchmark": "matrix", "time_ms": 69042.4289, "result": "0.0003328334999999996"}
+{"language": "python", "benchmark": "strings", "time_ms": 10.5935, "result": "181820"},{"language": "python", "benchmark": "strings", "time_ms": 10.5935, "result": "181820"},,{"language": "python", "benchmark": "strings", "time_ms": 10.5935, "result": "181820"}
+{"language": "python", "benchmark": "concurrent", "time_ms": 102.9662, "result": "832040000"},{"language": "python", "benchmark": "concurrent", "time_ms": 102.9662, "result": "832040000"},,{"language": "python", "benchmark": "concurrent", "time_ms": 102.9662, "result": "832040000"}
+java,fib,299.1630,102334155
+java,trees,83.4494,4194303
+java,matrix,3444.6025,0.000333
+java,strings,42.2481,196429
+java,concurrent,603.4369,832040000
+ruby,fib,6389.629,102334155
+ruby,trees,1635.815,4194303
+ruby,matrix,44590.299,0.0003328334999999996
+ruby,strings,30.593,181820
+ruby,concurrent,40.308,832040000
+elixir,fib,712.315,102334155
+elixir,trees,170.653,4194303
+elixir,matrix (500x500),2110.684,4.154174999999999e-5
+elixir,strings,144.242,181820
+elixir,concurrent,6.001,832040000

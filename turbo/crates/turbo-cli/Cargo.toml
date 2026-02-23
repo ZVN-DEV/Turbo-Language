@@ -1,0 +1,16 @@
+[package]
+name = "turbo-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "turbo"
+path = "src/main.rs"
+
+[dependencies]
+turbo-lexer = { path = "../turbo-lexer" }
+turbo-ast = { path = "../turbo-ast" }
+turbo-parser = { path = "../turbo-parser" }
+turbo-codegen-cranelift = { path = "../turbo-codegen-cranelift" }
+turbo-sema = { path = "../turbo-sema" }
+clap = { workspace = true }

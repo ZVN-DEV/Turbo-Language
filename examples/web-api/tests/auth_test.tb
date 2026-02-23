@@ -1,0 +1,311 @@
+// =============================================================================
+// auth_test.tb — Tests for JWT authentication, password hashing, auth middleware
+//
+// Demonstrates:
+//   - @test decorator for test functions
+//   - Testing T ! E results with match and assert
+//   - Async test functions with await
+//   - Pattern matching on error variants
+//   - MockServer and TestClient for middleware testing
+//   - Token lifecycle testing (sign, verify, expire, revoke)
+// =============================================================================
+
+import { MockServer, TestClient } from "turbo/test"
+import { Router, Response, Request } from "turbo/http"
+import { Shared } from "turbo/sync"
+import { DateTime, Duration } from "std/time"
+import {
+  hash_password, verify_password, sign_token, verify_token,
+  auth_required, auth_optional, get_authenticated_user,
+  TokenBlacklist,
+} from "../src/auth"
+import { ApiError, TokenClaims } from "../src/models"
+
+// =============================================================================
+// Password Hashing Tests
+// =============================================================================
+
+@test
+async fn test_hash_password_success() {
+  let hash = hash_password("secure_password_123")?
+  assert(!hash.is_empty(), "Hash should not be empty")
+  assert(hash != "secure_password_123", "Hash should differ from input")
+}
+
+@test
+async fn test_hash_password_different_inputs_differ() {
+  let hash1 = hash_password("password_one!")?
+  let hash2 = hash_password("password_two!")?
+  assert_ne(hash1, hash2, "Different passwords should produce different hashes")
+}
+
+@test
+async fn test_hash_password_same_input_differs() {
+  // bcrypt generates a random salt each time
+  let hash1 = hash_password("same_password")?
+  let hash2 = hash_password("same_password")?
+  assert_ne(hash1, hash2, "Same password should produce different hashes (random salt)")
+}
+
+@test
+async fn test_hash_password_too_short() {
+  match hash_password("short") {
+    ok(_) => assert(false, "Should reject passwords under 8 characters")
+    err(ApiError.BadRequest(field, _)) => assert_eq(field, "password")
+    err(e) => assert(false, "Wrong error type: {e.message()}")
+  }
+}
+
+@test
+async fn test_hash_password_too_long() {
+  let long_password = "x".repeat(129)
+  match hash_password(long_password) {
+    ok(_) => assert(false, "Should reject passwords over 128 characters")
+    err(ApiError.BadRequest(field, _)) => assert_eq(field, "password")
+    err(e) => assert(false, "Wrong error type: {e.message()}")
+  }
+}
+
+@test
+async fn test_verify_password_correct() {
+  let hash = hash_password("correct_password")?
+  let valid = verify_password("correct_password", hash)?
+  assert(valid, "Correct password should verify")
+}
+
+@test
+async fn test_verify_password_incorrect() {
+  let hash = hash_password("correct_password")?
+  let valid = verify_password("wrong_password!!", hash)?
+  assert(!valid, "Incorrect password should not verify")
+}
+
+// =============================================================================
+// JWT Sign/Verify Tests
+// =============================================================================
+
+@test
+async fn test_sign_token_returns_valid_structure() {
+  let token = sign_token(42, "testuser")?
+
+  assert(!token.access_token.is_empty(), "Token string should not be empty")
+  assert_eq(token.token_type, "Bearer")
+  assert_eq(token.user_id, 42)
+  assert(token.expires_in > 0, "Expiry should be positive")
+}
+
+@test
+async fn test_verify_token_roundtrip() {
+  let token = sign_token(42, "testuser")?
+  let claims = verify_token(token.access_token)?
+
+  assert_eq(claims.sub, 42)
+  assert_eq(claims.username, "testuser")
+  assert(claims.exp > claims.iat, "Expiry should be after issued-at")
+}
+
+@test
+async fn test_verify_token_invalid_string() {
+  match verify_token("not.a.valid.jwt.token") {
+    ok(_) => assert(false, "Should reject invalid JWT")
+    err(ApiError.Unauthorized(reason)) => {
+      assert(reason.contains("Invalid token"), "Should mention invalid token")
+    }
+    err(e) => assert(false, "Wrong error type: {e.message()}")
+  }
+}
+
+@test
+async fn test_verify_token_empty_string() {
+  match verify_token("") {
+    ok(_) => assert(false, "Should reject empty token")
+    err(ApiError.Unauthorized(_)) => {}  // expected
+    err(e) => assert(false, "Wrong error type: {e.message()}")
+  }
+}
+
+@test
+async fn test_different_users_get_different_tokens() {
+  let token1 = sign_token(1, "alice")?
+  let token2 = sign_token(2, "bob")?
+
+  assert_ne(token1.access_token, token2.access_token)
+
+  let claims1 = verify_token(token1.access_token)?
+  let claims2 = verify_token(token2.access_token)?
+
+  assert_eq(claims1.sub, 1)
+  assert_eq(claims1.username, "alice")
+  assert_eq(claims2.sub, 2)
+  assert_eq(claims2.username, "bob")
+}
+
+// =============================================================================
+// Token Blacklist Tests
+// =============================================================================
+
+@test
+async fn test_blacklist_revoke_and_check() {
+  let blacklist = TokenBlacklist.new()
+
+  assert(!blacklist.is_revoked("some-token"), "New token should not be revoked")
+
+  let future_expiry = DateTime.now().timestamp() + 3600
+  blacklist.revoke("some-token", future_expiry)
+
+  assert(blacklist.is_revoked("some-token"), "Revoked token should be marked")
+  assert(!blacklist.is_revoked("other-token"), "Other tokens unaffected")
+}
+
+@test
+async fn test_blacklist_cleanup_removes_expired() {
+  let blacklist = TokenBlacklist.new()
+
+  // Add a token that expired in the past
+  let past = DateTime.now().timestamp() - 100
+  blacklist.revoke("expired-token", past)
+
+  // Add a token that expires in the future
+  let future = DateTime.now().timestamp() + 3600
+  blacklist.revoke("valid-token", future)
+
+  blacklist.cleanup()
+
+  assert(!blacklist.is_revoked("expired-token"), "Expired token should be cleaned up")
+  assert(blacklist.is_revoked("valid-token"), "Future token should remain")
+}
+
+// =============================================================================
+// Auth Middleware Tests
+// =============================================================================
+
+/// Helper: create a test server with a protected endpoint
+async fn setup_protected_server() -> (TestClient, Shared<TokenBlacklist>) {
+  let blacklist = Shared.new(TokenBlacklist.new())
+  let router = Router.new()
+
+  router.use(auth_required(blacklist.clone()))
+
+  router.get("/protected", async (req) => {
+    let user_id = get_authenticated_user(req)?
+    Response.json({ user_id })
+  })
+
+  let server = MockServer.new(router)
+  let client = server.client()
+  (client, blacklist)
+}
+
+@test
+async fn test_middleware_rejects_missing_header() {
+  let (client, _) = await setup_protected_server()
+
+  let resp = await client.get("/protected")
+
+  assert_eq(resp.status, 401)
+  let body = resp.json<{str: any}>()
+  assert(body["error"].contains("Authorization"), "Should mention Authorization header")
+}
+
+@test
+async fn test_middleware_rejects_invalid_format() {
+  let (client, _) = await setup_protected_server()
+
+  let resp = await client.get("/protected", headers: {
+    "Authorization": "Basic dXNlcjpwYXNz"
+  })
+
+  assert_eq(resp.status, 401)
+  let body = resp.json<{str: any}>()
+  assert(body["error"].contains("Bearer"), "Should mention Bearer format")
+}
+
+@test
+async fn test_middleware_rejects_invalid_token() {
+  let (client, _) = await setup_protected_server()
+
+  let resp = await client.get("/protected", headers: {
+    "Authorization": "Bearer invalid-jwt-string"
+  })
+
+  assert_eq(resp.status, 401)
+}
+
+@test
+async fn test_middleware_accepts_valid_token() {
+  let (client, _) = await setup_protected_server()
+  let token = sign_token(42, "testuser")?
+
+  let resp = await client.get("/protected", headers: {
+    "Authorization": "Bearer {token.access_token}"
+  })
+
+  assert_eq(resp.status, 200)
+  let body = resp.json<{str: any}>()
+  assert_eq(body["user_id"], 42)
+}
+
+@test
+async fn test_middleware_rejects_revoked_token() {
+  let (client, blacklist) = await setup_protected_server()
+  let token = sign_token(42, "testuser")?
+
+  // Revoke the token
+  let future_expiry = DateTime.now().timestamp() + 3600
+  blacklist.write().revoke(token.access_token, future_expiry)
+
+  let resp = await client.get("/protected", headers: {
+    "Authorization": "Bearer {token.access_token}"
+  })
+
+  assert_eq(resp.status, 401)
+  let body = resp.json<{str: any}>()
+  assert(body["error"].contains("revoked"), "Should mention token revocation")
+}
+
+// =============================================================================
+// Optional Auth Middleware Tests
+// =============================================================================
+
+@test
+async fn test_optional_auth_allows_unauthenticated() {
+  let router = Router.new()
+  router.use(auth_optional())
+  router.get("/public", async (req) => {
+    let user_id = req.state.get<u64>("user_id")
+    Response.json({ user_id: user_id ?? 0, authenticated: user_id != none })
+  })
+
+  let server = MockServer.new(router)
+  let client = server.client()
+
+  let resp = await client.get("/public")
+
+  assert_eq(resp.status, 200)
+  let body = resp.json<{str: any}>()
+  assert_eq(body["authenticated"], false)
+  assert_eq(body["user_id"], 0)
+}
+
+@test
+async fn test_optional_auth_injects_user_when_present() {
+  let router = Router.new()
+  router.use(auth_optional())
+  router.get("/public", async (req) => {
+    let user_id = req.state.get<u64>("user_id")
+    Response.json({ user_id: user_id ?? 0, authenticated: user_id != none })
+  })
+
+  let server = MockServer.new(router)
+  let client = server.client()
+  let token = sign_token(99, "optional_user")?
+
+  let resp = await client.get("/public", headers: {
+    "Authorization": "Bearer {token.access_token}"
+  })
+
+  assert_eq(resp.status, 200)
+  let body = resp.json<{str: any}>()
+  assert_eq(body["authenticated"], true)
+  assert_eq(body["user_id"], 99)
+}

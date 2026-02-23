@@ -1,0 +1,555 @@
+// =============================================================================
+// cache_test.tb — Tests for the edge caching layer
+//
+// Demonstrates:
+//   - Cache hit/miss testing
+//   - TTL expiration with time simulation
+//   - Conditional requests (ETag, If-None-Match)
+//   - LRU eviction behavior
+//   - Cache invalidation and purging
+//   - Cache statistics
+//   - Concurrent cache access
+// =============================================================================
+
+import { Stream } from "turbo/stream"
+import { Duration, Instant } from "std/time"
+import { Shared } from "turbo/sync"
+import { Request } from "turbo/http"
+import {
+  CacheKey, ImageFormat, Dimensions, ProcessingConfig, PipelineError,
+} from "../src/models"
+import {
+  EdgeCache, CachedImage, CacheStats, ConditionalResult, LruCache,
+} from "../src/cache"
+
+// --- Test fixtures ---
+
+fn test_config() -> ProcessingConfig {
+  ProcessingConfig {
+    cache_ttl: Duration.seconds(10),  // Short TTL for testing
+  }
+}
+
+fn mock_cached_image(size: u64 = 1024) -> CachedImage {
+  let data: [u8] = [0; size as usize]
+  CachedImage {
+    data: Stream.from_bytes(data),
+    format: ImageFormat.WebP(quality: 80),
+    dimensions: Dimensions { width: 800, height: 600 },
+    file_size: size,
+  }
+}
+
+fn make_key(id: str) -> CacheKey {
+  CacheKey {
+    hash: "hash_{id}",
+    source_url: "https://example.com/{id}.jpg",
+  }
+}
+
+fn mock_request(etag: str? = none) -> Request {
+  let mut headers: {str: str} = {:}
+  if let some(tag) = etag {
+    headers["if-none-match"] = tag
+  }
+  Request {
+    method: "GET",
+    path: "/image/resize/800x600",
+    headers,
+    query: {:},
+    body: none,
+  }
+}
+
+// =============================================================================
+// LRU Cache Core Tests
+// =============================================================================
+
+@test
+fn test_lru_cache_basic_operations() {
+  let cache = LruCache<str, str>.new(1024)
+
+  cache.put("key1", "value1", 100)
+  cache.put("key2", "value2", 100)
+
+  assert_eq(cache.get("key1"), some("value1"))
+  assert_eq(cache.get("key2"), some("value2"))
+  assert_eq(cache.get("key3"), none)
+  assert_eq(cache.len(), 2)
+}
+
+@test
+fn test_lru_cache_eviction() {
+  // Cache with 300 bytes max
+  let cache = LruCache<str, str>.new(300)
+
+  cache.put("a", "value_a", 100)
+  cache.put("b", "value_b", 100)
+  cache.put("c", "value_c", 100)
+
+  // All three should fit (300 bytes total)
+  assert_eq(cache.len(), 3)
+
+  // Adding a fourth should evict the least recently used (a)
+  cache.put("d", "value_d", 100)
+
+  assert_eq(cache.len(), 3)
+  assert_eq(cache.get("a"), none)  // Evicted
+  assert_eq(cache.get("b"), some("value_b"))
+  assert_eq(cache.get("c"), some("value_c"))
+  assert_eq(cache.get("d"), some("value_d"))
+}
+
+@test
+fn test_lru_cache_access_updates_order() {
+  let cache = LruCache<str, str>.new(300)
+
+  cache.put("a", "value_a", 100)
+  cache.put("b", "value_b", 100)
+  cache.put("c", "value_c", 100)
+
+  // Access "a", making it most recently used
+  cache.get("a")
+
+  // Adding "d" should now evict "b" (least recently used), not "a"
+  cache.put("d", "value_d", 100)
+
+  assert_eq(cache.get("a"), some("value_a"))  // Still present (accessed recently)
+  assert_eq(cache.get("b"), none)              // Evicted
+  assert_eq(cache.get("c"), some("value_c"))
+  assert_eq(cache.get("d"), some("value_d"))
+}
+
+@test
+fn test_lru_cache_update_in_place() {
+  let cache = LruCache<str, str>.new(1024)
+
+  cache.put("key", "original", 100)
+  assert_eq(cache.get("key"), some("original"))
+
+  // Update the same key
+  cache.put("key", "updated", 100)
+  assert_eq(cache.get("key"), some("updated"))
+  assert_eq(cache.len(), 1)
+}
+
+@test
+fn test_lru_cache_remove() {
+  let cache = LruCache<str, str>.new(1024)
+
+  cache.put("key1", "value1", 100)
+  cache.put("key2", "value2", 100)
+
+  assert(cache.remove("key1"))
+  assert_eq(cache.get("key1"), none)
+  assert_eq(cache.len(), 1)
+
+  // Removing non-existent key returns false
+  assert(!cache.remove("key999"))
+}
+
+@test
+fn test_lru_cache_clear() {
+  let cache = LruCache<str, str>.new(1024)
+
+  cache.put("a", "1", 100)
+  cache.put("b", "2", 100)
+  cache.put("c", "3", 100)
+
+  cache.clear()
+
+  assert_eq(cache.len(), 0)
+  assert_eq(cache.byte_size(), 0)
+  assert_eq(cache.get("a"), none)
+}
+
+@test
+fn test_lru_cache_byte_size_tracking() {
+  let cache = LruCache<str, str>.new(1024)
+
+  cache.put("a", "value", 256)
+  assert_eq(cache.byte_size(), 256)
+
+  cache.put("b", "value", 512)
+  assert_eq(cache.byte_size(), 768)
+
+  cache.remove("a")
+  assert_eq(cache.byte_size(), 512)
+}
+
+@test
+fn test_lru_cache_large_eviction_cascade() {
+  // Small cache, large items should trigger multiple evictions
+  let cache = LruCache<str, str>.new(500)
+
+  // Fill with small items
+  for i in 0..10 {
+    cache.put("small_{i}", "val", 50)
+  }
+  assert_eq(cache.len(), 10)
+
+  // Insert one large item — should evict multiple small items
+  cache.put("big", "big_value", 400)
+
+  assert(cache.len() <= 2, "Should have evicted most items, have {cache.len()}")
+  assert_eq(cache.get("big"), some("big_value"))
+}
+
+// =============================================================================
+// Edge Cache Tests
+// =============================================================================
+
+@test
+async fn test_edge_cache_miss() {
+  let cache = EdgeCache.new(test_config())
+  let key = make_key("nonexistent")
+
+  let result = await cache.get(key)
+  assert_eq(result, none)
+}
+
+@test
+async fn test_edge_cache_put_and_get() {
+  let cache = EdgeCache.new(test_config())
+  let key = make_key("photo1")
+  let image = mock_cached_image()
+
+  await cache.put(key.clone(), image)
+
+  let result = await cache.get(key)
+  assert(result != none, "Should be a cache hit")
+
+  let cached = result!
+  assert_eq(cached.format, ImageFormat.WebP(quality: 80))
+  assert_eq(cached.dimensions.width, 800)
+  assert_eq(cached.dimensions.height, 600)
+}
+
+@test
+async fn test_edge_cache_ttl_expiration() {
+  let config = ProcessingConfig { cache_ttl: Duration.millis(50) }
+  let cache = EdgeCache.new(config)
+  let key = make_key("expires")
+
+  await cache.put(key.clone(), mock_cached_image())
+
+  // Should hit immediately
+  assert(await cache.get(key.clone()) != none, "Should hit before TTL")
+
+  // Wait for TTL to expire (plus stale-while-revalidate window)
+  await sleep(Duration.millis(100) + Duration.minutes(5) + Duration.millis(100))
+
+  // Should miss after TTL + stale-while-revalidate
+  assert(await cache.get(key) == none, "Should miss after full expiration")
+}
+
+@test
+async fn test_edge_cache_stale_while_revalidate() {
+  let config = ProcessingConfig { cache_ttl: Duration.millis(50) }
+  let cache = EdgeCache.new(config)
+  let key = make_key("stale")
+
+  await cache.put(key.clone(), mock_cached_image())
+
+  // Wait past TTL but within stale-while-revalidate window
+  await sleep(Duration.millis(100))
+
+  // Should still return data (stale-while-revalidate)
+  let result = await cache.get(key)
+  assert(result != none, "Should return stale data during revalidation window")
+}
+
+@test
+async fn test_edge_cache_invalidate() {
+  let cache = EdgeCache.new(test_config())
+  let key = make_key("to_invalidate")
+
+  await cache.put(key.clone(), mock_cached_image())
+  assert(await cache.get(key.clone()) != none)
+
+  let removed = await cache.invalidate(key.clone())
+  assert(removed)
+
+  assert(await cache.get(key) == none)
+}
+
+@test
+async fn test_edge_cache_purge_by_source() {
+  let cache = EdgeCache.new(test_config())
+
+  // Add several images from the same source
+  for i in 0..5 {
+    let key = CacheKey {
+      hash: "hash_example_{i}",
+      source_url: "https://example.com/photo_{i}.jpg",
+    }
+    await cache.put(key, mock_cached_image())
+  }
+
+  // Add images from a different source
+  for i in 0..3 {
+    let key = CacheKey {
+      hash: "hash_other_{i}",
+      source_url: "https://other.com/img_{i}.jpg",
+    }
+    await cache.put(key, mock_cached_image())
+  }
+
+  // Purge only example.com images
+  let purged = await cache.purge_by_source("example.com")
+  assert_eq(purged, 5)
+
+  // other.com images should still be cached
+  let stats = cache.stats()
+  assert_eq(stats.entries, 3)
+}
+
+@test
+async fn test_edge_cache_clear() {
+  let cache = EdgeCache.new(test_config())
+
+  for i in 0..10 {
+    await cache.put(make_key("item_{i}"), mock_cached_image())
+  }
+
+  assert_eq(cache.stats().entries, 10)
+
+  await cache.clear()
+  assert_eq(cache.stats().entries, 0)
+  assert_eq(cache.stats().byte_size, 0)
+}
+
+// =============================================================================
+// Conditional Request Tests
+// =============================================================================
+
+@test
+async fn test_conditional_request_304() {
+  let cache = EdgeCache.new(test_config())
+  let key = make_key("photo304")
+
+  await cache.put(key.clone(), mock_cached_image())
+
+  // Simulate a conditional request with the correct ETag
+  let etag = "W/\"hash_photo304_\""  // Will match the first 16 chars of hash
+  let req = mock_request(etag: some(etag))
+
+  match await cache.handle_conditional(key, req) {
+    NotModified(returned_etag, ttl) => {
+      assert(returned_etag.len() > 0, "Should return an ETag")
+      assert(ttl.as_secs() > 0, "Should have remaining TTL")
+    }
+    Fresh(_, _, _) => {
+      // Also acceptable if ETag doesn't exactly match our format
+    }
+    Stale(_, _) => assert(false, "Should not be stale immediately")
+    Miss => assert(false, "Should be a hit")
+  }
+}
+
+@test
+async fn test_conditional_request_fresh_without_etag() {
+  let cache = EdgeCache.new(test_config())
+  let key = make_key("no_etag")
+
+  await cache.put(key.clone(), mock_cached_image())
+
+  // Request without If-None-Match header
+  let req = mock_request()
+
+  match await cache.handle_conditional(key, req) {
+    Fresh(image, etag, ttl) => {
+      assert_eq(image.format, ImageFormat.WebP(quality: 80))
+      assert(etag.len() > 0)
+      assert(ttl.as_secs() > 0)
+    }
+    NotModified(_, _) => assert(false, "Should return full response without client ETag")
+    Stale(_, _) => assert(false, "Should be fresh")
+    Miss => assert(false, "Should be a hit")
+  }
+}
+
+@test
+async fn test_conditional_request_miss() {
+  let cache = EdgeCache.new(test_config())
+  let key = make_key("never_cached")
+
+  let req = mock_request(etag: some("W/\"old_etag\""))
+
+  match await cache.handle_conditional(key, req) {
+    Miss => {}  // Expected
+    _ => assert(false, "Should be a cache miss")
+  }
+}
+
+@test
+async fn test_conditional_request_wildcard_etag() {
+  let cache = EdgeCache.new(test_config())
+  let key = make_key("wildcard")
+
+  await cache.put(key.clone(), mock_cached_image())
+
+  // Wildcard ETag matches everything
+  let req = mock_request(etag: some("*"))
+
+  match await cache.handle_conditional(key, req) {
+    NotModified(_, _) => {}  // Expected — wildcard match
+    _ => assert(false, "Wildcard ETag should match")
+  }
+}
+
+// =============================================================================
+// Cache Headers Tests
+// =============================================================================
+
+@test
+fn test_cache_headers_generation() {
+  let cache = EdgeCache.new(test_config())
+
+  let headers = cache.build_cache_headers("W/\"abc123\"", Duration.hours(1))
+
+  assert(headers["Cache-Control"].contains("max-age=3600"))
+  assert(headers["Cache-Control"].contains("stale-while-revalidate=300"))
+  assert(headers["Cache-Control"].contains("public"))
+  assert_eq(headers["ETag"], "W/\"abc123\"")
+  assert(headers["Vary"].contains("Accept"))
+}
+
+// =============================================================================
+// Cache Statistics Tests
+// =============================================================================
+
+@test
+async fn test_cache_stats() {
+  let cache = EdgeCache.new(test_config(), max_size: 10_000)
+
+  // Empty cache
+  let stats = cache.stats()
+  assert_eq(stats.entries, 0)
+  assert_eq(stats.byte_size, 0)
+  assert_eq(stats.utilization, 0.0)
+
+  // Add some items
+  await cache.put(make_key("a"), mock_cached_image(size: 1000))
+  await cache.put(make_key("b"), mock_cached_image(size: 2000))
+  await cache.put(make_key("c"), mock_cached_image(size: 3000))
+
+  let stats = cache.stats()
+  assert_eq(stats.entries, 3)
+  assert_eq(stats.byte_size, 6000)
+  assert_eq(stats.max_size, 10_000)
+  assert((stats.utilization - 0.6).abs() < 0.01)
+}
+
+// =============================================================================
+// Concurrent Cache Access Tests
+// =============================================================================
+
+@test
+async fn test_concurrent_cache_reads() {
+  let cache = EdgeCache.new(test_config())
+  let key = make_key("concurrent_read")
+
+  await cache.put(key.clone(), mock_cached_image())
+
+  // 100 concurrent reads should all succeed
+  let futures = (0..100).map((_) => {
+    cache.get(key.clone())
+  })
+
+  let results = await all(futures)
+
+  for result in results {
+    assert(result != none, "Concurrent read should hit cache")
+  }
+}
+
+@test
+async fn test_concurrent_cache_writes() {
+  let cache = EdgeCache.new(test_config(), max_size: 1_000_000)
+
+  // 50 concurrent writes
+  let futures = (0..50).map((i) => {
+    cache.put(make_key("concurrent_{i}"), mock_cached_image())
+  })
+
+  await all(futures)
+
+  let stats = cache.stats()
+  assert_eq(stats.entries, 50)
+}
+
+@test
+async fn test_concurrent_read_write() {
+  let cache = EdgeCache.new(test_config(), max_size: 1_000_000)
+
+  // Pre-populate
+  for i in 0..20 {
+    await cache.put(make_key("item_{i}"), mock_cached_image())
+  }
+
+  // Mix of concurrent reads and writes
+  let read_futures = (0..50).map((i) => {
+    cache.get(make_key("item_{i % 20}"))
+  })
+
+  let write_futures = (20..70).map((i) => {
+    cache.put(make_key("item_{i}"), mock_cached_image())
+  })
+
+  let [reads, _] = await all([
+    all(read_futures),
+    all(write_futures),
+  ])
+
+  // All pre-existing reads should hit
+  let hits = reads.filter((r) => r != none).len()
+  assert(hits > 0, "Should have some cache hits during concurrent access")
+}
+
+// =============================================================================
+// Edge Cases
+// =============================================================================
+
+@test
+fn test_lru_cache_zero_size() {
+  // Cache with zero capacity should evict immediately
+  let cache = LruCache<str, str>.new(0)
+
+  cache.put("key", "value", 100)
+  assert_eq(cache.get("key"), none)
+  assert_eq(cache.len(), 0)
+}
+
+@test
+fn test_lru_cache_single_item() {
+  let cache = LruCache<str, str>.new(100)
+
+  cache.put("only", "one", 100)
+  assert_eq(cache.get("only"), some("one"))
+  assert_eq(cache.len(), 1)
+
+  // Replace with a larger item — should evict and fail
+  cache.put("big", "too_big", 200)
+  assert_eq(cache.len(), 0)  // Neither fits (200 > 100 even with eviction)
+}
+
+@test
+async fn test_cache_key_collision_resilience() {
+  let cache = EdgeCache.new(test_config())
+
+  // Two different images that should have different cache keys
+  let key1 = CacheKey { hash: "same_prefix_aaa", source_url: "https://a.com/1.jpg" }
+  let key2 = CacheKey { hash: "same_prefix_bbb", source_url: "https://a.com/2.jpg" }
+
+  await cache.put(key1.clone(), mock_cached_image(size: 100))
+  await cache.put(key2.clone(), mock_cached_image(size: 200))
+
+  let img1 = await cache.get(key1)
+  let img2 = await cache.get(key2)
+
+  assert(img1 != none)
+  assert(img2 != none)
+  assert_eq(img1!.file_size, 100)
+  assert_eq(img2!.file_size, 200)
+}

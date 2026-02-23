@@ -1,0 +1,15 @@
+[package]
+name = "turbo-codegen-cranelift"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+turbo-ast = { path = "../turbo-ast" }
+cranelift = { workspace = true }
+cranelift-jit = { workspace = true }
+cranelift-module = { workspace = true }
+cranelift-codegen = { workspace = true }
+cranelift-frontend = { workspace = true }
+cranelift-native = { workspace = true }
+cranelift-object = { workspace = true }
+target-lexicon = { workspace = true }

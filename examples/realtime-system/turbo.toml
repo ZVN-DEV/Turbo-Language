@@ -1,0 +1,33 @@
+[package]
+name = "turbo-exchange"
+version = "0.1.0"
+edition = "2026"
+description = "Real-time order matching engine with sub-microsecond latency"
+license = "MIT"
+
+[dependencies]
+turbo-ws = "0.1"           # WebSocket server
+turbo-otel = "0.1"         # OpenTelemetry metrics export
+
+[dev-dependencies]
+turbo-test-utils = "0.1"
+
+[build]
+target = "native"
+opt-level = "release"
+
+[profile.release]
+lto = true                  # Link-time optimization for maximum inlining
+panic = "abort"             # No unwinding — abort on panic for deterministic behavior
+codegen-units = 1           # Single codegen unit for best optimization
+strip = "symbols"           # Strip debug symbols from release binary
+opt-level = 3               # Maximum optimization
+
+[compiler]
+auto_clone_warn_threshold = "1KB"   # Strict: warn on clones > 1KB in hot paths
+auto_clone_warn_count = 10          # Warn if a function triggers > 10 auto-clones
+
+[runtime]
+scheduler = "work-stealing"         # M:N work-stealing thread pool
+thread_pool_size = "auto"           # Match CPU core count
+task_stack_size = "4KB"             # Minimal stack for matching engine tasks

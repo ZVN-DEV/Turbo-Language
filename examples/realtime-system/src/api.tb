@@ -1,0 +1,330 @@
+// =============================================================================
+// api.tb — REST API for the TurboExchange
+//
+// Demonstrates:
+//   - REST API route definitions (POST, GET, DELETE)
+//   - Request parsing with req.json<T>() and req.params
+//   - Response construction with status codes
+//   - Error propagation with ? operator and pattern matching
+//   - Shared<T> state access in route handlers
+//   - Input validation with guard statements
+// =============================================================================
+
+import { Router, Response, Request } from "turbo/http"
+import { log } from "turbo/log"
+import { Shared } from "turbo/sync"
+import {
+  SubmitOrder, Side, OrderType, Decimal, ExchangeError,
+  OrderBookSnapshot, Trade
+} from "./models"
+import { ExchangeService } from "./matching"
+import { ExchangeMetrics } from "./metrics"
+
+// =============================================================================
+// API Request/Response types
+// =============================================================================
+
+@derive(Schema)
+struct SubmitOrderRequest {
+  symbol: str
+  side: str                   // "buy" or "sell"
+  order_type: str             // "market", "limit", or "stop"
+  quantity: u64
+  price: str? = none          // Required for limit orders
+  stop_trigger: str? = none   // Required for stop orders
+  stop_limit: str? = none     // Optional limit for stop orders
+  client_id: str
+}
+
+@derive(Schema)
+struct CancelOrderRequest {
+  order_id: u64
+  client_id: str
+}
+
+@derive(Serialize)
+struct OrderResponse {
+  order_id: u64
+  status: str
+}
+
+@derive(Serialize)
+struct BookDepthResponse {
+  symbol: str
+  bids: [LevelResponse]
+  asks: [LevelResponse]
+  spread: str?
+  timestamp: str
+}
+
+@derive(Serialize)
+struct LevelResponse {
+  price: str
+  quantity: u64
+  orders: u32
+}
+
+@derive(Serialize)
+struct TradeHistoryResponse {
+  trades: [TradeResponse]
+  count: usize
+}
+
+@derive(Serialize)
+struct TradeResponse {
+  id: u64
+  symbol: str
+  price: str
+  quantity: u64
+  buyer: str
+  seller: str
+  timestamp: str
+}
+
+// =============================================================================
+// Router construction
+// =============================================================================
+
+/// Build the REST API router for the exchange.
+pub fn create_router(
+  exchange: Shared<ExchangeService>,
+  metrics: Shared<ExchangeMetrics>,
+  trade_history: Shared<[Trade]>,
+) -> Router {
+  let router = Router.new()
+
+  // ── POST /orders — Submit a new order ──
+
+  router.post("/orders", async (req) => {
+    let body = req.json<SubmitOrderRequest>()?
+
+    // Parse side
+    let side = match body.side.to_lower() {
+      "buy"  => Side.Buy
+      "sell" => Side.Sell
+      other  => {
+        return Response.json(
+          { error: "Invalid side: '{other}'. Must be 'buy' or 'sell'." },
+          status: 400
+        )
+      }
+    }
+
+    // Parse order type
+    let order_type = match body.order_type.to_lower() {
+      "market" => OrderType.Market
+
+      "limit" => {
+        guard let some(price_str) = body.price else {
+          return Response.json(
+            { error: "Limit orders require a 'price' field." },
+            status: 400
+          )
+        }
+        match Decimal.parse(price_str) {
+          ok(price) => OrderType.Limit(price)
+          err(_) => {
+            return Response.json(
+              { error: "Invalid price format: '{price_str}'." },
+              status: 400
+            )
+          }
+        }
+      }
+
+      "stop" => {
+        guard let some(trigger_str) = body.stop_trigger else {
+          return Response.json(
+            { error: "Stop orders require a 'stop_trigger' field." },
+            status: 400
+          )
+        }
+        let trigger = match Decimal.parse(trigger_str) {
+          ok(t) => t
+          err(_) => {
+            return Response.json(
+              { error: "Invalid stop_trigger format." },
+              status: 400
+            )
+          }
+        }
+        let limit = match body.stop_limit {
+          some(l) => match Decimal.parse(l) {
+            ok(p) => some(p)
+            err(_) => {
+              return Response.json(
+                { error: "Invalid stop_limit format." },
+                status: 400
+              )
+            }
+          }
+          none => none
+        }
+        OrderType.Stop(trigger, limit)
+      }
+
+      other => {
+        return Response.json(
+          { error: "Invalid order_type: '{other}'. Must be 'market', 'limit', or 'stop'." },
+          status: 400
+        )
+      }
+    }
+
+    // Validate quantity
+    guard body.quantity > 0 else {
+      return Response.json(
+        { error: "Quantity must be greater than 0." },
+        status: 400
+      )
+    }
+
+    // Submit to the exchange
+    let input = SubmitOrder {
+      symbol: body.symbol,
+      side,
+      order_type,
+      quantity: body.quantity,
+      client_id: body.client_id,
+    }
+
+    match await exchange.read().submit_order(input) {
+      ok(order_id) => {
+        log.info("Order submitted", {
+          order_id,
+          symbol: body.symbol,
+          side: body.side,
+          quantity: body.quantity,
+        })
+        Response.json(OrderResponse {
+          order_id,
+          status: "accepted",
+        }, status: 201)
+      }
+      err(ExchangeError.InvalidOrder(reason)) => {
+        Response.json({ error: reason }, status: 400)
+      }
+      err(ExchangeError.SymbolNotFound(s)) => {
+        Response.json({ error: "Unknown symbol: {s}" }, status: 404)
+      }
+      err(e) => {
+        log.error("Order submission failed", { error: e.message() })
+        Response.json({ error: e.message() }, status: 500)
+      }
+    }
+  })
+
+  // ── DELETE /orders/:id — Cancel an order ──
+
+  router.delete("/orders/:id", async (req) => {
+    let order_id = req.params.id.parse<u64>()?
+    let client_id = req.query.get("client_id") ?? ""
+
+    guard !client_id.is_empty() else {
+      return Response.json(
+        { error: "client_id query parameter is required." },
+        status: 400
+      )
+    }
+
+    match await exchange.read().cancel_order(order_id, client_id) {
+      ok(_) => {
+        log.info("Order cancelled", { order_id, client_id })
+        Response.json({ cancelled: true, order_id })
+      }
+      err(e) => {
+        Response.json({ error: e.message() }, status: 400)
+      }
+    }
+  })
+
+  // ── GET /book/:symbol — Get order book depth ──
+
+  router.get("/book/:symbol", async (req) => {
+    let symbol = req.params.symbol
+    let depth = req.query.get("depth")?.parse<usize>() ?? 10
+
+    match exchange.read().get_book_snapshot(symbol, depth: depth) {
+      ok(snapshot) => {
+        let bids = snapshot.bids.map((lvl) => LevelResponse {
+          price: lvl.price.to_string(),
+          quantity: lvl.total_quantity,
+          orders: lvl.order_count,
+        })
+        let asks = snapshot.asks.map((lvl) => LevelResponse {
+          price: lvl.price.to_string(),
+          quantity: lvl.total_quantity,
+          orders: lvl.order_count,
+        })
+        let spread = match (snapshot.bids.first(), snapshot.asks.first()) {
+          (some(b), some(a)) => some(a.price.sub(b.price).to_string())
+          _ => none
+        }
+
+        Response.json(BookDepthResponse {
+          symbol,
+          bids,
+          asks,
+          spread,
+          timestamp: snapshot.timestamp.to_string(),
+        })
+      }
+      err(ExchangeError.SymbolNotFound(s)) => {
+        Response.json({ error: "Unknown symbol: {s}" }, status: 404)
+      }
+      err(e) => {
+        Response.json({ error: e.message() }, status: 500)
+      }
+    }
+  })
+
+  // ── GET /trades — Get recent trade history ──
+
+  router.get("/trades", async (req) => {
+    let symbol = req.query.get("symbol")
+    let limit = req.query.get("limit")?.parse<usize>() ?? 100
+
+    let history = trade_history.read()
+    let mut trades = match symbol {
+      some(s) => history.iter().filter((t) => t.symbol == s).collect()
+      none    => history.clone()
+    }
+
+    // Return most recent trades first, limited
+    trades.reverse()
+    trades = trades.take(limit).collect()
+
+    let trade_responses = trades.map((t) => TradeResponse {
+      id: t.id,
+      symbol: t.symbol,
+      price: t.price.to_string(),
+      quantity: t.quantity,
+      buyer: t.buyer_client_id,
+      seller: t.seller_client_id,
+      timestamp: t.timestamp.to_string(),
+    })
+
+    Response.json(TradeHistoryResponse {
+      trades: trade_responses,
+      count: trade_responses.len(),
+    })
+  })
+
+  // ── GET /metrics — Get exchange metrics ──
+
+  router.get("/metrics", async (req) => {
+    let m = metrics.read()
+    Response.json(m.snapshot())
+  })
+
+  // ── GET /health — Health check ──
+
+  router.get("/health", async (req) => {
+    Response.json({
+      status: "healthy",
+      uptime_seconds: metrics.read().uptime().as_secs(),
+    })
+  })
+
+  router
+}

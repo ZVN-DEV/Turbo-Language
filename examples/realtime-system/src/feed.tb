@@ -1,0 +1,355 @@
+// =============================================================================
+// feed.tb — Real-time price feed via WebSocket
+//
+// Demonstrates:
+//   - Actor-based client connections for isolation and fault tolerance
+//   - WebSocket server with message framing
+//   - Backpressure handling (slow clients don't block fast ones)
+//   - Channels for fan-out to multiple subscribers
+//   - for await streaming with async generators
+//   - Supervision tree for client actors
+//   - select {} for multiplexing heartbeats and data
+// =============================================================================
+
+import { WebSocket, WsMessage, WsServer } from "turbo/ws"
+import { log } from "turbo/log"
+import { Instant, Duration } from "std/time"
+import { json } from "turbo/json"
+import { Tick, OrderBookSnapshot, EngineEvent, Trade } from "./models"
+
+// =============================================================================
+// FeedMessage — Messages sent to WebSocket clients
+// =============================================================================
+
+@derive(Debug, Clone, Serialize)
+pub type FeedMessage {
+  TickUpdate(tick: Tick)
+  BookUpdate(snapshot: OrderBookSnapshot)
+  TradeUpdate(trade: Trade)
+  Heartbeat(timestamp: Instant)
+  Error(message: str)
+}
+
+impl FeedMessage {
+  fn to_json(self) -> str {
+    match self {
+      TickUpdate(tick)     => json.serialize({ type: "tick", data: tick })
+      BookUpdate(snap)     => json.serialize({ type: "book", data: snap })
+      TradeUpdate(trade)   => json.serialize({ type: "trade", data: trade })
+      Heartbeat(ts)        => json.serialize({ type: "heartbeat", timestamp: ts })
+      Error(msg)           => json.serialize({ type: "error", message: msg })
+    }
+  }
+}
+
+// =============================================================================
+// ClientActor — Each WebSocket connection is an actor
+// =============================================================================
+
+/// Each connected client is an isolated actor. If a client is slow or crashes,
+/// it does not affect other clients or the matching engine. The supervisor
+/// automatically cleans up dead actors.
+actor ClientActor {
+  client_id: str
+  ws: WebSocket
+  subscriptions: {str}              // Set of subscribed symbols
+  feed_rx: Receiver<FeedMessage>    // Receives feed messages
+  send_queue: [FeedMessage]         // Buffered messages for slow clients
+  max_queue_depth: usize
+  connected_at: Instant
+  messages_sent: u64
+  messages_dropped: u64
+
+  state: {
+    client_id: client_id,
+    ws: ws,
+    subscriptions: {,},
+    feed_rx: feed_rx,
+    send_queue: [],
+    max_queue_depth: 1_000,
+    connected_at: Instant.now(),
+    messages_sent: 0,
+    messages_dropped: 0,
+  }
+
+  pub fn init(client_id: str, ws: WebSocket, feed_rx: Receiver<FeedMessage>) -> ClientActor {
+    ClientActor {
+      client_id,
+      ws,
+      subscriptions: {,},
+      feed_rx,
+      send_queue: [],
+      max_queue_depth: 1_000,
+      connected_at: Instant.now(),
+      messages_sent: 0,
+      messages_dropped: 0,
+    }
+  }
+
+  /// Main processing loop — runs until the client disconnects.
+  pub async fn run(mut self) {
+    log.info("Client connected", { client_id: self.client_id })
+
+    loop {
+      select {
+        // Incoming message from the price feed
+        msg = self.feed_rx.recv() => {
+          match msg {
+            some(feed_msg) => self.handle_feed_message(feed_msg)
+            none => {
+              log.info("Feed channel closed", { client_id: self.client_id })
+              break
+            }
+          }
+        }
+
+        // Incoming message from the WebSocket client
+        ws_msg = self.ws.recv() => {
+          match ws_msg {
+            ok(WsMessage.Text(text)) => self.handle_client_message(text)
+            ok(WsMessage.Close) => {
+              log.info("Client disconnected", {
+                client_id: self.client_id,
+                messages_sent: self.messages_sent,
+                messages_dropped: self.messages_dropped,
+              })
+              break
+            }
+            ok(WsMessage.Ping(data)) => {
+              self.ws.send(WsMessage.Pong(data))
+            }
+            err(e) => {
+              log.warn("WebSocket error", {
+                client_id: self.client_id,
+                error: e.message(),
+              })
+              break
+            }
+            _ => {}
+          }
+        }
+
+        // Heartbeat every 5 seconds
+        _ = timeout(5.seconds()) => {
+          let hb = FeedMessage.Heartbeat(Instant.now())
+          self.send_to_client(hb)
+        }
+      }
+    }
+
+    // Cleanup
+    self.ws.close()
+  }
+
+  /// Handle a message from the price feed.
+  @inline
+  fn handle_feed_message(mut self, msg: FeedMessage) {
+    // Filter by subscription
+    let symbol = match msg {
+      FeedMessage.TickUpdate(ref tick)      => tick.symbol
+      FeedMessage.BookUpdate(ref snap)      => snap.symbol
+      FeedMessage.TradeUpdate(ref trade)    => trade.symbol
+      FeedMessage.Heartbeat(_)              => { self.send_to_client(msg); return }
+      FeedMessage.Error(_)                  => { self.send_to_client(msg); return }
+    }
+
+    // Only send if the client is subscribed to this symbol (or subscribed to all)
+    if self.subscriptions.is_empty() || self.subscriptions.contains(symbol) {
+      self.send_to_client(msg)
+    }
+  }
+
+  /// Handle a message from the WebSocket client (subscribe/unsubscribe).
+  fn handle_client_message(mut self, text: str) {
+    match json.parse<ClientCommand>(text) {
+      ok(ClientCommand.Subscribe(symbol)) => {
+        self.subscriptions.insert(symbol)
+        log.debug("Client subscribed", { client_id: self.client_id, symbol })
+      }
+      ok(ClientCommand.Unsubscribe(symbol)) => {
+        self.subscriptions.remove(symbol)
+        log.debug("Client unsubscribed", { client_id: self.client_id, symbol })
+      }
+      ok(ClientCommand.SubscribeAll) => {
+        self.subscriptions.clear()  // Empty set means "subscribe to all"
+        log.debug("Client subscribed to all", { client_id: self.client_id })
+      }
+      err(e) => {
+        let err_msg = FeedMessage.Error("invalid command: {e.message()}")
+        self.send_to_client(err_msg)
+      }
+    }
+  }
+
+  /// Send a message to the client with backpressure handling.
+  /// If the client is too slow, messages are dropped (not buffered forever).
+  @inline
+  fn send_to_client(mut self, msg: FeedMessage) {
+    if self.send_queue.len() >= self.max_queue_depth {
+      // Client is too slow — drop oldest messages to stay current
+      self.messages_dropped += 1
+      self.send_queue.remove(0)
+      log.debug("Dropping message for slow client", {
+        client_id: self.client_id,
+        queue_depth: self.send_queue.len(),
+      })
+    }
+
+    let json_str = msg.to_json()
+    match self.ws.try_send(WsMessage.Text(json_str)) {
+      ok(_) => {
+        self.messages_sent += 1
+      }
+      err(_) => {
+        // WebSocket buffer full — queue for later
+        self.send_queue.push(msg)
+      }
+    }
+
+    // Drain the send queue if possible
+    while !self.send_queue.is_empty() {
+      let queued = self.send_queue[0]
+      let queued_json = queued.to_json()
+      match self.ws.try_send(WsMessage.Text(queued_json)) {
+        ok(_) => {
+          self.send_queue.remove(0)
+          self.messages_sent += 1
+        }
+        err(_) => break  // Still full — stop draining
+      }
+    }
+  }
+
+  /// Actor error handler — log and restart.
+  fn on_error(self, error: Error) -> ActorAction {
+    log.warn("Client actor error", {
+      client_id: self.client_id,
+      error: error.message(),
+    })
+    .stop  // Don't restart client actors — let them reconnect
+  }
+}
+
+// =============================================================================
+// ClientCommand — Commands from WebSocket clients
+// =============================================================================
+
+@derive(Debug, Schema)
+type ClientCommand {
+  Subscribe(symbol: str)
+  Unsubscribe(symbol: str)
+  SubscribeAll
+}
+
+// =============================================================================
+// PriceFeedServer — WebSocket server managing all client connections
+// =============================================================================
+
+pub struct PriceFeedServer {
+  ws_server: WsServer
+  clients: Shared<{str: Sender<FeedMessage>}>
+  next_client_id: Shared<u64>
+}
+
+impl PriceFeedServer {
+  /// Create a new price feed server on the given port.
+  pub fn new(port: u16) -> PriceFeedServer {
+    PriceFeedServer {
+      ws_server: WsServer.new(),
+      clients: Shared.new({:}),
+      next_client_id: Shared.new(1),
+    }
+  }
+
+  /// Start accepting WebSocket connections.
+  pub async fn start(self, port: u16) {
+    log.info("Price feed server starting", { port })
+
+    // Create a supervisor for client actors
+    let supervisor = Supervisor.new(strategy: .one_for_one)
+
+    self.ws_server.on_connect(async (ws: WebSocket) => {
+      // Assign client ID
+      let mut id_ref = self.next_client_id.write()
+      let client_id = "client-{id_ref}"
+      id_ref += 1
+
+      // Create a feed channel for this client
+      let (feed_tx, feed_rx) = channel<FeedMessage>(buffer: 5_000)
+
+      // Register the client
+      self.clients.write()[client_id] = feed_tx
+
+      // Spawn a client actor under the supervisor
+      let actor = ClientActor.init(client_id, ws, feed_rx)
+      supervisor.start_child(actor)
+
+      // Run the client actor
+      spawn async {
+        await actor.run()
+        // Client disconnected — remove from registry
+        self.clients.write().remove(client_id)
+        log.debug("Client removed from registry", { client_id })
+      }
+    })
+
+    await self.ws_server.listen(port)
+  }
+
+  /// Broadcast a feed message to all connected clients.
+  /// Uses non-blocking sends — slow clients are handled by their actors.
+  pub fn broadcast(self, msg: FeedMessage) {
+    let clients = self.clients.read()
+    for (client_id, ref tx) in clients.iter() {
+      // Non-blocking send — if the client's channel is full, the actor handles it
+      match tx.try_send(msg.clone()) {
+        ok(_) => {}
+        err(_) => {
+          log.debug("Client feed channel full", { client_id })
+        }
+      }
+    }
+  }
+
+  /// Broadcast a trade to all clients.
+  pub fn broadcast_trade(self, trade: Trade) {
+    self.broadcast(FeedMessage.TradeUpdate(trade))
+  }
+
+  /// Broadcast an order book update to all clients.
+  pub fn broadcast_book(self, snapshot: OrderBookSnapshot) {
+    self.broadcast(FeedMessage.BookUpdate(snapshot))
+  }
+
+  /// Get the number of connected clients.
+  pub fn client_count(self) -> usize {
+    self.clients.read().len()
+  }
+}
+
+// =============================================================================
+// EventBridge — Connects engine events to the price feed
+// =============================================================================
+
+/// Bridges the matching engine's event stream to the WebSocket price feed.
+/// Runs as a background task, converting EngineEvents to FeedMessages.
+pub async fn bridge_events_to_feed(
+  event_rx: Receiver<EngineEvent>,
+  feed: PriceFeedServer,
+) {
+  log.info("Event bridge started")
+
+  for await event in event_rx {
+    match event {
+      EngineEvent.TradeExecuted(trade) => {
+        feed.broadcast_trade(trade)
+      }
+      EngineEvent.BookUpdated(snapshot) => {
+        feed.broadcast_book(snapshot)
+      }
+      _ => {}  // Other events are not broadcast to clients
+    }
+  }
+
+  log.info("Event bridge stopped")
+}

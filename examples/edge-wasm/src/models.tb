@@ -1,0 +1,410 @@
+// =============================================================================
+// models.tb — Data types for the edge image processing pipeline
+//
+// Demonstrates:
+//   - Algebraic data types (type keyword) for image formats and transforms
+//   - @derive decorators for automatic trait implementations
+//   - Structs with default field values
+//   - T? optional types for optional configuration
+//   - T ! E typed errors for pipeline failures
+//   - Const values for compile-time configuration
+//   - Generic structs (BoundingBox, Dimensions)
+// =============================================================================
+
+import { Duration } from "std/time"
+import { Hash } from "turbo/crypto"
+
+// --- Image formats supported by the pipeline ---
+
+@derive(Debug, Eq, Clone, Hash, Serialize)
+type ImageFormat {
+  PNG
+  JPEG(quality: u8)
+  WebP(quality: u8)
+  AVIF(quality: u8, speed: u8)
+}
+
+impl ImageFormat {
+  /// Parse format from string (URL segment or Accept header)
+  fn from_string(s: str) -> ImageFormat? {
+    match s.to_lowercase() {
+      "png"  => PNG
+      "jpeg" => JPEG(quality: 85)
+      "jpg"  => JPEG(quality: 85)
+      "webp" => WebP(quality: 80)
+      "avif" => AVIF(quality: 75, speed: 6)
+      _      => none
+    }
+  }
+
+  /// Get the MIME type for this format
+  fn mime_type(self) -> str {
+    match self {
+      PNG       => "image/png"
+      JPEG(_)   => "image/jpeg"
+      WebP(_)   => "image/webp"
+      AVIF(_, _) => "image/avif"
+    }
+  }
+
+  /// Get file extension
+  fn extension(self) -> str {
+    match self {
+      PNG       => "png"
+      JPEG(_)   => "jpg"
+      WebP(_)   => "webp"
+      AVIF(_, _) => "avif"
+    }
+  }
+
+  /// Whether this format supports transparency
+  fn supports_alpha(self) -> bool {
+    match self {
+      PNG       => true
+      JPEG(_)   => false
+      WebP(_)   => true
+      AVIF(_, _) => true
+    }
+  }
+
+  /// Get the quality setting (if applicable)
+  fn quality(self) -> u8? {
+    match self {
+      PNG            => none
+      JPEG(q)        => some(q)
+      WebP(q)        => some(q)
+      AVIF(q, _)     => some(q)
+    }
+  }
+}
+
+// --- Dimensions ---
+
+@derive(Debug, Eq, Clone, Hash, Serialize)
+struct Dimensions {
+  width: u32
+  height: u32
+}
+
+impl Dimensions {
+  /// Calculate aspect ratio as a float
+  fn aspect_ratio(self) -> f64 {
+    self.width as f64 / self.height as f64
+  }
+
+  /// Scale to fit within max dimensions while preserving aspect ratio
+  fn fit_within(self, max_width: u32, max_height: u32) -> Dimensions {
+    let scale_x = max_width as f64 / self.width as f64
+    let scale_y = max_height as f64 / self.height as f64
+    let scale = f64.min(scale_x, scale_y)
+
+    if scale >= 1.0 {
+      // Already fits — no upscaling
+      self
+    } else {
+      Dimensions {
+        width: (self.width as f64 * scale).round() as u32,
+        height: (self.height as f64 * scale).round() as u32,
+      }
+    }
+  }
+
+  /// Total pixel count
+  fn pixel_count(self) -> u64 {
+    self.width as u64 * self.height as u64
+  }
+}
+
+// --- Bounding box for crop regions and face detection ---
+
+@derive(Debug, Clone, Serialize)
+struct BoundingBox {
+  x: u32
+  y: u32
+  width: u32
+  height: u32
+}
+
+impl BoundingBox {
+  /// Center point of the bounding box
+  fn center(self) -> (u32, u32) {
+    (self.x + self.width / 2, self.y + self.height / 2)
+  }
+
+  /// Whether this box fully contains another
+  fn contains(self, other: BoundingBox) -> bool {
+    other.x >= self.x &&
+    other.y >= self.y &&
+    other.x + other.width <= self.x + self.width &&
+    other.y + other.height <= self.y + self.height
+  }
+
+  /// Clamp this box to fit within given dimensions
+  fn clamp_to(self, dims: Dimensions) -> BoundingBox {
+    let x = u32.min(self.x, dims.width)
+    let y = u32.min(self.y, dims.height)
+    let w = u32.min(self.width, dims.width - x)
+    let h = u32.min(self.height, dims.height - y)
+    BoundingBox { x, y, width: w, height: h }
+  }
+}
+
+// --- Resize algorithm ---
+
+@derive(Debug, Eq, Clone, Hash, Serialize)
+type ResizeAlgorithm {
+  NearestNeighbor
+  Bilinear
+  Lanczos(window: u8)
+}
+
+impl ResizeAlgorithm {
+  fn default() -> ResizeAlgorithm {
+    Lanczos(window: 3)
+  }
+}
+
+// --- Crop anchor for positioning ---
+
+@derive(Debug, Eq, Clone, Hash, Serialize)
+type CropAnchor {
+  TopLeft
+  TopCenter
+  TopRight
+  CenterLeft
+  Center
+  CenterRight
+  BottomLeft
+  BottomCenter
+  BottomRight
+  SmartFace          // Auto-detect faces and center on them
+  SmartEntropy       // Center on the region with highest entropy
+}
+
+// --- Transform operations (the pipeline building blocks) ---
+
+@derive(Debug, Clone, Serialize)
+type TransformOp {
+  Resize(width: u32, height: u32, algorithm: ResizeAlgorithm)
+  Crop(box: BoundingBox)
+  SmartCrop(width: u32, height: u32, anchor: CropAnchor)
+  Blur(sigma: f32)
+  Sharpen(amount: f32, radius: f32, threshold: f32)
+  Watermark(image_url: str, position: CropAnchor, opacity: f32, scale: f32)
+  Convert(format: ImageFormat)
+  Rotate(degrees: i16)
+  Flip(horizontal: bool)
+  Grayscale
+  Brightness(factor: f32)
+  Contrast(factor: f32)
+}
+
+impl TransformOp {
+  /// Human-readable name for logging
+  fn name(self) -> str {
+    match self {
+      Resize(_, _, _)      => "resize"
+      Crop(_)              => "crop"
+      SmartCrop(_, _, _)   => "smart_crop"
+      Blur(_)              => "blur"
+      Sharpen(_, _, _)     => "sharpen"
+      Watermark(_, _, _, _) => "watermark"
+      Convert(_)           => "convert"
+      Rotate(_)            => "rotate"
+      Flip(_)              => "flip"
+      Grayscale            => "grayscale"
+      Brightness(_)        => "brightness"
+      Contrast(_)          => "contrast"
+    }
+  }
+
+  /// Estimated relative cost (1-10) for scheduling/prioritization
+  fn cost(self) -> u8 {
+    match self {
+      Rotate(_)            => 1
+      Flip(_)              => 1
+      Grayscale            => 2
+      Brightness(_)        => 2
+      Contrast(_)          => 2
+      Crop(_)              => 2
+      Resize(_, _, _)      => 5
+      Blur(_)              => 6
+      Sharpen(_, _, _)     => 6
+      SmartCrop(_, _, _)   => 7
+      Convert(_)           => 4
+      Watermark(_, _, _, _) => 8
+    }
+  }
+}
+
+// --- Transform pipeline (ordered list of operations) ---
+
+@derive(Debug, Clone, Serialize)
+struct TransformPipeline {
+  operations: [TransformOp]
+  source_url: str
+  output_format: ImageFormat?
+}
+
+impl TransformPipeline {
+  /// Create an empty pipeline for a source image
+  fn new(source_url: str) -> TransformPipeline {
+    TransformPipeline {
+      operations: [],
+      source_url,
+      output_format: none,
+    }
+  }
+
+  /// Add an operation to the pipeline (builder pattern)
+  fn add(self, op: TransformOp) -> TransformPipeline {
+    TransformPipeline {
+      ..self,
+      operations: self.operations + [op],
+    }
+  }
+
+  /// Set the output format
+  fn format(self, fmt: ImageFormat) -> TransformPipeline {
+    TransformPipeline {
+      ..self,
+      output_format: some(fmt),
+    }
+  }
+
+  /// Total estimated cost of the pipeline
+  fn total_cost(self) -> u32 {
+    self.operations
+      |> map((op) => op.cost() as u32)
+      |> sum()
+  }
+
+  /// Whether the pipeline is empty (no-op)
+  fn is_empty(self) -> bool {
+    self.operations.is_empty() && self.output_format == none
+  }
+
+  /// Generate a deterministic cache key for this pipeline
+  fn cache_key(self) -> CacheKey {
+    let parts = self.operations
+      |> map((op) => "{op}")
+      |> join(",")
+    let format_str = match self.output_format {
+      some(fmt) => fmt.extension()
+      none      => "original"
+    }
+    let raw = "{self.source_url}|{parts}|{format_str}"
+    CacheKey {
+      hash: Hash.sha256(raw),
+      source_url: self.source_url,
+    }
+  }
+}
+
+// --- Cache key ---
+
+@derive(Debug, Eq, Clone, Hash, Serialize)
+struct CacheKey {
+  hash: str
+  source_url: str
+}
+
+// --- Processing configuration ---
+
+@derive(Debug, Clone)
+struct ProcessingConfig {
+  max_width: u32 = 4096
+  max_height: u32 = 4096
+  max_file_size: u64 = 25 * 1024 * 1024       // 25 MB
+  default_quality: u8 = 85
+  max_pipeline_cost: u32 = 50
+  stream_chunk_size: usize = 16_384             // 16 KB chunks
+  wasm_memory_budget: usize = 128 * 1024 * 1024 // 128 MB
+  allowed_origins: [str] = ["*"]
+  cache_ttl: Duration = Duration.hours(1)
+}
+
+// --- Geo location for edge routing ---
+
+@derive(Debug, Clone, Serialize)
+struct GeoLocation {
+  country: str
+  region: str?
+  city: str?
+  latitude: f64
+  longitude: f64
+  colo: str            // Cloudflare colo code or edge node ID
+}
+
+// --- Edge request context ---
+
+@derive(Debug, Clone)
+struct EdgeContext {
+  geo: GeoLocation?
+  client_ip: str
+  ray_id: str
+  edge_node: str
+  is_bot: bool
+  accept_formats: [ImageFormat]
+}
+
+// --- Processing result ---
+
+@derive(Debug, Clone)
+struct ProcessingResult {
+  data: Stream<[u8]>
+  format: ImageFormat
+  dimensions: Dimensions
+  file_size: u64
+  processing_time_ms: f64
+  cache_hit: bool
+  edge_node: str
+}
+
+// --- Pipeline errors ---
+
+type PipelineError: Error {
+  InvalidSource(url: str, reason: str)
+  UnsupportedFormat(format: str)
+  DimensionsTooLarge(width: u32, height: u32, max: u32)
+  FileTooLarge(size: u64, max: u64)
+  PipelineTooExpensive(cost: u32, max: u32)
+  TransformFailed(op: str, reason: str)
+  FetchFailed(url: str, status: u16)
+  WasmMemoryExceeded(used: usize, limit: usize)
+  CacheError(reason: str)
+  Timeout(elapsed_ms: f64)
+}
+
+impl PipelineError {
+  fn message(self) -> str {
+    match self {
+      InvalidSource(url, reason)      => "Invalid source '{url}': {reason}"
+      UnsupportedFormat(fmt)          => "Unsupported format: {fmt}"
+      DimensionsTooLarge(w, h, max)   => "Dimensions {w}x{h} exceed max {max}"
+      FileTooLarge(size, max)         => "File size {size} exceeds max {max}"
+      PipelineTooExpensive(c, max)    => "Pipeline cost {c} exceeds limit {max}"
+      TransformFailed(op, reason)     => "Transform '{op}' failed: {reason}"
+      FetchFailed(url, status)        => "Failed to fetch '{url}': HTTP {status}"
+      WasmMemoryExceeded(used, limit) => "WASM memory {used} exceeds {limit}"
+      CacheError(reason)              => "Cache error: {reason}"
+      Timeout(elapsed)                => "Processing timed out after {elapsed}ms"
+    }
+  }
+
+  /// Map pipeline errors to HTTP status codes
+  fn status_code(self) -> u16 {
+    match self {
+      InvalidSource(_, _)         => 400
+      UnsupportedFormat(_)        => 400
+      DimensionsTooLarge(_, _, _) => 400
+      FileTooLarge(_, _)          => 413
+      PipelineTooExpensive(_, _)  => 400
+      TransformFailed(_, _)       => 500
+      FetchFailed(_, status)      => if status >= 400 { status } else { 502 }
+      WasmMemoryExceeded(_, _)    => 507
+      CacheError(_)               => 500
+      Timeout(_)                  => 504
+    }
+  }
+}

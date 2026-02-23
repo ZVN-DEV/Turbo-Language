@@ -1,0 +1,8 @@
+/Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/release/build/target-lexicon-bee4ae4ce8b68c08/build_script_build-bee4ae4ce8b68c08.d: /Users/macbookpro-kirby/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.12.16/build.rs /Users/macbookpro-kirby/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.12.16/src/data_model.rs /Users/macbookpro-kirby/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.12.16/src/triple.rs /Users/macbookpro-kirby/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.12.16/src/targets.rs
+
+/Users/macbookpro-kirby/Desktop/Coding/new-language/turbo/target/release/build/target-lexicon-bee4ae4ce8b68c08/build_script_build-bee4ae4ce8b68c08: /Users/macbookpro-kirby/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.12.16/build.rs /Users/macbookpro-kirby/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.12.16/src/data_model.rs /Users/macbookpro-kirby/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.12.16/src/triple.rs /Users/macbookpro-kirby/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.12.16/src/targets.rs
+
+/Users/macbookpro-kirby/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.12.16/build.rs:
+/Users/macbookpro-kirby/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.12.16/src/data_model.rs:
+/Users/macbookpro-kirby/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.12.16/src/triple.rs:
+/Users/macbookpro-kirby/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.12.16/src/targets.rs:

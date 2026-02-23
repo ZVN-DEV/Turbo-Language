@@ -1,0 +1,585 @@
+// =============================================================================
+// order_book_test.tb — Unit tests for order matching correctness
+//
+// Demonstrates:
+//   - @test decorator for test functions
+//   - assert, assert_eq, assert_ne for assertions
+//   - Pattern matching on results in tests
+//   - Testing error cases with err() matching
+//   - Comprehensive order book behavior verification
+//   - Price-time priority validation
+//   - Partial fill testing
+//   - Stop order trigger testing
+// =============================================================================
+
+import { OrderBook } from "../src/order_book"
+import {
+  Order, OrderType, OrderStatus, Side, Trade, Decimal,
+  ExchangeError, PriceLevel, OrderBookSnapshot
+} from "../src/models"
+import { Instant } from "std/time"
+
+// =============================================================================
+// Helper functions
+// =============================================================================
+
+fn make_order(
+  id: u64,
+  side: Side,
+  order_type: OrderType,
+  quantity: u64,
+  client_id: str = "test-client",
+) -> Order {
+  Order.new(id, "AAPL", side, order_type, quantity, client_id)
+}
+
+fn make_limit_buy(id: u64, price: str, qty: u64) -> Order {
+  make_order(id, Side.Buy, OrderType.Limit(Decimal.parse(price).unwrap()), qty)
+}
+
+fn make_limit_sell(id: u64, price: str, qty: u64) -> Order {
+  make_order(id, Side.Sell, OrderType.Limit(Decimal.parse(price).unwrap()), qty)
+}
+
+fn make_market_buy(id: u64, qty: u64) -> Order {
+  make_order(id, Side.Buy, OrderType.Market, qty)
+}
+
+fn make_market_sell(id: u64, qty: u64) -> Order {
+  make_order(id, Side.Sell, OrderType.Market, qty)
+}
+
+// =============================================================================
+// Basic Order Book Operations
+// =============================================================================
+
+@test
+fn test_empty_order_book() {
+  let book = OrderBook.new("AAPL")
+
+  assert_eq(book.best_bid(), none)
+  assert_eq(book.best_ask(), none)
+  assert_eq(book.spread(), none)
+  assert_eq(book.resting_order_count(), 0)
+}
+
+@test
+fn test_add_single_bid() {
+  let mut book = OrderBook.new("AAPL")
+  let order = make_limit_buy(1, "150.00", 100)
+
+  let trades = book.submit(order)?
+
+  assert_eq(trades.len(), 0)
+  assert_eq(book.best_bid(), some(Decimal.parse("150.00").unwrap()))
+  assert_eq(book.best_ask(), none)
+  assert_eq(book.resting_order_count(), 1)
+}
+
+@test
+fn test_add_single_ask() {
+  let mut book = OrderBook.new("AAPL")
+  let order = make_limit_sell(1, "151.00", 100)
+
+  let trades = book.submit(order)?
+
+  assert_eq(trades.len(), 0)
+  assert_eq(book.best_bid(), none)
+  assert_eq(book.best_ask(), some(Decimal.parse("151.00").unwrap()))
+  assert_eq(book.resting_order_count(), 1)
+}
+
+@test
+fn test_bid_ask_spread() {
+  let mut book = OrderBook.new("AAPL")
+
+  book.submit(make_limit_buy(1, "150.00", 100))?
+  book.submit(make_limit_sell(2, "151.00", 100))?
+
+  assert_eq(book.best_bid(), some(Decimal.parse("150.00").unwrap()))
+  assert_eq(book.best_ask(), some(Decimal.parse("151.00").unwrap()))
+  assert_eq(book.spread(), some(Decimal.parse("1.00").unwrap()))
+}
+
+@test
+fn test_multiple_bids_best_price() {
+  let mut book = OrderBook.new("AAPL")
+
+  book.submit(make_limit_buy(1, "149.00", 100))?
+  book.submit(make_limit_buy(2, "150.00", 100))?
+  book.submit(make_limit_buy(3, "148.00", 100))?
+
+  // Best bid should be the highest price
+  assert_eq(book.best_bid(), some(Decimal.parse("150.00").unwrap()))
+  assert_eq(book.resting_order_count(), 3)
+}
+
+@test
+fn test_multiple_asks_best_price() {
+  let mut book = OrderBook.new("AAPL")
+
+  book.submit(make_limit_sell(1, "152.00", 100))?
+  book.submit(make_limit_sell(2, "151.00", 100))?
+  book.submit(make_limit_sell(3, "153.00", 100))?
+
+  // Best ask should be the lowest price
+  assert_eq(book.best_ask(), some(Decimal.parse("151.00").unwrap()))
+  assert_eq(book.resting_order_count(), 3)
+}
+
+// =============================================================================
+// Crossing / Matching
+// =============================================================================
+
+@test
+fn test_exact_cross_limit_orders() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Place a sell at 150
+  book.submit(make_limit_sell(1, "150.00", 100))?
+
+  // Place a buy at 150 — should cross
+  let trades = book.submit(make_limit_buy(2, "150.00", 100))?
+
+  assert_eq(trades.len(), 1)
+  assert_eq(trades[0].price, Decimal.parse("150.00").unwrap())
+  assert_eq(trades[0].quantity, 100)
+  assert_eq(trades[0].buy_order_id, 2)
+  assert_eq(trades[0].sell_order_id, 1)
+
+  // Book should be empty after full cross
+  assert_eq(book.best_bid(), none)
+  assert_eq(book.best_ask(), none)
+  assert_eq(book.resting_order_count(), 0)
+}
+
+@test
+fn test_buy_crosses_at_better_price() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Sell resting at 150
+  book.submit(make_limit_sell(1, "150.00", 100))?
+
+  // Buy at 151 — should cross at the resting price (150)
+  let trades = book.submit(make_limit_buy(2, "151.00", 100))?
+
+  assert_eq(trades.len(), 1)
+  assert_eq(trades[0].price, Decimal.parse("150.00").unwrap())
+  assert_eq(trades[0].quantity, 100)
+}
+
+@test
+fn test_sell_crosses_at_better_price() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Buy resting at 151
+  book.submit(make_limit_buy(1, "151.00", 100))?
+
+  // Sell at 150 — should cross at the resting price (151)
+  let trades = book.submit(make_limit_sell(2, "150.00", 100))?
+
+  assert_eq(trades.len(), 1)
+  assert_eq(trades[0].price, Decimal.parse("151.00").unwrap())
+  assert_eq(trades[0].quantity, 100)
+}
+
+@test
+fn test_no_cross_when_spread_exists() {
+  let mut book = OrderBook.new("AAPL")
+
+  book.submit(make_limit_buy(1, "149.00", 100))?
+  let trades = book.submit(make_limit_sell(2, "151.00", 100))?
+
+  // No cross — spread is 2.00
+  assert_eq(trades.len(), 0)
+  assert_eq(book.resting_order_count(), 2)
+}
+
+// =============================================================================
+// Partial Fills
+// =============================================================================
+
+@test
+fn test_partial_fill_buyer_larger() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Sell 50 at 150
+  book.submit(make_limit_sell(1, "150.00", 50))?
+
+  // Buy 100 at 150 — partial fill: 50 filled, 50 rests
+  let trades = book.submit(make_limit_buy(2, "150.00", 100))?
+
+  assert_eq(trades.len(), 1)
+  assert_eq(trades[0].quantity, 50)
+
+  // Remaining 50 buy should rest in the book
+  assert_eq(book.best_bid(), some(Decimal.parse("150.00").unwrap()))
+  assert_eq(book.best_ask(), none)
+}
+
+@test
+fn test_partial_fill_seller_larger() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Buy 50 at 150
+  book.submit(make_limit_buy(1, "150.00", 50))?
+
+  // Sell 100 at 150 — partial fill: 50 filled, 50 rests
+  let trades = book.submit(make_limit_sell(2, "150.00", 100))?
+
+  assert_eq(trades.len(), 1)
+  assert_eq(trades[0].quantity, 50)
+
+  // Remaining 50 sell should rest
+  assert_eq(book.best_bid(), none)
+  assert_eq(book.best_ask(), some(Decimal.parse("150.00").unwrap()))
+}
+
+@test
+fn test_multiple_fills_at_different_prices() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Build the ask side: 50@150, 50@151, 50@152
+  book.submit(make_limit_sell(1, "150.00", 50))?
+  book.submit(make_limit_sell(2, "151.00", 50))?
+  book.submit(make_limit_sell(3, "152.00", 50))?
+
+  // Market buy for 120 — should eat through multiple levels
+  let trades = book.submit(make_market_buy(4, 120))?
+
+  assert_eq(trades.len(), 3)
+
+  // First fill: 50@150
+  assert_eq(trades[0].price, Decimal.parse("150.00").unwrap())
+  assert_eq(trades[0].quantity, 50)
+
+  // Second fill: 50@151
+  assert_eq(trades[1].price, Decimal.parse("151.00").unwrap())
+  assert_eq(trades[1].quantity, 50)
+
+  // Third fill: 20@152 (partial)
+  assert_eq(trades[2].price, Decimal.parse("152.00").unwrap())
+  assert_eq(trades[2].quantity, 20)
+
+  // 30 should remain at 152
+  assert_eq(book.best_ask(), some(Decimal.parse("152.00").unwrap()))
+}
+
+// =============================================================================
+// Market Orders
+// =============================================================================
+
+@test
+fn test_market_buy_against_asks() {
+  let mut book = OrderBook.new("AAPL")
+
+  book.submit(make_limit_sell(1, "150.00", 100))?
+  let trades = book.submit(make_market_buy(2, 100))?
+
+  assert_eq(trades.len(), 1)
+  assert_eq(trades[0].quantity, 100)
+  assert_eq(trades[0].price, Decimal.parse("150.00").unwrap())
+  assert_eq(book.resting_order_count(), 0)
+}
+
+@test
+fn test_market_sell_against_bids() {
+  let mut book = OrderBook.new("AAPL")
+
+  book.submit(make_limit_buy(1, "150.00", 100))?
+  let trades = book.submit(make_market_sell(2, 100))?
+
+  assert_eq(trades.len(), 1)
+  assert_eq(trades[0].quantity, 100)
+  assert_eq(trades[0].price, Decimal.parse("150.00").unwrap())
+  assert_eq(book.resting_order_count(), 0)
+}
+
+@test
+fn test_market_order_no_liquidity() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Market buy with empty book — should be rejected
+  let trades = book.submit(make_market_buy(1, 100))?
+
+  // Market order on empty book produces no trades
+  assert_eq(trades.len(), 0)
+}
+
+// =============================================================================
+// Price-Time Priority
+// =============================================================================
+
+@test
+fn test_time_priority_same_price() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Three sells at the same price — order 1 first, then 2, then 3
+  book.submit(make_limit_sell(1, "150.00", 50))?
+  book.submit(make_limit_sell(2, "150.00", 50))?
+  book.submit(make_limit_sell(3, "150.00", 50))?
+
+  // Market buy for 100 — should fill orders 1 and 2 (time priority)
+  let trades = book.submit(make_market_buy(4, 100))?
+
+  assert_eq(trades.len(), 2)
+  assert_eq(trades[0].sell_order_id, 1)  // First in, first filled
+  assert_eq(trades[0].quantity, 50)
+  assert_eq(trades[1].sell_order_id, 2)  // Second in, second filled
+  assert_eq(trades[1].quantity, 50)
+
+  // Order 3 should still be resting
+  assert_eq(book.resting_order_count(), 1)
+}
+
+@test
+fn test_price_priority_over_time() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Three sells: 152 first, 150 second, 151 third
+  book.submit(make_limit_sell(1, "152.00", 50))?
+  book.submit(make_limit_sell(2, "150.00", 50))?
+  book.submit(make_limit_sell(3, "151.00", 50))?
+
+  // Market buy for 100 — should fill best price first (150, then 151)
+  let trades = book.submit(make_market_buy(4, 100))?
+
+  assert_eq(trades.len(), 2)
+  assert_eq(trades[0].price, Decimal.parse("150.00").unwrap())  // Best price first
+  assert_eq(trades[0].sell_order_id, 2)
+  assert_eq(trades[1].price, Decimal.parse("151.00").unwrap())  // Second best
+  assert_eq(trades[1].sell_order_id, 3)
+}
+
+// =============================================================================
+// Stop Orders
+// =============================================================================
+
+@test
+fn test_stop_buy_trigger() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Place a stop buy: trigger at 155, execute as market
+  let stop_order = make_order(
+    1, Side.Buy,
+    OrderType.Stop(Decimal.parse("155.00").unwrap(), none),
+    100,
+  )
+  book.submit(stop_order)?
+
+  // No trades yet, stop is pending
+  assert_eq(book.resting_order_count(), 0)
+
+  // Simulate a trade at 155 — should trigger the stop
+  let triggered = book.check_stops(Decimal.parse("155.00").unwrap())
+
+  assert_eq(triggered.len(), 1)
+  assert_eq(triggered[0].id, 1)
+  assert_eq(triggered[0].status, OrderStatus.Triggered)
+  assert_eq(triggered[0].order_type.is_market(), true)
+}
+
+@test
+fn test_stop_sell_trigger() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Place a stop sell: trigger at 145, execute as limit at 144
+  let stop_order = make_order(
+    1, Side.Sell,
+    OrderType.Stop(
+      Decimal.parse("145.00").unwrap(),
+      some(Decimal.parse("144.00").unwrap()),
+    ),
+    100,
+  )
+  book.submit(stop_order)?
+
+  // Trigger at 145
+  let triggered = book.check_stops(Decimal.parse("145.00").unwrap())
+
+  assert_eq(triggered.len(), 1)
+  assert_eq(triggered[0].id, 1)
+  match triggered[0].order_type {
+    OrderType.Limit(p) => assert_eq(p, Decimal.parse("144.00").unwrap())
+    _ => assert(false, "Expected limit order after stop trigger")
+  }
+}
+
+@test
+fn test_stop_not_triggered_below_threshold() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Stop buy triggers at 155
+  let stop_order = make_order(
+    1, Side.Buy,
+    OrderType.Stop(Decimal.parse("155.00").unwrap(), none),
+    100,
+  )
+  book.submit(stop_order)?
+
+  // Trade at 154 — should NOT trigger
+  let triggered = book.check_stops(Decimal.parse("154.00").unwrap())
+  assert_eq(triggered.len(), 0)
+}
+
+// =============================================================================
+// Cancellation
+// =============================================================================
+
+@test
+fn test_cancel_existing_order() {
+  let mut book = OrderBook.new("AAPL")
+
+  book.submit(make_limit_buy(1, "150.00", 100))?
+  assert_eq(book.resting_order_count(), 1)
+
+  let cancelled = book.cancel(1)
+  assert(cancelled)
+  assert_eq(book.resting_order_count(), 0)
+  assert_eq(book.best_bid(), none)
+}
+
+@test
+fn test_cancel_nonexistent_order() {
+  let mut book = OrderBook.new("AAPL")
+
+  let cancelled = book.cancel(999)
+  assert(!cancelled)
+}
+
+@test
+fn test_cancel_one_of_many() {
+  let mut book = OrderBook.new("AAPL")
+
+  book.submit(make_limit_buy(1, "150.00", 100))?
+  book.submit(make_limit_buy(2, "150.00", 200))?
+  book.submit(make_limit_buy(3, "149.00", 100))?
+
+  // Cancel order 2
+  let cancelled = book.cancel(2)
+  assert(cancelled)
+  assert_eq(book.resting_order_count(), 2)
+
+  // Best bid should still be 150
+  assert_eq(book.best_bid(), some(Decimal.parse("150.00").unwrap()))
+}
+
+// =============================================================================
+// Order Book Snapshot
+// =============================================================================
+
+@test
+fn test_snapshot_depth() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Add bids at various prices
+  book.submit(make_limit_buy(1, "150.00", 100))?
+  book.submit(make_limit_buy(2, "149.00", 200))?
+  book.submit(make_limit_buy(3, "148.00", 300))?
+
+  // Add asks at various prices
+  book.submit(make_limit_sell(4, "151.00", 100))?
+  book.submit(make_limit_sell(5, "152.00", 200))?
+
+  let snap = book.snapshot(depth: 2)
+
+  assert_eq(snap.symbol, "AAPL")
+  assert_eq(snap.bids.len(), 2)
+  assert_eq(snap.asks.len(), 2)
+
+  // Bids: best (highest) first
+  assert_eq(snap.bids[0].price, Decimal.parse("150.00").unwrap())
+  assert_eq(snap.bids[0].total_quantity, 100)
+  assert_eq(snap.bids[1].price, Decimal.parse("149.00").unwrap())
+  assert_eq(snap.bids[1].total_quantity, 200)
+
+  // Asks: best (lowest) first
+  assert_eq(snap.asks[0].price, Decimal.parse("151.00").unwrap())
+  assert_eq(snap.asks[0].total_quantity, 100)
+  assert_eq(snap.asks[1].price, Decimal.parse("152.00").unwrap())
+  assert_eq(snap.asks[1].total_quantity, 200)
+}
+
+// =============================================================================
+// Validation
+// =============================================================================
+
+@test
+fn test_reject_zero_quantity() {
+  let mut book = OrderBook.new("AAPL")
+  let order = make_limit_buy(1, "150.00", 0)
+
+  match book.submit(order) {
+    ok(_)  => assert(false, "Should reject zero quantity")
+    err(ExchangeError.InvalidOrder(reason)) => {
+      assert(reason.contains("quantity"), "Error should mention quantity")
+    }
+    err(e) => assert(false, "Wrong error type: {e.message()}")
+  }
+}
+
+@test
+fn test_reject_wrong_symbol() {
+  let mut book = OrderBook.new("AAPL")
+  let order = Order.new(1, "GOOGL", Side.Buy, OrderType.Limit(Decimal.parse("100.00").unwrap()), 100, "test")
+
+  match book.submit(order) {
+    ok(_)  => assert(false, "Should reject mismatched symbol")
+    err(ExchangeError.InvalidOrder(reason)) => {
+      assert(reason.contains("symbol"), "Error should mention symbol")
+    }
+    err(e) => assert(false, "Wrong error type: {e.message()}")
+  }
+}
+
+// =============================================================================
+// Decimal Type
+// =============================================================================
+
+@test
+fn test_decimal_precision() {
+  let a = Decimal.parse("150.25").unwrap()
+  let b = Decimal.parse("0.75").unwrap()
+
+  let sum = a.add(b)
+  assert_eq(sum.to_string(), "151.00000000")
+
+  let diff = a.sub(b)
+  assert_eq(diff.to_string(), "149.50000000")
+}
+
+@test
+fn test_decimal_comparison() {
+  let a = Decimal.parse("150.00").unwrap()
+  let b = Decimal.parse("151.00").unwrap()
+
+  assert(a.raw < b.raw)
+  assert_eq(a.min(b), a)
+  assert_eq(a.max(b), b)
+}
+
+@test
+fn test_decimal_zero() {
+  let z = Decimal.zero()
+  assert(z.is_zero())
+  assert(!z.is_positive())
+}
+
+// =============================================================================
+// Trade ID Generation
+// =============================================================================
+
+@test
+fn test_trade_ids_are_sequential() {
+  let mut book = OrderBook.new("AAPL")
+
+  // Set up multiple crosses
+  book.submit(make_limit_sell(1, "150.00", 100))?
+  book.submit(make_limit_sell(2, "151.00", 100))?
+
+  let trades = book.submit(make_market_buy(3, 200))?
+
+  assert_eq(trades.len(), 2)
+  assert_eq(trades[0].id, 1)
+  assert_eq(trades[1].id, 2)
+}

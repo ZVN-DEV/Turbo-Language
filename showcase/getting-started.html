@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Getting Started - Turbo Programming Language</title>
+<style>
+  /* ========== Reset & Base ========== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; font-size: 16px; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: #0a0a0b;
+    color: #e4e4e7;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+  a { color: #3B82F6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ========== Utility ========== */
+  .container { max-width: 860px; margin: 0 auto; padding: 0 24px; }
+  code, .code {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Menlo', 'Consolas', monospace;
+  }
+
+  /* ========== Navigation ========== */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(10, 10, 11, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  nav .nav-inner {
+    max-width: 1200px; margin: 0 auto; padding: 0 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    height: 56px;
+  }
+  nav .logo {
+    font-weight: 800; font-size: 1.15rem; color: #fafafa;
+    letter-spacing: -0.02em;
+  }
+  nav .logo span { color: #3B82F6; }
+  nav .logo a { color: inherit; text-decoration: none; }
+  nav .logo a:hover { text-decoration: none; }
+  nav ul { list-style: none; display: flex; gap: 28px; }
+  nav ul li a {
+    font-size: 0.85rem; color: #a1a1aa; transition: color 0.2s;
+    font-weight: 500;
+  }
+  nav ul li a:hover { color: #fafafa; text-decoration: none; }
+  nav ul li a.active { color: #3B82F6; }
+
+  /* ========== Page Header ========== */
+  .page-header {
+    padding-top: 120px;
+    padding-bottom: 60px;
+    background:
+      radial-gradient(ellipse 70% 50% at 50% 0%, rgba(59,130,246,0.08) 0%, transparent 70%),
+      #0a0a0b;
+  }
+  .page-header h1 {
+    font-size: clamp(2.5rem, 5vw, 3.5rem);
+    font-weight: 900;
+    letter-spacing: -0.04em;
+    background: linear-gradient(135deg, #fafafa 0%, #a1a1aa 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 16px;
+  }
+  .page-header p {
+    font-size: 1.15rem;
+    color: #a1a1aa;
+    max-width: 600px;
+    line-height: 1.6;
+  }
+
+  /* ========== Content Sections ========== */
+  .doc-section {
+    padding: 64px 0;
+    border-top: 1px solid rgba(255,255,255,0.04);
+  }
+  .doc-section:first-of-type { border-top: none; }
+  .doc-section h2 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #fafafa;
+    margin-bottom: 8px;
+    letter-spacing: -0.02em;
+  }
+  .doc-section h3 {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #fafafa;
+    margin-top: 40px;
+    margin-bottom: 12px;
+  }
+  .doc-section p {
+    font-size: 0.95rem;
+    color: #a1a1aa;
+    margin-bottom: 20px;
+    line-height: 1.7;
+    max-width: 720px;
+  }
+  .doc-section p strong { color: #e4e4e7; }
+  .section-intro {
+    font-size: 1.05rem;
+    color: #a1a1aa;
+    margin-bottom: 32px;
+    line-height: 1.7;
+  }
+
+  /* ========== Step Numbers ========== */
+  .step-label {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #3B82F6;
+    margin-bottom: 8px;
+    background: rgba(59,130,246,0.1);
+    padding: 3px 10px;
+    border-radius: 4px;
+  }
+
+  /* ========== Code Blocks ========== */
+  .code-block {
+    background: #111114;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 24px;
+  }
+  .code-block-header {
+    padding: 10px 16px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #71717a;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .code-block-header .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+  }
+  .code-block-header .dot.turbo { background: #3B82F6; }
+  .code-block-header .dot.shell { background: #22c55e; }
+  .code-block pre {
+    padding: 16px 20px;
+    font-size: 0.82rem;
+    line-height: 1.7;
+    overflow-x: auto;
+    color: #d4d4d8;
+    tab-size: 2;
+  }
+
+  /* Syntax highlights */
+  .kw { color: #c084fc; }
+  .fn-name { color: #60a5fa; }
+  .str { color: #34d399; }
+  .comment { color: #52525b; font-style: italic; }
+  .type { color: #fbbf24; }
+  .num { color: #fb923c; }
+  .op { color: #f472b6; }
+  .sh-cmd { color: #22c55e; }
+  .sh-flag { color: #a78bfa; }
+  .sh-comment { color: #52525b; font-style: italic; }
+
+  /* ========== File Tree ========== */
+  .file-tree {
+    background: #111114;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 24px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Menlo', 'Consolas', monospace;
+    font-size: 0.82rem;
+    line-height: 1.8;
+    color: #a1a1aa;
+  }
+  .file-tree .dir { color: #60a5fa; font-weight: 600; }
+  .file-tree .file { color: #d4d4d8; }
+  .file-tree .config { color: #fbbf24; }
+
+  /* ========== Tour Cards ========== */
+  .tour-card {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px;
+    padding: 32px;
+    margin-bottom: 32px;
+    transition: border-color 0.25s;
+  }
+  .tour-card:hover {
+    border-color: rgba(59,130,246,0.2);
+  }
+  .tour-card h3 {
+    margin-top: 0;
+    margin-bottom: 12px;
+    font-size: 1.15rem;
+  }
+  .tour-card .code-block { margin-bottom: 16px; }
+  .tour-card .code-block:last-child { margin-bottom: 0; }
+  .tour-card p { margin-bottom: 16px; }
+
+  /* ========== Inline Code ========== */
+  p code, li code {
+    background: rgba(255,255,255,0.06);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    color: #e4e4e7;
+  }
+
+  /* ========== What's Next Links ========== */
+  .next-links {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 24px;
+  }
+  .next-link {
+    display: block;
+    background: #111114;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 24px;
+    transition: border-color 0.2s, background 0.2s;
+    text-decoration: none;
+  }
+  .next-link:hover {
+    border-color: rgba(59,130,246,0.3);
+    background: rgba(59,130,246,0.04);
+    text-decoration: none;
+  }
+  .next-link .next-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #3B82F6;
+    margin-bottom: 6px;
+  }
+  .next-link .next-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #fafafa;
+    margin-bottom: 4px;
+  }
+  .next-link .next-desc {
+    font-size: 0.82rem;
+    color: #a1a1aa;
+  }
+
+  /* ========== Footer ========== */
+  footer {
+    padding: 48px 0;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    text-align: center;
+    color: #52525b;
+    font-size: 0.8rem;
+  }
+  footer .tagline-small {
+    color: #71717a; margin-bottom: 8px; font-size: 0.85rem;
+  }
+
+  /* ========== Responsive ========== */
+  @media (max-width: 768px) {
+    nav ul { display: none; }
+    .page-header h1 { font-size: 2rem; }
+    .next-links { grid-template-columns: 1fr; }
+    .tour-card { padding: 20px; }
+    .doc-section { padding: 40px 0; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ========== Navigation ========== -->
+<nav>
+  <div class="nav-inner">
+    <div class="logo"><a href="index.html"><span>turbo</span></a></div>
+    <ul>
+      <li><a href="index.html">Showcase</a></li>
+      <li><a href="getting-started.html" class="active">Getting Started</a></li>
+      <li><a href="docs.html">Docs</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ========== Page Header ========== -->
+<header class="page-header">
+  <div class="container">
+    <h1>Getting Started</h1>
+    <p>Go from zero to running Turbo code in under five minutes. Install the toolchain, create a project, and explore the language through five progressive examples.</p>
+  </div>
+</header>
+
+<main>
+
+<!-- ========== Installation ========== -->
+<section class="doc-section" id="installation">
+  <div class="container">
+    <span class="step-label">Step 1</span>
+    <h2>Installation</h2>
+    <p class="section-intro">Turbo ships as a single binary with everything included: compiler, formatter, linter, test runner, package manager, REPL, and LSP. One install, zero additional setup.</p>
+
+    <p style="color: #fbbf24; font-size: 0.88rem; background: rgba(251,191,36,0.06); border: 1px solid rgba(251,191,36,0.15); border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; max-width: 720px;">(Turbo is currently in design phase &mdash; compiler coming soon)</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot shell"></span> Terminal</div>
+      <pre><span class="sh-comment"># macOS</span>
+<span class="sh-cmd">brew</span> install turbo-lang
+
+<span class="sh-comment"># Linux</span>
+<span class="sh-cmd">curl</span> <span class="sh-flag">-fsSL</span> https://turbo-lang.dev/install.sh | sh
+
+<span class="sh-comment"># Windows</span>
+<span class="sh-cmd">winget</span> install turbo-lang
+
+<span class="sh-comment"># Or from source</span>
+<span class="sh-cmd">git</span> clone https://github.com/turbo-lang/turbo
+<span class="sh-cmd">cd</span> turbo && turbo build <span class="sh-flag">--release</span></pre>
+    </div>
+
+    <p>Verify the installation:</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot shell"></span> Terminal</div>
+      <pre><span class="sh-cmd">$</span> turbo <span class="sh-flag">--version</span>
+turbo 0.1.0 (aarch64-apple-darwin)
+Includes: compiler, lsp, fmt, test, bench, doc, repl, pkg</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Your First Program ========== -->
+<section class="doc-section" id="first-program">
+  <div class="container">
+    <span class="step-label">Step 2</span>
+    <h2>Your First Program</h2>
+    <p class="section-intro">Create a file called <code>hello.tb</code> and run it. No boilerplate, no config, no build step.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> hello.tb</div>
+      <pre><span class="comment">// hello.tb</span>
+<span class="kw">fn</span> <span class="fn-name">main</span>() {
+  <span class="fn-name">print</span>(<span class="str">"Hello, Turbo!"</span>)
+}</pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot shell"></span> Terminal</div>
+      <pre><span class="sh-cmd">$</span> turbo run hello.tb
+Hello, Turbo!</pre>
+    </div>
+
+    <p>That is it. The <code>turbo run</code> command compiles and executes in a single step. For development, add <code>--watch</code> to auto-rebuild on changes.</p>
+  </div>
+</section>
+
+<!-- ========== Create a Project ========== -->
+<section class="doc-section" id="create-project">
+  <div class="container">
+    <span class="step-label">Step 3</span>
+    <h2>Create a Project</h2>
+    <p class="section-intro">Use <code>turbo new</code> to scaffold a full project with configuration, source directory, and tests already wired up.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot shell"></span> Terminal</div>
+      <pre><span class="sh-cmd">$</span> turbo new my-app
+<span class="sh-cmd">$</span> cd my-app
+<span class="sh-cmd">$</span> turbo run</pre>
+    </div>
+
+    <p>This generates the following project structure:</p>
+
+    <div class="file-tree">
+      <span class="dir">my-app/</span><br>
+      &nbsp;&nbsp;<span class="config">turbo.toml</span><br>
+      &nbsp;&nbsp;<span class="dir">src/</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">main.tb</span><br>
+      &nbsp;&nbsp;<span class="dir">tests/</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;<span class="file">main_test.tb</span>
+    </div>
+
+    <p>The <code>turbo.toml</code> file holds your project metadata, dependencies, and build configuration:</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> turbo.toml</div>
+      <pre><span class="comment">[package]</span>
+name = <span class="str">"my-app"</span>
+version = <span class="str">"0.1.0"</span>
+edition = <span class="str">"2026"</span>
+
+<span class="comment">[dependencies]</span>
+<span class="comment"># Add deps with: turbo add &lt;package&gt;</span>
+
+<span class="comment">[build]</span>
+target = <span class="str">"native"</span></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Quick Tour ========== -->
+<section class="doc-section" id="quick-tour">
+  <div class="container">
+    <span class="step-label">Step 4</span>
+    <h2>Quick Tour</h2>
+    <p class="section-intro">Five examples that take you from familiar basics to Turbo's most powerful features. Each builds on the last.</p>
+
+    <!-- Tour 1: Variables & Functions -->
+    <div class="tour-card" id="tour-variables">
+      <h3>1. Variables and Functions</h3>
+      <p>Turbo uses <code>let</code> for immutable bindings and <code>let mut</code> for mutable ones. Types are inferred, but you can annotate when it adds clarity. String interpolation uses <code>{}</code> inside double quotes. The last expression in a function is the return value.</p>
+
+      <div class="code-block">
+        <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+        <pre><span class="kw">let</span> name = <span class="str">"World"</span>
+<span class="kw">let mut</span> count = <span class="num">0</span>
+
+<span class="kw">fn</span> <span class="fn-name">greet</span>(who: <span class="type">str</span>) -> <span class="type">str</span> {
+  count += <span class="num">1</span>
+  <span class="str">"Hello, {who}! (greeted {count} times)"</span>
+}</pre>
+      </div>
+    </div>
+
+    <!-- Tour 2: Types & Pattern Matching -->
+    <div class="tour-card" id="tour-types">
+      <h3>2. Types and Pattern Matching</h3>
+      <p>Define algebraic data types with the <code>type</code> keyword. Each variant can carry data. The <code>match</code> expression is exhaustive &mdash; the compiler ensures you handle every case.</p>
+
+      <div class="code-block">
+        <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+        <pre><span class="kw">type</span> <span class="type">Shape</span> {
+  <span class="type">Circle</span>(radius: <span class="type">f64</span>)
+  <span class="type">Rectangle</span>(width: <span class="type">f64</span>, height: <span class="type">f64</span>)
+}
+
+<span class="kw">fn</span> <span class="fn-name">area</span>(s: <span class="type">Shape</span>) -> <span class="type">f64</span> {
+  <span class="kw">match</span> s {
+    <span class="type">Circle</span>(r) => <span class="num">3.14159</span> * r * r
+    <span class="type">Rectangle</span>(w, h) => w * h
+  }
+}</pre>
+      </div>
+    </div>
+
+    <!-- Tour 3: Error Handling -->
+    <div class="tour-card" id="tour-errors">
+      <h3>3. Error Handling</h3>
+      <p>Functions that can fail use the <code>T ! E</code> result syntax. The <code>?</code> operator propagates errors to the caller automatically. Optionals use <code>T?</code> with <code>none</code> (lowercase) for the absent case.</p>
+
+      <div class="code-block">
+        <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+        <pre><span class="kw">fn</span> <span class="fn-name">read_config</span>(path: <span class="type">str</span>) -> <span class="type">Config</span> <span class="op">!</span> <span class="type">IoError</span> {
+  <span class="kw">let</span> text = <span class="kw">await</span> fs.<span class="fn-name">read</span>(path)<span class="op">?</span>
+  <span class="kw">let</span> config = <span class="fn-name">parse_toml</span>(text)<span class="op">?</span>
+  config
+}
+
+<span class="comment">// Usage &mdash; errors propagate with ?</span>
+<span class="kw">let</span> config = <span class="fn-name">read_config</span>(<span class="str">"config.toml"</span>)<span class="op">?</span></pre>
+      </div>
+    </div>
+
+    <!-- Tour 4: Async & Concurrency -->
+    <div class="tour-card" id="tour-async">
+      <h3>4. Async and Concurrency</h3>
+      <p>Turbo's async model feels like JavaScript &mdash; <code>async</code>/<code>await</code>, <code>all()</code> for concurrent execution, and <code>for await</code> for streaming. Under the hood, tasks are lightweight (not OS threads) and scheduled by a work-stealing runtime.</p>
+
+      <div class="code-block">
+        <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+        <pre><span class="kw">let</span> [users, posts] = <span class="kw">await</span> <span class="fn-name">all</span>([
+  <span class="fn-name">fetch_users</span>(),
+  <span class="fn-name">fetch_posts</span>()
+])
+
+<span class="kw">for await</span> event <span class="kw">in</span> stream {
+  <span class="fn-name">print</span>(<span class="str">"Got: {event}"</span>)
+}</pre>
+      </div>
+    </div>
+
+    <!-- Tour 5: Your First Agent -->
+    <div class="tour-card" id="tour-agents">
+      <h3>5. Your First Agent</h3>
+      <p>Turbo is the first language with native AI primitives. The <code>tool fn</code> keyword declares a function that an LLM can call &mdash; the compiler auto-generates the JSON schema. The <code>Agent</code> type handles model interaction, tool routing, and token streaming.</p>
+
+      <div class="code-block">
+        <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+        <pre><span class="kw">tool fn</span> <span class="fn-name">search</span>(query: <span class="type">str</span>) -> <span class="type">[SearchResult]</span> {
+  <span class="kw">await</span> search_api.<span class="fn-name">query</span>(query)
+}
+
+<span class="kw">let</span> agent = <span class="type">Agent</span>.<span class="fn-name">new</span>(<span class="str">"claude-sonnet"</span>, tools: [search])
+
+<span class="kw">for await</span> token <span class="kw">in</span> agent.<span class="fn-name">stream</span>(<span class="str">"Find info about Turbo lang"</span>) {
+  <span class="fn-name">print</span>(token, end: <span class="str">""</span>)
+}</pre>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ========== What's Next ========== -->
+<section class="doc-section" id="whats-next">
+  <div class="container">
+    <h2>What's Next</h2>
+    <p class="section-intro">You have the basics. Dive deeper into specific topics or explore the full showcase to see everything Turbo can do.</p>
+
+    <div class="next-links">
+      <a href="docs.html#agents" class="next-link">
+        <div class="next-label">Agents</div>
+        <div class="next-title">Learn About Agents</div>
+        <div class="next-desc">Native AI primitives, tool functions, streaming, structured output, and multi-agent orchestration.</div>
+      </a>
+      <a href="docs.html#concurrency" class="next-link">
+        <div class="next-label">Concurrency</div>
+        <div class="next-title">Master Async</div>
+        <div class="next-desc">Async/await, structured concurrency, channels, actors, supervision trees, and async streams.</div>
+      </a>
+      <a href="docs.html#types" class="next-link">
+        <div class="next-label">Type System</div>
+        <div class="next-title">Explore the Type System</div>
+        <div class="next-desc">Primitives, collections, generics, algebraic data types, traits, and compile-time type safety.</div>
+      </a>
+      <a href="index.html" class="next-link">
+        <div class="next-label">Explore</div>
+        <div class="next-title">Showcase</div>
+        <div class="next-desc">See benchmarks, the memory model, feature comparisons, and full code examples.</div>
+      </a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ========== Footer ========== -->
+<footer>
+  <div class="container">
+    <p class="tagline-small">JavaScript's soul. Rust's speed. Built for the AI age.</p>
+    <p>Turbo Programming Language &mdash; Design Preview</p>
+  </div>
+</footer>
+
+</body>
+</html>

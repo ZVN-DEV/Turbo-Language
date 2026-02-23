@@ -1,0 +1,534 @@
+// =============================================================================
+// storage.tb — File system operations, auto-save, conflict detection
+//
+// Demonstrates:
+//   - Async file I/O with turbo/fs
+//   - File system watchers with event streams
+//   - Debounced auto-save using timers and channels
+//   - Conflict detection via modification timestamps and content hashing
+//   - Shared<T> for thread-safe mutable state
+//   - defer for cleanup
+//   - T ! E error propagation with ? operator
+//   - for await on async event streams
+// =============================================================================
+
+import { Path, File, DirEntry, ReadDir } from "std/fs"
+import { watch, Watcher, WatchEvent } from "turbo/fs"
+import { DateTime, Duration } from "std/time"
+import { Shared } from "turbo/sync"
+import { Channel, Timer } from "turbo/async"
+import { log } from "turbo/log"
+import {
+  Note, NoteMetadata, FileEvent, ConflictState, AppError
+} from "./models"
+
+// =============================================================================
+// NoteStore — manages the on-disk notes directory
+// =============================================================================
+
+pub struct NoteStore {
+  notes_dir: Path
+  notes: Shared<{str: Note}>              // ID -> Note
+  file_hashes: Shared<{str: str}>          // Path -> SHA-256 hash of content on disk
+  watcher: Watcher?
+  autosave_timer: Timer?
+  pending_save: Shared<{str: str}>         // ID -> content awaiting save
+  event_channel: Channel<FileEvent>
+}
+
+impl NoteStore {
+  /// Initialize the note store, creating the notes directory if it does not exist
+  pub async fn new(notes_dir: Path) -> NoteStore ! AppError {
+    // Ensure the notes directory exists
+    if !notes_dir.exists() {
+      File.create_dir_all(notes_dir)
+        .map_err((e) => AppError.IoError("Failed to create notes directory: {e}"))?
+    }
+
+    let store = NoteStore {
+      notes_dir,
+      notes: Shared.new({:}),
+      file_hashes: Shared.new({:}),
+      watcher: none,
+      autosave_timer: none,
+      pending_save: Shared.new({:}),
+      event_channel: Channel.new(capacity: 256),
+    }
+
+    // Load all existing notes from disk
+    await store.scan_directory()?
+
+    store
+  }
+
+  /// Scan the notes directory and load all .md files
+  async fn scan_directory(self) -> () ! AppError {
+    let entries = File.read_dir(self.notes_dir)
+      .map_err((e) => AppError.IoError("Failed to read notes directory: {e}"))?
+
+    let mut notes_map = self.notes.write()
+    let mut hash_map = self.file_hashes.write()
+
+    for entry in entries {
+      if entry.path.extension() != some("md") { continue }
+
+      match await self.load_note_from_disk(entry.path) {
+        ok(note) => {
+          let hash = note.content.sha256()
+          hash_map[note.path.to_str()] = hash
+          notes_map[note.id] = note
+        }
+        err(e) => {
+          log.warn("Skipping unreadable note", {
+            path: entry.path.to_str(),
+            error: e.message(),
+          })
+        }
+      }
+    }
+
+    log.info("Loaded notes from disk", { count: notes_map.len() })
+  }
+
+  /// Load a single note from a file path
+  async fn load_note_from_disk(self, path: Path) -> Note ! AppError {
+    let content = File.read_string(path)
+      .map_err((e) => AppError.IoError("Failed to read {path}: {e}"))?
+
+    let stat = File.metadata(path)
+      .map_err((e) => AppError.IoError("Failed to stat {path}: {e}"))?
+
+    let title = Note.extract_title(content, path)
+    let metadata = self.extract_metadata(content)
+
+    Note {
+      id: path.to_str().sha256(),
+      title,
+      content,
+      metadata,
+      path,
+      created_at: stat.created_at,
+      updated_at: stat.modified_at,
+    }
+  }
+
+  /// Extract metadata from YAML frontmatter if present
+  fn extract_metadata(self, content: str) -> NoteMetadata {
+    guard content.starts_with("---\n") else {
+      return NoteMetadata {
+        word_count: content.split_whitespace().count(),
+        reading_time_minutes: (content.split_whitespace().count() / 200).max(1) as u32,
+      }
+    }
+
+    // Find the closing ---
+    let end = content[4..].find("---\n")
+    match end {
+      some(pos) => {
+        let frontmatter = content[4..4 + pos]
+        let tags = self.parse_frontmatter_field(frontmatter, "tags")
+        let category = self.parse_frontmatter_string(frontmatter, "category")
+        let pinned = self.parse_frontmatter_string(frontmatter, "pinned")
+          .map((s) => s == "true")
+          ?? false
+        let body = content[4 + pos + 4..]
+        let word_count = body.split_whitespace().count()
+
+        NoteMetadata {
+          tags,
+          category,
+          pinned,
+          word_count,
+          reading_time_minutes: (word_count / 200).max(1) as u32,
+          links_to: [],
+          backlinks: [],
+        }
+      }
+      none => NoteMetadata {
+        word_count: content.split_whitespace().count(),
+        reading_time_minutes: (content.split_whitespace().count() / 200).max(1) as u32,
+      }
+    }
+  }
+
+  /// Parse a list field from YAML-like frontmatter
+  fn parse_frontmatter_field(self, frontmatter: str, key: str) -> [str] {
+    frontmatter
+      .lines()
+      .find((line) => line.starts_with("{key}:"))
+      .map((line) => {
+        line.strip_prefix("{key}:").trim()
+          .trim_start_matches('[').trim_end_matches(']')
+          .split(',')
+          .map((s) => s.trim().trim_matches('"'))
+          .filter((s) => !s.is_empty())
+          .collect()
+      })
+      ?? []
+  }
+
+  /// Parse a string field from YAML-like frontmatter
+  fn parse_frontmatter_string(self, frontmatter: str, key: str) -> str? {
+    frontmatter
+      .lines()
+      .find((line) => line.starts_with("{key}:"))
+      .map((line) => line.strip_prefix("{key}:").trim().trim_matches('"'))
+  }
+
+  // ===========================================================================
+  // CRUD Operations
+  // ===========================================================================
+
+  /// Create a new note with a given title
+  pub async fn create_note(self, title: str) -> Note ! AppError {
+    let filename = self.title_to_filename(title)
+    let path = self.notes_dir.join(filename)
+
+    guard !path.exists() else {
+      return err(AppError.IoError("Note already exists: {path}"))
+    }
+
+    let note = Note.new(title, path)
+
+    // Write to disk
+    File.write_string(note.path, note.content)
+      .map_err((e) => AppError.IoError("Failed to create note: {e}"))?
+
+    // Update in-memory state
+    let hash = note.content.sha256()
+    self.file_hashes.write()[note.path.to_str()] = hash
+    self.notes.write()[note.id] = note.clone()
+
+    log.info("Created note", { title, path: note.path.to_str() })
+    note
+  }
+
+  /// Save a note's content to disk, updating the hash for conflict detection
+  pub async fn save_note(self, note_id: str, content: str) -> () ! AppError {
+    let mut notes = self.notes.write()
+
+    guard let some(note) = notes.get(note_id) else {
+      return err(AppError.IoError("Note not found: {note_id}"))
+    }
+
+    // Check for conflicts before saving
+    let conflict = await self.check_conflict(note_id, content)?
+    guard !conflict.has_conflict() else {
+      match conflict {
+        ExternalChange(disk, _, modified) => {
+          return err(AppError.ConflictError(
+            note.path,
+            "File was modified externally at {modified}",
+          ))
+        }
+        DeletedExternally(_) => {
+          return err(AppError.ConflictError(
+            note.path,
+            "File was deleted externally",
+          ))
+        }
+        _ => {}
+      }
+    }
+
+    // Write to disk
+    File.write_string(note.path, content)
+      .map_err((e) => AppError.IoError("Failed to save: {e}"))?
+
+    // Update in-memory state
+    let now = DateTime.now()
+    let title = Note.extract_title(content, note.path)
+    let metadata = self.extract_metadata(content)
+
+    notes[note_id] = Note {
+      ..note,
+      title,
+      content,
+      metadata,
+      updated_at: now,
+    }
+
+    // Update hash so our own save does not trigger a conflict
+    self.file_hashes.write()[note.path.to_str()] = content.sha256()
+
+    log.debug("Saved note", { id: note_id, bytes: content.len() })
+  }
+
+  /// Delete a note from disk and memory
+  pub async fn delete_note(self, note_id: str) -> () ! AppError {
+    let note = {
+      let notes = self.notes.read()
+      match notes.get(note_id) {
+        some(n) => n.clone()
+        none    => return err(AppError.IoError("Note not found: {note_id}"))
+      }
+    }
+
+    File.remove(note.path)
+      .map_err((e) => AppError.IoError("Failed to delete: {e}"))?
+
+    self.notes.write().remove(note_id)
+    self.file_hashes.write().remove(note.path.to_str())
+
+    log.info("Deleted note", { id: note_id, path: note.path.to_str() })
+  }
+
+  /// Get a note by ID
+  pub fn get_note(self, note_id: str) -> Note? {
+    self.notes.read().get(note_id).cloned()
+  }
+
+  /// List all notes, sorted by most recently updated
+  pub fn list_notes(self) -> [Note] {
+    self.notes.read()
+      .values()
+      .cloned()
+      .collect()
+      |> sort_by((a, b) => b.updated_at.cmp(a.updated_at))
+  }
+
+  // ===========================================================================
+  // File Watching
+  // ===========================================================================
+
+  /// Start watching the notes directory for external changes
+  pub async fn start_watching(self) -> () ! AppError {
+    let watcher = watch(self.notes_dir, recursive: true)
+      .map_err((e) => AppError.IoError("Failed to start watcher: {e}"))?
+
+    log.info("Watching notes directory", { path: self.notes_dir.to_str() })
+
+    // Process watch events in the background
+    spawn async {
+      for await event in watcher.events() {
+        match event {
+          WatchEvent.Create(path) if path.extension() == some("md") => {
+            self.event_channel.send(FileEvent.Created(path))
+            // Reload the new file
+            match await self.load_note_from_disk(path) {
+              ok(note) => {
+                self.file_hashes.write()[note.path.to_str()] = note.content.sha256()
+                self.notes.write()[note.id] = note
+              }
+              err(e) => log.warn("Failed to load new note", { error: e.message() })
+            }
+          }
+
+          WatchEvent.Modify(path) if path.extension() == some("md") => {
+            // Check if this modification was caused by us (our save)
+            let current_hash = self.file_hashes.read().get(path.to_str()).cloned()
+            let disk_content = File.read_string(path).ok()
+            let disk_hash = disk_content.map((c) => c.sha256())
+
+            let by_us = match (current_hash, disk_hash) {
+              (some(h1), some(h2)) => h1 == h2
+              _ => false
+            }
+
+            if !by_us {
+              self.event_channel.send(FileEvent.Modified(path, by_us: false))
+              // Reload from disk
+              if let some(content) = disk_content {
+                let path_str = path.to_str()
+                let note_id = path_str.sha256()
+                self.file_hashes.write()[path_str] = content.sha256()
+                if let some(existing) = self.notes.read().get(note_id) {
+                  let title = Note.extract_title(content, path)
+                  self.notes.write()[note_id] = Note {
+                    ..existing,
+                    title,
+                    content,
+                    metadata: self.extract_metadata(content),
+                    updated_at: DateTime.now(),
+                  }
+                }
+              }
+            }
+          }
+
+          WatchEvent.Remove(path) if path.extension() == some("md") => {
+            self.event_channel.send(FileEvent.Deleted(path))
+            let note_id = path.to_str().sha256()
+            self.notes.write().remove(note_id)
+            self.file_hashes.write().remove(path.to_str())
+          }
+
+          WatchEvent.Rename(old_path, new_path) => {
+            self.event_channel.send(FileEvent.Renamed(old_path, new_path))
+            let old_id = old_path.to_str().sha256()
+            if let some(note) = self.notes.write().remove(old_id) {
+              let new_id = new_path.to_str().sha256()
+              let title = Note.extract_title(note.content, new_path)
+              self.notes.write()[new_id] = Note {
+                ..note,
+                id: new_id,
+                title,
+                path: new_path,
+              }
+              self.file_hashes.write().remove(old_path.to_str())
+              self.file_hashes.write()[new_path.to_str()] = note.content.sha256()
+            }
+          }
+
+          _ => {}  // Ignore non-.md files and other events
+        }
+      }
+    }
+
+    self.watcher = some(watcher)
+  }
+
+  /// Get the event stream for UI updates
+  pub fn events(self) -> Channel<FileEvent> {
+    self.event_channel.clone()
+  }
+
+  // ===========================================================================
+  // Auto-Save with Debounce
+  // ===========================================================================
+
+  /// Start the auto-save loop with debounced writes.
+  /// Content is buffered and only flushed to disk after the debounce window
+  /// elapses with no new changes.
+  pub async fn start_autosave(self, debounce: Duration, interval: Duration) {
+    spawn async {
+      loop {
+        await Timer.sleep(interval)
+
+        // Drain all pending saves
+        let pending = {
+          let mut p = self.pending_save.write()
+          let snapshot = p.clone()
+          p.clear()
+          snapshot
+        }
+
+        for (note_id, content) in pending {
+          match await self.save_note(note_id, content) {
+            ok(_) => log.debug("Auto-saved note", { id: note_id })
+            err(e) => log.error("Auto-save failed", {
+              id: note_id,
+              error: e.message(),
+            })
+          }
+        }
+      }
+    }
+  }
+
+  /// Queue a note for auto-save (debounced)
+  pub fn queue_autosave(self, note_id: str, content: str) {
+    self.pending_save.write()[note_id] = content
+  }
+
+  // ===========================================================================
+  // Conflict Detection
+  // ===========================================================================
+
+  /// Check whether the file on disk has been modified since we last read/wrote it.
+  /// Compares the stored hash with the current file hash.
+  pub async fn check_conflict(self, note_id: str, our_content: str) -> ConflictState ! AppError {
+    let note = match self.notes.read().get(note_id) {
+      some(n) => n.clone()
+      none    => return err(AppError.IoError("Note not found: {note_id}"))
+    }
+
+    // Check if the file still exists
+    if !note.path.exists() {
+      return ConflictState.DeletedExternally(our_content)
+    }
+
+    // Read the current disk content
+    let disk_content = File.read_string(note.path)
+      .map_err((e) => AppError.IoError("Failed to read {note.path}: {e}"))?
+
+    let disk_hash = disk_content.sha256()
+    let stored_hash = self.file_hashes.read().get(note.path.to_str()).cloned()
+
+    match stored_hash {
+      some(h) if h == disk_hash => {
+        // Disk matches our last known state — no conflict
+        ConflictState.NoConflict
+      }
+      some(_) => {
+        // Disk has changed since we last read/wrote — conflict
+        let stat = File.metadata(note.path)
+          .map_err((e) => AppError.IoError("Failed to stat: {e}"))?
+
+        ConflictState.ExternalChange(disk_content, our_content, stat.modified_at)
+      }
+      none => {
+        // No stored hash — first time checking, no conflict
+        ConflictState.NoConflict
+      }
+    }
+  }
+
+  /// Resolve a conflict by choosing either the disk version or our version
+  pub async fn resolve_conflict(self, note_id: str, keep_ours: bool) -> () ! AppError {
+    if keep_ours {
+      // Overwrite disk with our content
+      let note = self.notes.read().get(note_id).cloned()
+      guard let some(note) = note else {
+        return err(AppError.IoError("Note not found: {note_id}"))
+      }
+
+      File.write_string(note.path, note.content)
+        .map_err((e) => AppError.IoError("Failed to resolve conflict: {e}"))?
+
+      self.file_hashes.write()[note.path.to_str()] = note.content.sha256()
+    } else {
+      // Accept disk version — reload from disk
+      let note = self.notes.read().get(note_id).cloned()
+      guard let some(note) = note else {
+        return err(AppError.IoError("Note not found: {note_id}"))
+      }
+
+      let fresh = await self.load_note_from_disk(note.path)?
+      self.file_hashes.write()[note.path.to_str()] = fresh.content.sha256()
+      self.notes.write()[note_id] = fresh
+    }
+
+    log.info("Resolved conflict", { id: note_id, kept_ours: keep_ours })
+  }
+
+  // ===========================================================================
+  // Helpers
+  // ===========================================================================
+
+  /// Convert a note title to a safe filename
+  fn title_to_filename(self, title: str) -> str {
+    let safe = title
+      .to_lowercase()
+      .replace(" ", "-")
+      .chars()
+      .filter((c) => c.is_alphanumeric() || c == '-' || c == '_')
+      .collect::<str>()
+
+    // Avoid empty filenames
+    let name = if safe.is_empty() { "untitled" } else { safe }
+
+    // Ensure uniqueness by appending a counter if needed
+    let base_path = self.notes_dir.join("{name}.md")
+    if !base_path.exists() {
+      return "{name}.md"
+    }
+
+    let mut counter = 1
+    loop {
+      let candidate = "{name}-{counter}.md"
+      if !self.notes_dir.join(candidate).exists() {
+        return candidate
+      }
+      counter += 1
+    }
+  }
+
+  /// Stop watching and clean up resources
+  pub async fn shutdown(self) {
+    if let some(watcher) = self.watcher {
+      watcher.close()
+    }
+    log.info("NoteStore shut down")
+  }
+}

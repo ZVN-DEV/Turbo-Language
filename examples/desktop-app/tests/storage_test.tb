@@ -1,0 +1,410 @@
+// =============================================================================
+// storage_test.tb — Tests for file system operations, auto-save, conflicts
+//
+// Demonstrates:
+//   - @test decorator for test functions
+//   - Async test functions with await
+//   - Filesystem sandboxing with TempDir for isolated test environments
+//   - Testing auto-save debounce behavior with controlled time
+//   - Conflict detection and resolution testing
+//   - Pattern matching on T ! E results and error variants
+//   - Concurrent file operations with all()
+//   - defer for test cleanup
+// =============================================================================
+
+import { NoteStore } from "../src/storage"
+import { Note, NoteMetadata, FileEvent, ConflictState, AppError } from "../src/models"
+import { TempDir } from "turbo/test-utils"
+import { Path, File } from "std/fs"
+import { DateTime, Duration } from "std/time"
+import { Timer } from "turbo/async"
+
+// ── Setup Helper ──
+
+/// Create a NoteStore backed by a temporary directory that is cleaned up after the test
+async fn test_store() -> (NoteStore, TempDir) {
+  let tmp = TempDir.new("turbo-notes-test")
+  let store = await NoteStore.new(tmp.path())?
+  (store, tmp)
+}
+
+// ── Note CRUD ──
+
+@test
+async fn test_create_note() {
+  let (store, _tmp) = await test_store()
+
+  let note = await store.create_note("My First Note")?
+
+  assert_eq(note.title, "My First Note")
+  assert(note.content.starts_with("# My First Note"))
+  assert(note.path.exists())
+}
+
+@test
+async fn test_create_note_generates_safe_filename() {
+  let (store, _tmp) = await test_store()
+
+  let note = await store.create_note("Notes about C++ & Rust: A Comparison!")?
+
+  // Filename should be sanitized
+  let filename = note.path.file_name().unwrap()
+  assert(!filename.contains(' '), "Filename should not contain spaces")
+  assert(!filename.contains('&'), "Filename should not contain special characters")
+  assert(filename.ends_with(".md"))
+}
+
+@test
+async fn test_create_duplicate_title_appends_counter() {
+  let (store, _tmp) = await test_store()
+
+  let note1 = await store.create_note("Ideas")?
+  let note2 = await store.create_note("Ideas")?
+
+  assert_ne(note1.path, note2.path)
+  assert_ne(note1.id, note2.id)
+
+  let name2 = note2.path.file_name().unwrap()
+  assert(name2.contains("-1"), "Second note should have a counter suffix: {name2}")
+}
+
+@test
+async fn test_save_and_reload_note() {
+  let (store, _tmp) = await test_store()
+
+  let note = await store.create_note("Test")?
+  let new_content = "# Test\n\nUpdated content with **bold** text."
+
+  await store.save_note(note.id, new_content)?
+
+  let loaded = store.get_note(note.id)
+  assert(loaded.is_some())
+  assert_eq(loaded.unwrap().content, new_content)
+}
+
+@test
+async fn test_save_updates_title_from_content() {
+  let (store, _tmp) = await test_store()
+
+  let note = await store.create_note("Original Title")?
+  await store.save_note(note.id, "# New Title\n\nSome body text.")?
+
+  let loaded = store.get_note(note.id).unwrap()
+  assert_eq(loaded.title, "New Title")
+}
+
+@test
+async fn test_delete_note() {
+  let (store, _tmp) = await test_store()
+
+  let note = await store.create_note("To Delete")?
+  let path = note.path.clone()
+  assert(path.exists())
+
+  await store.delete_note(note.id)?
+
+  assert(!path.exists(), "File should be removed from disk")
+  assert(store.get_note(note.id).is_none(), "Note should be removed from memory")
+}
+
+@test
+async fn test_delete_nonexistent_note_returns_error() {
+  let (store, _tmp) = await test_store()
+
+  match await store.delete_note("nonexistent-id") {
+    ok(_) => assert(false, "Should return error for nonexistent note")
+    err(AppError.IoError(_)) => {}  // Expected
+    err(e) => assert(false, "Unexpected error type: {e.message()}")
+  }
+}
+
+@test
+async fn test_list_notes_sorted_by_update_time() {
+  let (store, _tmp) = await test_store()
+
+  let note_a = await store.create_note("A")?
+  await Timer.sleep(Duration.from_ms(10))
+
+  let note_b = await store.create_note("B")?
+  await Timer.sleep(Duration.from_ms(10))
+
+  let note_c = await store.create_note("C")?
+
+  // Now update note_a so it becomes the most recently updated
+  await store.save_note(note_a.id, "# A\n\nUpdated")?
+
+  let notes = store.list_notes()
+  assert_eq(notes.len(), 3)
+  assert_eq(notes[0].title, "A")  // Most recently updated
+}
+
+// ── Metadata Extraction ──
+
+@test
+async fn test_metadata_from_frontmatter() {
+  let (store, tmp) = await test_store()
+
+  // Write a note with YAML frontmatter directly to disk
+  let path = tmp.path().join("tagged-note.md")
+  File.write_string(path, """---
+tags: ["rust", "turbo", "programming"]
+category: "tech"
+pinned: true
+---
+# Tagged Note
+
+This note has frontmatter metadata.
+""")?
+
+  // Reload store to pick up the new file
+  let store2 = await NoteStore.new(tmp.path())?
+  let notes = store2.list_notes()
+  let note = notes.find((n) => n.title == "Tagged Note")
+
+  assert(note.is_some(), "Should find the tagged note")
+  let n = note.unwrap()
+  assert_eq(n.metadata.tags, ["rust", "turbo", "programming"])
+  assert_eq(n.metadata.category, some("tech"))
+  assert_eq(n.metadata.pinned, true)
+}
+
+@test
+async fn test_word_count_and_reading_time() {
+  let (store, _tmp) = await test_store()
+
+  // Create a note with ~400 words (should be 2 min read)
+  let words = (0..400).map((_) => "word").collect::<[str]>().join(" ")
+  let note = await store.create_note("Long Note")?
+  await store.save_note(note.id, "# Long Note\n\n{words}")?
+
+  let loaded = store.get_note(note.id).unwrap()
+  assert(loaded.metadata.word_count >= 400)
+  assert(loaded.metadata.reading_time_minutes >= 2)
+}
+
+// ── Conflict Detection ──
+
+@test
+async fn test_no_conflict_when_file_unchanged() {
+  let (store, _tmp) = await test_store()
+
+  let note = await store.create_note("No Conflict")?
+
+  let conflict = await store.check_conflict(note.id, note.content)?
+
+  assert(!conflict.has_conflict())
+  match conflict {
+    ConflictState.NoConflict => {}  // Expected
+    _ => assert(false, "Expected NoConflict")
+  }
+}
+
+@test
+async fn test_conflict_when_external_modification() {
+  let (store, _tmp) = await test_store()
+
+  let note = await store.create_note("Conflict Test")?
+
+  // Simulate an external editor modifying the file
+  File.write_string(note.path, "# Conflict Test\n\nModified by another program.")?
+
+  let conflict = await store.check_conflict(note.id, note.content)?
+
+  assert(conflict.has_conflict(), "Should detect conflict")
+  match conflict {
+    ConflictState.ExternalChange(disk, ours, _) => {
+      assert(disk.contains("Modified by another program"))
+      assert(ours.contains("# Conflict Test"))
+    }
+    _ => assert(false, "Expected ExternalChange conflict")
+  }
+}
+
+@test
+async fn test_conflict_when_file_deleted_externally() {
+  let (store, _tmp) = await test_store()
+
+  let note = await store.create_note("To Be Deleted Externally")?
+
+  // Delete the file externally
+  File.remove(note.path)?
+
+  let conflict = await store.check_conflict(note.id, note.content)?
+
+  match conflict {
+    ConflictState.DeletedExternally(content) => {
+      assert(content.contains("# To Be Deleted Externally"))
+    }
+    _ => assert(false, "Expected DeletedExternally conflict")
+  }
+}
+
+@test
+async fn test_resolve_conflict_keep_ours() {
+  let (store, _tmp) = await test_store()
+
+  let note = await store.create_note("Resolve Test")?
+
+  // External modification
+  File.write_string(note.path, "External version")?
+
+  // Resolve by keeping our version
+  await store.resolve_conflict(note.id, keep_ours: true)?
+
+  // File should now contain our original content
+  let disk_content = File.read_string(note.path)?
+  assert(disk_content.starts_with("# Resolve Test"))
+}
+
+@test
+async fn test_resolve_conflict_keep_theirs() {
+  let (store, _tmp) = await test_store()
+
+  let note = await store.create_note("Resolve Test 2")?
+
+  // External modification
+  File.write_string(note.path, "# Resolve Test 2\n\nExternal version.")?
+
+  // Resolve by accepting the disk version
+  await store.resolve_conflict(note.id, keep_ours: false)?
+
+  // In-memory note should reflect the disk version
+  let loaded = store.get_note(note.id).unwrap()
+  assert_eq(loaded.content, "# Resolve Test 2\n\nExternal version.")
+}
+
+// ── Auto-Save ──
+
+@test
+async fn test_autosave_queues_and_flushes() {
+  let (store, _tmp) = await test_store()
+
+  let note = await store.create_note("Auto Save Test")?
+
+  // Start auto-save with a very short interval for testing
+  await store.start_autosave(
+    debounce: Duration.from_ms(50),
+    interval: Duration.from_ms(100),
+  )
+
+  // Queue an auto-save
+  store.queue_autosave(note.id, "# Auto Save Test\n\nAuto-saved content.")
+
+  // Wait for the auto-save to flush
+  await Timer.sleep(Duration.from_ms(200))
+
+  // Verify the file was updated
+  let disk_content = File.read_string(note.path)?
+  assert_eq(disk_content, "# Auto Save Test\n\nAuto-saved content.")
+}
+
+@test
+async fn test_autosave_coalesces_rapid_changes() {
+  let (store, _tmp) = await test_store()
+
+  let note = await store.create_note("Rapid Changes")?
+
+  await store.start_autosave(
+    debounce: Duration.from_ms(50),
+    interval: Duration.from_ms(200),
+  )
+
+  // Queue multiple rapid changes — only the last should be saved
+  store.queue_autosave(note.id, "Version 1")
+  store.queue_autosave(note.id, "Version 2")
+  store.queue_autosave(note.id, "Version 3")
+  store.queue_autosave(note.id, "Version 4 — Final")
+
+  await Timer.sleep(Duration.from_ms(300))
+
+  let disk_content = File.read_string(note.path)?
+  assert_eq(disk_content, "Version 4 — Final")
+}
+
+// ── Filesystem Sandboxing ──
+
+@test
+async fn test_scan_directory_ignores_non_markdown_files() {
+  let tmp = TempDir.new("turbo-notes-scan")
+
+  // Create various files
+  File.write_string(tmp.path().join("note.md"), "# A Note")?
+  File.write_string(tmp.path().join("data.json"), "{}")?
+  File.write_string(tmp.path().join("readme.txt"), "Hello")?
+  File.write_string(tmp.path().join("another.md"), "# Another")?
+
+  let store = await NoteStore.new(tmp.path())?
+  let notes = store.list_notes()
+
+  assert_eq(notes.len(), 2, "Should only load .md files, got {notes.len()}")
+}
+
+@test
+async fn test_save_note_nonexistent_id_returns_error() {
+  let (store, _tmp) = await test_store()
+
+  match await store.save_note("fake-id", "content") {
+    ok(_) => assert(false, "Should return error")
+    err(AppError.IoError(msg)) => {
+      assert(msg.contains("not found"), "Error should mention not found: {msg}")
+    }
+    err(e) => assert(false, "Unexpected error: {e.message()}")
+  }
+}
+
+// ── Concurrent Access ──
+
+@test
+async fn test_concurrent_note_creation() {
+  let (store, _tmp) = await test_store()
+
+  // Create 20 notes concurrently
+  let futures = (0..20).map((i) => {
+    store.create_note("Concurrent Note {i}")
+  })
+
+  let results = await all(futures)
+
+  let succeeded = results.filter((r) => r.is_ok()).len()
+  assert_eq(succeeded, 20, "All concurrent creates should succeed")
+
+  let notes = store.list_notes()
+  assert_eq(notes.len(), 20)
+}
+
+@test
+async fn test_concurrent_save_same_note() {
+  let (store, _tmp) = await test_store()
+
+  let note = await store.create_note("Shared Note")?
+
+  // Multiple concurrent saves to the same note
+  let futures = (0..10).map((i) => {
+    store.save_note(note.id, "# Shared Note\n\nVersion {i}")
+  })
+
+  let results = await all(futures)
+
+  // At least some should succeed (conflicts may cause some to fail)
+  let succeeded = results.filter((r) => r.is_ok()).len()
+  assert(succeeded > 0, "At least one save should succeed")
+
+  // The stored content should be one of the versions
+  let loaded = store.get_note(note.id).unwrap()
+  assert(loaded.content.starts_with("# Shared Note"))
+}
+
+// ── Cleanup ──
+
+@test
+async fn test_temp_dir_cleanup() {
+  let path = {
+    let tmp = TempDir.new("turbo-notes-cleanup")
+    let store = await NoteStore.new(tmp.path())?
+    await store.create_note("Will be cleaned up")?
+    tmp.path().clone()
+    // tmp is dropped here — directory should be cleaned up
+  }
+
+  assert(!path.exists(), "Temp directory should be cleaned up after drop")
+}

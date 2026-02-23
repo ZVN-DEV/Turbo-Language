@@ -1,0 +1,196 @@
+// =============================================================================
+// agent.tb — AI agent for task management
+//
+// Demonstrates:
+//   - tool fn keyword for LLM-callable functions
+//   - agent keyword for declaring AI agents
+//   - Doc comments (///) for auto-generated tool schemas
+//   - Guard statements for input validation
+//   - Pattern matching on optional values
+//   - Pipe operator for data transformation chains
+//   - Streaming with for await
+//   - Agent memory configuration
+//   - Agent ask() and stream() APIs
+// =============================================================================
+
+import { Shared } from "turbo/sync"
+import { log } from "turbo/log"
+import { Task, TaskStatus, TaskError, TaskFilter, UpdateTask } from "./models"
+import { TaskStore } from "./store"
+
+// =============================================================================
+// Tool Functions — these are automatically exposed to the LLM
+// =============================================================================
+
+/// The store reference is captured from the agent's context
+let store: Shared<TaskStore>
+
+tool fn list_tasks(status: str? = none, assignee: str? = none) -> [Task] {
+  /// List all tasks, optionally filtered by status or assignee
+  /// @param status - Filter by status: "todo", "in_progress", "done", or "blocked"
+  /// @param assignee - Filter by assignee name
+  let filter = TaskFilter { status, assignee }
+  await store.read().list(filter)
+}
+
+tool fn get_task(id: u64) -> Task ! TaskError {
+  /// Get details of a specific task by its ID
+  /// @param id - The task ID to look up
+  await store.read().get(id)
+}
+
+tool fn prioritize_task(id: u64, priority: u8) -> Task ! TaskError {
+  /// Set the priority of a task (1=highest, 5=lowest)
+  /// @param id - The task ID to update
+  /// @param priority - New priority value (1-5, where 1 is most urgent)
+  guard priority >= 1 && priority <= 5 else {
+    return err(TaskError.InvalidPriority(priority))
+  }
+  await store.write().update(id, UpdateTask { priority: some(priority) })
+}
+
+tool fn update_task_status(id: u64, status: str) -> Task ! TaskError {
+  /// Change the status of a task
+  /// @param id - The task ID to update
+  /// @param status - New status: "todo", "in_progress", or "done"
+  let new_status = match status {
+    "todo"        => TaskStatus.Todo
+    "in_progress" => TaskStatus.InProgress
+    "done"        => TaskStatus.Done
+    other         => TaskStatus.Blocked("Unknown status: {other}")
+  }
+  await store.write().update(id, UpdateTask { status: some(new_status) })
+}
+
+tool fn suggest_next_task() -> Task? {
+  /// Suggest the highest-priority incomplete task that should be worked on next
+  let tasks = await store.read().list()
+  tasks
+    .filter((t) => t.status.is_open())
+    .sort_by((t) => t.priority)
+    .first()
+}
+
+tool fn get_overdue_tasks() -> [Task] {
+  /// Get all tasks that are past their due date and not yet completed
+  let tasks = await store.read().list()
+  tasks.filter((t) => t.is_overdue())
+}
+
+tool fn get_task_summary() -> TaskSummaryReport {
+  /// Get a summary report of all tasks including counts by status and priority
+  let tasks = await store.read().list()
+  let stats = await store.read().stats()
+
+  let by_status = tasks
+    |> group_by((t) => t.status.to_string())
+    |> map_values((group) => group.len())
+
+  let by_priority = tasks
+    |> group_by((t) => "P{t.priority}")
+    |> map_values((group) => group.len())
+
+  let blocked_tasks = tasks
+    .filter((t) => match t.status { Blocked(_) => true, _ => false })
+    .map((t) => t.summary())
+
+  TaskSummaryReport {
+    total: stats.total,
+    done: stats.done,
+    overdue: stats.overdue,
+    by_status,
+    by_priority,
+    blocked_tasks,
+  }
+}
+
+// --- Report struct for the summary tool ---
+
+@derive(Debug, Schema, Serialize)
+struct TaskSummaryReport {
+  total: usize
+  done: usize
+  overdue: usize
+  by_status: {str: usize}
+  by_priority: {str: usize}
+  blocked_tasks: [str]
+}
+
+// =============================================================================
+// Agent Declaration — first-class language primitive
+// =============================================================================
+
+agent TaskAssistant {
+  model: "claude-sonnet"
+
+  system: """
+    You are a task management assistant. You help users organize, prioritize,
+    and track their tasks. Be concise and actionable.
+
+    Guidelines:
+    - When asked to organize, review all tasks and suggest priority changes
+    - When asked what to work on, suggest the highest-priority open task
+    - When reporting status, include counts and highlight overdue items
+    - Use the tools available to read and modify tasks directly
+    - Be proactive about identifying blocked or overdue tasks
+    """
+
+  tools: [
+    list_tasks,
+    get_task,
+    prioritize_task,
+    update_task_status,
+    suggest_next_task,
+    get_overdue_tasks,
+    get_task_summary,
+  ]
+
+  memory: ConversationMemory(max_turns: 20)
+  max_tokens: 2048
+  temperature: 0.3
+}
+
+impl TaskAssistant {
+  /// Create a new TaskAssistant with a reference to the task store
+  pub fn new(store: Shared<TaskStore>) -> TaskAssistant {
+    // Bind the store so tool functions can access it
+    let agent = TaskAssistant.init()
+    agent.bind_context({ store })
+    agent
+  }
+
+  /// Ask the agent a question and get a complete response
+  pub async fn ask(self, message: str) -> str ! TaskError {
+    match await self.send(message) {
+      ok(response) => response.text
+      err(e) => err(TaskError.AgentError(e.message()))
+    }
+  }
+
+  /// Stream a response token by token
+  pub async fn stream(self, message: str) -> Stream<str> {
+    let token_stream = self.send_stream(message)
+
+    // Transform the raw token stream into text chunks
+    async gen {
+      for await token in token_stream {
+        match token.kind {
+          .text(t) => yield t
+          .tool_call(name, _) => {
+            log.debug("Agent calling tool", { tool: name })
+          }
+          .tool_result(_) => {
+            log.debug("Tool returned result")
+          }
+          .done(usage) => {
+            log.info("Agent response complete", {
+              tokens: usage.total,
+              tool_calls: usage.tool_calls,
+            })
+          }
+          _ => {}
+        }
+      }
+    }
+  }
+}

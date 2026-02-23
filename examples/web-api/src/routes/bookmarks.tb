@@ -1,0 +1,520 @@
+// =============================================================================
+// routes/bookmarks.tb — Full CRUD for bookmarks with pagination and search
+//
+// Demonstrates:
+//   - REST API route definitions (GET, POST, PATCH, DELETE)
+//   - Request parsing with req.json<T>() and req.params, req.query
+//   - Generic PaginatedResponse<T> in practice
+//   - Full-text search integration
+//   - Response construction with status codes
+//   - Error propagation with ? operator
+//   - Pattern matching on T ! E results for error responses
+//   - Shared<T> state access in route handlers
+//   - Auth middleware integration via get_authenticated_user()
+//   - Pipe operator for data transformation
+//   - Tag cloud aggregation
+// =============================================================================
+
+import { Router, Response, Request } from "turbo/http"
+import { Shared } from "turbo/sync"
+import { DateTime } from "std/time"
+import { log } from "turbo/log"
+import {
+  Bookmark, CreateBookmark, UpdateBookmark, SearchQuery,
+  PaginatedResponse, TagCount, Visibility, ApiError, SyncEvent,
+} from "../models"
+import { SearchEngine } from "../search"
+import { get_authenticated_user } from "../auth"
+
+// --- Bookmark Store ---
+
+struct BookmarkState {
+  bookmarks: {u64: Bookmark}
+  next_id: u64
+}
+
+pub struct BookmarkStore {
+  state: Shared<BookmarkState>
+  search: SearchEngine
+}
+
+impl BookmarkStore {
+  pub fn new(search: SearchEngine) -> BookmarkStore {
+    BookmarkStore {
+      state: Shared.new(BookmarkState {
+        bookmarks: {:},
+        next_id: 1,
+      }),
+      search,
+    }
+  }
+
+  /// Create a new bookmark
+  pub async fn create(self, user_id: u64, input: CreateBookmark) -> Bookmark ! ApiError {
+    // Validate URL
+    guard !input.url.is_empty() else {
+      return err(ApiError.BadRequest("url", "URL must not be empty"))
+    }
+    guard input.url.starts_with("http://") || input.url.starts_with("https://") else {
+      return err(ApiError.BadRequest("url", "URL must start with http:// or https://"))
+    }
+
+    // Validate title
+    guard !input.title.is_empty() else {
+      return err(ApiError.BadRequest("title", "Title must not be empty"))
+    }
+    guard input.title.len() <= 500 else {
+      return err(ApiError.BadRequest("title", "Title must not exceed 500 characters"))
+    }
+
+    // Validate tags
+    for tag in input.tags {
+      guard tag.len() <= 50 else {
+        return err(ApiError.BadRequest("tags", "Tag '{tag}' exceeds 50 characters"))
+      }
+    }
+
+    let mut s = self.state.write()
+
+    // Check for duplicate URL for this user
+    let duplicate = s.bookmarks.values()
+      .any((b) => b.user_id == user_id && b.url == input.url)
+    guard !duplicate else {
+      return err(ApiError.Conflict("Bookmark with this URL already exists"))
+    }
+
+    let id = s.next_id
+    s.next_id += 1
+    let now = DateTime.now()
+
+    // Normalize tags: lowercase and deduplicate
+    let tags = input.tags
+      .map((t) => t.to_lowercase().trim())
+      .filter((t) => !t.is_empty())
+      |> unique()
+      |> collect()
+
+    let bookmark = Bookmark {
+      id,
+      user_id,
+      url: input.url,
+      title: input.title,
+      description: input.description,
+      tags,
+      notes: input.notes,
+      visibility: input.visibility,
+      is_starred: input.is_starred,
+      read_count: 0,
+      created_at: now,
+      updated_at: now,
+    }
+
+    s.bookmarks[id] = bookmark.clone()
+
+    // Index in search engine (outside write lock)
+    self.search.index_bookmark(bookmark.clone())
+
+    log.info("Bookmark created", { id, user_id, url: bookmark.url })
+    bookmark
+  }
+
+  /// Get a bookmark by ID
+  pub async fn get(self, id: u64) -> Bookmark ! ApiError {
+    let s = self.state.read()
+    match s.bookmarks.get(id) {
+      some(b) => b.clone()
+      none    => err(ApiError.NotFound("Bookmark", id))
+    }
+  }
+
+  /// List bookmarks for a user with pagination
+  pub async fn list(
+    self,
+    user_id: u64,
+    page: u32 = 1,
+    per_page: u32 = 20,
+    tag: str? = none,
+    is_starred: bool? = none,
+    visibility: Visibility? = none,
+  ) -> PaginatedResponse<Bookmark> {
+    let s = self.state.read()
+
+    let mut items: [Bookmark] = s.bookmarks.values()
+      .filter((b) => b.user_id == user_id)
+      .collect()
+
+    // Apply optional filters
+    if let some(t) = tag {
+      items = items.filter((b) => b.tags.contains(t.to_lowercase()))
+    }
+
+    if let some(starred) = is_starred {
+      items = items.filter((b) => b.is_starred == starred)
+    }
+
+    if let some(vis) = visibility {
+      items = items.filter((b) => b.visibility == vis)
+    }
+
+    // Sort by created_at descending (newest first)
+    items.sort_by((a, b) => b.created_at.cmp(a.created_at))
+
+    PaginatedResponse.from_slice(items, page, per_page)
+  }
+
+  /// Update a bookmark
+  pub async fn update(self, id: u64, user_id: u64, changes: UpdateBookmark) -> Bookmark ! ApiError {
+    let mut s = self.state.write()
+
+    guard let some(bookmark) = s.bookmarks.get(id) else {
+      return err(ApiError.NotFound("Bookmark", id))
+    }
+
+    // Ownership check
+    guard bookmark.user_id == user_id else {
+      return err(ApiError.Forbidden("You do not own this bookmark"))
+    }
+
+    // Validate URL if provided
+    if let some(url) = changes.url {
+      guard url.starts_with("http://") || url.starts_with("https://") else {
+        return err(ApiError.BadRequest("url", "URL must start with http:// or https://"))
+      }
+    }
+
+    // Normalize tags if provided
+    let normalized_tags = match changes.tags {
+      some(tags) => some(
+        tags
+          .map((t) => t.to_lowercase().trim())
+          .filter((t) => !t.is_empty())
+          |> unique()
+          |> collect()
+      )
+      none => none
+    }
+
+    let updated = Bookmark {
+      ..bookmark,
+      url:         changes.url         ?? bookmark.url,
+      title:       changes.title       ?? bookmark.title,
+      description: changes.description ?? bookmark.description,
+      tags:        normalized_tags     ?? bookmark.tags,
+      notes:       changes.notes       ?? bookmark.notes,
+      visibility:  changes.visibility  ?? bookmark.visibility,
+      is_starred:  changes.is_starred  ?? bookmark.is_starred,
+      updated_at:  DateTime.now(),
+    }
+
+    s.bookmarks[id] = updated.clone()
+
+    // Re-index in search engine
+    self.search.index_bookmark(updated.clone())
+
+    log.info("Bookmark updated", { id, user_id })
+    updated
+  }
+
+  /// Delete a bookmark
+  pub async fn delete(self, id: u64, user_id: u64) -> bool ! ApiError {
+    let mut s = self.state.write()
+
+    guard let some(bookmark) = s.bookmarks.get(id) else {
+      return err(ApiError.NotFound("Bookmark", id))
+    }
+
+    guard bookmark.user_id == user_id else {
+      return err(ApiError.Forbidden("You do not own this bookmark"))
+    }
+
+    s.bookmarks.remove(id)
+    self.search.remove_bookmark(id)
+
+    log.info("Bookmark deleted", { id, user_id })
+    true
+  }
+
+  /// Get tag cloud for a user (all tags with counts)
+  pub async fn tag_cloud(self, user_id: u64) -> [TagCount] {
+    let s = self.state.read()
+
+    s.bookmarks.values()
+      .filter((b) => b.user_id == user_id)
+      .flat_map((b) => b.tags)
+      |> group_by((tag) => tag)
+      |> map_entries((tag, occurrences) => TagCount {
+        name: tag,
+        count: occurrences.len() as u64,
+      })
+      |> collect()
+      |> sort_by((a, b) => b.count.cmp(a.count))
+  }
+
+  /// Full-text search with pagination
+  pub async fn search(
+    self,
+    user_id: u64,
+    query: SearchQuery,
+  ) -> PaginatedResponse<Bookmark> {
+    // Get search results from the engine
+    let results = self.search.search(query.q)
+    let result_ids: {u64} = results.map((r) => r.bookmark_id).collect()
+
+    let s = self.state.read()
+
+    // Fetch matching bookmarks, applying user filter and additional filters
+    let mut items: [Bookmark] = results
+      .filter_map((r) => s.bookmarks.get(r.bookmark_id))
+      .filter((b) => b.user_id == user_id)
+      .filter((b) => {
+        // Apply optional filters
+        let vis_ok = match query.visibility {
+          some(v) => b.visibility == v
+          none    => true
+        }
+        let star_ok = match query.is_starred {
+          some(s) => b.is_starred == s
+          none    => true
+        }
+        let tags_ok = if query.tags.is_empty() {
+          true
+        } else {
+          query.tags.all((t) => b.tags.contains(t.to_lowercase()))
+        }
+        vis_ok && star_ok && tags_ok
+      })
+      .collect()
+
+    PaginatedResponse.from_slice(items, query.page, query.per_page)
+  }
+
+  /// Increment the read count for a bookmark
+  pub async fn increment_read_count(self, id: u64) -> () ! ApiError {
+    let mut s = self.state.write()
+    guard let some(bookmark) = s.bookmarks.get(id) else {
+      return err(ApiError.NotFound("Bookmark", id))
+    }
+    s.bookmarks[id] = Bookmark {
+      ..bookmark,
+      read_count: bookmark.read_count + 1,
+    }
+    ok(())
+  }
+
+  /// Count bookmarks for a user
+  pub async fn count(self, user_id: u64) -> u64 {
+    let s = self.state.read()
+    s.bookmarks.values()
+      .filter((b) => b.user_id == user_id)
+      .count() as u64
+  }
+
+  /// Count total bookmarks across all users
+  pub async fn total_count(self) -> u64 {
+    self.state.read().bookmarks.len() as u64
+  }
+}
+
+// --- Router ---
+
+pub fn bookmark_routes(
+  store: Shared<BookmarkStore>,
+  sync_broadcaster: Shared<SyncBroadcaster>,
+) -> Router {
+  let router = Router.new()
+
+  // ── GET /bookmarks — List bookmarks with pagination + optional filters ──
+
+  router.get("/bookmarks", async (req) => {
+    let user_id = get_authenticated_user(req)?
+
+    let page = req.query.get("page")?.parse<u32>() ?? 1
+    let per_page = req.query.get("per_page")?.parse<u32>() ?? 20
+    let tag = req.query.get("tag")
+    let is_starred = req.query.get("starred")?.parse<bool>()
+    let visibility = req.query.get("visibility")?.and_then(Visibility.from_string)
+
+    // Clamp per_page to reasonable bounds
+    let per_page = per_page.clamp(1, 100)
+
+    let result = await store.read().list(
+      user_id,
+      page: page,
+      per_page: per_page,
+      tag: tag,
+      is_starred: is_starred,
+      visibility: visibility,
+    )
+
+    Response.json(result)
+  })
+
+  // ── GET /bookmarks/search — Full-text search ──
+
+  router.get("/bookmarks/search", async (req) => {
+    let user_id = get_authenticated_user(req)?
+
+    let q = req.query.get("q") ?? ""
+    guard !q.is_empty() else {
+      return Response.json(
+        { error: "Search query 'q' is required" },
+        status: 400
+      )
+    }
+
+    let tags_str = req.query.get("tags") ?? ""
+    let tags = if tags_str.is_empty() { [] } else { tags_str.split(",").collect() }
+
+    let query = SearchQuery {
+      q,
+      tags,
+      visibility: req.query.get("visibility")?.and_then(Visibility.from_string),
+      is_starred: req.query.get("starred")?.parse<bool>(),
+      page: req.query.get("page")?.parse<u32>() ?? 1,
+      per_page: (req.query.get("per_page")?.parse<u32>() ?? 20).clamp(1, 100),
+    }
+
+    let result = await store.read().search(user_id, query)
+    Response.json(result)
+  })
+
+  // ── GET /bookmarks/tags — Tag cloud ──
+
+  router.get("/bookmarks/tags", async (req) => {
+    let user_id = get_authenticated_user(req)?
+    let tags = await store.read().tag_cloud(user_id)
+    Response.json(tags)
+  })
+
+  // ── GET /bookmarks/:id — Get a single bookmark ──
+
+  router.get("/bookmarks/:id", async (req) => {
+    let user_id = get_authenticated_user(req)?
+    let id = req.params.id.parse<u64>()?
+
+    match await store.read().get(id) {
+      ok(bookmark) => {
+        // Only allow access to own bookmarks or public ones
+        guard bookmark.user_id == user_id || bookmark.visibility == Visibility.Public else {
+          return Response.json(
+            { error: "Bookmark not found" },
+            status: 404
+          )
+        }
+
+        // Increment read count
+        await store.write().increment_read_count(id)?
+
+        Response.json(bookmark)
+      }
+      err(ApiError.NotFound(_, _)) => Response.json(
+        { error: "Bookmark not found", id },
+        status: 404
+      )
+      err(e) => Response.json(
+        { error: e.message() },
+        status: e.status_code()
+      )
+    }
+  })
+
+  // ── POST /bookmarks — Create a new bookmark ──
+
+  router.post("/bookmarks", async (req) => {
+    let user_id = get_authenticated_user(req)?
+    let input = req.json<CreateBookmark>()?
+
+    match await store.write().create(user_id, input) {
+      ok(bookmark) => {
+        // Broadcast creation to sync clients
+        sync_broadcaster.read().broadcast(
+          user_id,
+          SyncEvent.BookmarkCreated(bookmark: bookmark.clone())
+        )
+
+        Response.json(bookmark, status: 201)
+      }
+      err(ApiError.Conflict(reason)) => Response.json(
+        { error: reason },
+        status: 409
+      )
+      err(ApiError.BadRequest(field, reason)) => Response.json(
+        { error: reason, field },
+        status: 400
+      )
+      err(e) => Response.json(
+        { error: e.message() },
+        status: e.status_code()
+      )
+    }
+  })
+
+  // ── PATCH /bookmarks/:id — Update a bookmark ──
+
+  router.patch("/bookmarks/:id", async (req) => {
+    let user_id = get_authenticated_user(req)?
+    let id = req.params.id.parse<u64>()?
+    let changes = req.json<UpdateBookmark>()?
+
+    match await store.write().update(id, user_id, changes) {
+      ok(bookmark) => {
+        // Broadcast update to sync clients
+        sync_broadcaster.read().broadcast(
+          user_id,
+          SyncEvent.BookmarkUpdated(bookmark: bookmark.clone())
+        )
+
+        Response.json(bookmark)
+      }
+      err(ApiError.NotFound(_, _)) => Response.json(
+        { error: "Bookmark not found", id },
+        status: 404
+      )
+      err(ApiError.Forbidden(reason)) => Response.json(
+        { error: reason },
+        status: 403
+      )
+      err(e) => Response.json(
+        { error: e.message() },
+        status: e.status_code()
+      )
+    }
+  })
+
+  // ── DELETE /bookmarks/:id — Delete a bookmark ──
+
+  router.delete("/bookmarks/:id", async (req) => {
+    let user_id = get_authenticated_user(req)?
+    let id = req.params.id.parse<u64>()?
+
+    match await store.write().delete(id, user_id) {
+      ok(_) => {
+        // Broadcast deletion to sync clients
+        sync_broadcaster.read().broadcast(
+          user_id,
+          SyncEvent.BookmarkDeleted(id: id)
+        )
+
+        Response.json({ deleted: true, id })
+      }
+      err(ApiError.NotFound(_, _)) => Response.json(
+        { error: "Bookmark not found", id },
+        status: 404
+      )
+      err(ApiError.Forbidden(reason)) => Response.json(
+        { error: reason },
+        status: 403
+      )
+      err(e) => Response.json(
+        { error: e.message() },
+        status: e.status_code()
+      )
+    }
+  })
+
+  router
+}
+
+// --- Sync Broadcaster (used by WebSocket handler) ---
+
+import { SyncBroadcaster } from "../routes/ws"

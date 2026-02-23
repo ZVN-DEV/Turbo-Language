@@ -1,0 +1,12 @@
+fn double(x: i64) -> i64 {
+    x * 2
+}
+
+fn add_one(x: i64) -> i64 {
+    x + 1
+}
+
+fn main() {
+    let result = double(add_one(4))
+    print(result)
+}

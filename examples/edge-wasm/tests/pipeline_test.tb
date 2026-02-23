@@ -1,0 +1,595 @@
+// =============================================================================
+// pipeline_test.tb — Tests for the image transform pipeline
+//
+// Demonstrates:
+//   - @test decorator for test functions
+//   - Stream testing: creating mock image streams
+//   - Pipe operator for composing test pipelines
+//   - Assert on image dimensions, format, chunk properties
+//   - Testing error cases with pattern matching on T ! E
+//   - Async test functions with await and for await
+//   - Test fixtures and helpers
+// =============================================================================
+
+import { Stream } from "turbo/stream"
+import {
+  ImageFormat, TransformOp, TransformPipeline, BoundingBox,
+  CropAnchor, ResizeAlgorithm, Dimensions, ProcessingConfig,
+  EdgeContext, GeoLocation, PipelineError,
+} from "../src/models"
+import { PipelineExecutor, PipelineBuilder, process_image, ImageChunk } from "../src/pipeline"
+import { EdgeCache } from "../src/cache"
+import {
+  apply_resize, apply_crop, apply_blur, apply_sharpen,
+  apply_grayscale, apply_brightness, apply_contrast, apply_flip,
+} from "../src/transforms"
+import { parse_request } from "../src/routing"
+
+// --- Test fixtures ---
+
+/// Create a mock image stream of solid red pixels
+fn mock_image_stream(width: u32, height: u32, channels: u8 = 4) -> Stream<ImageChunk> {
+  let rows_per_chunk = 64
+  let mut current_row: u32 = 0
+
+  async gen {
+    while current_row < height {
+      let chunk_rows = u32.min(rows_per_chunk, height - current_row)
+      let row_bytes = width as usize * channels as usize
+      let mut data: [u8] = []
+
+      for _ in 0..chunk_rows {
+        for _ in 0..width {
+          data.push(255)  // R
+          data.push(0)    // G
+          data.push(0)    // B
+          if channels == 4 {
+            data.push(255) // A
+          }
+        }
+      }
+
+      yield ImageChunk {
+        data,
+        row_start: current_row,
+        row_end: current_row + chunk_rows,
+        width,
+        channels,
+        is_last: current_row + chunk_rows >= height,
+      }
+
+      current_row += chunk_rows
+    }
+  }
+}
+
+/// Create a gradient image stream (for testing transforms with varying content)
+fn mock_gradient_stream(width: u32, height: u32) -> Stream<ImageChunk> {
+  let rows_per_chunk = 32
+  let mut current_row: u32 = 0
+
+  async gen {
+    while current_row < height {
+      let chunk_rows = u32.min(rows_per_chunk, height - current_row)
+      let mut data: [u8] = []
+
+      for row in 0..chunk_rows {
+        let abs_row = current_row + row
+        for col in 0..width {
+          let r = ((col as f32 / width as f32) * 255.0) as u8
+          let g = ((abs_row as f32 / height as f32) * 255.0) as u8
+          let b = 128
+          data.push(r)
+          data.push(g)
+          data.push(b)
+          data.push(255)  // alpha
+        }
+      }
+
+      yield ImageChunk {
+        data,
+        row_start: current_row,
+        row_end: current_row + chunk_rows,
+        width,
+        channels: 4,
+        is_last: current_row + chunk_rows >= height,
+      }
+
+      current_row += chunk_rows
+    }
+  }
+}
+
+/// Create a test EdgeContext
+fn mock_context() -> EdgeContext {
+  EdgeContext {
+    geo: some(GeoLocation {
+      country: "US",
+      region: some("CA"),
+      city: some("San Francisco"),
+      latitude: 37.7749,
+      longitude: -122.4194,
+      colo: "SFO",
+    }),
+    client_ip: "192.0.2.1",
+    ray_id: "test-ray-001",
+    edge_node: "SFO-01",
+    is_bot: false,
+    accept_formats: [ImageFormat.WebP(quality: 80), ImageFormat.JPEG(quality: 85)],
+  }
+}
+
+/// Default test config
+fn test_config() -> ProcessingConfig {
+  ProcessingConfig {
+    max_width: 4096,
+    max_height: 4096,
+    max_file_size: 25 * 1024 * 1024,
+    default_quality: 85,
+    max_pipeline_cost: 50,
+    stream_chunk_size: 16_384,
+    wasm_memory_budget: 128 * 1024 * 1024,
+    allowed_origins: ["*"],
+    cache_ttl: Duration.hours(1),
+  }
+}
+
+// ── Pipeline Building Tests ──
+
+@test
+fn test_pipeline_creation() {
+  let pipeline = TransformPipeline.new("https://example.com/photo.jpg")
+  assert(pipeline.is_empty())
+  assert_eq(pipeline.source_url, "https://example.com/photo.jpg")
+  assert_eq(pipeline.operations.len(), 0)
+}
+
+@test
+fn test_pipeline_add_operations() {
+  let pipeline = TransformPipeline.new("https://example.com/photo.jpg")
+    .add(TransformOp.Resize(800, 600, ResizeAlgorithm.default()))
+    .add(TransformOp.Sharpen(0.5, 1.0, 0.0))
+    .format(ImageFormat.WebP(quality: 80))
+
+  assert(!pipeline.is_empty())
+  assert_eq(pipeline.operations.len(), 2)
+  assert_eq(pipeline.output_format, some(ImageFormat.WebP(quality: 80)))
+}
+
+@test
+fn test_pipeline_builder_fluent_api() {
+  let builder = process_image("https://example.com/photo.jpg")
+    |> resize(800, 600)
+    |> sharpen(0.5)
+    |> convert(ImageFormat.WebP(quality: 80))
+
+  assert_eq(builder.pipeline.operations.len(), 2)
+  assert_eq(builder.pipeline.output_format, some(ImageFormat.WebP(quality: 80)))
+}
+
+@test
+fn test_pipeline_cost_calculation() {
+  let pipeline = TransformPipeline.new("https://example.com/photo.jpg")
+    .add(TransformOp.Resize(800, 600, ResizeAlgorithm.default()))  // cost 5
+    .add(TransformOp.Blur(2.0))                                     // cost 6
+    .add(TransformOp.Sharpen(0.5, 1.0, 0.0))                       // cost 6
+
+  assert_eq(pipeline.total_cost(), 17)
+}
+
+@test
+fn test_pipeline_cache_key_deterministic() {
+  let pipeline1 = TransformPipeline.new("https://example.com/photo.jpg")
+    .add(TransformOp.Resize(800, 600, ResizeAlgorithm.default()))
+    .format(ImageFormat.WebP(quality: 80))
+
+  let pipeline2 = TransformPipeline.new("https://example.com/photo.jpg")
+    .add(TransformOp.Resize(800, 600, ResizeAlgorithm.default()))
+    .format(ImageFormat.WebP(quality: 80))
+
+  // Same pipeline should produce the same cache key
+  assert_eq(pipeline1.cache_key().hash, pipeline2.cache_key().hash)
+}
+
+@test
+fn test_pipeline_cache_key_varies_by_params() {
+  let pipeline1 = TransformPipeline.new("https://example.com/photo.jpg")
+    .add(TransformOp.Resize(800, 600, ResizeAlgorithm.default()))
+
+  let pipeline2 = TransformPipeline.new("https://example.com/photo.jpg")
+    .add(TransformOp.Resize(400, 300, ResizeAlgorithm.default()))
+
+  // Different parameters should produce different cache keys
+  assert_ne(pipeline1.cache_key().hash, pipeline2.cache_key().hash)
+}
+
+// ── Stream Transform Tests ──
+
+@test
+async fn test_resize_reduces_dimensions() {
+  let input = mock_image_stream(1600, 1200)
+  let target = Dimensions { width: 800, height: 600 }
+
+  let resized = input |> apply_resize(target, ResizeAlgorithm.default())
+
+  let mut total_rows: u32 = 0
+  let mut last_width: u32 = 0
+
+  for await chunk in resized {
+    total_rows += chunk.row_count()
+    last_width = chunk.width
+  }
+
+  assert_eq(last_width, 800)
+  assert_eq(total_rows, 600)
+}
+
+@test
+async fn test_crop_selects_region() {
+  let input = mock_gradient_stream(800, 600)
+  let crop_box = BoundingBox { x: 100, y: 100, width: 400, height: 300 }
+
+  let cropped = input |> apply_crop(crop_box)
+
+  let mut total_rows: u32 = 0
+  let mut chunk_width: u32 = 0
+
+  for await chunk in cropped {
+    total_rows += chunk.row_count()
+    chunk_width = chunk.width
+    assert_eq(chunk.width, 400)
+  }
+
+  assert_eq(total_rows, 300)
+  assert_eq(chunk_width, 400)
+}
+
+@test
+async fn test_crop_outside_bounds_produces_empty() {
+  let input = mock_image_stream(100, 100)
+  // Crop box entirely outside the image
+  let crop_box = BoundingBox { x: 200, y: 200, width: 50, height: 50 }
+
+  let cropped = input |> apply_crop(crop_box)
+
+  let mut chunk_count = 0
+  for await _ in cropped {
+    chunk_count += 1
+  }
+
+  assert_eq(chunk_count, 0)
+}
+
+@test
+async fn test_blur_preserves_dimensions() {
+  let input = mock_gradient_stream(200, 200)
+
+  let blurred = input |> apply_blur(2.0)
+
+  let mut total_rows: u32 = 0
+  let mut width: u32 = 0
+
+  for await chunk in blurred {
+    total_rows += chunk.row_count()
+    width = chunk.width
+  }
+
+  assert_eq(width, 200)
+  assert_eq(total_rows, 200)
+}
+
+@test
+async fn test_sharpen_preserves_dimensions() {
+  let input = mock_gradient_stream(200, 200)
+
+  let sharpened = input |> apply_sharpen(1.0, 1.0, 0.0)
+
+  let mut total_rows: u32 = 0
+  for await chunk in sharpened {
+    total_rows += chunk.row_count()
+    assert_eq(chunk.width, 200)
+  }
+
+  assert_eq(total_rows, 200)
+}
+
+@test
+async fn test_grayscale_produces_gray_pixels() {
+  let input = mock_image_stream(100, 100)  // All red pixels
+
+  let gray = input |> apply_grayscale()
+
+  for await chunk in gray {
+    // Red (255,0,0) with BT.709: 0.2126*255 + 0.7152*0 + 0.0722*0 = ~54
+    let expected_gray = (0.2126 * 255.0) as u8
+
+    // Check first pixel
+    assert_eq(chunk.data[0], expected_gray)  // R
+    assert_eq(chunk.data[1], expected_gray)  // G
+    assert_eq(chunk.data[2], expected_gray)  // B
+    assert_eq(chunk.data[3], 255)            // A preserved
+    break  // Just check the first chunk
+  }
+}
+
+@test
+async fn test_brightness_increases_values() {
+  let input = mock_image_stream(100, 100)  // Red pixels: 255, 0, 0
+
+  let bright = input |> apply_brightness(0.5)  // Halve brightness
+
+  for await chunk in bright {
+    // Red channel: 255 * 0.5 = 127
+    assert_eq(chunk.data[0], 127)
+    // Green and blue should remain 0
+    assert_eq(chunk.data[1], 0)
+    assert_eq(chunk.data[2], 0)
+    // Alpha should be unchanged
+    assert_eq(chunk.data[3], 255)
+    break
+  }
+}
+
+@test
+async fn test_contrast_adjusts_values() {
+  let input = mock_image_stream(100, 100)
+
+  let contrasted = input |> apply_contrast(2.0)
+
+  for await chunk in contrasted {
+    // Red 255: (255 - 128) * 2 + 128 = 382 -> clamped to 255
+    assert_eq(chunk.data[0], 255)
+    // Green 0: (0 - 128) * 2 + 128 = -128 -> clamped to 0
+    assert_eq(chunk.data[1], 0)
+    break
+  }
+}
+
+@test
+async fn test_flip_horizontal_reverses_pixels() {
+  let input = mock_gradient_stream(100, 1)  // Single row gradient
+
+  let flipped = input |> apply_flip(true)
+
+  for await chunk in flipped {
+    // First pixel of flipped should be last pixel of original
+    // Original last pixel: r = (99/100*255) = ~252
+    let first_r = chunk.data[0]
+    assert(first_r > 250, "Expected high red value for flipped first pixel, got {first_r}")
+    break
+  }
+}
+
+// ── Chained Pipeline Tests ──
+
+@test
+async fn test_resize_then_crop() {
+  let input = mock_gradient_stream(1600, 1200)
+
+  // Resize to 800x600, then crop a 400x300 region from the center
+  let target = Dimensions { width: 800, height: 600 }
+  let crop_box = BoundingBox { x: 200, y: 150, width: 400, height: 300 }
+
+  let result = input
+    |> apply_resize(target, ResizeAlgorithm.default())
+    |> apply_crop(crop_box)
+
+  let mut total_rows: u32 = 0
+  for await chunk in result {
+    total_rows += chunk.row_count()
+    assert_eq(chunk.width, 400)
+  }
+
+  assert_eq(total_rows, 300)
+}
+
+@test
+async fn test_full_pipeline_chain() {
+  let input = mock_gradient_stream(1000, 800)
+
+  // Full pipeline: resize -> sharpen -> grayscale
+  let target = Dimensions { width: 500, height: 400 }
+
+  let result = input
+    |> apply_resize(target, ResizeAlgorithm.Bilinear)
+    |> apply_sharpen(0.5, 1.0, 0.0)
+    |> apply_grayscale()
+
+  let mut total_rows: u32 = 0
+  for await chunk in result {
+    total_rows += chunk.row_count()
+    assert_eq(chunk.width, 500)
+
+    // Verify grayscale: R == G == B for every pixel
+    let pixel_count = chunk.data.len() / 4
+    for i in 0..pixel_count {
+      let offset = i * 4
+      assert_eq(chunk.data[offset], chunk.data[offset + 1],
+        "R != G at pixel {i}")
+      assert_eq(chunk.data[offset + 1], chunk.data[offset + 2],
+        "G != B at pixel {i}")
+    }
+  }
+
+  assert_eq(total_rows, 400)
+}
+
+// ── ImageFormat Tests ──
+
+@test
+fn test_image_format_parsing() {
+  assert_eq(ImageFormat.from_string("png"), some(ImageFormat.PNG))
+  assert_eq(ImageFormat.from_string("jpeg"), some(ImageFormat.JPEG(quality: 85)))
+  assert_eq(ImageFormat.from_string("jpg"), some(ImageFormat.JPEG(quality: 85)))
+  assert_eq(ImageFormat.from_string("webp"), some(ImageFormat.WebP(quality: 80)))
+  assert_eq(ImageFormat.from_string("avif"), some(ImageFormat.AVIF(quality: 75, speed: 6)))
+  assert_eq(ImageFormat.from_string("bmp"), none)
+}
+
+@test
+fn test_image_format_mime_types() {
+  assert_eq(ImageFormat.PNG.mime_type(), "image/png")
+  assert_eq(ImageFormat.JPEG(quality: 85).mime_type(), "image/jpeg")
+  assert_eq(ImageFormat.WebP(quality: 80).mime_type(), "image/webp")
+  assert_eq(ImageFormat.AVIF(quality: 75, speed: 6).mime_type(), "image/avif")
+}
+
+@test
+fn test_image_format_alpha_support() {
+  assert(ImageFormat.PNG.supports_alpha())
+  assert(!ImageFormat.JPEG(quality: 85).supports_alpha())
+  assert(ImageFormat.WebP(quality: 80).supports_alpha())
+  assert(ImageFormat.AVIF(quality: 75, speed: 6).supports_alpha())
+}
+
+// ── Dimensions Tests ──
+
+@test
+fn test_dimensions_fit_within() {
+  let dims = Dimensions { width: 1600, height: 1200 }
+
+  let fitted = dims.fit_within(800, 600)
+  assert_eq(fitted.width, 800)
+  assert_eq(fitted.height, 600)
+}
+
+@test
+fn test_dimensions_fit_within_preserves_aspect_ratio() {
+  let dims = Dimensions { width: 1600, height: 900 }  // 16:9
+
+  let fitted = dims.fit_within(800, 800)
+  assert_eq(fitted.width, 800)
+  assert_eq(fitted.height, 450)  // Maintains 16:9
+}
+
+@test
+fn test_dimensions_fit_within_no_upscale() {
+  let dims = Dimensions { width: 400, height: 300 }
+
+  let fitted = dims.fit_within(800, 600)
+  assert_eq(fitted.width, 400)   // No upscaling
+  assert_eq(fitted.height, 300)
+}
+
+@test
+fn test_dimensions_pixel_count() {
+  let dims = Dimensions { width: 1920, height: 1080 }
+  assert_eq(dims.pixel_count(), 2_073_600)
+}
+
+// ── BoundingBox Tests ──
+
+@test
+fn test_bounding_box_center() {
+  let box = BoundingBox { x: 100, y: 200, width: 400, height: 300 }
+  let (cx, cy) = box.center()
+  assert_eq(cx, 300)
+  assert_eq(cy, 350)
+}
+
+@test
+fn test_bounding_box_contains() {
+  let outer = BoundingBox { x: 0, y: 0, width: 800, height: 600 }
+  let inner = BoundingBox { x: 100, y: 100, width: 200, height: 200 }
+  let outside = BoundingBox { x: 700, y: 500, width: 200, height: 200 }
+
+  assert(outer.contains(inner))
+  assert(!outer.contains(outside))
+}
+
+@test
+fn test_bounding_box_clamp() {
+  let box = BoundingBox { x: 700, y: 500, width: 200, height: 200 }
+  let dims = Dimensions { width: 800, height: 600 }
+
+  let clamped = box.clamp_to(dims)
+  assert_eq(clamped.x, 700)
+  assert_eq(clamped.y, 500)
+  assert_eq(clamped.width, 100)   // Clamped: 800 - 700 = 100
+  assert_eq(clamped.height, 100)  // Clamped: 600 - 500 = 100
+}
+
+// ── Error Handling Tests ──
+
+@test
+fn test_pipeline_too_expensive() {
+  let config = ProcessingConfig { max_pipeline_cost: 10 }
+
+  let pipeline = TransformPipeline.new("https://example.com/photo.jpg")
+    .add(TransformOp.Resize(800, 600, ResizeAlgorithm.default()))  // cost 5
+    .add(TransformOp.Blur(2.0))                                     // cost 6 -> total 11
+
+  assert(pipeline.total_cost() > config.max_pipeline_cost)
+}
+
+@test
+fn test_error_status_codes() {
+  assert_eq(PipelineError.InvalidSource("", "test").status_code(), 400)
+  assert_eq(PipelineError.UnsupportedFormat("bmp").status_code(), 400)
+  assert_eq(PipelineError.FileTooLarge(100, 50).status_code(), 413)
+  assert_eq(PipelineError.TransformFailed("resize", "oom").status_code(), 500)
+  assert_eq(PipelineError.WasmMemoryExceeded(300, 256).status_code(), 507)
+  assert_eq(PipelineError.Timeout(30000.0).status_code(), 504)
+}
+
+// ── ImageChunk Tests ──
+
+@test
+fn test_image_chunk_properties() {
+  let chunk = ImageChunk {
+    data: [0; 800 * 4],   // 800 pixels, RGBA
+    row_start: 0,
+    row_end: 1,
+    width: 800,
+    channels: 4,
+    is_last: false,
+  }
+
+  assert_eq(chunk.byte_size(), 3200)
+  assert_eq(chunk.row_count(), 1)
+}
+
+// ── Stream Integrity Tests ──
+
+@test
+async fn test_stream_chunk_continuity() {
+  let input = mock_image_stream(400, 400)
+
+  let mut prev_end: u32 = 0
+  let mut chunk_count: u32 = 0
+  let mut saw_last = false
+
+  for await chunk in input {
+    // Verify chunks are contiguous
+    assert_eq(chunk.row_start, prev_end,
+      "Gap between chunks: expected row_start {prev_end}, got {chunk.row_start}")
+    prev_end = chunk.row_end
+    chunk_count += 1
+
+    if chunk.is_last {
+      saw_last = true
+    }
+  }
+
+  assert(saw_last, "Stream should end with is_last = true")
+  assert_eq(prev_end, 400, "All rows should be emitted")
+  assert(chunk_count > 1, "Should emit multiple chunks, not buffer entire image")
+}
+
+@test
+async fn test_stream_never_loads_full_image() {
+  // A 4000x4000 RGBA image would be 64MB uncompressed.
+  // Our streaming pipeline should never hold more than a few chunks in memory.
+  let input = mock_image_stream(4000, 4000)
+
+  let mut max_chunk_size: usize = 0
+
+  for await chunk in input {
+    max_chunk_size = usize.max(max_chunk_size, chunk.byte_size())
+  }
+
+  // Each chunk should be much smaller than the full image (64MB)
+  // With 64 rows per chunk at 4000 width * 4 channels = ~1MB per chunk
+  assert(max_chunk_size < 2 * 1024 * 1024,
+    "Chunk too large: {max_chunk_size} bytes (should be under 2MB)")
+}

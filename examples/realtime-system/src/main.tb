@@ -1,0 +1,187 @@
+// =============================================================================
+// main.tb — TurboExchange system bootstrap
+//
+// Demonstrates:
+//   - Top-level await for async startup
+//   - Structured logging with turbo/log
+//   - Configuration from environment with defaults
+//   - Graceful shutdown with defer
+//   - Spawning multiple concurrent services (matching engine, feed, API)
+//   - Supervisor tree for fault tolerance
+//   - Channel-based event routing between components
+// =============================================================================
+
+import { Server } from "turbo/http"
+import { log } from "turbo/log"
+import { env } from "turbo/env"
+import { Shared } from "turbo/sync"
+import { Duration } from "std/time"
+
+import { Trade, EngineEvent } from "./models"
+import { ExchangeService } from "./matching"
+import { PriceFeedServer, bridge_events_to_feed } from "./feed"
+import { create_router } from "./api"
+import { ExchangeMetrics, start_otel_exporter, start_console_dashboard } from "./metrics"
+
+// =============================================================================
+// Configuration
+// =============================================================================
+
+@derive(Debug, Clone)
+struct Config {
+  api_host: str
+  api_port: u16
+  ws_port: u16
+  symbols: [str]
+  log_level: str
+  otel_endpoint: str?
+  dashboard_interval: u64
+}
+
+fn load_config() -> Config {
+  Config {
+    api_host:           env.get("EXCHANGE_HOST")        ?? "0.0.0.0",
+    api_port:           env.get("EXCHANGE_API_PORT")?.parse<u16>() ?? 8080,
+    ws_port:            env.get("EXCHANGE_WS_PORT")?.parse<u16>() ?? 8081,
+    symbols:            env.get("EXCHANGE_SYMBOLS")?.split(",") ?? ["AAPL", "GOOGL", "MSFT", "AMZN", "TSLA"],
+    log_level:          env.get("EXCHANGE_LOG_LEVEL")   ?? "info",
+    otel_endpoint:      env.get("OTEL_ENDPOINT"),
+    dashboard_interval: env.get("EXCHANGE_DASHBOARD_INTERVAL")?.parse<u64>() ?? 5,
+  }
+}
+
+// =============================================================================
+// Application entry point
+// =============================================================================
+
+async fn main() -> () ! Error {
+  // Load configuration
+  let config = load_config()
+
+  // Initialize structured logging
+  log.init(level: config.log_level, format: "json")
+  log.info("TurboExchange starting", {
+    version: "0.1.0",
+    symbols: config.symbols,
+    api_port: config.api_port,
+    ws_port: config.ws_port,
+  })
+
+  // --- Create shared state ---
+
+  let metrics = Shared.new(ExchangeMetrics.new())
+  let trade_history: Shared<[Trade]> = Shared.new([])
+
+  // --- Start the matching engine ---
+
+  let exchange = ExchangeService.new(config.symbols)
+  let exchange_shared = Shared.new(exchange)
+  let event_rx = exchange_shared.read().events()
+
+  log.info("Matching engine initialized", { symbols: config.symbols })
+
+  // --- Start the WebSocket price feed ---
+
+  let feed = PriceFeedServer.new(config.ws_port)
+
+  // Spawn the feed server
+  let feed_handle = spawn async {
+    await feed.start(config.ws_port)
+  }
+  log.info("WebSocket price feed started", { port: config.ws_port })
+
+  // --- Bridge engine events to the feed and trade history ---
+
+  let feed_ref = feed.clone()
+  let trade_history_ref = trade_history.clone()
+  let metrics_ref = metrics.clone()
+
+  let event_bridge_handle = spawn async {
+    for await event in event_rx {
+      match event {
+        EngineEvent.TradeExecuted(ref trade) => {
+          // Record trade in history
+          trade_history_ref.write().push(trade.clone())
+          // Broadcast to WebSocket clients
+          feed_ref.broadcast_trade(trade.clone())
+          // Update metrics
+          metrics_ref.read().record_trade()
+        }
+        EngineEvent.BookUpdated(ref snapshot) => {
+          feed_ref.broadcast_book(snapshot.clone())
+        }
+        EngineEvent.OrderRejected(id, ref reason) => {
+          metrics_ref.read().record_rejection()
+          log.warn("Order rejected", { order_id: id, reason })
+        }
+        EngineEvent.OrderCancelled(id) => {
+          metrics_ref.read().record_cancellation()
+        }
+        _ => {}
+      }
+    }
+  }
+
+  // --- Start the REST API server ---
+
+  let router = create_router(exchange_shared, metrics.clone(), trade_history)
+
+  let api_server = Server.new(router, middleware: [
+    cors(),
+    rate_limit(1_000),     // 1000 requests/sec rate limit
+    request_logger(),
+  ])
+
+  // --- Start metrics exporters ---
+
+  // Console dashboard
+  let dashboard_handle = spawn async {
+    await start_console_dashboard(
+      metrics.clone(),
+      interval: Duration.from_secs(config.dashboard_interval),
+    )
+  }
+
+  // OpenTelemetry exporter (if configured)
+  if let some(otel_endpoint) = config.otel_endpoint {
+    spawn async {
+      await start_otel_exporter(
+        metrics.clone(),
+        endpoint: otel_endpoint,
+      )
+    }
+    log.info("OpenTelemetry exporter started", { endpoint: otel_endpoint })
+  }
+
+  // --- Graceful shutdown ---
+
+  defer {
+    log.info("Shutting down TurboExchange")
+
+    // Print final metrics
+    let final_metrics = metrics.read().snapshot()
+    log.info("Final metrics", {
+      total_orders: final_metrics.orders_total,
+      total_trades: final_metrics.trades_total,
+      p99_latency_us: final_metrics.match_latency_p99_us,
+      uptime_seconds: final_metrics.uptime_seconds,
+    })
+
+    // Shutdown exchange
+    await exchange_shared.read().shutdown()
+
+    // Shutdown API server
+    await api_server.shutdown()
+
+    log.info("TurboExchange stopped")
+  }
+
+  // --- Start listening ---
+
+  log.info("TurboExchange ready", {
+    api: "http://{config.api_host}:{config.api_port}",
+    ws: "ws://{config.api_host}:{config.ws_port}",
+  })
+
+  await api_server.listen(config.api_port, host: config.api_host)
+}

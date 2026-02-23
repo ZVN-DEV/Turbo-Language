@@ -1,0 +1,334 @@
+// =============================================================================
+// middleware.tb — Rate limiter, CORS, request logger, metrics collector
+//
+// Demonstrates:
+//   - Shared<T> for thread-safe middleware state
+//   - Middleware as higher-order async functions
+//   - const fn for configuration constants
+//   - DateTime and duration arithmetic
+//   - Pattern matching on HTTP methods
+//   - Structured logging with context objects
+//   - Arrow functions in map/filter chains
+//   - Guard statements for early returns
+//   - Atomic counters for metrics
+// =============================================================================
+
+import { Request, Response, Middleware } from "turbo/http"
+import { Shared } from "turbo/sync"
+import { Atomic } from "turbo/sync"
+import { DateTime, Duration } from "std/time"
+import { log } from "turbo/log"
+
+// =============================================================================
+// Rate Limiter — token bucket algorithm per IP
+// =============================================================================
+
+struct RateLimitEntry {
+  tokens: f64
+  last_refill: DateTime
+}
+
+struct RateLimitState {
+  buckets: {str: RateLimitEntry}
+  max_tokens: f64
+  refill_rate: f64          // tokens per second
+  window: Duration
+}
+
+/// Create a rate limiting middleware
+/// @param max_requests - Maximum requests per window
+/// @param window_seconds - Time window in seconds (default: 60)
+pub fn rate_limiter(max_requests: u32, window_seconds: u64 = 60) -> Middleware {
+  let state = Shared.new(RateLimitState {
+    buckets: {:},
+    max_tokens: max_requests as f64,
+    refill_rate: (max_requests as f64) / (window_seconds as f64),
+    window: Duration.seconds(window_seconds),
+  })
+
+  async (req: Request, next: fn) -> Response {
+    let client_ip = req.headers.get("X-Forwarded-For")
+      ?? req.headers.get("X-Real-IP")
+      ?? req.remote_addr
+
+    let now = DateTime.now()
+    let mut s = state.write()
+
+    // Get or create bucket for this IP
+    let entry = match s.buckets.get(client_ip) {
+      some(existing) => {
+        // Refill tokens based on elapsed time
+        let elapsed = now.duration_since(existing.last_refill).as_seconds_f64()
+        let new_tokens = (existing.tokens + elapsed * s.refill_rate).min(s.max_tokens)
+        RateLimitEntry { tokens: new_tokens, last_refill: now }
+      }
+      none => RateLimitEntry { tokens: s.max_tokens, last_refill: now }
+    }
+
+    // Check if enough tokens remain
+    if entry.tokens < 1.0 {
+      let retry_after = ((1.0 - entry.tokens) / s.refill_rate).ceil() as u64
+      log.warn("Rate limited", { ip: client_ip, retry_after })
+
+      s.buckets[client_ip] = entry
+      return Response.json(
+        { error: "Rate limit exceeded", retry_after },
+        status: 429,
+        headers: { "Retry-After": "{retry_after}" }
+      )
+    }
+
+    // Consume a token
+    s.buckets[client_ip] = RateLimitEntry {
+      tokens: entry.tokens - 1.0,
+      last_refill: entry.last_refill,
+    }
+
+    // Add rate limit headers to response
+    let remaining = (entry.tokens - 1.0).floor() as u32
+    let resp = await next(req)
+    resp.set_header("X-RateLimit-Limit", "{max_requests}")
+    resp.set_header("X-RateLimit-Remaining", "{remaining}")
+    resp.set_header("X-RateLimit-Reset", "{now.timestamp() + window_seconds}")
+    resp
+  }
+}
+
+// =============================================================================
+// CORS — Cross-Origin Resource Sharing
+// =============================================================================
+
+@derive(Debug, Clone)
+struct CorsConfig {
+  allowed_origins: [str]
+  allowed_methods: [str]
+  allowed_headers: [str]
+  expose_headers: [str]
+  max_age: u64
+  allow_credentials: bool
+}
+
+/// Create CORS middleware with sensible defaults
+pub fn cors(config: CorsConfig? = none) -> Middleware {
+  let cfg = config ?? CorsConfig {
+    allowed_origins: ["*"],
+    allowed_methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allowed_headers: ["Content-Type", "Authorization", "X-Request-ID"],
+    expose_headers: ["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-Request-ID"],
+    max_age: 86400,
+    allow_credentials: false,
+  }
+
+  async (req: Request, next: fn) -> Response {
+    let origin = req.headers.get("Origin") ?? "*"
+
+    // Check if origin is allowed
+    let origin_allowed = cfg.allowed_origins.contains("*")
+      || cfg.allowed_origins.contains(origin)
+
+    let cors_origin = if origin_allowed { origin } else { "" }
+
+    // Handle preflight OPTIONS requests
+    if req.method == "OPTIONS" {
+      return Response.new(status: 204)
+        .set_header("Access-Control-Allow-Origin", cors_origin)
+        .set_header("Access-Control-Allow-Methods", cfg.allowed_methods.join(", "))
+        .set_header("Access-Control-Allow-Headers", cfg.allowed_headers.join(", "))
+        .set_header("Access-Control-Max-Age", "{cfg.max_age}")
+        .set_header("Access-Control-Allow-Credentials", "{cfg.allow_credentials}")
+    }
+
+    // Process the actual request
+    let resp = await next(req)
+
+    // Add CORS headers to response
+    resp
+      .set_header("Access-Control-Allow-Origin", cors_origin)
+      .set_header("Access-Control-Expose-Headers", cfg.expose_headers.join(", "))
+      .set_header("Access-Control-Allow-Credentials", "{cfg.allow_credentials}")
+  }
+}
+
+// =============================================================================
+// Request Logger — structured JSON logging for every request
+// =============================================================================
+
+/// Create a request logging middleware with timing information
+pub fn request_logger() -> Middleware {
+  async (req: Request, next: fn) -> Response {
+    let start = DateTime.now()
+    let request_id = req.headers.get("X-Request-ID")
+      ?? crypto.random_hex(16)
+    let method = req.method
+    let path = req.path
+
+    log.info("Request started", {
+      request_id,
+      method,
+      path,
+      ip: req.remote_addr,
+      user_agent: req.headers.get("User-Agent") ?? "unknown",
+    })
+
+    // Set request ID on the request for downstream use
+    req.state.set("request_id", request_id)
+
+    // Execute the handler
+    let resp = await next(req)
+
+    let duration = DateTime.now().duration_since(start)
+    let status = resp.status
+
+    // Log based on status code
+    let log_fn = if status >= 500 {
+      log.error
+    } else if status >= 400 {
+      log.warn
+    } else {
+      log.info
+    }
+
+    log_fn("Request completed", {
+      request_id,
+      method,
+      path,
+      status,
+      duration_ms: duration.as_millis(),
+    })
+
+    // Add request ID and timing headers
+    resp
+      .set_header("X-Request-ID", request_id)
+      .set_header("X-Response-Time", "{duration.as_millis()}ms")
+  }
+}
+
+// =============================================================================
+// Metrics Collector — counters, histograms, and gauges
+// =============================================================================
+
+pub struct Metrics {
+  total_requests: Atomic<u64>
+  active_requests: Atomic<i64>
+  requests_by_method: Shared<{str: u64}>
+  requests_by_status: Shared<{u16: u64}>
+  response_times: Shared<[f64]>
+  active_ws_connections: Atomic<u32>
+  start_time: DateTime
+}
+
+impl Metrics {
+  pub fn new() -> Metrics {
+    Metrics {
+      total_requests: Atomic.new(0),
+      active_requests: Atomic.new(0),
+      requests_by_method: Shared.new({:}),
+      requests_by_status: Shared.new({:}),
+      response_times: Shared.new([]),
+      active_ws_connections: Atomic.new(0),
+      start_time: DateTime.now(),
+    }
+  }
+
+  /// Get a snapshot of current metrics
+  pub fn snapshot(self) -> MetricsSnapshot {
+    let times = self.response_times.read()
+    let p50 = percentile(times, 50.0)
+    let p95 = percentile(times, 95.0)
+    let p99 = percentile(times, 99.0)
+    let avg = if times.len() > 0 {
+      times.sum() / times.len() as f64
+    } else {
+      0.0
+    }
+
+    MetricsSnapshot {
+      total_requests: self.total_requests.load(),
+      active_requests: self.active_requests.load(),
+      requests_by_method: self.requests_by_method.read().clone(),
+      requests_by_status: self.requests_by_status.read().clone(),
+      avg_response_ms: avg,
+      p50_response_ms: p50,
+      p95_response_ms: p95,
+      p99_response_ms: p99,
+      active_ws_connections: self.active_ws_connections.load(),
+      uptime_seconds: DateTime.now().duration_since(self.start_time).as_secs(),
+    }
+  }
+
+  /// Record a WebSocket connection opening
+  pub fn ws_connect(self) {
+    self.active_ws_connections.fetch_add(1)
+  }
+
+  /// Record a WebSocket connection closing
+  pub fn ws_disconnect(self) {
+    self.active_ws_connections.fetch_sub(1)
+  }
+}
+
+@derive(Debug, Clone, Schema, Serialize)
+struct MetricsSnapshot {
+  total_requests: u64
+  active_requests: i64
+  requests_by_method: {str: u64}
+  requests_by_status: {u16: u64}
+  avg_response_ms: f64
+  p50_response_ms: f64
+  p95_response_ms: f64
+  p99_response_ms: f64
+  active_ws_connections: u32
+  uptime_seconds: u64
+}
+
+/// Calculate a percentile from a sorted slice of values
+fn percentile(values: [f64], pct: f64) -> f64 {
+  if values.is_empty() {
+    return 0.0
+  }
+  let mut sorted = values.clone()
+  sorted.sort()
+  let idx = ((pct / 100.0) * (sorted.len() - 1) as f64).round() as usize
+  sorted[idx]
+}
+
+/// Create a metrics collection middleware
+pub fn metrics_collector(metrics: Shared<Metrics>) -> Middleware {
+  async (req: Request, next: fn) -> Response {
+    metrics.read().total_requests.fetch_add(1)
+    metrics.read().active_requests.fetch_add(1)
+
+    // Track method
+    {
+      let mut by_method = metrics.read().requests_by_method.write()
+      let method = req.method
+      by_method[method] = (by_method.get(method) ?? 0) + 1
+    }
+
+    let start = DateTime.now()
+    let resp = await next(req)
+    let duration_ms = DateTime.now().duration_since(start).as_millis() as f64
+
+    metrics.read().active_requests.fetch_sub(1)
+
+    // Track status code
+    {
+      let mut by_status = metrics.read().requests_by_status.write()
+      let status = resp.status
+      by_status[status] = (by_status.get(status) ?? 0) + 1
+    }
+
+    // Track response time
+    {
+      let mut times = metrics.read().response_times.write()
+      times.push(duration_ms)
+
+      // Keep only last 10,000 samples to bound memory
+      if times.len() > 10_000 {
+        times.drain(0..5_000)
+      }
+    }
+
+    resp
+  }
+}

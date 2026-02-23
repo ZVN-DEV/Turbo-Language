@@ -1,0 +1,364 @@
+// =============================================================================
+// routes/users.tb — User registration, login, profile, and settings
+//
+// Demonstrates:
+//   - REST API route definitions for auth-related endpoints
+//   - Password hashing and JWT token signing
+//   - Request body parsing with req.json<T>()
+//   - Shared<T> state for user store
+//   - Pattern matching on error variants for HTTP responses
+//   - Guard statements for input validation
+//   - String interpolation in error messages
+//   - T? optional types in update DTOs
+// =============================================================================
+
+import { Router, Response, Request } from "turbo/http"
+import { Shared } from "turbo/sync"
+import { DateTime } from "std/time"
+import { log } from "turbo/log"
+import {
+  User, CreateUser, LoginRequest, UpdateProfile, UpdateSettings,
+  UserSettings, ApiError, AuthToken, FieldError,
+} from "../models"
+import {
+  hash_password, verify_password, sign_token,
+  get_authenticated_user, TokenBlacklist,
+} from "../auth"
+
+// --- User Store ---
+
+struct UserState {
+  users: {u64: User}
+  by_username: {str: u64}
+  by_email: {str: u64}
+  next_id: u64
+}
+
+pub struct UserStore {
+  state: Shared<UserState>
+}
+
+impl UserStore {
+  pub fn new() -> UserStore {
+    UserStore {
+      state: Shared.new(UserState {
+        users: {:},
+        by_username: {:},
+        by_email: {:},
+        next_id: 1,
+      })
+    }
+  }
+
+  /// Register a new user
+  pub async fn register(self, input: CreateUser) -> User ! ApiError {
+    // Validate fields
+    let mut errors: [FieldError] = []
+
+    if input.username.len() < 3 {
+      errors.push(FieldError { field: "username", message: "must be at least 3 characters" })
+    }
+    if input.username.len() > 30 {
+      errors.push(FieldError { field: "username", message: "must not exceed 30 characters" })
+    }
+    if !input.username.chars().all((c) => c.is_alphanumeric() || c == '_') {
+      errors.push(FieldError { field: "username", message: "must contain only letters, numbers, and underscores" })
+    }
+    if !input.email.contains("@") || !input.email.contains(".") {
+      errors.push(FieldError { field: "email", message: "must be a valid email address" })
+    }
+    if input.password.len() < 8 {
+      errors.push(FieldError { field: "password", message: "must be at least 8 characters" })
+    }
+
+    guard errors.is_empty() else {
+      return err(ApiError.ValidationError(errors))
+    }
+
+    let mut s = self.state.write()
+
+    // Check for uniqueness
+    guard !s.by_username.contains_key(input.username) else {
+      return err(ApiError.Conflict("Username '{input.username}' is already taken"))
+    }
+    guard !s.by_email.contains_key(input.email) else {
+      return err(ApiError.Conflict("Email '{input.email}' is already registered"))
+    }
+
+    let password_hash = hash_password(input.password)?
+
+    let id = s.next_id
+    s.next_id += 1
+    let now = DateTime.now()
+
+    let user = User {
+      id,
+      username: input.username,
+      email: input.email,
+      password_hash,
+      display_name: input.display_name,
+      created_at: now,
+      updated_at: now,
+      settings: UserSettings {},
+    }
+
+    s.users[id] = user.clone()
+    s.by_username[user.username] = id
+    s.by_email[user.email] = id
+
+    log.info("User registered", { id, username: user.username })
+    user
+  }
+
+  /// Authenticate a user and return their record
+  pub async fn authenticate(self, username: str, password: str) -> User ! ApiError {
+    let s = self.state.read()
+
+    let user_id = match s.by_username.get(username) {
+      some(id) => id
+      none     => return err(ApiError.Unauthorized("Invalid username or password"))
+    }
+
+    let user = s.users[user_id].clone()
+
+    let valid = verify_password(password, user.password_hash)?
+    guard valid else {
+      return err(ApiError.Unauthorized("Invalid username or password"))
+    }
+
+    user
+  }
+
+  /// Get a user by ID
+  pub async fn get(self, id: u64) -> User ! ApiError {
+    let s = self.state.read()
+    match s.users.get(id) {
+      some(u) => u.clone()
+      none    => err(ApiError.NotFound("User", id))
+    }
+  }
+
+  /// Update user profile
+  pub async fn update_profile(self, id: u64, changes: UpdateProfile) -> User ! ApiError {
+    let mut s = self.state.write()
+
+    guard let some(user) = s.users.get(id) else {
+      return err(ApiError.NotFound("User", id))
+    }
+
+    // If email is changing, check uniqueness
+    if let some(new_email) = changes.email {
+      if new_email != user.email {
+        guard !s.by_email.contains_key(new_email) else {
+          return err(ApiError.Conflict("Email '{new_email}' is already registered"))
+        }
+        // Update email index
+        s.by_email.remove(user.email)
+        s.by_email[new_email] = id
+      }
+    }
+
+    let updated = User {
+      ..user,
+      display_name: changes.display_name ?? user.display_name,
+      email: changes.email ?? user.email,
+      updated_at: DateTime.now(),
+    }
+
+    s.users[id] = updated.clone()
+    log.info("Profile updated", { id })
+    updated
+  }
+
+  /// Update user settings
+  pub async fn update_settings(self, id: u64, changes: UpdateSettings) -> UserSettings ! ApiError {
+    let mut s = self.state.write()
+
+    guard let some(user) = s.users.get(id) else {
+      return err(ApiError.NotFound("User", id))
+    }
+
+    let new_settings = UserSettings {
+      default_visibility: changes.default_visibility ?? user.settings.default_visibility,
+      bookmarks_per_page: changes.bookmarks_per_page ?? user.settings.bookmarks_per_page,
+      enable_sync:        changes.enable_sync        ?? user.settings.enable_sync,
+      theme:              changes.theme               ?? user.settings.theme,
+    }
+
+    // Validate bookmarks_per_page bounds
+    guard new_settings.bookmarks_per_page >= 1 && new_settings.bookmarks_per_page <= 100 else {
+      return err(ApiError.BadRequest("bookmarks_per_page", "must be between 1 and 100"))
+    }
+
+    s.users[id] = User {
+      ..user,
+      settings: new_settings.clone(),
+      updated_at: DateTime.now(),
+    }
+
+    log.info("Settings updated", { id })
+    new_settings
+  }
+
+  /// Count total users
+  pub async fn count(self) -> u64 {
+    self.state.read().users.len() as u64
+  }
+}
+
+// --- Router ---
+
+/// Sanitize a user record for API output (strip password_hash)
+fn sanitize_user(user: User) -> {str: any} {
+  {
+    "id": user.id,
+    "username": user.username,
+    "email": user.email,
+    "display_name": user.display_name,
+    "created_at": user.created_at,
+    "updated_at": user.updated_at,
+    "settings": user.settings,
+  }
+}
+
+pub fn user_routes(
+  store: Shared<UserStore>,
+  blacklist: Shared<TokenBlacklist>,
+) -> Router {
+  let router = Router.new()
+
+  // ── POST /auth/register — Create a new user account ──
+
+  router.post("/auth/register", async (req) => {
+    let input = req.json<CreateUser>()?
+
+    match await store.write().register(input) {
+      ok(user) => {
+        // Auto-login: sign a token for the new user
+        let token = sign_token(user.id, user.username)?
+        Response.json({
+          "user": sanitize_user(user),
+          "token": token,
+        }, status: 201)
+      }
+      err(ApiError.ValidationError(errors)) => Response.json(
+        { error: "Validation failed", errors },
+        status: 422
+      )
+      err(ApiError.Conflict(reason)) => Response.json(
+        { error: reason },
+        status: 409
+      )
+      err(e) => Response.json(
+        { error: e.message() },
+        status: e.status_code()
+      )
+    }
+  })
+
+  // ── POST /auth/login — Authenticate and receive a token ──
+
+  router.post("/auth/login", async (req) => {
+    let input = req.json<LoginRequest>()?
+
+    match await store.read().authenticate(input.username, input.password) {
+      ok(user) => {
+        let token = sign_token(user.id, user.username)?
+        log.info("User logged in", { user_id: user.id, username: user.username })
+        Response.json({
+          "user": sanitize_user(user),
+          "token": token,
+        })
+      }
+      err(ApiError.Unauthorized(_)) => Response.json(
+        { error: "Invalid username or password" },
+        status: 401
+      )
+      err(e) => Response.json(
+        { error: e.message() },
+        status: e.status_code()
+      )
+    }
+  })
+
+  // ── POST /auth/logout — Revoke the current token ──
+
+  router.post("/auth/logout", async (req) => {
+    let user_id = get_authenticated_user(req)?
+    let token = req.state.get<str>("token") ?? ""
+
+    // Add token to blacklist
+    blacklist.write().revoke(token, DateTime.now().timestamp() + 3600)
+
+    log.info("User logged out", { user_id })
+    Response.json({ message: "Logged out successfully" })
+  })
+
+  // ── GET /users/me — Get current user's profile ──
+
+  router.get("/users/me", async (req) => {
+    let user_id = get_authenticated_user(req)?
+
+    match await store.read().get(user_id) {
+      ok(user) => Response.json(sanitize_user(user))
+      err(e) => Response.json(
+        { error: e.message() },
+        status: e.status_code()
+      )
+    }
+  })
+
+  // ── PATCH /users/me — Update current user's profile ──
+
+  router.patch("/users/me", async (req) => {
+    let user_id = get_authenticated_user(req)?
+    let changes = req.json<UpdateProfile>()?
+
+    match await store.write().update_profile(user_id, changes) {
+      ok(user) => Response.json(sanitize_user(user))
+      err(ApiError.Conflict(reason)) => Response.json(
+        { error: reason },
+        status: 409
+      )
+      err(e) => Response.json(
+        { error: e.message() },
+        status: e.status_code()
+      )
+    }
+  })
+
+  // ── GET /users/me/settings — Get current user's settings ──
+
+  router.get("/users/me/settings", async (req) => {
+    let user_id = get_authenticated_user(req)?
+
+    match await store.read().get(user_id) {
+      ok(user) => Response.json(user.settings)
+      err(e) => Response.json(
+        { error: e.message() },
+        status: e.status_code()
+      )
+    }
+  })
+
+  // ── PATCH /users/me/settings — Update current user's settings ──
+
+  router.patch("/users/me/settings", async (req) => {
+    let user_id = get_authenticated_user(req)?
+    let changes = req.json<UpdateSettings>()?
+
+    match await store.write().update_settings(user_id, changes) {
+      ok(settings) => Response.json(settings)
+      err(ApiError.BadRequest(field, reason)) => Response.json(
+        { error: reason, field },
+        status: 400
+      )
+      err(e) => Response.json(
+        { error: e.message() },
+        status: e.status_code()
+      )
+    }
+  })
+
+  router
+}

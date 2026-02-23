@@ -1,0 +1,62 @@
+[package]
+name = "turbo-edge"
+version = "0.1.0"
+edition = "2026"
+description = "Edge image processing pipeline compiled to WASM for CDN deployment"
+license = "MIT"
+authors = ["Turbo Examples"]
+
+[dependencies]
+turbo-http = "0.1"
+turbo-image = "0.1"
+turbo-cache = "0.1"
+turbo-stream = "0.1"
+turbo-crypto = "0.1"
+
+[dev-dependencies]
+turbo-test-utils = "0.1"
+
+[build]
+target = "wasm32-wasi"
+opt-level = "release"
+strip = true
+lto = true
+
+# WASM-specific build settings
+[build.wasm]
+initial-memory = "2mb"
+max-memory = "256mb"
+stack-size = "64kb"
+bulk-memory = true
+simd = true
+threads = false
+
+# Edge deployment configuration
+[edge]
+provider = "auto"                    # auto-detect: cloudflare, vercel, deno
+regions = ["all"]                    # deploy to all edge locations
+min-instances = 0                    # scale to zero when idle
+max-instances = 1000
+timeout = "30s"
+memory-limit = "128mb"
+
+# Edge-specific routes
+[edge.routes]
+"/image/*" = "handle_image_request"
+"/health" = "handle_health_check"
+
+# Cache configuration
+[edge.cache]
+default-ttl = "1h"
+max-size = "50mb"
+stale-while-revalidate = "5m"
+vary = ["Accept", "Accept-Encoding"]
+
+# Image processing defaults
+[image]
+max-width = 4096
+max-height = 4096
+max-file-size = "25mb"
+default-quality = 85
+allowed-formats = ["png", "jpeg", "webp", "avif"]
+allowed-origins = ["*"]

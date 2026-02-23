@@ -1,0 +1,447 @@
+// =============================================================================
+// models.tb — Data types for TurboNotes desktop application
+//
+// Demonstrates:
+//   - @derive decorators for automatic trait implementations
+//   - Algebraic data types (type keyword for sum types)
+//   - Structs with default field values
+//   - T? optional types
+//   - T ! E error types (custom error enum implementing Error)
+//   - {K: V} map literals, [T] array types
+//   - const for compile-time constants
+//   - Pattern matching on sum type variants
+// =============================================================================
+
+import { DateTime, Duration } from "std/time"
+import { Path } from "std/fs"
+
+// =============================================================================
+// Core Note Types
+// =============================================================================
+
+/// A single markdown note — the fundamental unit of the application.
+/// Notes are identified by their file path relative to the notes directory.
+@derive(Debug, Clone, Schema, Serialize)
+struct Note {
+  id: str                        // SHA-256 hash of the file path
+  title: str                     // First heading or filename
+  content: str                   // Raw markdown content
+  metadata: NoteMetadata
+  path: Path                     // Absolute path on disk
+  created_at: DateTime
+  updated_at: DateTime
+}
+
+impl Note {
+  /// Create a new note with sensible defaults
+  fn new(title: str, path: Path) -> Note {
+    let now = DateTime.now()
+    Note {
+      id: path.to_str().sha256(),
+      title,
+      content: "# {title}\n\n",
+      metadata: NoteMetadata {},
+      path,
+      created_at: now,
+      updated_at: now,
+    }
+  }
+
+  /// Extract the title from the first markdown heading, falling back to filename
+  fn extract_title(content: str, path: Path) -> str {
+    content
+      .lines()
+      .find((line) => line.starts_with("# "))
+      .map((line) => line.strip_prefix("# ").trim())
+      ?? path.file_stem()
+      ?? "Untitled"
+  }
+
+  /// Word count for the note content
+  fn word_count(self) -> usize {
+    self.content.split_whitespace().count()
+  }
+
+  /// Estimated reading time in minutes
+  fn reading_time(self) -> u32 {
+    let words = self.word_count()
+    let minutes = words / 200  // average reading speed
+    if minutes == 0 { 1 } else { minutes as u32 }
+  }
+}
+
+/// Metadata extracted from YAML frontmatter or inferred from content
+@derive(Debug, Clone, Schema, Serialize)
+struct NoteMetadata {
+  tags: [str] = []
+  category: str? = none
+  pinned: bool = false
+  word_count: usize = 0
+  reading_time_minutes: u32 = 0
+  links_to: [str] = []           // IDs of notes this note links to
+  backlinks: [str] = []          // IDs of notes that link to this note
+}
+
+// =============================================================================
+// Editor State Types
+// =============================================================================
+
+/// The complete state of the editor at any point in time.
+/// Immutable snapshots enable simple undo/redo via a stack of states.
+@derive(Debug, Clone)
+struct EditorState {
+  content: str                   // Current buffer content
+  cursor: CursorPosition         // Where the cursor is
+  selection: TextSelection?      // Active selection, if any
+  scroll_offset: f64             // Vertical scroll position in pixels
+  is_modified: bool              // Has unsaved changes
+  mode: EditorMode               // Current editing mode
+}
+
+impl EditorState {
+  /// Create an empty editor state
+  fn empty() -> EditorState {
+    EditorState {
+      content: "",
+      cursor: CursorPosition { line: 0, column: 0, offset: 0 },
+      selection: none,
+      scroll_offset: 0.0,
+      is_modified: false,
+      mode: EditorMode.Normal,
+    }
+  }
+
+  /// Create editor state from existing content
+  fn from_content(content: str) -> EditorState {
+    EditorState {
+      ..EditorState.empty(),
+      content,
+    }
+  }
+
+  /// Get the currently selected text, if any
+  fn selected_text(self) -> str? {
+    match self.selection {
+      some(sel) => {
+        let start = sel.anchor.offset.min(sel.focus.offset)
+        let end = sel.anchor.offset.max(sel.focus.offset)
+        some(self.content[start..end])
+      }
+      none => none
+    }
+  }
+
+  /// Get the current line of text the cursor is on
+  fn current_line(self) -> str {
+    self.content
+      .lines()
+      .nth(self.cursor.line)
+      ?? ""
+  }
+}
+
+/// Position of the cursor in the document
+@derive(Debug, Clone, Eq)
+struct CursorPosition {
+  line: usize                    // Zero-based line number
+  column: usize                  // Zero-based column (grapheme cluster index)
+  offset: usize                  // Absolute byte offset from start of content
+}
+
+/// A text selection defined by anchor (start) and focus (end) positions.
+/// The anchor is where the selection began; the focus is where it ends.
+/// If focus < anchor, the selection goes backward.
+@derive(Debug, Clone, Eq)
+struct TextSelection {
+  anchor: CursorPosition
+  focus: CursorPosition
+}
+
+impl TextSelection {
+  /// Get the ordered start and end positions regardless of selection direction
+  fn ordered(self) -> (CursorPosition, CursorPosition) {
+    if self.anchor.offset <= self.focus.offset {
+      (self.anchor, self.focus)
+    } else {
+      (self.focus, self.anchor)
+    }
+  }
+
+  /// Length of the selection in bytes
+  fn len(self) -> usize {
+    let (start, end) = self.ordered()
+    end.offset - start.offset
+  }
+
+  /// Whether the selection is empty (zero-length)
+  fn is_empty(self) -> bool {
+    self.anchor.offset == self.focus.offset
+  }
+}
+
+/// Editor mode — determines how keystrokes are interpreted
+@derive(Debug, Eq, Clone)
+type EditorMode {
+  Normal                         // Standard editing
+  Preview                        // Read-only rendered markdown
+  SplitView                      // Editor on left, preview on right
+  AiPrompt                       // AI assistant input overlay
+  CommandPalette                  // Ctrl+P command palette
+  Search                         // Inline search mode
+}
+
+// =============================================================================
+// Undo/Redo Types
+// =============================================================================
+
+/// An undoable action — captures what changed and how to reverse it.
+/// Actions that occur within a short window are coalesced into groups.
+@derive(Debug, Clone)
+type UndoAction {
+  Insert(offset: usize, text: str)
+  Delete(offset: usize, text: str)
+  Replace(offset: usize, old_text: str, new_text: str)
+  Group(actions: [UndoAction])   // Multiple atomic changes (e.g., find-and-replace all)
+}
+
+impl UndoAction {
+  /// Compute the inverse action for redo
+  fn inverse(self) -> UndoAction {
+    match self {
+      Insert(offset, text)             => Delete(offset, text)
+      Delete(offset, text)             => Insert(offset, text)
+      Replace(offset, old_text, new)   => Replace(offset, new, old_text)
+      Group(actions)                   => Group(actions.reverse().map((a) => a.inverse()))
+    }
+  }
+
+  /// Description for display in the edit menu
+  fn description(self) -> str {
+    match self {
+      Insert(_, text) => {
+        let preview = if text.len() > 20 { "{text[..20]}..." } else { text }
+        "Insert \"{preview}\""
+      }
+      Delete(_, text) => {
+        let preview = if text.len() > 20 { "{text[..20]}..." } else { text }
+        "Delete \"{preview}\""
+      }
+      Replace(_, _, _) => "Replace text"
+      Group(actions)   => "Batch edit ({actions.len()} changes)"
+    }
+  }
+}
+
+// =============================================================================
+// Search Types
+// =============================================================================
+
+/// A single search result with relevance scoring and context
+@derive(Debug, Clone, Schema, Serialize)
+struct SearchResult {
+  note_id: str
+  note_title: str
+  note_path: Path
+  score: f64                     // Relevance score (0.0 to 1.0)
+  matches: [SearchMatch]         // Individual match locations
+  snippet: str                   // Context snippet around the best match
+}
+
+/// A match within a specific note
+@derive(Debug, Clone, Schema, Serialize)
+struct SearchMatch {
+  line: usize                    // Line number (zero-based)
+  column: usize                  // Column of match start
+  length: usize                  // Length of matched text
+  context: str                   // The line containing the match
+}
+
+/// Search query options
+@derive(Debug, Clone, Schema)
+struct SearchQuery {
+  text: str                      // The search text or regex
+  case_sensitive: bool = false
+  whole_word: bool = false
+  use_regex: bool = false
+  max_results: usize = 100
+  file_pattern: str? = none      // Optional glob filter (e.g., "*.md")
+}
+
+// =============================================================================
+// Export Types
+// =============================================================================
+
+/// Export format selection
+@derive(Debug, Eq, Clone, Schema, Serialize)
+type ExportFormat {
+  Html
+  Pdf
+}
+
+/// Configuration for a single export operation
+@derive(Debug, Clone, Schema)
+struct ExportConfig {
+  format: ExportFormat
+  output_path: Path
+  include_frontmatter: bool = false
+  include_metadata: bool = false
+  css_theme: str = "default"
+  page_size: PageSize = PageSize.A4
+  syntax_highlight: bool = true
+}
+
+/// Standard page sizes for PDF export
+@derive(Debug, Eq, Clone, Schema, Serialize)
+type PageSize {
+  A4
+  Letter
+  Legal
+  Custom(width_mm: f64, height_mm: f64)
+}
+
+impl PageSize {
+  fn dimensions_mm(self) -> (f64, f64) {
+    match self {
+      A4                     => (210.0, 297.0)
+      Letter                 => (215.9, 279.4)
+      Legal                  => (215.9, 355.6)
+      Custom(w, h)           => (w, h)
+    }
+  }
+}
+
+// =============================================================================
+// File System Events
+// =============================================================================
+
+/// Events emitted by the file system watcher
+@derive(Debug, Clone)
+type FileEvent {
+  Created(path: Path)
+  Modified(path: Path, by_us: bool)
+  Deleted(path: Path)
+  Renamed(old_path: Path, new_path: Path)
+}
+
+/// Conflict detection when an external process modifies a file we have open
+@derive(Debug, Clone)
+type ConflictState {
+  NoConflict
+  ExternalChange(disk_content: str, our_content: str, modified_at: DateTime)
+  DeletedExternally(our_content: str)
+}
+
+impl ConflictState {
+  fn has_conflict(self) -> bool {
+    match self {
+      NoConflict => false
+      _          => true
+    }
+  }
+}
+
+// =============================================================================
+// Application Events (Event-Driven Architecture)
+// =============================================================================
+
+/// Top-level application events that drive the main event loop.
+/// Every user interaction, system event, or background task communicates
+/// through this unified event type.
+@derive(Debug, Clone)
+type AppEvent {
+  // --- File Operations ---
+  NewNote
+  OpenNote(path: Path)
+  SaveNote
+  SaveNoteAs(path: Path)
+  CloseNote(note_id: str)
+  FileChanged(event: FileEvent)
+
+  // --- Editor Operations ---
+  TextInput(text: str)
+  CursorMove(direction: Direction, extend_selection: bool)
+  SelectAll
+  DeleteSelection
+  Cut
+  Copy
+  Paste(text: str)
+  Undo
+  Redo
+
+  // --- View ---
+  SetMode(mode: EditorMode)
+  ToggleSplitView
+  OpenCommandPalette
+  ScrollTo(offset: f64)
+
+  // --- Search ---
+  StartSearch
+  SearchQuery(query: str)
+  SearchNext
+  SearchPrevious
+  SearchReplace(replacement: str)
+  SearchReplaceAll(replacement: str)
+  CloseSearch
+
+  // --- AI Agent ---
+  AiSummarize
+  AiExpand
+  AiFixGrammar
+  AiGenerateOutline
+  AiSuggestTags
+  AiCustomPrompt(prompt: str)
+  AiResponseReceived(text: str)
+
+  // --- Export ---
+  ExportHtml(path: Path)
+  ExportPdf(config: ExportConfig)
+
+  // --- Application Lifecycle ---
+  WindowResized(width: u32, height: u32)
+  WindowClosed
+  Quit
+}
+
+/// Cardinal directions for cursor movement
+@derive(Debug, Eq, Clone)
+type Direction {
+  Up
+  Down
+  Left
+  Right
+  Home     // Start of line
+  End      // End of line
+  PageUp
+  PageDown
+  DocStart // Ctrl+Home
+  DocEnd   // Ctrl+End
+}
+
+// =============================================================================
+// Error Types
+// =============================================================================
+
+/// All errors the application can produce, implementing the Error trait
+type AppError: Error {
+  IoError(source: str)
+  ParseError(line: usize, message: str)
+  ConflictError(path: Path, detail: str)
+  SearchError(message: str)
+  AgentError(message: str)
+  ExportError(format: str, reason: str)
+  InvalidState(description: str)
+}
+
+impl AppError {
+  fn message(self) -> str {
+    match self {
+      IoError(src)              => "I/O error: {src}"
+      ParseError(line, msg)     => "Parse error at line {line}: {msg}"
+      ConflictError(path, det)  => "Conflict on {path}: {det}"
+      SearchError(msg)          => "Search error: {msg}"
+      AgentError(msg)           => "AI agent error: {msg}"
+      ExportError(fmt, reason)  => "Export to {fmt} failed: {reason}"
+      InvalidState(desc)        => "Invalid state: {desc}"
+    }
+  }
+}

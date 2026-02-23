@@ -1,0 +1,23 @@
+fn gcd(a: i64, b: i64) -> i64 {
+    let mut x = a
+    let mut y = b
+    while y != 0 {
+        let temp = y
+        y = x % y
+        x = temp
+    }
+    x
+}
+
+fn lcm(a: i64, b: i64) -> i64 {
+    a / gcd(a, b) * b
+}
+
+fn main() {
+    assert(gcd(12, 8) == 4)
+    assert(gcd(100, 75) == 25)
+    assert(gcd(17, 13) == 1)
+    assert(lcm(4, 6) == 12)
+    assert(lcm(12, 18) == 36)
+    print("GCD/LCM verified!")
+}

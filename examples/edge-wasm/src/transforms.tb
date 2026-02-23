@@ -1,0 +1,1118 @@
+// =============================================================================
+// transforms.tb — Individual image transform implementations
+//
+// Demonstrates:
+//   - const fn for compile-time computation (convolution kernels baked into WASM)
+//   - Stream transformers that process chunks without buffering the full image
+//   - Pipe operator |> for composing stream operations
+//   - Mathematical operations for image processing
+//   - Pattern matching on enum variants
+//   - @wasm_hint decorator for WASM-specific optimizations
+//   - SIMD-friendly data layouts for performance
+// =============================================================================
+
+import { Stream } from "turbo/stream"
+import { log } from "turbo/log"
+import { math } from "std/math"
+import {
+  ImageChunk, Dimensions, BoundingBox, CropAnchor,
+  ResizeAlgorithm, ImageFormat, PipelineError,
+} from "./pipeline"
+import { Dimensions } from "./models"
+
+// =============================================================================
+// Compile-time computed kernels (const fn)
+// These are evaluated at compile time and baked into the WASM binary,
+// eliminating runtime allocation and computation.
+// =============================================================================
+
+/// Generate a Gaussian blur kernel at compile time.
+/// The kernel is pre-computed and embedded directly in the WASM binary.
+const fn gaussian_kernel(radius: u32, sigma: f64) -> [[f64]] {
+  let size = radius * 2 + 1
+  let mut kernel: [[f64]] = []
+  let mut sum: f64 = 0.0
+
+  for y in 0..size {
+    let mut row: [f64] = []
+    for x in 0..size {
+      let dx = x as f64 - radius as f64
+      let dy = y as f64 - radius as f64
+      let value = math.exp(-(dx * dx + dy * dy) / (2.0 * sigma * sigma))
+      row.push(value)
+      sum += value
+    }
+    kernel.push(row)
+  }
+
+  // Normalize so all values sum to 1.0
+  for y in 0..size {
+    for x in 0..size {
+      kernel[y][x] /= sum
+    }
+  }
+
+  kernel
+}
+
+/// Pre-compute Lanczos interpolation weights for common scale factors.
+/// These lookup tables are baked into the binary at compile time.
+const fn lanczos_weights(window: u8, num_entries: u32) -> [f64] {
+  let mut weights: [f64] = []
+
+  for i in 0..num_entries {
+    let x = i as f64 / num_entries as f64 * window as f64
+    let weight = if x == 0.0 {
+      1.0
+    } else if x < window as f64 {
+      let pi_x = math.PI * x
+      (math.sin(pi_x) / pi_x) * (math.sin(pi_x / window as f64) / (pi_x / window as f64))
+    } else {
+      0.0
+    }
+    weights.push(weight)
+  }
+
+  weights
+}
+
+/// Pre-compute an unsharp mask convolution kernel at compile time
+const fn unsharp_mask_kernel(radius: f64, amount: f64) -> [[f64]] {
+  let size = (radius.ceil() as u32) * 2 + 1
+  let blur = gaussian_kernel(size / 2, radius)
+  let mut kernel: [[f64]] = []
+  let center = size / 2
+
+  for y in 0..size {
+    let mut row: [f64] = []
+    for x in 0..size {
+      let identity = if x == center && y == center { 1.0 } else { 0.0 }
+      // unsharp = identity + amount * (identity - blur)
+      let value = identity + amount * (identity - blur[y][x])
+      row.push(value)
+    }
+    kernel.push(row)
+  }
+
+  kernel
+}
+
+/// Pre-computed gamma correction lookup table (256 entries)
+/// Converts sRGB -> linear for processing, then back
+const fn gamma_lut() -> ([f64; 256], [u8; 256]) {
+  let mut to_linear: [f64; 256] = [0.0; 256]
+  let mut to_srgb: [u8; 256] = [0; 256]
+
+  for i in 0..256 {
+    let s = i as f64 / 255.0
+    // sRGB -> linear
+    to_linear[i] = if s <= 0.04045 {
+      s / 12.92
+    } else {
+      math.pow((s + 0.055) / 1.055, 2.4)
+    }
+  }
+
+  for i in 0..256 {
+    let linear = i as f64 / 255.0
+    // linear -> sRGB
+    let s = if linear <= 0.0031308 {
+      linear * 12.92
+    } else {
+      1.055 * math.pow(linear, 1.0 / 2.4) - 0.055
+    }
+    to_srgb[i] = (s * 255.0 + 0.5) as u8
+  }
+
+  (to_linear, to_srgb)
+}
+
+// --- Instantiate compile-time lookup tables ---
+
+const BLUR_KERNEL_3: [[f64]] = gaussian_kernel(1, 0.85)
+const BLUR_KERNEL_5: [[f64]] = gaussian_kernel(2, 1.4)
+const BLUR_KERNEL_7: [[f64]] = gaussian_kernel(3, 2.0)
+
+const LANCZOS3_WEIGHTS: [f64] = lanczos_weights(3, 1024)
+const LANCZOS2_WEIGHTS: [f64] = lanczos_weights(2, 1024)
+
+const SHARPEN_KERNEL_LIGHT: [[f64]] = unsharp_mask_kernel(1.0, 0.5)
+const SHARPEN_KERNEL_MEDIUM: [[f64]] = unsharp_mask_kernel(1.5, 1.0)
+const SHARPEN_KERNEL_HEAVY: [[f64]] = unsharp_mask_kernel(2.0, 2.0)
+
+const GAMMA_TO_LINEAR: [f64; 256] = gamma_lut().0
+const GAMMA_TO_SRGB: [u8; 256] = gamma_lut().1
+
+// =============================================================================
+// Stream transform functions
+// Each takes a stream of ImageChunks and returns a transformed stream.
+// Designed to work with the pipe operator: stream |> apply_resize(target, algo)
+// =============================================================================
+
+/// Resize an image stream to target dimensions
+/// Uses row-accumulation for vertical scaling, per-row interpolation for horizontal
+@wasm_hint(simd: true)
+pub fn apply_resize(
+  input: Stream<ImageChunk>,
+  target: Dimensions,
+  algorithm: ResizeAlgorithm,
+) -> Stream<ImageChunk> {
+  // Select interpolation weights based on algorithm
+  let weights = match algorithm {
+    NearestNeighbor   => []    // No interpolation needed
+    Bilinear          => []    // Computed inline
+    Lanczos(window)   => match window {
+      2 => LANCZOS2_WEIGHTS
+      _ => LANCZOS3_WEIGHTS
+    }
+  }
+
+  let mut row_buffer: [[u8]] = []
+  let mut output_row: u32 = 0
+  let source_height_acc: f64 = 0.0
+
+  async gen {
+    for await chunk in input {
+      // Horizontal resize each row in the chunk
+      let h_resized = resize_rows_horizontal(chunk, target.width, algorithm, weights)
+
+      // Accumulate rows for vertical resize
+      for row in h_resized {
+        row_buffer.push(row)
+      }
+
+      // Emit output rows when we have enough input rows
+      let y_scale = target.height as f64 / chunk.row_end as f64
+      while row_buffer.len() >= 2 || chunk.is_last {
+        if output_row >= target.height {
+          break
+        }
+
+        let src_y = output_row as f64 * (chunk.row_end as f64 / target.height as f64)
+        let output = interpolate_vertical(row_buffer, src_y, algorithm, weights)
+
+        yield ImageChunk {
+          data: output,
+          row_start: output_row,
+          row_end: output_row + 1,
+          width: target.width,
+          channels: chunk.channels,
+          is_last: output_row == target.height - 1,
+        }
+
+        output_row += 1
+
+        // Free consumed rows
+        let consumed = src_y as usize
+        if consumed > 0 && row_buffer.len() > consumed {
+          row_buffer = row_buffer[consumed..]
+        }
+      }
+    }
+  }
+}
+
+/// Crop an image stream to a bounding box
+/// Extremely efficient: simply drops rows/columns outside the box
+pub fn apply_crop(
+  input: Stream<ImageChunk>,
+  box: BoundingBox,
+) -> Stream<ImageChunk> {
+  let mut output_row: u32 = 0
+
+  async gen {
+    for await chunk in input {
+      // Skip chunks entirely outside the crop region
+      if chunk.row_end <= box.y || chunk.row_start >= box.y + box.height {
+        continue
+      }
+
+      // Calculate which rows from this chunk fall inside the crop box
+      let start = u32.max(chunk.row_start, box.y) - chunk.row_start
+      let end = u32.min(chunk.row_end, box.y + box.height) - chunk.row_start
+      let row_bytes = chunk.width as usize * chunk.channels as usize
+
+      let mut cropped_data: [u8] = []
+
+      for row_idx in start..end {
+        let row_offset = row_idx as usize * row_bytes
+        let pixel_start = row_offset + box.x as usize * chunk.channels as usize
+        let pixel_end = pixel_start + box.width as usize * chunk.channels as usize
+        cropped_data = cropped_data + chunk.data[pixel_start..pixel_end]
+      }
+
+      let rows_emitted = end - start
+
+      yield ImageChunk {
+        data: cropped_data,
+        row_start: output_row,
+        row_end: output_row + rows_emitted,
+        width: box.width,
+        channels: chunk.channels,
+        is_last: chunk.row_end >= box.y + box.height,
+      }
+
+      output_row += rows_emitted
+    }
+  }
+}
+
+/// Smart crop: detect faces or high-entropy regions and crop around them
+/// Requires a two-pass approach: first pass detects, second pass crops
+pub fn apply_smart_crop(
+  input: Stream<ImageChunk>,
+  target_width: u32,
+  target_height: u32,
+  anchor: CropAnchor,
+  source_dims: Dimensions,
+) -> Stream<ImageChunk> {
+  match anchor {
+    SmartFace => {
+      // Buffer enough rows for face detection, then crop
+      apply_smart_crop_face(input, target_width, target_height, source_dims)
+    }
+    SmartEntropy => {
+      apply_smart_crop_entropy(input, target_width, target_height, source_dims)
+    }
+    _ => {
+      // Fixed anchor: compute crop box immediately
+      let box = compute_anchor_crop(source_dims, target_width, target_height, anchor)
+      apply_crop(input, box)
+    }
+  }
+}
+
+/// Face detection based smart crop
+/// Uses a lightweight Haar cascade that runs within WASM constraints
+fn apply_smart_crop_face(
+  input: Stream<ImageChunk>,
+  target_width: u32,
+  target_height: u32,
+  source_dims: Dimensions,
+) -> Stream<ImageChunk> {
+  // We need to buffer the stream to run face detection first
+  // To stay within memory limits, we run on a downsampled preview
+  let preview_scale = 8  // 8x downsampled for detection
+
+  let mut preview_rows: [[u8]] = []
+  let mut full_chunks: [ImageChunk] = []
+
+  async gen {
+    // Phase 1: Collect chunks, build a downsampled preview for detection
+    for await chunk in input {
+      full_chunks.push(chunk.clone())
+
+      // Downsample for face detection preview
+      let row_bytes = chunk.width as usize * chunk.channels as usize
+      for row_idx in 0..chunk.row_count() {
+        if (chunk.row_start + row_idx) % preview_scale as u32 == 0 {
+          let row_offset = row_idx as usize * row_bytes
+          let row = chunk.data[row_offset..row_offset + row_bytes]
+          let downsampled = downsample_row(row, chunk.width, chunk.channels, preview_scale)
+          preview_rows.push(downsampled)
+        }
+      }
+    }
+
+    // Phase 2: Run face detection on the preview
+    let preview_dims = Dimensions {
+      width: source_dims.width / preview_scale as u32,
+      height: preview_rows.len() as u32,
+    }
+    let faces = detect_faces_haar(preview_rows, preview_dims)
+
+    // Phase 3: Compute crop box centered on detected faces
+    let crop_box = if faces.len() > 0 {
+      // Center crop on the face cluster, scaled back to full resolution
+      let face_center = compute_face_cluster_center(faces, preview_scale)
+      center_crop_around(face_center, target_width, target_height, source_dims)
+    } else {
+      // Fallback to center crop
+      compute_anchor_crop(source_dims, target_width, target_height, CropAnchor.Center)
+    }
+
+    // Phase 4: Replay buffered chunks through the crop transform
+    let replayed = Stream.from_iter(full_chunks)
+    let cropped = apply_crop(replayed, crop_box)
+
+    for await cropped_chunk in cropped {
+      yield cropped_chunk
+    }
+  }
+}
+
+/// Entropy-based smart crop: center on the most visually interesting region
+fn apply_smart_crop_entropy(
+  input: Stream<ImageChunk>,
+  target_width: u32,
+  target_height: u32,
+  source_dims: Dimensions,
+) -> Stream<ImageChunk> {
+  let mut entropy_map: [f64] = []
+  let mut full_chunks: [ImageChunk] = []
+  let grid_size: u32 = 16  // Divide image into 16x16 grid cells
+
+  async gen {
+    // Phase 1: Collect chunks and compute entropy per grid cell
+    for await chunk in input {
+      full_chunks.push(chunk.clone())
+
+      let cell_width = source_dims.width / grid_size
+      let cell_height = source_dims.height / grid_size
+
+      // Compute local entropy for rows in this chunk
+      for row_idx in 0..chunk.row_count() {
+        let abs_row = chunk.row_start + row_idx
+        let cell_y = abs_row / cell_height
+        let row_entropy = compute_row_entropy(
+          chunk.data, row_idx, chunk.width, chunk.channels, grid_size
+        )
+        // Accumulate entropy per grid cell
+        for (cell_x, e) in row_entropy.enumerate() {
+          let idx = (cell_y * grid_size + cell_x as u32) as usize
+          if idx < entropy_map.len() {
+            entropy_map[idx] += e
+          } else {
+            entropy_map.push(e)
+          }
+        }
+      }
+    }
+
+    // Phase 2: Find the region with highest entropy
+    let best_center = find_highest_entropy_region(
+      entropy_map, grid_size, source_dims, target_width, target_height
+    )
+
+    let crop_box = center_crop_around(best_center, target_width, target_height, source_dims)
+
+    // Phase 3: Replay buffered chunks through crop
+    let replayed = Stream.from_iter(full_chunks)
+    let cropped = apply_crop(replayed, crop_box)
+
+    for await cropped_chunk in cropped {
+      yield cropped_chunk
+    }
+  }
+}
+
+/// Apply Gaussian blur to an image stream
+/// Uses pre-computed kernels for common sigma values
+@wasm_hint(simd: true)
+pub fn apply_blur(
+  input: Stream<ImageChunk>,
+  sigma: f32,
+) -> Stream<ImageChunk> {
+  // Select or compute the appropriate kernel
+  let kernel = match sigma {
+    s if s <= 1.0 => BLUR_KERNEL_3
+    s if s <= 2.0 => BLUR_KERNEL_5
+    s if s <= 3.0 => BLUR_KERNEL_7
+    _             => gaussian_kernel((sigma.ceil() as u32), sigma as f64)
+  }
+
+  let radius = kernel.len() / 2
+
+  // We need `radius` extra rows above and below for the convolution window
+  let mut row_window: [[u8]] = []
+
+  async gen {
+    for await chunk in input {
+      let row_bytes = chunk.width as usize * chunk.channels as usize
+
+      // Add rows from this chunk to our sliding window
+      for row_idx in 0..chunk.row_count() {
+        let offset = row_idx as usize * row_bytes
+        row_window.push(chunk.data[offset..offset + row_bytes].clone())
+      }
+
+      // Emit blurred rows once we have enough context in the window
+      while row_window.len() > radius * 2 {
+        let blurred_row = convolve_row(row_window, radius, kernel, chunk.width, chunk.channels)
+        row_window = row_window[1..]  // Slide window forward
+
+        yield ImageChunk {
+          data: blurred_row,
+          row_start: chunk.row_start,
+          row_end: chunk.row_start + 1,
+          width: chunk.width,
+          channels: chunk.channels,
+          is_last: false,
+        }
+      }
+
+      // Handle the final rows when the stream ends
+      if chunk.is_last {
+        // Pad and emit remaining rows in the window
+        while row_window.len() > 0 {
+          let blurred_row = convolve_row_padded(row_window, radius, kernel, chunk.width, chunk.channels)
+          row_window = row_window[1..]
+
+          yield ImageChunk {
+            data: blurred_row,
+            row_start: chunk.row_end - row_window.len() as u32 - 1,
+            row_end: chunk.row_end - row_window.len() as u32,
+            width: chunk.width,
+            channels: chunk.channels,
+            is_last: row_window.len() == 0,
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Apply unsharp mask sharpening
+@wasm_hint(simd: true)
+pub fn apply_sharpen(
+  input: Stream<ImageChunk>,
+  amount: f32,
+  radius: f32,
+  threshold: f32,
+) -> Stream<ImageChunk> {
+  // Select pre-computed kernel or generate dynamically
+  let kernel = match (amount, radius) {
+    (a, r) if a <= 0.6 && r <= 1.2 => SHARPEN_KERNEL_LIGHT
+    (a, r) if a <= 1.2 && r <= 1.8 => SHARPEN_KERNEL_MEDIUM
+    (a, r) if a <= 2.5             => SHARPEN_KERNEL_HEAVY
+    _                               => unsharp_mask_kernel(radius as f64, amount as f64)
+  }
+
+  let kern_radius = kernel.len() / 2
+  let mut row_window: [[u8]] = []
+
+  async gen {
+    for await chunk in input {
+      let row_bytes = chunk.width as usize * chunk.channels as usize
+
+      for row_idx in 0..chunk.row_count() {
+        let offset = row_idx as usize * row_bytes
+        row_window.push(chunk.data[offset..offset + row_bytes].clone())
+      }
+
+      while row_window.len() > kern_radius * 2 {
+        let sharpened = convolve_row(row_window, kern_radius, kernel, chunk.width, chunk.channels)
+
+        // Apply threshold: only sharpen pixels that differ by more than threshold
+        let original_row = row_window[kern_radius]
+        let output = if threshold > 0.0 {
+          apply_threshold(original_row, sharpened, threshold)
+        } else {
+          sharpened
+        }
+
+        row_window = row_window[1..]
+
+        yield ImageChunk {
+          data: output,
+          row_start: chunk.row_start,
+          row_end: chunk.row_start + 1,
+          width: chunk.width,
+          channels: chunk.channels,
+          is_last: false,
+        }
+      }
+
+      if chunk.is_last {
+        while row_window.len() > 0 {
+          let sharpened = convolve_row_padded(row_window, kern_radius, kernel, chunk.width, chunk.channels)
+          row_window = row_window[1..]
+
+          yield ImageChunk {
+            data: sharpened,
+            row_start: chunk.row_end - row_window.len() as u32 - 1,
+            row_end: chunk.row_end - row_window.len() as u32,
+            width: chunk.width,
+            channels: chunk.channels,
+            is_last: row_window.len() == 0,
+          }
+        }
+      }
+    }
+  }
+}
+
+/// Apply a watermark overlay to the image stream
+pub fn apply_watermark(
+  input: Stream<ImageChunk>,
+  watermark_url: str,
+  position: CropAnchor,
+  opacity: f32,
+  scale: f32,
+  source_dims: Dimensions,
+) -> Stream<ImageChunk> {
+  // Pre-fetch and decode the watermark image (small, fits in memory)
+  let watermark = fetch_and_decode_watermark(watermark_url, scale, source_dims)
+
+  // Compute watermark placement region
+  let wm_width = (source_dims.width as f32 * scale) as u32
+  let wm_height = (watermark.height as f32 * (wm_width as f32 / watermark.width as f32)) as u32
+  let wm_box = compute_anchor_crop(source_dims, wm_width, wm_height, position)
+
+  async gen {
+    for await chunk in input {
+      // Check if this chunk overlaps with the watermark region
+      if chunk.row_end > wm_box.y && chunk.row_start < wm_box.y + wm_box.height {
+        // Blend watermark pixels into overlapping rows
+        let blended = blend_watermark_rows(chunk, watermark, wm_box, opacity)
+        yield ImageChunk { ..chunk, data: blended }
+      } else {
+        // No overlap — pass through unchanged
+        yield chunk
+      }
+    }
+  }
+}
+
+/// Convert image format (this is mainly a pass-through marker;
+/// actual conversion happens in the encoder stage)
+pub fn apply_convert(
+  input: Stream<ImageChunk>,
+  target_format: ImageFormat,
+) -> Stream<ImageChunk> {
+  // Format conversion is handled by the StreamEncoder.
+  // This transform is a no-op on the chunk stream but signals the pipeline
+  // to change the encoder.
+  input
+}
+
+/// Rotate image by 90/180/270 degrees
+pub fn apply_rotate(
+  input: Stream<ImageChunk>,
+  degrees: i16,
+) -> Stream<ImageChunk> {
+  let normalized = ((degrees % 360) + 360) % 360
+
+  match normalized {
+    0 => input  // No rotation
+
+    180 => {
+      // 180: reverse row order and reverse each row
+      let mut all_chunks: [ImageChunk] = []
+
+      async gen {
+        for await chunk in input {
+          all_chunks.push(chunk)
+        }
+
+        // Emit in reverse order with reversed pixel data
+        for chunk in all_chunks.reverse() {
+          let reversed_data = reverse_rows(chunk.data, chunk.width, chunk.channels)
+          yield ImageChunk {
+            ..chunk,
+            data: reversed_data,
+          }
+        }
+      }
+    }
+
+    90 | 270 => {
+      // 90/270: requires buffering columns — transpose operation
+      let mut all_rows: [[u8]] = []
+
+      async gen {
+        // Collect all rows
+        for await chunk in input {
+          let row_bytes = chunk.width as usize * chunk.channels as usize
+          for row_idx in 0..chunk.row_count() {
+            let offset = row_idx as usize * row_bytes
+            all_rows.push(chunk.data[offset..offset + row_bytes].clone())
+          }
+        }
+
+        // Transpose: columns become rows
+        let src_width = all_rows[0].len() / 4  // RGBA
+        let src_height = all_rows.len()
+
+        for col in 0..src_width {
+          let mut row_data: [u8] = []
+          let iter = if normalized == 90 {
+            (0..src_height).rev()
+          } else {
+            0..src_height
+          }
+
+          for row_idx in iter {
+            let pixel_offset = col * 4
+            row_data = row_data + all_rows[row_idx][pixel_offset..pixel_offset + 4]
+          }
+
+          yield ImageChunk {
+            data: row_data,
+            row_start: col as u32,
+            row_end: col as u32 + 1,
+            width: src_height as u32,
+            channels: 4,
+            is_last: col == src_width - 1,
+          }
+        }
+      }
+    }
+
+    _ => input  // Non-standard angle: pass through
+  }
+}
+
+/// Flip image horizontally or vertically
+pub fn apply_flip(
+  input: Stream<ImageChunk>,
+  horizontal: bool,
+) -> Stream<ImageChunk> {
+  if horizontal {
+    // Horizontal flip: reverse pixels within each row
+    async gen {
+      for await chunk in input {
+        let flipped = reverse_pixels_in_rows(chunk.data, chunk.width, chunk.channels, chunk.row_count())
+        yield ImageChunk { ..chunk, data: flipped }
+      }
+    }
+  } else {
+    // Vertical flip: buffer and reverse row order
+    let mut all_chunks: [ImageChunk] = []
+
+    async gen {
+      for await chunk in input {
+        all_chunks.push(chunk)
+      }
+
+      let total_rows = all_chunks.last()?.row_end ?? 0
+      let mut output_row: u32 = 0
+
+      for chunk in all_chunks.reverse() {
+        yield ImageChunk {
+          ..chunk,
+          row_start: output_row,
+          row_end: output_row + chunk.row_count(),
+          is_last: output_row + chunk.row_count() >= total_rows,
+        }
+        output_row += chunk.row_count()
+      }
+    }
+  }
+}
+
+/// Convert to grayscale using luminance weights
+@wasm_hint(simd: true)
+pub fn apply_grayscale() -> fn(Stream<ImageChunk>) -> Stream<ImageChunk> {
+  // ITU-R BT.709 luminance coefficients
+  let r_weight: f32 = 0.2126
+  let g_weight: f32 = 0.7152
+  let b_weight: f32 = 0.0722
+
+  (input) => {
+    async gen {
+      for await chunk in input {
+        let mut output: [u8] = []
+        output.reserve(chunk.data.len())
+
+        let pixel_count = chunk.data.len() / chunk.channels as usize
+        for i in 0..pixel_count {
+          let offset = i * chunk.channels as usize
+          let r = chunk.data[offset] as f32
+          let g = chunk.data[offset + 1] as f32
+          let b = chunk.data[offset + 2] as f32
+
+          let gray = (r * r_weight + g * g_weight + b * b_weight) as u8
+
+          output.push(gray)
+          output.push(gray)
+          output.push(gray)
+          if chunk.channels == 4 {
+            output.push(chunk.data[offset + 3])  // Preserve alpha
+          }
+        }
+
+        yield ImageChunk { ..chunk, data: output }
+      }
+    }
+  }
+}
+
+/// Adjust brightness by a factor (1.0 = unchanged, >1.0 brighter, <1.0 darker)
+@wasm_hint(simd: true)
+pub fn apply_brightness(factor: f32) -> fn(Stream<ImageChunk>) -> Stream<ImageChunk> {
+  (input) => {
+    async gen {
+      for await chunk in input {
+        let mut output: [u8] = []
+        output.reserve(chunk.data.len())
+
+        for i in 0..chunk.data.len() {
+          if chunk.channels == 4 && i % 4 == 3 {
+            // Don't modify alpha channel
+            output.push(chunk.data[i])
+          } else {
+            let val = (chunk.data[i] as f32 * factor).clamp(0.0, 255.0) as u8
+            output.push(val)
+          }
+        }
+
+        yield ImageChunk { ..chunk, data: output }
+      }
+    }
+  }
+}
+
+/// Adjust contrast by a factor (1.0 = unchanged)
+@wasm_hint(simd: true)
+pub fn apply_contrast(factor: f32) -> fn(Stream<ImageChunk>) -> Stream<ImageChunk> {
+  let midpoint: f32 = 128.0
+
+  (input) => {
+    async gen {
+      for await chunk in input {
+        let mut output: [u8] = []
+        output.reserve(chunk.data.len())
+
+        for i in 0..chunk.data.len() {
+          if chunk.channels == 4 && i % 4 == 3 {
+            output.push(chunk.data[i])
+          } else {
+            let val = ((chunk.data[i] as f32 - midpoint) * factor + midpoint).clamp(0.0, 255.0) as u8
+            output.push(val)
+          }
+        }
+
+        yield ImageChunk { ..chunk, data: output }
+      }
+    }
+  }
+}
+
+// =============================================================================
+// Internal helper functions
+// =============================================================================
+
+/// Convolve a row in a sliding window with a 2D kernel
+fn convolve_row(
+  window: [[u8]],
+  center_idx: usize,
+  kernel: [[f64]],
+  width: u32,
+  channels: u8,
+) -> [u8] {
+  let kern_size = kernel.len()
+  let half = kern_size / 2
+  let mut output: [u8] = []
+  output.reserve(width as usize * channels as usize)
+
+  for x in 0..width as usize {
+    for c in 0..channels as usize {
+      if c == 3 && channels == 4 {
+        // Pass through alpha
+        output.push(window[center_idx][x * channels as usize + c])
+        continue
+      }
+
+      let mut sum: f64 = 0.0
+      for ky in 0..kern_size {
+        let row_idx = ky
+        guard row_idx < window.len() else { continue }
+
+        for kx in 0..kern_size {
+          let sx = x as i32 + kx as i32 - half as i32
+          if sx >= 0 && sx < width as i32 {
+            let pixel = window[row_idx][sx as usize * channels as usize + c] as f64
+            sum += pixel * kernel[ky][kx]
+          }
+        }
+      }
+
+      output.push(sum.clamp(0.0, 255.0) as u8)
+    }
+  }
+
+  output
+}
+
+/// Convolve with edge padding for border rows
+fn convolve_row_padded(
+  window: [[u8]],
+  center_idx: usize,
+  kernel: [[f64]],
+  width: u32,
+  channels: u8,
+) -> [u8] {
+  // Same as convolve_row but clamps out-of-bounds reads to edge pixels
+  convolve_row(window, u32.min(center_idx, window.len() - 1), kernel, width, channels)
+}
+
+/// Resize rows horizontally using the selected interpolation algorithm
+fn resize_rows_horizontal(
+  chunk: ImageChunk,
+  target_width: u32,
+  algorithm: ResizeAlgorithm,
+  weights: [f64],
+) -> [[u8]] {
+  let row_bytes = chunk.width as usize * chunk.channels as usize
+  let mut rows: [[u8]] = []
+
+  for row_idx in 0..chunk.row_count() {
+    let src_offset = row_idx as usize * row_bytes
+    let src_row = chunk.data[src_offset..src_offset + row_bytes]
+
+    let resized = match algorithm {
+      NearestNeighbor => resize_row_nearest(src_row, chunk.width, target_width, chunk.channels)
+      Bilinear        => resize_row_bilinear(src_row, chunk.width, target_width, chunk.channels)
+      Lanczos(w)      => resize_row_lanczos(src_row, chunk.width, target_width, chunk.channels, w, weights)
+    }
+
+    rows.push(resized)
+  }
+
+  rows
+}
+
+/// Vertical interpolation between accumulated rows
+fn interpolate_vertical(
+  rows: [[u8]],
+  src_y: f64,
+  algorithm: ResizeAlgorithm,
+  weights: [f64],
+) -> [u8] {
+  let y_floor = src_y as usize
+  let y_frac = src_y - y_floor as f64
+
+  guard y_floor < rows.len() else { return rows.last() ?? [] }
+
+  match algorithm {
+    NearestNeighbor => rows[y_floor].clone()
+
+    Bilinear => {
+      let y_ceil = u32.min(y_floor + 1, rows.len() - 1) as usize
+      lerp_rows(rows[y_floor], rows[y_ceil], y_frac)
+    }
+
+    Lanczos(window) => {
+      interpolate_rows_lanczos(rows, src_y, window, weights)
+    }
+  }
+}
+
+/// Nearest-neighbor row resize
+fn resize_row_nearest(src: [u8], src_w: u32, dst_w: u32, channels: u8) -> [u8] {
+  let mut output: [u8] = []
+  let c = channels as usize
+
+  for x in 0..dst_w as usize {
+    let src_x = (x * src_w as usize) / dst_w as usize
+    output = output + src[src_x * c..(src_x + 1) * c]
+  }
+
+  output
+}
+
+/// Bilinear row resize
+fn resize_row_bilinear(src: [u8], src_w: u32, dst_w: u32, channels: u8) -> [u8] {
+  let mut output: [u8] = []
+  let c = channels as usize
+  let scale = src_w as f64 / dst_w as f64
+
+  for x in 0..dst_w as usize {
+    let src_x = x as f64 * scale
+    let x0 = src_x as usize
+    let x1 = usize.min(x0 + 1, src_w as usize - 1)
+    let frac = src_x - x0 as f64
+
+    for ch in 0..c {
+      let v0 = src[x0 * c + ch] as f64
+      let v1 = src[x1 * c + ch] as f64
+      let interpolated = (v0 * (1.0 - frac) + v1 * frac) as u8
+      output.push(interpolated)
+    }
+  }
+
+  output
+}
+
+/// Lanczos row resize using pre-computed weights
+fn resize_row_lanczos(src: [u8], src_w: u32, dst_w: u32, channels: u8, window: u8, weights: [f64]) -> [u8] {
+  let mut output: [u8] = []
+  let c = channels as usize
+  let scale = src_w as f64 / dst_w as f64
+
+  for x in 0..dst_w as usize {
+    let center = (x as f64 + 0.5) * scale - 0.5
+    let start = (center - window as f64).ceil() as i32
+    let end = (center + window as f64).floor() as i32
+
+    for ch in 0..c {
+      let mut sum: f64 = 0.0
+      let mut weight_sum: f64 = 0.0
+
+      for sx in start..=end {
+        let clamped = sx.clamp(0, src_w as i32 - 1) as usize
+        let distance = (center - sx as f64).abs()
+        let weight_idx = (distance * weights.len() as f64 / window as f64) as usize
+        let w = if weight_idx < weights.len() { weights[weight_idx] } else { 0.0 }
+
+        sum += src[clamped * c + ch] as f64 * w
+        weight_sum += w
+      }
+
+      let val = if weight_sum > 0.0 { sum / weight_sum } else { 0.0 }
+      output.push(val.clamp(0.0, 255.0) as u8)
+    }
+  }
+
+  output
+}
+
+/// Linear interpolation between two rows
+fn lerp_rows(a: [u8], b: [u8], t: f64) -> [u8] {
+  let mut output: [u8] = []
+  let inv_t = 1.0 - t
+
+  for i in 0..a.len() {
+    let val = (a[i] as f64 * inv_t + b[i] as f64 * t) as u8
+    output.push(val)
+  }
+
+  output
+}
+
+/// Lanczos interpolation across multiple rows
+fn interpolate_rows_lanczos(rows: [[u8]], src_y: f64, window: u8, weights: [f64]) -> [u8] {
+  let center = src_y
+  let start = (center - window as f64).ceil() as i32
+  let end = (center + window as f64).floor() as i32
+  let row_len = rows[0].len()
+  let mut output: [u8] = []
+
+  for i in 0..row_len {
+    let mut sum: f64 = 0.0
+    let mut weight_sum: f64 = 0.0
+
+    for sy in start..=end {
+      let clamped = sy.clamp(0, rows.len() as i32 - 1) as usize
+      let distance = (center - sy as f64).abs()
+      let weight_idx = (distance * weights.len() as f64 / window as f64) as usize
+      let w = if weight_idx < weights.len() { weights[weight_idx] } else { 0.0 }
+
+      sum += rows[clamped][i] as f64 * w
+      weight_sum += w
+    }
+
+    let val = if weight_sum > 0.0 { sum / weight_sum } else { 0.0 }
+    output.push(val.clamp(0.0, 255.0) as u8)
+  }
+
+  output
+}
+
+/// Apply sharpening threshold: only sharpen where the difference exceeds threshold
+fn apply_threshold(original: [u8], sharpened: [u8], threshold: f32) -> [u8] {
+  let mut output: [u8] = []
+
+  for i in 0..original.len() {
+    let diff = (sharpened[i] as f32 - original[i] as f32).abs()
+    if diff > threshold {
+      output.push(sharpened[i])
+    } else {
+      output.push(original[i])
+    }
+  }
+
+  output
+}
+
+/// Compute a crop box for a fixed anchor position
+fn compute_anchor_crop(dims: Dimensions, w: u32, h: u32, anchor: CropAnchor) -> BoundingBox {
+  let (x, y) = match anchor {
+    TopLeft       => (0, 0)
+    TopCenter     => ((dims.width - w) / 2, 0)
+    TopRight      => (dims.width - w, 0)
+    CenterLeft    => (0, (dims.height - h) / 2)
+    Center        => ((dims.width - w) / 2, (dims.height - h) / 2)
+    CenterRight   => (dims.width - w, (dims.height - h) / 2)
+    BottomLeft    => (0, dims.height - h)
+    BottomCenter  => ((dims.width - w) / 2, dims.height - h)
+    BottomRight   => (dims.width - w, dims.height - h)
+    _             => ((dims.width - w) / 2, (dims.height - h) / 2)  // default center
+  }
+
+  BoundingBox { x, y, width: w, height: h }
+}
+
+/// Center a crop box around a given point, clamping to image bounds
+fn center_crop_around(center: (u32, u32), w: u32, h: u32, dims: Dimensions) -> BoundingBox {
+  let x = (center.0 as i32 - w as i32 / 2).clamp(0, (dims.width - w) as i32) as u32
+  let y = (center.1 as i32 - h as i32 / 2).clamp(0, (dims.height - h) as i32) as u32
+  BoundingBox { x, y, width: w, height: h }
+}
+
+/// Reverse pixel order within rows for horizontal flip
+fn reverse_pixels_in_rows(data: [u8], width: u32, channels: u8, rows: u32) -> [u8] {
+  let row_bytes = width as usize * channels as usize
+  let c = channels as usize
+  let mut output: [u8] = []
+
+  for row in 0..rows as usize {
+    for x in (0..width as usize).rev() {
+      let offset = row * row_bytes + x * c
+      output = output + data[offset..offset + c]
+    }
+  }
+
+  output
+}
+
+/// Reverse row data for 180-degree rotation
+fn reverse_rows(data: [u8], width: u32, channels: u8) -> [u8] {
+  reverse_pixels_in_rows(data, width, channels, (data.len() / (width as usize * channels as usize)) as u32)
+}
+
+/// Downsample a row by a given factor (for face detection preview)
+fn downsample_row(row: [u8], width: u32, channels: u8, factor: u32) -> [u8] {
+  let c = channels as usize
+  let mut output: [u8] = []
+
+  for x in (0..width as usize).step_by(factor as usize) {
+    output = output + row[x * c..(x + 1) * c]
+  }
+
+  output
+}
+
+/// Compute entropy for segments of a row (for smart crop)
+fn compute_row_entropy(data: [u8], row_idx: u32, width: u32, channels: u8, grid_count: u32) -> [f64] {
+  let cell_width = width / grid_count
+  let c = channels as usize
+  let row_offset = row_idx as usize * width as usize * c
+  let mut entropies: [f64] = []
+
+  for cell in 0..grid_count as usize {
+    let start_x = cell * cell_width as usize
+    let end_x = start_x + cell_width as usize
+    let mut histogram: [u32; 256] = [0; 256]
+    let mut total: u32 = 0
+
+    for x in start_x..end_x {
+      let offset = row_offset + x * c
+      // Use luminance for entropy
+      let lum = (data[offset] as u32 * 77 + data[offset + 1] as u32 * 150 + data[offset + 2] as u32 * 29) >> 8
+      histogram[lum as usize] += 1
+      total += 1
+    }
+
+    // Shannon entropy
+    let mut entropy: f64 = 0.0
+    for count in histogram {
+      if count > 0 {
+        let p = count as f64 / total as f64
+        entropy -= p * math.log2(p)
+      }
+    }
+
+    entropies.push(entropy)
+  }
+
+  entropies
+}
+
+// External functions (provided by turbo-image)
+extern fn detect_faces_haar(rows: [[u8]], dims: Dimensions) -> [BoundingBox]
+extern fn compute_face_cluster_center(faces: [BoundingBox], scale: u32) -> (u32, u32)
+extern fn find_highest_entropy_region(map: [f64], grid: u32, dims: Dimensions, tw: u32, th: u32) -> (u32, u32)
+extern fn fetch_and_decode_watermark(url: str, scale: f32, dims: Dimensions) -> ImageChunk
+extern fn blend_watermark_rows(chunk: ImageChunk, watermark: ImageChunk, box: BoundingBox, opacity: f32) -> [u8]

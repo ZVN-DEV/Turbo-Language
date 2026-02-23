@@ -1,0 +1,11 @@
+[package]
+name = "turbo-sema"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+turbo-ast = { path = "../turbo-ast" }
+
+[dev-dependencies]
+turbo-lexer = { path = "../turbo-lexer" }
+turbo-parser = { path = "../turbo-parser" }

@@ -1,0 +1,354 @@
+// =============================================================================
+// search.tb — Full-text search across all notes with relevance ranking
+//
+// Demonstrates:
+//   - Inverted index built at runtime with {K: V} maps
+//   - Shared<T> for concurrent read access during search
+//   - Pipe operator for multi-stage scoring pipelines
+//   - Arrow functions in sort, filter, map chains
+//   - Pattern matching on search options
+//   - Guard statements for input validation
+//   - Struct methods with default parameters
+//   - const for compile-time tokenizer configuration
+// =============================================================================
+
+import { Path } from "std/fs"
+import { Shared } from "turbo/sync"
+import { log } from "turbo/log"
+import { Note, SearchResult, SearchMatch, SearchQuery, AppError } from "./models"
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+/// Stop words excluded from the index to reduce noise
+const STOP_WORDS: {str} = {
+  "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+  "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
+  "be", "have", "has", "had", "do", "does", "did", "will", "would",
+  "could", "should", "may", "might", "shall", "can", "need", "dare",
+  "it", "its", "this", "that", "these", "those", "i", "me", "my",
+  "we", "our", "you", "your", "he", "she", "they", "them", "their",
+  "not", "no", "nor", "so", "if", "then", "than", "too", "very",
+}
+
+/// Minimum token length to index
+const MIN_TOKEN_LENGTH: usize = 2
+
+/// Maximum snippet context to show around a match
+const SNIPPET_CONTEXT_CHARS: usize = 60
+
+// =============================================================================
+// Inverted Index — maps terms to document positions
+// =============================================================================
+
+/// A posting: where a term appears in the corpus
+@derive(Debug, Clone)
+struct Posting {
+  note_id: str
+  positions: [usize]       // Byte offsets within the note content
+  term_frequency: f64       // TF: occurrences / total terms in document
+}
+
+/// The full search index
+pub struct SearchIndex {
+  index: Shared<{str: [Posting]}>       // term -> list of postings
+  doc_lengths: Shared<{str: usize}>     // note_id -> total term count
+  doc_count: Shared<usize>              // total number of indexed documents
+  notes: Shared<{str: Note}>            // note_id -> Note (for retrieving results)
+}
+
+impl SearchIndex {
+  /// Create a new empty search index
+  pub fn new() -> SearchIndex {
+    SearchIndex {
+      index: Shared.new({:}),
+      doc_lengths: Shared.new({:}),
+      doc_count: Shared.new(0),
+      notes: Shared.new({:}),
+    }
+  }
+
+  /// Build the index from a collection of notes
+  pub fn build(notes: [Note]) -> SearchIndex {
+    let idx = SearchIndex.new()
+    for note in notes {
+      idx.add_document(note)
+    }
+    idx
+  }
+
+  /// Add a single document to the index
+  pub fn add_document(self, note: Note) {
+    let tokens = self.tokenize(note.content)
+    let total_terms = tokens.len()
+
+    // Count term frequencies
+    let mut term_counts: {str: [usize]} = {:}
+    for (position, token) in tokens.enumerate() {
+      match term_counts.get(token) {
+        some(positions) => positions.push(position)
+        none            => term_counts[token] = [position]
+      }
+    }
+
+    // Create postings for each term
+    let mut idx = self.index.write()
+    for (term, positions) in term_counts {
+      let posting = Posting {
+        note_id: note.id,
+        positions,
+        term_frequency: positions.len() as f64 / total_terms as f64,
+      }
+
+      match idx.get(term) {
+        some(postings) => postings.push(posting)
+        none           => idx[term] = [posting]
+      }
+    }
+
+    // Store document metadata
+    self.doc_lengths.write()[note.id] = total_terms
+    self.notes.write()[note.id] = note
+    let mut count = self.doc_count.write()
+    count += 1
+  }
+
+  /// Remove a document from the index
+  pub fn remove_document(self, note_id: str) {
+    let mut idx = self.index.write()
+
+    // Remove postings for this document from all terms
+    for (term, postings) in idx.iter() {
+      let filtered = postings.filter((p) => p.note_id != note_id)
+      if filtered.is_empty() {
+        idx.remove(term)
+      } else {
+        idx[term] = filtered
+      }
+    }
+
+    self.doc_lengths.write().remove(note_id)
+    self.notes.write().remove(note_id)
+    let mut count = self.doc_count.write()
+    count -= 1
+  }
+
+  /// Update a document in the index (remove + re-add)
+  pub fn update_document(self, note: Note) {
+    self.remove_document(note.id)
+    self.add_document(note)
+  }
+
+  // ===========================================================================
+  // Search
+  // ===========================================================================
+
+  /// Execute a search query and return ranked results
+  pub fn search(self, query: SearchQuery) -> [SearchResult] ! AppError {
+    guard !query.text.trim().is_empty() else {
+      return err(AppError.SearchError("Search query cannot be empty"))
+    }
+
+    let query_tokens = self.tokenize(query.text)
+
+    guard !query_tokens.is_empty() else {
+      return err(AppError.SearchError("Query contains only stop words"))
+    }
+
+    let idx = self.index.read()
+    let doc_count = *self.doc_count.read()
+    let notes = self.notes.read()
+
+    // Collect candidate documents with their scores
+    let mut scores: {str: f64} = {:}
+    let mut doc_matches: {str: [SearchMatch]} = {:}
+
+    for token in query_tokens {
+      // Handle case sensitivity
+      let search_token = if query.case_sensitive { token } else { token.to_lowercase() }
+
+      let postings = match idx.get(search_token) {
+        some(p) => p
+        none    => continue
+      }
+
+      // Calculate IDF (Inverse Document Frequency)
+      let idf = ((doc_count as f64) / (postings.len() as f64 + 1.0)).ln() + 1.0
+
+      for posting in postings {
+        // TF-IDF score
+        let tf_idf = posting.term_frequency * idf
+
+        // Accumulate score for this document
+        let current = scores.get(posting.note_id) ?? 0.0
+        scores[posting.note_id] = current + tf_idf
+
+        // Build match information
+        let note = match notes.get(posting.note_id) {
+          some(n) => n
+          none    => continue
+        }
+
+        let matches = doc_matches.get(posting.note_id) ?? []
+        for position in posting.positions {
+          let (line, column) = self.offset_to_line_col(note.content, position)
+          let context = self.extract_line_context(note.content, line)
+
+          matches.push(SearchMatch {
+            line,
+            column,
+            length: search_token.len(),
+            context,
+          })
+        }
+        doc_matches[posting.note_id] = matches
+      }
+    }
+
+    // Apply title boost — matches in the title score higher
+    for (note_id, score) in scores.iter() {
+      let note = match notes.get(note_id) {
+        some(n) => n
+        none    => continue
+      }
+      let title_lower = note.title.to_lowercase()
+      let query_lower = query.text.to_lowercase()
+      if title_lower.contains(query_lower) {
+        scores[note_id] = score * 2.5  // Title match bonus
+      }
+    }
+
+    // Build and rank results
+    let results = scores
+      |> entries()
+      |> map((note_id, score) => {
+        let note = notes.get(note_id).unwrap()
+        let matches = doc_matches.get(note_id) ?? []
+        let max_score = scores.values().max() ?? 1.0
+        let normalized_score = score / max_score
+
+        SearchResult {
+          note_id,
+          note_title: note.title,
+          note_path: note.path,
+          score: normalized_score,
+          matches,
+          snippet: self.build_snippet(note.content, matches),
+        }
+      })
+      |> filter((r) => {
+        // Apply file pattern filter if specified
+        match query.file_pattern {
+          some(pattern) => r.note_path.matches_glob(pattern)
+          none          => true
+        }
+      })
+      |> sort_by((a, b) => b.score.partial_cmp(a.score))
+      |> take(query.max_results)
+      |> collect()
+
+    log.debug("Search completed", {
+      query: query.text,
+      results: results.len(),
+      docs_scanned: scores.len(),
+    })
+
+    results
+  }
+
+  /// Quick search by prefix — for autocomplete and command palette
+  pub fn prefix_search(self, prefix: str, max_results: usize = 10) -> [Note] {
+    let prefix_lower = prefix.to_lowercase()
+    let notes = self.notes.read()
+
+    notes.values()
+      .filter((note) => {
+        note.title.to_lowercase().starts_with(prefix_lower) ||
+        note.title.to_lowercase().contains(prefix_lower)
+      })
+      .cloned()
+      .collect()
+      |> sort_by((a, b) => {
+        // Prioritize prefix matches over contains matches
+        let a_prefix = a.title.to_lowercase().starts_with(prefix_lower)
+        let b_prefix = b.title.to_lowercase().starts_with(prefix_lower)
+        match (a_prefix, b_prefix) {
+          (true, false) => -1
+          (false, true) => 1
+          _             => a.title.cmp(b.title)
+        }
+      })
+      |> take(max_results)
+      |> collect()
+  }
+
+  // ===========================================================================
+  // Tokenization
+  // ===========================================================================
+
+  /// Tokenize text into searchable terms.
+  /// Strips punctuation, lowercases, and removes stop words.
+  fn tokenize(self, text: str) -> [str] {
+    text
+      .to_lowercase()
+      .split_whitespace()
+      .map((word) => {
+        // Strip leading/trailing punctuation
+        word.trim_matches((c: char) => !c.is_alphanumeric())
+      })
+      .filter((word) => {
+        word.len() >= MIN_TOKEN_LENGTH &&
+        !STOP_WORDS.contains(word)
+      })
+      .collect()
+  }
+
+  // ===========================================================================
+  // Helpers
+  // ===========================================================================
+
+  /// Convert a byte offset to (line, column) pair
+  fn offset_to_line_col(self, content: str, offset: usize) -> (usize, usize) {
+    let before = content[..offset.min(content.len())]
+    let line = before.chars().filter((c) => c == '\n').count()
+    let last_newline = before.rfind('\n').map((i) => i + 1) ?? 0
+    let column = offset - last_newline
+    (line, column)
+  }
+
+  /// Extract the full line at a given line number for context
+  fn extract_line_context(self, content: str, line: usize) -> str {
+    content.lines().nth(line) ?? ""
+  }
+
+  /// Build a snippet showing the best match in context
+  fn build_snippet(self, content: str, matches: [SearchMatch]) -> str {
+    guard let some(best) = matches.first() else {
+      // No matches — return the beginning of the document
+      let preview_len = SNIPPET_CONTEXT_CHARS * 2
+      if content.len() <= preview_len {
+        return content.replace('\n', " ")
+      }
+      return "{content[..preview_len].replace('\n', " ")}..."
+    }
+
+    let line = best.context
+    if line.len() <= SNIPPET_CONTEXT_CHARS * 2 {
+      line
+    } else {
+      // Center the snippet around the match
+      let match_center = best.column + best.length / 2
+      let start = if match_center > SNIPPET_CONTEXT_CHARS {
+        match_center - SNIPPET_CONTEXT_CHARS
+      } else {
+        0
+      }
+      let end = (start + SNIPPET_CONTEXT_CHARS * 2).min(line.len())
+
+      let prefix = if start > 0 { "..." } else { "" }
+      let suffix = if end < line.len() { "..." } else { "" }
+      "{prefix}{line[start..end]}{suffix}"
+    }
+  }
+}

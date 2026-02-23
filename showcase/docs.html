@@ -1,0 +1,1418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Documentation - Turbo Programming Language</title>
+<style>
+  /* ========== Reset & Base ========== */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; font-size: 16px; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background: #0a0a0b;
+    color: #e4e4e7;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+  a { color: #3B82F6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ========== Utility ========== */
+  .container { max-width: 920px; margin: 0 auto; padding: 0 24px; }
+  code, .code {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Menlo', 'Consolas', monospace;
+  }
+
+  /* ========== Navigation ========== */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(10, 10, 11, 0.8);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  nav .nav-inner {
+    max-width: 1200px; margin: 0 auto; padding: 0 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    height: 56px;
+  }
+  nav .logo {
+    font-weight: 800; font-size: 1.15rem; color: #fafafa;
+    letter-spacing: -0.02em;
+  }
+  nav .logo span { color: #3B82F6; }
+  nav .logo a { color: inherit; text-decoration: none; }
+  nav .logo a:hover { text-decoration: none; }
+  nav ul { list-style: none; display: flex; gap: 28px; }
+  nav ul li a {
+    font-size: 0.85rem; color: #a1a1aa; transition: color 0.2s;
+    font-weight: 500;
+  }
+  nav ul li a:hover { color: #fafafa; text-decoration: none; }
+  nav ul li a.active { color: #3B82F6; }
+
+  /* ========== Page Header ========== */
+  .page-header {
+    padding-top: 80px;
+    padding-bottom: 60px;
+    background:
+      radial-gradient(ellipse 70% 50% at 50% 0%, rgba(59,130,246,0.08) 0%, transparent 70%),
+      #0a0a0b;
+  }
+  .page-header h1 {
+    font-size: clamp(2.5rem, 5vw, 3.5rem);
+    font-weight: 900;
+    letter-spacing: -0.04em;
+    background: linear-gradient(135deg, #fafafa 0%, #a1a1aa 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 16px;
+  }
+  .page-header p {
+    font-size: 1.15rem;
+    color: #a1a1aa;
+    max-width: 620px;
+    line-height: 1.6;
+  }
+
+  /* ========== TOC ========== */
+  .toc {
+    padding: 40px 0 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  .toc h2 {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #3B82F6;
+    margin-bottom: 16px;
+  }
+  .toc-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px 32px;
+  }
+  .toc-grid a {
+    display: block;
+    font-size: 0.88rem;
+    color: #a1a1aa;
+    padding: 4px 0;
+    transition: color 0.2s;
+  }
+  .toc-grid a:hover { color: #fafafa; text-decoration: none; }
+
+  /* ========== Doc Sections ========== */
+  .doc-section {
+    padding: 64px 0;
+    border-top: 1px solid rgba(255,255,255,0.04);
+  }
+  .doc-section h2 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #fafafa;
+    margin-bottom: 8px;
+    letter-spacing: -0.02em;
+  }
+  .doc-section h3 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #fafafa;
+    margin-top: 36px;
+    margin-bottom: 12px;
+  }
+  .doc-section h4 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #e4e4e7;
+    margin-top: 28px;
+    margin-bottom: 8px;
+  }
+  .doc-section p, .doc-section li {
+    font-size: 0.93rem;
+    color: #a1a1aa;
+    line-height: 1.7;
+    max-width: 760px;
+  }
+  .doc-section p { margin-bottom: 16px; }
+  .doc-section ul, .doc-section ol {
+    padding-left: 20px;
+    margin-bottom: 20px;
+  }
+  .doc-section li { margin-bottom: 6px; }
+  .doc-section p strong, .doc-section li strong { color: #e4e4e7; }
+  .section-intro {
+    font-size: 1rem;
+    color: #a1a1aa;
+    margin-bottom: 32px;
+    line-height: 1.7;
+  }
+  .section-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #3B82F6;
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  /* ========== Code Blocks ========== */
+  .code-block {
+    background: #111114;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 24px;
+  }
+  .code-block-header {
+    padding: 10px 16px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #71717a;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .code-block-header .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+  }
+  .code-block-header .dot.turbo { background: #3B82F6; }
+  .code-block-header .dot.shell { background: #22c55e; }
+  .code-block-header .dot.toml { background: #fbbf24; }
+  .code-block pre {
+    padding: 16px 20px;
+    font-size: 0.8rem;
+    line-height: 1.7;
+    overflow-x: auto;
+    color: #d4d4d8;
+    tab-size: 2;
+  }
+
+  /* Syntax highlights */
+  .kw { color: #c084fc; }
+  .fn-name { color: #60a5fa; }
+  .str { color: #34d399; }
+  .comment { color: #52525b; font-style: italic; }
+  .type { color: #fbbf24; }
+  .num { color: #fb923c; }
+  .op { color: #f472b6; }
+  .sh-cmd { color: #22c55e; }
+  .sh-flag { color: #a78bfa; }
+  .attr { color: #fb923c; }
+
+  /* ========== Inline Code ========== */
+  p code, li code, td code {
+    background: rgba(255,255,255,0.06);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    color: #e4e4e7;
+  }
+
+  /* ========== Tables ========== */
+  .doc-table-wrap { overflow-x: auto; margin-bottom: 24px; }
+  .doc-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+  .doc-table th {
+    text-align: left; padding: 12px 16px;
+    font-weight: 600; color: #a1a1aa;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    white-space: nowrap;
+  }
+  .doc-table td {
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    color: #d4d4d8;
+  }
+  .doc-table tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* ========== Toolchain Cards ========== */
+  .tool-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    margin-bottom: 24px;
+  }
+  .tool-card {
+    background: #111114;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 20px;
+    transition: border-color 0.2s;
+  }
+  .tool-card:hover { border-color: rgba(59,130,246,0.25); }
+  .tool-cmd {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #3B82F6;
+    margin-bottom: 8px;
+  }
+  .tool-desc { font-size: 0.82rem; color: #a1a1aa; line-height: 1.55; }
+  .tool-flags {
+    margin-top: 10px;
+    font-size: 0.78rem;
+    color: #71717a;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  }
+
+  /* ========== Stdlib Cards ========== */
+  .stdlib-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    margin-bottom: 24px;
+  }
+  .stdlib-card {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 20px;
+    transition: border-color 0.2s;
+  }
+  .stdlib-card:hover { border-color: rgba(59,130,246,0.2); }
+  .stdlib-name {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: #60a5fa;
+    margin-bottom: 6px;
+  }
+  .stdlib-desc { font-size: 0.82rem; color: #a1a1aa; line-height: 1.55; }
+  .stdlib-funcs {
+    margin-top: 8px;
+    font-size: 0.75rem;
+    color: #71717a;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  }
+
+  /* ========== Divider ========== */
+  .major-divider {
+    padding: 48px 0 0;
+    border-top: 2px solid rgba(59,130,246,0.15);
+  }
+  .major-divider h2 {
+    font-size: 2rem;
+    font-weight: 800;
+    color: #fafafa;
+    margin-bottom: 4px;
+  }
+  .major-divider .major-sub {
+    font-size: 1rem;
+    color: #71717a;
+    margin-bottom: 0;
+  }
+
+  /* ========== Footer ========== */
+  footer {
+    padding: 48px 0;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    text-align: center;
+    color: #52525b;
+    font-size: 0.8rem;
+  }
+  footer .tagline-small {
+    color: #71717a; margin-bottom: 8px; font-size: 0.85rem;
+  }
+
+  /* ========== Design Phase Banner ========== */
+  .design-banner {
+    background: rgba(251, 191, 36, 0.08);
+    border-bottom: 1px solid rgba(251, 191, 36, 0.15);
+    padding: 10px 24px;
+    text-align: center;
+    font-size: 0.78rem;
+    color: #d4a017;
+    margin-top: 56px;
+    letter-spacing: 0.01em;
+    line-height: 1.5;
+  }
+  .design-banner span {
+    opacity: 0.85;
+  }
+
+  /* ========== Responsive ========== */
+  @media (max-width: 768px) {
+    nav ul { display: none; }
+    .page-header h1 { font-size: 2rem; }
+    .toc-grid { grid-template-columns: 1fr; }
+    .tool-grid { grid-template-columns: 1fr; }
+    .stdlib-grid { grid-template-columns: 1fr; }
+    .doc-section { padding: 40px 0; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ========== Navigation ========== -->
+<nav>
+  <div class="nav-inner">
+    <div class="logo"><a href="index.html"><span>turbo</span></a></div>
+    <ul>
+      <li><a href="index.html">Showcase</a></li>
+      <li><a href="getting-started.html">Getting Started</a></li>
+      <li><a href="docs.html" class="active">Docs</a></li>
+    </ul>
+  </div>
+</nav>
+
+<!-- ========== Design Phase Banner ========== -->
+<div class="design-banner">
+  <span>Turbo is in active design. This documentation reflects the language specification. The compiler is under development.</span>
+</div>
+
+<!-- ========== Page Header ========== -->
+<header class="page-header">
+  <div class="container">
+    <h1>Documentation</h1>
+    <p>The complete language reference, toolchain guide, and standard library overview for Turbo.</p>
+  </div>
+</header>
+
+<!-- ========== Table of Contents ========== -->
+<section class="toc">
+  <div class="container">
+    <h2>On This Page</h2>
+    <div class="toc-grid">
+      <a href="#variables">Variables</a>
+      <a href="#functions">Functions</a>
+      <a href="#types">Types</a>
+      <a href="#optionals">Optionals</a>
+      <a href="#error-handling">Error Handling</a>
+      <a href="#pattern-matching">Pattern Matching</a>
+      <a href="#structs-traits">Structs and Traits</a>
+      <a href="#enums">Enums / ADTs</a>
+      <a href="#generics">Generics</a>
+      <a href="#concurrency">Concurrency</a>
+      <a href="#agents">Agents</a>
+      <a href="#modules">Modules</a>
+      <a href="#metaprogramming">Metaprogramming</a>
+      <a href="#toolchain">Toolchain</a>
+      <a href="#stdlib">Standard Library</a>
+    </div>
+  </div>
+</section>
+
+<main>
+
+<!-- ================================================================== -->
+<!--  PART 1: LANGUAGE REFERENCE                                        -->
+<!-- ================================================================== -->
+<div class="container major-divider" id="language-reference">
+  <span class="section-label">Part 1</span>
+  <h2>Language Reference</h2>
+  <p class="major-sub">Complete syntax and semantics for every language feature.</p>
+</div>
+
+<!-- ========== Variables ========== -->
+<section class="doc-section" id="variables">
+  <div class="container">
+    <h2>Variables</h2>
+    <p class="section-intro">Turbo is immutable by default. Use <code>let</code> for immutable bindings and <code>let mut</code> when you need to change a value. Types are inferred in most cases, but you can add annotations when they improve clarity.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+      <pre><span class="comment">// Immutable by default</span>
+<span class="kw">let</span> name = <span class="str">"world"</span>
+<span class="kw">let</span> age: <span class="type">u32</span> = <span class="num">25</span>
+
+<span class="comment">// Mutable with `mut`</span>
+<span class="kw">let mut</span> counter = <span class="num">0</span>
+counter += <span class="num">1</span>
+
+<span class="comment">// Constants (compile-time known)</span>
+<span class="kw">const</span> MAX_SIZE: <span class="type">usize</span> = <span class="num">1024</span>
+<span class="kw">const</span> PI: <span class="type">f64</span> = <span class="num">3.14159265358979</span></pre>
+    </div>
+
+    <h3>Destructuring</h3>
+    <p>Pull values out of objects and arrays directly at the binding site, just like JavaScript.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+      <pre><span class="comment">// Object destructuring</span>
+<span class="kw">let</span> { name, age, ...rest } = user
+
+<span class="comment">// Array destructuring</span>
+<span class="kw">let</span> [first, second, ...tail] = items
+
+<span class="comment">// Nested destructuring with defaults</span>
+<span class="kw">let</span> { address: { city, zip }, role = <span class="str">"user"</span> } = config</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Functions ========== -->
+<section class="doc-section" id="functions">
+  <div class="container">
+    <h2>Functions</h2>
+    <p class="section-intro">Functions are declared with <code>fn</code>. The last expression is the return value. Turbo supports default parameters, named arguments, closures, and both pipe-style and arrow-style lambdas.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Basic Functions</div>
+      <pre><span class="comment">// Basic function &mdash; last expression is the return value</span>
+<span class="kw">fn</span> <span class="fn-name">add</span>(a: <span class="type">i32</span>, b: <span class="type">i32</span>) -> <span class="type">i32</span> {
+  a + b
+}
+
+<span class="comment">// Default parameters</span>
+<span class="kw">fn</span> <span class="fn-name">greet</span>(name: <span class="type">str</span>, greeting: <span class="type">str</span> = <span class="str">"Hello"</span>) -> <span class="type">str</span> {
+  <span class="str">"{greeting}, {name}!"</span>
+}
+
+<span class="comment">// Named arguments at call site</span>
+<span class="fn-name">greet</span>(name: <span class="str">"Alice"</span>, greeting: <span class="str">"Hi"</span>)</pre>
+    </div>
+
+    <h3>Arrow Functions and Closures</h3>
+    <p>Arrow functions work like JavaScript. Pipe-style closures work like Rust. Both are interchangeable.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Closures</div>
+      <pre><span class="comment">// Arrow functions (JS-style)</span>
+<span class="kw">let</span> double = (x) => x * <span class="num">2</span>
+<span class="kw">let</span> add = (a, b) => a + b
+
+<span class="comment">// Pipe-style closures (Rust-style)</span>
+<span class="kw">let</span> double = |x| x * <span class="num">2</span>
+
+<span class="comment">// Multi-line with type annotations</span>
+<span class="kw">let</span> process = (data: <span class="type">[Record]</span>) => {
+  <span class="kw">let</span> cleaned = data.<span class="fn-name">filter</span>((d) => d.valid)
+  cleaned.<span class="fn-name">map</span>((d) => d.value)
+}
+
+<span class="comment">// In higher-order functions</span>
+<span class="kw">let</span> names = users
+  .<span class="fn-name">filter</span>((u) => u.active)
+  .<span class="fn-name">map</span>((u) => u.name)
+  .<span class="fn-name">sort_by</span>((a, b) => a.<span class="fn-name">cmp</span>(b))</pre>
+    </div>
+
+    <h3>Async Functions</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Async</div>
+      <pre><span class="kw">async fn</span> <span class="fn-name">fetch_user</span>(id: <span class="type">u64</span>) -> <span class="type">User</span> <span class="op">!</span> <span class="type">Error</span> {
+  <span class="kw">let</span> resp = <span class="kw">await</span> http.<span class="fn-name">get</span>(<span class="str">"/users/{id}"</span>)<span class="op">?</span>
+  resp.<span class="fn-name">json</span>&lt;<span class="type">User</span>&gt;()<span class="op">?</span>
+}</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Types ========== -->
+<section class="doc-section" id="types">
+  <div class="container">
+    <h2>Types</h2>
+    <p class="section-intro">Turbo has a rich type system with primitives, collections, structs, algebraic data types, and traits. Types are inferred where possible but can always be annotated explicitly.</p>
+
+    <h3>Primitives</h3>
+    <div class="doc-table-wrap">
+      <table class="doc-table">
+        <thead>
+          <tr><th>Type</th><th>Description</th><th>Example</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>i32</code>, <code>i64</code></td><td>Signed integers (32-bit, 64-bit)</td><td><code>let x: i32 = 42</code></td></tr>
+          <tr><td><code>u32</code>, <code>u64</code></td><td>Unsigned integers</td><td><code>let id: u64 = 100</code></td></tr>
+          <tr><td><code>f32</code>, <code>f64</code></td><td>Floating-point numbers</td><td><code>let pi: f64 = 3.14</code></td></tr>
+          <tr><td><code>str</code></td><td>UTF-8 string</td><td><code>let s = "hello"</code></td></tr>
+          <tr><td><code>bool</code></td><td>Boolean</td><td><code>let ok = true</code></td></tr>
+          <tr><td><code>usize</code></td><td>Platform-sized unsigned integer</td><td><code>let len: usize = 10</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Collections</h3>
+    <div class="doc-table-wrap">
+      <table class="doc-table">
+        <thead>
+          <tr><th>Syntax</th><th>Type</th><th>Example</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>[T]</code></td><td>Array / Vector</td><td><code>let nums: [i32] = [1, 2, 3]</code></td></tr>
+          <tr><td><code>{K: V}</code></td><td>HashMap / Dictionary</td><td><code>let scores: {str: i32} = { "a": 1 }</code></td></tr>
+          <tr><td><code>{T}</code></td><td>HashSet</td><td><code>let uniq: {i32} = {1, 2, 3}</code></td></tr>
+          <tr><td><code>(T, U)</code></td><td>Tuple</td><td><code>let point: (f64, f64) = (1.0, 2.0)</code></td></tr>
+          <tr><td><code>1..10</code></td><td>Range (exclusive end)</td><td><code>for i in 0..5 { }</code></td></tr>
+          <tr><td><code>1..=10</code></td><td>Range (inclusive end)</td><td><code>for i in 1..=10 { }</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Comprehensions</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+      <pre><span class="kw">let</span> squares = [x * x <span class="kw">for</span> x <span class="kw">in</span> <span class="num">1</span>..=<span class="num">10</span>]
+<span class="kw">let</span> evens = [x <span class="kw">for</span> x <span class="kw">in</span> items <span class="kw">if</span> x % <span class="num">2</span> == <span class="num">0</span>]
+<span class="kw">let</span> pairs = [(x, y) <span class="kw">for</span> x <span class="kw">in</span> xs <span class="kw">for</span> y <span class="kw">in</span> ys]</pre>
+    </div>
+
+    <h3>Special Types</h3>
+    <div class="doc-table-wrap">
+      <table class="doc-table">
+        <thead>
+          <tr><th>Syntax</th><th>Type</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>T?</code></td><td>Optional</td><td>Value that may be absent (<code>some(v)</code> or <code>none</code>)</td></tr>
+          <tr><td><code>T ! E</code></td><td>Result</td><td>Value <code>T</code> or error <code>E</code> &mdash; propagated with <code>?</code></td></tr>
+          <tr><td><code>Shared&lt;T&gt;</code></td><td>Shared ownership</td><td>Reference-counted shared pointer (like <code>Arc&lt;T&gt;</code> in Rust)</td></tr>
+          <tr><td><code>WeakRef&lt;T&gt;</code></td><td>Weak reference</td><td>Non-owning reference to a <code>Shared&lt;T&gt;</code> &mdash; breaks reference cycles</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Compile-Time Computation</h3>
+    <p>Functions marked <code>const fn</code> are evaluated at compile time when called in a <code>const</code> context. This enables type-safe code generation without macros.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> const fn</div>
+      <pre><span class="kw">const fn</span> <span class="fn-name">fibonacci</span>(n: <span class="type">u64</span>) -> <span class="type">u64</span> {
+  <span class="kw">match</span> n {
+    <span class="num">0</span> => <span class="num">0</span>
+    <span class="num">1</span> => <span class="num">1</span>
+    n => <span class="fn-name">fibonacci</span>(n - <span class="num">1</span>) + <span class="fn-name">fibonacci</span>(n - <span class="num">2</span>)
+  }
+}
+
+<span class="comment">// Computed at compile time &mdash; zero runtime cost</span>
+<span class="kw">const</span> FIB_20: <span class="type">u64</span> = <span class="fn-name">fibonacci</span>(<span class="num">20</span>)</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Optionals ========== -->
+<section class="doc-section" id="optionals">
+  <div class="container">
+    <h2>Optionals</h2>
+    <p class="section-intro">Turbo has no null. Instead, values that may be absent use the <code>T?</code> optional type with <code>none</code> for the absent case and <code>some(v)</code> for the present case. Optional chaining (<code>?.</code>) and null coalescing (<code>??</code>) work exactly like JavaScript.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+      <pre><span class="comment">// Optional type</span>
+<span class="kw">let</span> name: <span class="type">str?</span> = <span class="fn-name">some</span>(<span class="str">"Alice"</span>)
+<span class="kw">let</span> missing: <span class="type">str?</span> = <span class="kw">none</span>
+
+<span class="comment">// Optional chaining</span>
+<span class="kw">let</span> city = user<span class="op">?.</span>address<span class="op">?.</span>city      <span class="comment">// str?</span>
+
+<span class="comment">// Null coalescing &mdash; provide a default</span>
+<span class="kw">let</span> name = user<span class="op">?.</span>name <span class="op">??</span> <span class="str">"Anonymous"</span>
+
+<span class="comment">// Chained method calls</span>
+<span class="kw">let</span> upper = user<span class="op">?.</span>name<span class="op">?.</span><span class="fn-name">to_upper</span>() <span class="op">??</span> <span class="str">"UNKNOWN"</span>
+
+<span class="comment">// Pattern matching on optionals</span>
+<span class="kw">match</span> user<span class="op">?.</span>address {
+  <span class="fn-name">some</span>(addr) => <span class="fn-name">print</span>(<span class="str">"Lives in {addr.city}"</span>)
+  <span class="kw">none</span> => <span class="fn-name">print</span>(<span class="str">"No address on file"</span>)
+}</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Error Handling ========== -->
+<section class="doc-section" id="error-handling">
+  <div class="container">
+    <h2>Error Handling</h2>
+    <p class="section-intro">Functions that can fail return <code>T ! E</code> (a result that is either a value <code>T</code> or an error <code>E</code>). The <code>?</code> operator propagates errors to the caller. Use <code>match</code> to handle results explicitly, or chain with <code>with</code> blocks for multiple fallible operations.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Result Type and Propagation</div>
+      <pre><span class="comment">// Function that can fail</span>
+<span class="kw">fn</span> <span class="fn-name">parse_int</span>(s: <span class="type">str</span>) -> <span class="type">i32</span> <span class="op">!</span> <span class="type">ParseError</span> {
+  <span class="comment">// ...</span>
+}
+
+<span class="comment">// ? propagates errors to the caller</span>
+<span class="kw">fn</span> <span class="fn-name">process</span>(input: <span class="type">str</span>) -> <span class="type">Output</span> <span class="op">!</span> <span class="type">Error</span> {
+  <span class="kw">let</span> n = <span class="fn-name">parse_int</span>(input)<span class="op">?</span>
+  <span class="kw">let</span> data = <span class="fn-name">fetch_data</span>(n)<span class="op">?</span>
+  <span class="fn-name">transform</span>(data)
+}
+
+<span class="comment">// Match on results</span>
+<span class="kw">match</span> <span class="fn-name">parse_int</span>(<span class="str">"42"</span>) {
+  <span class="fn-name">ok</span>(n) => <span class="fn-name">print</span>(<span class="str">"Got {n}"</span>)
+  <span class="fn-name">err</span>(e) => <span class="fn-name">print</span>(<span class="str">"Error: {e}"</span>)
+}</pre>
+    </div>
+
+    <h3>With Blocks</h3>
+    <p>Chain multiple fallible operations with <code>with</code> blocks, inspired by Elixir.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+      <pre><span class="kw">fn</span> <span class="fn-name">complex_operation</span>() -> <span class="type">Data</span> <span class="op">!</span> <span class="type">Error</span> {
+  <span class="kw">with</span> {
+    <span class="kw">let</span> config = <span class="fn-name">load_config</span>()<span class="op">?</span>
+    <span class="kw">let</span> conn = <span class="fn-name">connect</span>(config.db_url)<span class="op">?</span>
+    <span class="kw">let</span> data = <span class="fn-name">query</span>(conn, <span class="str">"SELECT *"</span>)<span class="op">?</span>
+  } <span class="kw">yield</span> {
+    <span class="fn-name">transform</span>(data)
+  }
+}</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Pattern Matching ========== -->
+<section class="doc-section" id="pattern-matching">
+  <div class="container">
+    <h2>Pattern Matching</h2>
+    <p class="section-intro">The <code>match</code> expression is exhaustive &mdash; the compiler ensures every case is covered. Turbo also supports <code>if let</code> for single-pattern checks, <code>guard let</code> for early returns, and pattern matching in function heads.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Match Expressions</div>
+      <pre><span class="comment">// Match with guards</span>
+<span class="kw">fn</span> <span class="fn-name">classify</span>(n: <span class="type">i32</span>) -> <span class="type">str</span> {
+  <span class="kw">match</span> n {
+    <span class="num">0</span> => <span class="str">"zero"</span>
+    n <span class="kw">if</span> n > <span class="num">0</span> => <span class="str">"positive"</span>
+    _ => <span class="str">"negative"</span>
+  }
+}
+
+<span class="comment">// if let for single-pattern checks</span>
+<span class="kw">if let</span> <span class="fn-name">ok</span>(user) = <span class="fn-name">fetch_user</span>(id) {
+  <span class="fn-name">print</span>(<span class="str">"Found: {user.name}"</span>)
+}
+
+<span class="comment">// guard let for early returns</span>
+<span class="kw">guard let</span> value = optional <span class="kw">else</span> { <span class="kw">return</span> }
+
+<span class="comment">// Pattern matching in function heads</span>
+<span class="kw">fn</span> <span class="fn-name">factorial</span>(<span class="num">0</span>) -> <span class="type">u64</span> { <span class="num">1</span> }
+<span class="kw">fn</span> <span class="fn-name">factorial</span>(n: <span class="type">u64</span>) -> <span class="type">u64</span> { n * <span class="fn-name">factorial</span>(n - <span class="num">1</span>) }</pre>
+    </div>
+
+    <h3>Destructuring in Match</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+      <pre><span class="kw">match</span> response {
+  <span class="fn-name">ok</span>({ status: <span class="num">200</span>, body }) => <span class="fn-name">process</span>(body)
+  <span class="fn-name">ok</span>({ status: <span class="num">404</span>, .. }) => <span class="fn-name">print</span>(<span class="str">"Not found"</span>)
+  <span class="fn-name">err</span>(e) => <span class="fn-name">print</span>(<span class="str">"Error: {e}"</span>)
+}</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Structs & Traits ========== -->
+<section class="doc-section" id="structs-traits">
+  <div class="container">
+    <h2>Structs and Traits</h2>
+    <p class="section-intro">Structs define data. Traits define behavior. Use <code>impl</code> to implement traits for structs. The <code>@derive</code> decorator auto-generates common trait implementations.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Structs</div>
+      <pre><span class="attr">@derive(Debug, Eq, Serialize)</span>
+<span class="kw">struct</span> <span class="type">User</span> {
+  name: <span class="type">str</span>
+  email: <span class="type">str</span>
+  age: <span class="type">u32</span>
+}
+
+<span class="comment">// Instantiation</span>
+<span class="kw">let</span> user = <span class="type">User</span> { name: <span class="str">"Alice"</span>, email: <span class="str">"alice@example.com"</span>, age: <span class="num">30</span> }</pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Traits and Impl</div>
+      <pre><span class="comment">// Define a trait (interface)</span>
+<span class="kw">trait</span> <span class="type">Drawable</span> {
+  <span class="kw">fn</span> <span class="fn-name">draw</span>(self, canvas: &amp;<span class="type">Canvas</span>)
+  <span class="kw">fn</span> <span class="fn-name">bounds</span>(self) -> <span class="type">Rect</span>
+
+  <span class="comment">// Default implementation</span>
+  <span class="kw">fn</span> <span class="fn-name">is_visible</span>(self) -> <span class="type">bool</span> { <span class="kw">true</span> }
+}
+
+<span class="comment">// Implement a trait for a type</span>
+<span class="kw">impl</span> <span class="type">Drawable</span> <span class="kw">for</span> <span class="type">Circle</span> {
+  <span class="kw">fn</span> <span class="fn-name">draw</span>(self, canvas: &amp;<span class="type">Canvas</span>) {
+    canvas.<span class="fn-name">circle</span>(self.center, self.radius)
+  }
+  <span class="kw">fn</span> <span class="fn-name">bounds</span>(self) -> <span class="type">Rect</span> {
+    <span class="type">Rect</span>.<span class="fn-name">from_center</span>(self.center, self.radius * <span class="num">2</span>, self.radius * <span class="num">2</span>)
+  }
+}</pre>
+    </div>
+
+    <h3>Derive Macros</h3>
+    <p>Common trait implementations can be auto-generated with <code>@derive</code>:</p>
+    <ul>
+      <li><strong><code>Debug</code></strong> &mdash; human-readable debug output</li>
+      <li><strong><code>Eq</code></strong>, <strong><code>Hash</code></strong> &mdash; equality comparison and hashing</li>
+      <li><strong><code>Serialize</code></strong>, <strong><code>Deserialize</code></strong> &mdash; JSON and other formats</li>
+      <li><strong><code>Schema</code></strong> &mdash; auto-generate JSON Schema for structured LLM output</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ========== Enums / ADTs ========== -->
+<section class="doc-section" id="enums">
+  <div class="container">
+    <h2>Enums / Algebraic Data Types</h2>
+    <p class="section-intro">The <code>type</code> keyword defines algebraic data types (ADTs) with named variants. Each variant can carry different data. Combined with exhaustive pattern matching, ADTs eliminate entire categories of bugs.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+      <pre><span class="kw">type</span> <span class="type">Shape</span> {
+  <span class="type">Circle</span>(radius: <span class="type">f64</span>)
+  <span class="type">Rectangle</span>(width: <span class="type">f64</span>, height: <span class="type">f64</span>)
+  <span class="type">Triangle</span>(a: <span class="type">f64</span>, b: <span class="type">f64</span>, c: <span class="type">f64</span>)
+}
+
+<span class="kw">type</span> <span class="type">HttpStatus</span> {
+  <span class="type">Ok</span>
+  <span class="type">NotFound</span>
+  <span class="type">ServerError</span>(message: <span class="type">str</span>)
+}
+
+<span class="comment">// Type aliases</span>
+<span class="kw">type</span> <span class="type">UserId</span> = <span class="type">u64</span>
+<span class="kw">type</span> <span class="type">Point</span> = (<span class="type">f64</span>, <span class="type">f64</span>)</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Generics ========== -->
+<section class="doc-section" id="generics">
+  <div class="container">
+    <h2>Generics</h2>
+    <p class="section-intro">Write functions and types that work with any type using angle-bracket syntax. Constrain generic parameters with trait bounds.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+      <pre><span class="comment">// Generic function</span>
+<span class="kw">fn</span> <span class="fn-name">first</span>&lt;<span class="type">T</span>&gt;(items: <span class="type">[T]</span>) -> <span class="type">T?</span> {
+  <span class="kw">match</span> items {
+    [head, ..] => <span class="fn-name">some</span>(head)
+    [] => <span class="kw">none</span>
+  }
+}
+
+<span class="comment">// With trait bounds</span>
+<span class="kw">fn</span> <span class="fn-name">largest</span>&lt;<span class="type">T</span>: <span class="type">Ord</span>&gt;(items: <span class="type">[T]</span>) -> <span class="type">T?</span> {
+  items.<span class="fn-name">reduce</span>((a, b) => <span class="kw">if</span> a > b { a } <span class="kw">else</span> { b })
+}
+
+<span class="comment">// Generic struct</span>
+<span class="kw">struct</span> <span class="type">Pair</span>&lt;<span class="type">A</span>, <span class="type">B</span>&gt; {
+  first: <span class="type">A</span>
+  second: <span class="type">B</span>
+}</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Concurrency ========== -->
+<section class="doc-section" id="concurrency">
+  <div class="container">
+    <h2>Concurrency</h2>
+    <p class="section-intro">Turbo offers a layered concurrency model: async/await for familiar async code, structured concurrency for safe parallelism, channels for communication, actors for isolated state, and compile-time data race prevention.</p>
+
+    <h3>Async / Await</h3>
+    <p>Works exactly like JavaScript. <code>Future&lt;T&gt;</code> is Turbo's version of <code>Promise&lt;T&gt;</code>. Top-level <code>await</code> works out of the box.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Async Basics</div>
+      <pre><span class="comment">// Async function</span>
+<span class="kw">async fn</span> <span class="fn-name">fetch_user</span>(id: <span class="type">u64</span>) -> <span class="type">User</span> <span class="op">!</span> <span class="type">Error</span> {
+  <span class="kw">let</span> resp = <span class="kw">await</span> http.<span class="fn-name">get</span>(<span class="str">"/users/{id}"</span>)<span class="op">?</span>
+  resp.<span class="fn-name">json</span>&lt;<span class="type">User</span>&gt;()<span class="op">?</span>
+}
+
+<span class="comment">// Concurrent execution (like Promise.all)</span>
+<span class="kw">let</span> [users, posts, comments] = <span class="kw">await</span> <span class="fn-name">all</span>([
+  <span class="fn-name">fetch_users</span>(),
+  <span class="fn-name">fetch_posts</span>(),
+  <span class="fn-name">fetch_comments</span>()
+])
+
+<span class="comment">// Race (like Promise.race)</span>
+<span class="kw">let</span> fastest = <span class="kw">await</span> <span class="fn-name">race</span>([
+  <span class="fn-name">fetch_from_primary</span>(),
+  <span class="fn-name">fetch_from_fallback</span>()
+])</pre>
+    </div>
+
+    <h3>Spawn and Structured Concurrency</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Structured Concurrency</div>
+      <pre><span class="comment">// Spawn a lightweight task</span>
+<span class="kw">let</span> handle = <span class="kw">spawn async</span> {
+  <span class="kw">await</span> <span class="fn-name">fetch_data</span>(url)
+}
+<span class="kw">let</span> result = <span class="kw">await</span> handle
+
+<span class="comment">// Scoped concurrency &mdash; all tasks guaranteed done at scope end</span>
+<span class="kw">async fn</span> <span class="fn-name">fetch_all</span>(urls: <span class="type">[str]</span>) -> <span class="type">[Data]</span> <span class="op">!</span> <span class="type">Error</span> {
+  <span class="kw">scope</span> (s) => {
+    <span class="kw">let</span> tasks = urls.<span class="fn-name">map</span>((url) => s.<span class="fn-name">spawn</span>(<span class="kw">async</span> { <span class="kw">await</span> <span class="fn-name">fetch</span>(url)<span class="op">?</span> }))
+    <span class="kw">await</span> tasks.<span class="fn-name">collect</span>()<span class="op">?</span>
+  }
+}</pre>
+    </div>
+
+    <h3>Channels</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Channels and Select</div>
+      <pre><span class="kw">let</span> (tx, rx) = <span class="fn-name">channel</span>&lt;<span class="type">Message</span>&gt;(buffer: <span class="num">32</span>)
+
+<span class="kw">spawn async</span> {
+  <span class="kw">for</span> i <span class="kw">in</span> <span class="num">0</span>..<span class="num">100</span> {
+    <span class="kw">await</span> tx.<span class="fn-name">send</span>(<span class="type">Message</span> { id: i, data: <span class="fn-name">compute</span>(i) })
+  }
+}
+
+<span class="comment">// Receive from a channel</span>
+<span class="kw">for await</span> msg <span class="kw">in</span> rx {
+  <span class="fn-name">process</span>(msg)
+}
+
+<span class="comment">// Select across multiple channels</span>
+<span class="kw">select</span> {
+  msg = rx1.<span class="fn-name">recv</span>() => <span class="fn-name">handle_a</span>(msg)
+  msg = rx2.<span class="fn-name">recv</span>() => <span class="fn-name">handle_b</span>(msg)
+  _ = <span class="fn-name">timeout</span>(<span class="num">5</span>.seconds()) => <span class="fn-name">fallback</span>()
+}</pre>
+    </div>
+
+    <h3>Actors</h3>
+    <p>Isolated stateful processes with message passing and supervision trees, inspired by Erlang/OTP.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Actors</div>
+      <pre><span class="kw">actor</span> <span class="type">Counter</span> {
+  state: <span class="type">u64</span> = <span class="num">0</span>
+
+  <span class="kw">fn</span> <span class="fn-name">increment</span>(self) {
+    self.state += <span class="num">1</span>
+  }
+
+  <span class="kw">fn</span> <span class="fn-name">get</span>(self) -> <span class="type">u64</span> {
+    self.state
+  }
+
+  <span class="kw">fn</span> <span class="fn-name">on_error</span>(self, error: <span class="type">Error</span>) -> <span class="type">ActorAction</span> {
+    .restart(backoff: <span class="fn-name">exponential</span>(base: <span class="num">100</span>.ms))
+  }
+}
+
+<span class="comment">// Supervision tree</span>
+<span class="kw">let</span> supervisor = <span class="type">Supervisor</span>.<span class="fn-name">new</span>(strategy: .one_for_one)
+  .<span class="fn-name">child</span>(<span class="type">Counter</span>.<span class="fn-name">new</span>())
+  .<span class="fn-name">child</span>(<span class="type">Logger</span>.<span class="fn-name">new</span>())
+  .<span class="fn-name">child</span>(<span class="type">CacheActor</span>.<span class="fn-name">new</span>())</pre>
+    </div>
+
+    <h3>Async Streams</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Streams</div>
+      <pre><span class="comment">// Produce a stream with yield</span>
+<span class="kw">async fn</span> <span class="fn-name">token_stream</span>(prompt: <span class="type">str</span>) -> <span class="type">Stream</span>&lt;<span class="type">Token</span>&gt; {
+  <span class="kw">let</span> response = <span class="kw">await</span> llm.<span class="fn-name">complete</span>(prompt)
+  <span class="kw">for await</span> chunk <span class="kw">in</span> response.<span class="fn-name">stream</span>() {
+    <span class="kw">yield</span> <span class="type">Token</span>.<span class="fn-name">parse</span>(chunk)
+  }
+}
+
+<span class="comment">// Consume and transform streams</span>
+<span class="kw">let</span> upper = <span class="fn-name">token_stream</span>(<span class="str">"Hello"</span>)
+  <span class="op">|></span> <span class="fn-name">map_stream</span>((t) => t.text.<span class="fn-name">to_upper</span>())
+  <span class="op">|></span> <span class="fn-name">filter_stream</span>((t) => !t.<span class="fn-name">is_empty</span>())</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Agents ========== -->
+<section class="doc-section" id="agents">
+  <div class="container">
+    <h2>Agents</h2>
+    <p class="section-intro">Turbo is the first programming language with native AI agent primitives. The <code>agent</code> and <code>tool</code> keywords are first-class &mdash; the compiler understands them natively, generates schemas at compile time, and provides rich IDE support.</p>
+
+    <h3>Tool Functions</h3>
+    <p>The <code>tool fn</code> keyword declares a function that an LLM can call. The compiler auto-generates a JSON schema from the function signature and doc comments.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Tool Definition</div>
+      <pre><span class="kw">tool fn</span> <span class="fn-name">get_weather</span>(city: <span class="type">str</span>, units: <span class="type">TemperatureUnit</span> = .celsius) -> <span class="type">WeatherData</span> {
+  <span class="comment">/// Get the current weather for a city</span>
+  <span class="comment">/// @param city - The city name (e.g., "Tokyo", "New York")</span>
+  <span class="comment">/// @param units - Temperature units (celsius or fahrenheit)</span>
+  <span class="kw">await</span> weather_api.<span class="fn-name">fetch</span>(city, units)
+}</pre>
+    </div>
+
+    <h3>Agent Declaration</h3>
+    <p>Define agents with model, system prompt, tools, memory, and custom routing logic.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Agent Definition</div>
+      <pre><span class="kw">agent</span> <span class="type">Assistant</span> {
+  model: <span class="str">"claude-sonnet"</span>
+  system: <span class="str">"You are a helpful assistant."</span>
+  tools: [get_weather, search_web, run_code]
+  memory: <span class="type">ConversationMemory</span>(max_turns: <span class="num">50</span>)
+  max_tokens: <span class="num">4096</span>
+  temperature: <span class="num">0.7</span>
+
+  <span class="comment">// Custom routing logic</span>
+  <span class="kw">fn</span> <span class="fn-name">route</span>(self, input: <span class="type">str</span>) -> <span class="type">AgentAction</span> {
+    <span class="kw">match</span> <span class="fn-name">classify</span>(input) {
+      .weather => .use_tool(get_weather)
+      .code => .use_tool(run_code)
+      _ => .respond_directly
+    }
+  }
+}</pre>
+    </div>
+
+    <h3>Streaming</h3>
+    <p>Stream responses token-by-token with rich metadata about tool calls, thinking, and usage.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Streaming</div>
+      <pre><span class="kw">let</span> agent = <span class="type">Agent</span>.<span class="fn-name">new</span>(<span class="str">"claude-sonnet"</span>, tools: [get_weather])
+
+<span class="kw">for await</span> token <span class="kw">in</span> agent.<span class="fn-name">stream</span>(<span class="str">"What's the weather?"</span>) {
+  <span class="kw">match</span> token.kind {
+    .text(t) => <span class="fn-name">print</span>(t, end: <span class="str">""</span>)
+    .tool_call(name, args) => <span class="fn-name">print</span>(<span class="str">"\n[Calling {name}...]"</span>)
+    .tool_result(result) => <span class="fn-name">print</span>(<span class="str">"\n[Got result]"</span>)
+    .done(usage) => <span class="fn-name">print</span>(<span class="str">"\n\nTokens: {usage.total}"</span>)
+  }
+}</pre>
+    </div>
+
+    <h3>Memory</h3>
+    <p>Built-in memory abstractions for short-term conversation memory, long-term vector memory, and composites of both.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Memory</div>
+      <pre><span class="comment">// Short-term (conversation)</span>
+<span class="kw">let</span> memory = <span class="type">ConversationMemory</span>(max_turns: <span class="num">50</span>)
+
+<span class="comment">// Long-term (vector)</span>
+<span class="kw">let</span> long_memory = <span class="type">VectorMemory</span> {
+  store: <span class="type">ChromaDB</span>.<span class="fn-name">connect</span>(<span class="str">"localhost:8000"</span>)
+  embedding_model: <span class="str">"text-embedding-3-small"</span>
+  similarity_threshold: <span class="num">0.8</span>
+}
+
+<span class="comment">// Composite &mdash; check short-term first, then long-term</span>
+<span class="kw">let</span> memory = <span class="type">CompositeMemory</span> {
+  short_term: <span class="type">ConversationMemory</span>(max_turns: <span class="num">20</span>)
+  long_term: <span class="type">VectorMemory</span> { <span class="comment">/* ... */</span> }
+  strategy: .short_term_first
+}</pre>
+    </div>
+
+    <h3>Structured Output</h3>
+    <p>Parse LLM responses into typed structs with compile-time schema generation.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Structured Output</div>
+      <pre><span class="attr">@derive(Schema)</span>
+<span class="kw">struct</span> <span class="type">MovieReview</span> {
+  title: <span class="type">str</span>
+  rating: <span class="type">f64</span>
+  summary: <span class="type">str</span>
+  pros: <span class="type">[str]</span>
+  cons: <span class="type">[str]</span>
+  recommended: <span class="type">bool</span>
+}
+
+<span class="comment">// The compiler generates JSON Schema from MovieReview</span>
+<span class="kw">let</span> review = <span class="kw">await</span> agent.<span class="fn-name">structured</span>&lt;<span class="type">MovieReview</span>&gt;(
+  <span class="str">"Review the movie Inception"</span>
+)
+<span class="comment">// review is guaranteed to be a valid MovieReview</span></pre>
+    </div>
+
+    <h3>Multi-Agent Orchestration</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Agent Teams</div>
+      <pre><span class="comment">// Agent team with coordinator</span>
+<span class="kw">let</span> team = <span class="type">AgentTeam</span> {
+  coordinator: <span class="type">PlannerAgent</span>.<span class="fn-name">new</span>()
+  workers: [
+    <span class="type">ResearchAgent</span>.<span class="fn-name">new</span>(),
+    <span class="type">CodeAgent</span>.<span class="fn-name">new</span>(),
+    <span class="type">ReviewAgent</span>.<span class="fn-name">new</span>()
+  ]
+  strategy: .plan_and_execute
+}
+
+<span class="kw">let</span> result = <span class="kw">await</span> team.<span class="fn-name">run</span>(<span class="str">"Build a REST API for a todo app"</span>)</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ========== Modules ========== -->
+<section class="doc-section" id="modules">
+  <div class="container">
+    <h2>Modules</h2>
+    <p class="section-intro">Turbo uses JavaScript-style import syntax. Items are private by default &mdash; use <code>pub</code> to export. Dependencies are managed via <code>turbo.toml</code> and the built-in package manager.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Imports</div>
+      <pre><span class="comment">// Import specific items</span>
+<span class="kw">import</span> { <span class="type">HashMap</span>, <span class="type">HashSet</span> } <span class="kw">from</span> <span class="str">"std/collections"</span>
+<span class="kw">import</span> { <span class="type">Read</span>, <span class="type">Write</span> } <span class="kw">from</span> <span class="str">"std/io"</span>
+
+<span class="comment">// Import a module</span>
+<span class="kw">import</span> http <span class="kw">from</span> <span class="str">"http"</span>
+
+<span class="comment">// Aliased import</span>
+<span class="kw">import</span> { <span class="type">HashMap</span> <span class="kw">as</span> <span class="type">Map</span> } <span class="kw">from</span> <span class="str">"std/collections"</span></pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Visibility</div>
+      <pre><span class="comment">// Public (exported)</span>
+<span class="kw">pub fn</span> <span class="fn-name">public_function</span>() { }
+<span class="kw">pub struct</span> <span class="type">PublicStruct</span> { }
+
+<span class="comment">// Private (default)</span>
+<span class="kw">fn</span> <span class="fn-name">private_function</span>() { }</pre>
+    </div>
+
+    <h3>Project Configuration</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot toml"></span> turbo.toml</div>
+      <pre><span class="comment">[package]</span>
+name = <span class="str">"my-project"</span>
+version = <span class="str">"0.1.0"</span>
+edition = <span class="str">"2026"</span>
+
+<span class="comment">[dependencies]</span>
+http = <span class="str">"1.2"</span>
+serde = { version = <span class="str">"2.0"</span>, features = [<span class="str">"json"</span>] }
+
+<span class="comment">[dev-dependencies]</span>
+mock = <span class="str">"0.5"</span>
+
+<span class="comment">[build]</span>
+target = <span class="str">"native"</span>
+runtime = <span class="str">"default"</span></pre>
+    </div>
+  </div>
+</section>
+
+
+<!-- ========== Metaprogramming ========== -->
+<section class="doc-section" id="metaprogramming">
+  <div class="container">
+    <h2>Metaprogramming</h2>
+    <p class="section-intro">Turbo takes a deliberately minimal approach to metaprogramming. Instead of a macro system, Turbo provides three mechanisms that cover 95% of use cases with zero magic: <code>@derive</code>, <code>const fn</code>, and generics with trait bounds. No proc macros, no preprocessor.</p>
+
+    <h3>@derive &mdash; Automatic Trait Implementations</h3>
+    <p>The <code>@derive(...)</code> decorator tells the compiler to auto-generate boilerplate implementations for common traits. This replaces Rust's procedural macros with a built-in, well-defined expansion that the compiler fully understands.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> @derive</div>
+      <pre><span class="attr">@derive(Debug, Eq, Hash, Clone, Serialize, Schema)</span>
+<span class="kw">struct</span> <span class="type">User</span> { name: <span class="type">str</span>, age: <span class="type">u32</span> }
+
+<span class="comment">// The compiler generates: Debug.fmt(), Eq.eq(), Hash.hash(),</span>
+<span class="comment">// Clone.clone(), Serialize.serialize(), and a JSON Schema</span>
+<span class="comment">// — all from the struct definition.</span></pre>
+    </div>
+
+    <h3>const fn &mdash; Compile-Time Computation</h3>
+    <p>Any function marked <code>const fn</code> runs at compile time when called in a <code>const</code> context. This replaces traditional macro-based code generation with regular, debuggable, type-checked functions.</p>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> const fn</div>
+      <pre><span class="kw">const fn</span> <span class="fn-name">generate_routes</span>(prefix: <span class="type">str</span>, names: <span class="type">[str]</span>) -> <span class="type">[Route]</span> {
+  names.<span class="fn-name">map</span>((name) => <span class="type">Route</span> { path: <span class="str">"{prefix}/{name}"</span>, handler: name })
+}
+
+<span class="comment">// Evaluated entirely at compile time</span>
+<span class="kw">const</span> ROUTES = <span class="fn-name">generate_routes</span>(<span class="str">"/api"</span>, [<span class="str">"users"</span>, <span class="str">"posts"</span>, <span class="str">"comments"</span>])</pre>
+    </div>
+
+    <h3>What Turbo Does NOT Have</h3>
+    <ul>
+      <li>No Rust-style procedural macros (<code>macro_rules!</code>, <code>proc_macro</code>)</li>
+      <li>No C/C++ preprocessor (<code>#define</code>, <code>#ifdef</code>)</li>
+      <li>No Lisp-style code-as-data macros</li>
+      <li>No template metaprogramming</li>
+    </ul>
+    <p><strong>Philosophy:</strong> Prefer <code>const fn</code> + generics + <code>@derive</code> over macro systems. All code stays visible, type-checked, and IDE-friendly. Conditional compilation uses <code>@cfg</code> attributes, not preprocessor directives.</p>
+  </div>
+</section>
+
+
+<!-- ================================================================== -->
+<!--  PART 2: TOOLCHAIN REFERENCE                                       -->
+<!-- ================================================================== -->
+<div class="container major-divider" id="toolchain">
+  <span class="section-label">Part 2</span>
+  <h2>Toolchain Reference</h2>
+  <p class="major-sub">One binary, every tool. No separate installs required.</p>
+</div>
+
+<section class="doc-section">
+  <div class="container">
+    <p class="section-intro">The <code>turbo</code> CLI ships as a single binary with the compiler, formatter, linter, test runner, package manager, benchmarking framework, profiler, documentation generator, REPL, and LSP server. Everything works on day one.</p>
+
+    <div class="tool-grid">
+      <div class="tool-card">
+        <div class="tool-cmd">turbo build</div>
+        <div class="tool-desc">Compile to a native binary via LLVM. Incremental by default. Supports cross-compilation to Linux, macOS, Windows, WASM, and embedded targets.</div>
+        <div class="tool-flags">--release &middot; --target &lt;triple&gt; &middot; --watch</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-cmd">turbo run</div>
+        <div class="tool-desc">Build and execute in one step. Supports top-level await. Use <code>--watch</code> for auto-rebuild during development.</div>
+        <div class="tool-flags">--watch &middot; --release</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-cmd">turbo test</div>
+        <div class="tool-desc">Built-in test runner. Parallel by default. Supports snapshot testing, parameterized tests, filtering, and coverage reports.</div>
+        <div class="tool-flags">--parallel &middot; --filter &middot; --coverage &middot; --watch</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-cmd">turbo fmt</div>
+        <div class="tool-desc">Opinionated, deterministic formatter. One style, zero configuration. Fast enough to run on every save.</div>
+        <div class="tool-flags">--check</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-cmd">turbo check</div>
+        <div class="tool-desc">Built-in linter with rules for correctness, performance, style, complexity, and security. Auto-fix supported.</div>
+        <div class="tool-flags">--fix</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-cmd">turbo bench</div>
+        <div class="tool-desc">Micro-benchmarking with statistical analysis. Reports mean, median, P95, P99, and standard deviation. Regression detection for CI.</div>
+        <div class="tool-flags">--compare &lt;baseline&gt; &middot; --output json &middot; --fail-on-regression</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-cmd">turbo profile</div>
+        <div class="tool-desc">CPU, memory, and async task profiling. Generates flame graphs and allocation timelines. Interactive web UI included.</div>
+        <div class="tool-flags">--cpu &middot; --alloc &middot; --async &middot; --web</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-cmd">turbo doc</div>
+        <div class="tool-desc">Generate browseable HTML documentation from doc comments. Cross-references, search, and code examples that are compiled and tested.</div>
+        <div class="tool-flags">--open</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-cmd">turbo add / remove</div>
+        <div class="tool-desc">Built-in package manager. Add or remove dependencies. Lockfile for reproducible builds. Semantic versioning enforced.</div>
+        <div class="tool-flags">turbo update &middot; turbo audit &middot; turbo publish</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-cmd">turbo repl</div>
+        <div class="tool-desc">Interactive REPL for exploration and prototyping. Full language support, tab completion, syntax highlighting, and package imports.</div>
+        <div class="tool-flags">&nbsp;</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-cmd">turbo new</div>
+        <div class="tool-desc">Scaffold a new project with configuration, source directory, and tests. Convention-over-configuration project structure.</div>
+        <div class="tool-flags">turbo new &lt;name&gt;</div>
+      </div>
+      <div class="tool-card">
+        <div class="tool-cmd">LSP Server</div>
+        <div class="tool-desc">Ships with the compiler. Autocomplete, go-to-definition, find references, rename, inline hints, hover docs, error diagnostics, and code actions.</div>
+        <div class="tool-flags">Agent/tool-aware completions</div>
+      </div>
+    </div>
+
+    <h3>Example: Testing</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> tests/math_test.tb</div>
+      <pre><span class="attr">@test</span>
+<span class="kw">fn</span> <span class="fn-name">test_addition</span>() {
+  <span class="fn-name">assert_eq</span>(<span class="fn-name">add</span>(<span class="num">2</span>, <span class="num">3</span>), <span class="num">5</span>)
+}
+
+<span class="attr">@test_case(0, 1)</span>
+<span class="attr">@test_case(1, 1)</span>
+<span class="attr">@test_case(5, 120)</span>
+<span class="kw">fn</span> <span class="fn-name">test_factorial</span>(input: <span class="type">u64</span>, expected: <span class="type">u64</span>) {
+  <span class="fn-name">assert_eq</span>(<span class="fn-name">factorial</span>(input), expected)
+}</pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot shell"></span> Terminal</div>
+      <pre><span class="sh-cmd">$</span> turbo test
+<span style="color:#22c55e">PASS</span>  tests/math_test.tb::test_addition               0.2ms
+<span style="color:#22c55e">PASS</span>  tests/math_test.tb::test_factorial[0, 1]         0.1ms
+<span style="color:#22c55e">PASS</span>  tests/math_test.tb::test_factorial[1, 1]         0.1ms
+<span style="color:#22c55e">PASS</span>  tests/math_test.tb::test_factorial[5, 120]       0.1ms
+
+4 passed, 0 failed (0.8ms)</pre>
+    </div>
+
+    <h3>Example: Benchmarking</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> benches/sort.tb</div>
+      <pre><span class="attr">@bench</span>
+<span class="kw">fn</span> <span class="fn-name">bench_sort</span>(b: <span class="type">Bencher</span>) {
+  <span class="kw">let</span> data = <span class="fn-name">generate_random_vec</span>(<span class="num">10000</span>)
+  b.<span class="fn-name">iter</span>(() => {
+    <span class="kw">let mut</span> copy = data.<span class="fn-name">clone</span>()
+    copy.<span class="fn-name">sort</span>()
+  })
+}</pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot shell"></span> Terminal</div>
+      <pre><span class="sh-cmd">$</span> turbo bench
+bench_sort     1,247 ns/iter (+/- 42)     [800,256 iter/s]</pre>
+    </div>
+
+    <h3>Cross-Compilation Targets</h3>
+    <div class="doc-table-wrap">
+      <table class="doc-table">
+        <thead>
+          <tr><th>Target</th><th>Platform</th><th>Command</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>x86_64-linux-gnu</code></td><td>Linux x64</td><td><code>turbo build --target x86_64-linux-gnu</code></td></tr>
+          <tr><td><code>aarch64-linux-gnu</code></td><td>Linux ARM64</td><td><code>turbo build --target aarch64-linux-gnu</code></td></tr>
+          <tr><td><code>x86_64-apple-darwin</code></td><td>macOS x64</td><td><code>turbo build --target x86_64-apple-darwin</code></td></tr>
+          <tr><td><code>aarch64-apple-darwin</code></td><td>macOS ARM64</td><td><code>turbo build --target aarch64-apple-darwin</code></td></tr>
+          <tr><td><code>x86_64-windows-msvc</code></td><td>Windows x64</td><td><code>turbo build --target x86_64-windows-msvc</code></td></tr>
+          <tr><td><code>wasm32-wasi</code></td><td>WebAssembly</td><td><code>turbo build --target wasm32-wasi</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+
+<!-- ================================================================== -->
+<!--  PART 3: STANDARD LIBRARY                                          -->
+<!-- ================================================================== -->
+<div class="container major-divider" id="stdlib">
+  <span class="section-label">Part 3</span>
+  <h2>Standard Library</h2>
+  <p class="major-sub">Batteries included. No external dependencies for common tasks.</p>
+</div>
+
+<section class="doc-section">
+  <div class="container">
+    <p class="section-intro">Turbo ships with a comprehensive standard library covering file I/O, HTTP, logging, JSON, metrics, testing, and cryptography. Everything you need for production applications without reaching for third-party packages.</p>
+
+    <div class="stdlib-grid">
+      <div class="stdlib-card">
+        <div class="stdlib-name">turbo/io</div>
+        <div class="stdlib-desc">File system operations, stdin/stdout, buffered readers and writers, path manipulation, directory traversal, and file watching.</div>
+        <div class="stdlib-funcs">fs.read &middot; fs.write &middot; fs.exists &middot; stdin &middot; stdout &middot; BufReader &middot; BufWriter</div>
+      </div>
+      <div class="stdlib-card">
+        <div class="stdlib-name">turbo/http</div>
+        <div class="stdlib-desc">HTTP client and server. Make requests with a fluent API. Build servers with routing, middleware, and SSE support. WebSocket included.</div>
+        <div class="stdlib-funcs">http.get &middot; http.post &middot; Server.new &middot; Response.json &middot; Response.sse</div>
+      </div>
+      <div class="stdlib-card">
+        <div class="stdlib-name">turbo/log</div>
+        <div class="stdlib-desc">Structured JSON logging with log levels, contextual spans, and trace propagation across async boundaries. Zero-cost when compiled out.</div>
+        <div class="stdlib-funcs">log.info &middot; log.debug &middot; log.warn &middot; log.error &middot; trace()</div>
+      </div>
+      <div class="stdlib-card">
+        <div class="stdlib-name">turbo/json</div>
+        <div class="stdlib-desc">Parse and serialize JSON. Type-safe deserialization into structs with <code>@derive(Serialize, Deserialize)</code>. Streaming parser for large payloads.</div>
+        <div class="stdlib-funcs">json.parse &middot; json.stringify &middot; .json&lt;T&gt;()</div>
+      </div>
+      <div class="stdlib-card">
+        <div class="stdlib-name">turbo/metrics</div>
+        <div class="stdlib-desc">Built-in counters, gauges, and histograms. OpenTelemetry-compatible export. Type-checked label keys at compile time. Prometheus endpoint included.</div>
+        <div class="stdlib-funcs">counter &middot; histogram &middot; gauge &middot; metrics.serve</div>
+      </div>
+      <div class="stdlib-card">
+        <div class="stdlib-name">turbo/test</div>
+        <div class="stdlib-desc">Testing framework with assertions, snapshot testing, parameterized tests, and mocking utilities. Powers <code>turbo test</code>.</div>
+        <div class="stdlib-funcs">assert &middot; assert_eq &middot; assert_ne &middot; assert_matches &middot; assert_snapshot</div>
+      </div>
+      <div class="stdlib-card">
+        <div class="stdlib-name">turbo/crypto</div>
+        <div class="stdlib-desc">Hashing (SHA-256, SHA-512, BLAKE3), HMAC, symmetric encryption (AES-256-GCM), and key derivation (Argon2, PBKDF2). Constant-time comparisons.</div>
+        <div class="stdlib-funcs">sha256 &middot; sha512 &middot; blake3 &middot; hmac &middot; aes_encrypt &middot; argon2</div>
+      </div>
+      <div class="stdlib-card">
+        <div class="stdlib-name">turbo/collections</div>
+        <div class="stdlib-desc">HashMap, HashSet, BTreeMap, BTreeSet, VecDeque, PriorityQueue, and more. All with consistent, idiomatic APIs.</div>
+        <div class="stdlib-funcs">HashMap &middot; HashSet &middot; BTreeMap &middot; VecDeque &middot; PriorityQueue</div>
+      </div>
+    </div>
+
+    <h3>Example: HTTP Server</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> src/main.tb</div>
+      <pre><span class="kw">import</span> { <span class="type">Server</span>, <span class="type">Response</span> } <span class="kw">from</span> <span class="str">"turbo/http"</span>
+<span class="kw">import</span> { log } <span class="kw">from</span> <span class="str">"turbo/log"</span>
+
+<span class="kw">let</span> app = <span class="type">Server</span>.<span class="fn-name">new</span>()
+
+app.<span class="fn-name">get</span>(<span class="str">"/"</span>, <span class="kw">async</span> (req) => {
+  <span class="type">Response</span>.<span class="fn-name">json</span>({ message: <span class="str">"Hello from Turbo!"</span> })
+})
+
+app.<span class="fn-name">get</span>(<span class="str">"/users/:id"</span>, <span class="kw">async</span> (req) => {
+  <span class="kw">let</span> id = req.params.id.<span class="fn-name">parse</span>&lt;<span class="type">u64</span>&gt;()<span class="op">?</span>
+  <span class="kw">let</span> user = <span class="kw">await</span> db.<span class="fn-name">find_user</span>(id)<span class="op">?</span>
+  <span class="type">Response</span>.<span class="fn-name">json</span>(user)
+})
+
+log.<span class="fn-name">info</span>(<span class="str">"Server starting on port 3000"</span>)
+<span class="kw">await</span> app.<span class="fn-name">listen</span>(<span class="num">3000</span>)</pre>
+    </div>
+
+    <h3>Example: Structured Logging</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+      <pre><span class="kw">import</span> { log } <span class="kw">from</span> <span class="str">"turbo/log"</span>
+
+<span class="kw">fn</span> <span class="fn-name">process_request</span>(req: <span class="type">Request</span>) -> <span class="type">Response</span> {
+  log.<span class="fn-name">info</span>(<span class="str">"Processing request"</span>, { method: req.method, path: req.path })
+
+  <span class="kw">let</span> result = <span class="fn-name">trace</span>(<span class="str">"db_query"</span>) {
+    <span class="kw">await</span> db.<span class="fn-name">query</span>(req.params)
+  }
+
+  log.<span class="fn-name">debug</span>(<span class="str">"Query complete"</span>, { rows: result.<span class="fn-name">len</span>() })
+  <span class="type">Response</span>.<span class="fn-name">ok</span>(result)
+}</pre>
+    </div>
+
+    <h3>Example: Metrics</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+      <pre><span class="kw">import</span> { counter, histogram } <span class="kw">from</span> <span class="str">"turbo/metrics"</span>
+
+<span class="kw">let</span> request_count = <span class="fn-name">counter</span>(<span class="str">"http_requests_total"</span>)
+<span class="kw">let</span> response_time = <span class="fn-name">histogram</span>(<span class="str">"http_response_duration_ms"</span>)
+
+<span class="kw">fn</span> <span class="fn-name">handle</span>(req: <span class="type">Request</span>) -> <span class="type">Response</span> {
+  request_count.<span class="fn-name">inc</span>({ method: req.method, path: req.path })
+  <span class="kw">let</span> timer = response_time.<span class="fn-name">start</span>()
+  <span class="kw">let</span> result = <span class="fn-name">process</span>(req)
+  timer.<span class="fn-name">observe</span>()
+  result
+}</pre>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ========== Footer ========== -->
+<footer>
+  <div class="container">
+    <p class="tagline-small">JavaScript's soul. Rust's speed. Built for the AI age.</p>
+    <p>Turbo Programming Language &mdash; Design Preview</p>
+  </div>
+</footer>
+
+</body>
+</html>

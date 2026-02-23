@@ -1,0 +1,82 @@
+// =============================================================================
+// main.tb — Entry point for the Task Management API
+//
+// Demonstrates:
+//   - Top-level await (like modern JavaScript modules)
+//   - Structured logging with turbo/log
+//   - Configuration loading with defaults and environment overrides
+//   - Server startup with middleware
+//   - Graceful shutdown with defer
+//   - Error handling with T ! E and match
+// =============================================================================
+
+import { Server } from "turbo/http"
+import { log } from "turbo/log"
+import { env } from "turbo/env"
+import { Shared } from "turbo/sync"
+import { TaskStore } from "./store"
+import { create_router } from "./routes"
+import { TaskAssistant } from "./agent"
+
+// --- Configuration ---
+
+@derive(Debug, Clone)
+struct Config {
+  host: str
+  port: u16
+  log_level: str
+  agent_model: str
+  max_tasks: usize
+}
+
+fn load_config() -> Config {
+  Config {
+    host:        env.get("TASK_HOST")      ?? "0.0.0.0",
+    port:        env.get("TASK_PORT")?.parse<u16>() ?? 3000,
+    log_level:   env.get("TASK_LOG_LEVEL") ?? "info",
+    agent_model: env.get("TASK_MODEL")     ?? "claude-sonnet",
+    max_tasks:   env.get("TASK_MAX")?.parse<usize>() ?? 10_000,
+  }
+}
+
+// --- Application entry point ---
+
+async fn main() -> () ! Error {
+  // Load configuration
+  let config = load_config()
+
+  // Set up structured logging
+  log.init(level: config.log_level, format: "json")
+  log.info("Starting task-agent", {
+    version: "0.1.0",
+    host: config.host,
+    port: config.port,
+  })
+
+  // Create shared state — Shared<T> is thread-safe
+  let store = Shared.new(TaskStore.new())
+
+  // Initialize the AI agent
+  let agent = TaskAssistant.new(store: store.clone())
+  log.info("AI agent initialized", { model: config.agent_model })
+
+  // Build HTTP router
+  let router = create_router(store, agent)
+
+  // Create server with middleware
+  let server = Server.new(router, middleware: [
+    cors(),
+    rate_limit(100),
+    request_logger(),
+  ])
+
+  // Graceful shutdown handler
+  defer {
+    log.info("Shutting down gracefully")
+    await server.shutdown()
+  }
+
+  // Start listening — top-level await
+  log.info("Server ready", { url: "http://{config.host}:{config.port}" })
+  await server.listen(config.port, host: config.host)
+}
