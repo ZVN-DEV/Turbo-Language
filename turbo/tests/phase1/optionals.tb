@@ -1,0 +1,48 @@
+fn find(arr: [i64], target: i64) -> i64? {
+    let mut i = 0
+    while i < len(arr) {
+        if arr[i] == target {
+            return some(i)
+        }
+        i += 1
+    }
+    none
+}
+
+fn main() {
+    // Test some/none construction and match
+    let x = some(42)
+    match x {
+        some(v) => print("got {v}")
+        none => print("nothing")
+    }
+
+    // Test none and null coalescing
+    let y = none
+    let val = y ?? 0
+    print("val = {val}")
+
+    // Test find function returning optional
+    let idx = find([10, 20, 30], 20)
+    match idx {
+        some(i) => print("found at {i}")
+        none => print("not found")
+    }
+
+    // Test find with missing value
+    let idx2 = find([1, 2, 3], 99)
+    match idx2 {
+        some(i) => print("found at {i}")
+        none => print("not found")
+    }
+
+    // Test null coalescing with some
+    let a = some(100)
+    let b = a ?? -1
+    print("b = {b}")
+
+    // Test null coalescing with none
+    let c = none
+    let d = c ?? -1
+    print("d = {d}")
+}
