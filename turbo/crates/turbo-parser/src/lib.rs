@@ -26,7 +26,7 @@ impl Parser {
         // Filter out newlines — Turbo doesn't use them for syntax
         let tokens: Vec<_> = tokens
             .into_iter()
-            .filter(|t| !matches!(t.value, Token::Newline))
+            .filter(|t| !matches!(t.value, Token::Newline | Token::Semi))
             .collect();
         Self {
             tokens,
@@ -629,13 +629,10 @@ mod tests {
     fn test_empty_main() {
         let module = parse_source("fn main() { }");
         assert_eq!(module.items.len(), 1);
-        if let Item::Function(f) = &module.items[0].node {
-            assert_eq!(f.name, "main");
-            assert!(f.params.is_empty());
-            assert!(f.return_type.is_none());
-        } else {
-            panic!("Expected function");
-        }
+        let Item::Function(f) = &module.items[0].node;
+        assert_eq!(f.name, "main");
+        assert!(f.params.is_empty());
+        assert!(f.return_type.is_none());
     }
 
     #[test]
@@ -651,18 +648,17 @@ mod tests {
     fn test_let_binding() {
         let source = "fn main() { let x = 42 }";
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { stmts, .. } = &f.body.node {
-                assert_eq!(stmts.len(), 1);
-                if let Stmt::Let { name, mutable, .. } = &stmts[0].node {
-                    assert_eq!(name, "x");
-                    assert!(!mutable);
-                } else {
-                    panic!("Expected let statement");
-                }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { stmts, .. } = &f.body.node {
+            assert_eq!(stmts.len(), 1);
+            if let Stmt::Let { name, mutable, .. } = &stmts[0].node {
+                assert_eq!(name, "x");
+                assert!(!mutable);
             } else {
-                panic!("Expected block");
+                panic!("Expected let statement");
             }
+        } else {
+            panic!("Expected block");
         }
     }
 
@@ -670,12 +666,11 @@ mod tests {
     fn test_let_mut() {
         let source = "fn main() { let mut x = 0 }";
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { stmts, .. } = &f.body.node {
-                if let Stmt::Let { name, mutable, .. } = &stmts[0].node {
-                    assert_eq!(name, "x");
-                    assert!(mutable);
-                }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { stmts, .. } = &f.body.node {
+            if let Stmt::Let { name, mutable, .. } = &stmts[0].node {
+                assert_eq!(name, "x");
+                assert!(mutable);
             }
         }
     }
@@ -684,23 +679,22 @@ mod tests {
     fn test_binary_precedence() {
         let source = "fn main() { 1 + 2 * 3 }";
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
-                // Should be Add(1, Mul(2, 3)) due to precedence
-                if let Expr::BinaryOp { op, left, right } = &tail.node {
-                    assert_eq!(*op, BinOp::Add);
-                    assert!(matches!(left.node, Expr::IntLit(1)));
-                    if let Expr::BinaryOp { op: inner_op, .. } = &right.node {
-                        assert_eq!(*inner_op, BinOp::Mul);
-                    } else {
-                        panic!("Expected Mul on RHS, got {:?}", right.node);
-                    }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+            // Should be Add(1, Mul(2, 3)) due to precedence
+            if let Expr::BinaryOp { op, left, right } = &tail.node {
+                assert_eq!(*op, BinOp::Add);
+                assert!(matches!(left.node, Expr::IntLit(1)));
+                if let Expr::BinaryOp { op: inner_op, .. } = &right.node {
+                    assert_eq!(*inner_op, BinOp::Mul);
                 } else {
-                    panic!("Expected BinaryOp, got {:?}", tail.node);
+                    panic!("Expected Mul on RHS, got {:?}", right.node);
                 }
             } else {
-                panic!("Expected tail expr");
+                panic!("Expected BinaryOp, got {:?}", tail.node);
             }
+        } else {
+            panic!("Expected tail expr");
         }
     }
 
@@ -708,12 +702,11 @@ mod tests {
     fn test_if_else() {
         let source = "fn main() { if true { 1 } else { 2 } }";
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
-                assert!(matches!(tail.node, Expr::If { .. }));
-            } else {
-                panic!("Expected tail expr");
-            }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+            assert!(matches!(tail.node, Expr::If { .. }));
+        } else {
+            panic!("Expected tail expr");
         }
     }
 
@@ -721,23 +714,21 @@ mod tests {
     fn test_function_with_params() {
         let source = "fn add(a: i32, b: i32) -> i32 { a + b }";
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            assert_eq!(f.name, "add");
-            assert_eq!(f.params.len(), 2);
-            assert_eq!(f.params[0].name, "a");
-            assert_eq!(f.params[1].name, "b");
-            assert!(f.return_type.is_some());
-        }
+        let Item::Function(f) = &module.items[0].node;
+        assert_eq!(f.name, "add");
+        assert_eq!(f.params.len(), 2);
+        assert_eq!(f.params[0].name, "a");
+        assert_eq!(f.params[1].name, "b");
+        assert!(f.return_type.is_some());
     }
 
     #[test]
     fn test_function_call() {
         let source = r#"fn main() { print("hello") }"#;
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
-                assert!(matches!(tail.node, Expr::Call { .. }));
-            }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+            assert!(matches!(tail.node, Expr::Call { .. }));
         }
     }
 
@@ -762,10 +753,9 @@ mod tests {
     fn test_unary_neg() {
         let source = "fn main() { -42 }";
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
-                assert!(matches!(tail.node, Expr::UnaryOp { op: UnaryOp::Neg, .. }));
-            }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+            assert!(matches!(tail.node, Expr::UnaryOp { op: UnaryOp::Neg, .. }));
         }
     }
 
@@ -773,11 +763,10 @@ mod tests {
     fn test_comparison() {
         let source = "fn main() { x > 25 }";
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
-                if let Expr::BinaryOp { op, .. } = &tail.node {
-                    assert_eq!(*op, BinOp::Greater);
-                }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+            if let Expr::BinaryOp { op, .. } = &tail.node {
+                assert_eq!(*op, BinOp::Greater);
             }
         }
     }
@@ -786,12 +775,11 @@ mod tests {
     fn test_logical_operators() {
         let source = "fn main() { a && b || c }";
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
-                // Should be Or(And(a, b), c) since && binds tighter
-                if let Expr::BinaryOp { op, .. } = &tail.node {
-                    assert_eq!(*op, BinOp::Or);
-                }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+            // Should be Or(And(a, b), c) since && binds tighter
+            if let Expr::BinaryOp { op, .. } = &tail.node {
+                assert_eq!(*op, BinOp::Or);
             }
         }
     }
@@ -800,11 +788,10 @@ mod tests {
     fn test_stmt_then_tail() {
         let source = "fn main() { let x = 1\n x + 2 }";
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { stmts, tail_expr } = &f.body.node {
-                assert_eq!(stmts.len(), 1);
-                assert!(tail_expr.is_some());
-            }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { stmts, tail_expr } = &f.body.node {
+            assert_eq!(stmts.len(), 1);
+            assert!(tail_expr.is_some());
         }
     }
 
@@ -812,11 +799,10 @@ mod tests {
     fn test_return_statement() {
         let source = "fn foo() -> i32 { return 42 }";
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { stmts, .. } = &f.body.node {
-                assert_eq!(stmts.len(), 1);
-                assert!(matches!(&stmts[0].node, Stmt::Return(Some(_))));
-            }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { stmts, .. } = &f.body.node {
+            assert_eq!(stmts.len(), 1);
+            assert!(matches!(&stmts[0].node, Stmt::Return(Some(_))));
         }
     }
 
@@ -824,11 +810,10 @@ mod tests {
     fn test_let_with_type() {
         let source = "fn main() { let x: i32 = 42 }";
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { stmts, .. } = &f.body.node {
-                if let Stmt::Let { ty: Some(ty), .. } = &stmts[0].node {
-                    assert!(matches!(&ty.node, TypeExpr::Named(n) if n == "i32"));
-                }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { stmts, .. } = &f.body.node {
+            if let Stmt::Let { ty: Some(ty), .. } = &stmts[0].node {
+                assert!(matches!(&ty.node, TypeExpr::Named(n) if n == "i32"));
             }
         }
     }
@@ -846,11 +831,10 @@ mod tests {
         }"#;
         let module = parse_source(source);
         assert_eq!(module.items.len(), 1);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { stmts, tail_expr } = &f.body.node {
-                assert_eq!(stmts.len(), 2); // two let bindings
-                assert!(tail_expr.is_some()); // if-else is tail expr
-            }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { stmts, tail_expr } = &f.body.node {
+            assert_eq!(stmts.len(), 2); // two let bindings
+            assert!(tail_expr.is_some()); // if-else is tail expr
         }
     }
 
@@ -858,12 +842,11 @@ mod tests {
     fn test_assignment() {
         let source = "fn main() { let mut x = 1\n x = 2 }";
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { stmts, tail_expr } = &f.body.node {
-                assert_eq!(stmts.len(), 1); // let
-                if let Some(tail) = tail_expr {
-                    assert!(matches!(tail.node, Expr::Assign { .. }));
-                }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { stmts, tail_expr } = &f.body.node {
+            assert_eq!(stmts.len(), 1); // let
+            if let Some(tail) = tail_expr {
+                assert!(matches!(tail.node, Expr::Assign { .. }));
             }
         }
     }
@@ -872,17 +855,30 @@ mod tests {
     fn test_compound_assignment() {
         let source = "fn main() { let mut x = 1\n x += 2 }";
         let module = parse_source(source);
-        if let Item::Function(f) = &module.items[0].node {
-            if let Expr::Block { stmts, tail_expr } = &f.body.node {
-                assert_eq!(stmts.len(), 1);
-                if let Some(tail) = tail_expr {
-                    if let Expr::CompoundAssign { op, .. } = &tail.node {
-                        assert_eq!(*op, BinOp::Add);
-                    } else {
-                        panic!("Expected CompoundAssign");
-                    }
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { stmts, tail_expr } = &f.body.node {
+            assert_eq!(stmts.len(), 1);
+            if let Some(tail) = tail_expr {
+                if let Expr::CompoundAssign { op, .. } = &tail.node {
+                    assert_eq!(*op, BinOp::Add);
+                } else {
+                    panic!("Expected CompoundAssign");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_semicolons_accepted() {
+        let source = "fn main() { let x = 5; print(x); x + 1 }";
+        let module = parse_source(source);
+        assert_eq!(module.items.len(), 1);
+        let Item::Function(f) = &module.items[0].node;
+        if let Expr::Block { stmts, tail_expr } = &f.body.node {
+            assert_eq!(stmts.len(), 2); // let x = 5 and print(x)
+            assert!(tail_expr.is_some()); // x + 1 is the tail expr
+        } else {
+            panic!("Expected block");
         }
     }
 }
