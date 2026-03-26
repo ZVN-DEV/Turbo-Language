@@ -1,0 +1,10 @@
+fn main() {
+    let mut arr = [1, 2, 3, 4, 5]
+    arr[0] = 100
+    arr[4] = 500
+    print(arr[0])
+    print(arr[4])
+    let mut sum = 0
+    for n in arr { sum += n }
+    print(sum)
+}

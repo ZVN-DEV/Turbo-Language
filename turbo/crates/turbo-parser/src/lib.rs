@@ -532,6 +532,44 @@ impl Parser {
             }
         }
 
+        // Check for field assignment: expr.field = value
+        if let Expr::FieldAccess { .. } = &lhs.node {
+            if matches!(self.peek(), Some(Token::Eq)) {
+                self.advance();
+                let value = self.parse_expr()?;
+                let span = lhs.span.start..value.span.end;
+                if let Expr::FieldAccess { object, field } = lhs.node {
+                    return Ok(Spanned::new(
+                        Expr::FieldAssign {
+                            object,
+                            field,
+                            value: Box::new(value),
+                        },
+                        span,
+                    ));
+                }
+            }
+        }
+
+        // Check for index assignment: expr[index] = value
+        if let Expr::Index { .. } = &lhs.node {
+            if matches!(self.peek(), Some(Token::Eq)) {
+                self.advance();
+                let value = self.parse_expr()?;
+                let span = lhs.span.start..value.span.end;
+                if let Expr::Index { object, index } = lhs.node {
+                    return Ok(Spanned::new(
+                        Expr::IndexAssign {
+                            object,
+                            index,
+                            value: Box::new(value),
+                        },
+                        span,
+                    ));
+                }
+            }
+        }
+
         // Check for range operator (..)
         if matches!(self.peek(), Some(Token::DotDot)) {
             self.advance();

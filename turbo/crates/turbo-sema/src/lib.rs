@@ -260,6 +260,16 @@ impl Checker {
         matches!(name, "print" | "panic" | "assert" | "len" | "abs" | "min" | "max" | "to_str")
     }
 
+    /// Walk a chain of FieldAccess / Index expressions to find the root variable name.
+    fn root_var_name(expr: &Spanned<Expr>) -> Option<String> {
+        match &expr.node {
+            Expr::Ident(name) => Some(name.clone()),
+            Expr::FieldAccess { object, .. } => Self::root_var_name(object),
+            Expr::Index { object, .. } => Self::root_var_name(object),
+            _ => None,
+        }
+    }
+
     fn check_module(&mut self, module: &Module) {
         // Pass 0: register all struct definitions
         for item in &module.items {
@@ -1102,6 +1112,98 @@ impl Checker {
                         format!("undefined variable `{target}`"),
                         expr.span.clone(),
                     );
+                }
+
+                Ty::Unit
+            }
+
+            Expr::FieldAssign { object, field, value } => {
+                let val_ty = self.check_expr(value);
+                let obj_ty = self.check_expr(object);
+
+                // Check mutability of the root variable
+                if let Some(root_name) = Self::root_var_name(object) {
+                    if let Some(info) = self.lookup_var(&root_name) {
+                        if !info.mutable {
+                            self.error(
+                                format!("cannot assign to field `{field}` of immutable variable `{root_name}` (declare with `let mut` to make mutable)"),
+                                expr.span.clone(),
+                            );
+                        }
+                    }
+                }
+
+                // Check field exists and type matches
+                if let Ty::Struct(struct_name) = &obj_ty {
+                    if let Some(struct_info) = self.structs.get(struct_name).cloned() {
+                        if let Some((_, field_ty)) = struct_info.fields.iter().find(|(n, _)| n == field) {
+                            if !val_ty.is_error() && !field_ty.is_error() && val_ty != *field_ty {
+                                self.error(
+                                    format!(
+                                        "cannot assign `{val_ty}` to field `{field}` of type `{field_ty}`"
+                                    ),
+                                    value.span.clone(),
+                                );
+                            }
+                        } else {
+                            self.error(
+                                format!("struct `{struct_name}` has no field `{field}`"),
+                                expr.span.clone(),
+                            );
+                        }
+                    }
+                } else if !obj_ty.is_error() {
+                    self.error(
+                        format!("cannot assign to field `{field}` on non-struct type `{obj_ty}`"),
+                        object.span.clone(),
+                    );
+                }
+
+                Ty::Unit
+            }
+
+            Expr::IndexAssign { object, index, value } => {
+                let val_ty = self.check_expr(value);
+                let obj_ty = self.check_expr(object);
+                let idx_ty = self.check_expr(index);
+
+                // Check mutability of the root variable
+                if let Some(root_name) = Self::root_var_name(object) {
+                    if let Some(info) = self.lookup_var(&root_name) {
+                        if !info.mutable {
+                            self.error(
+                                format!("cannot assign to index of immutable variable `{root_name}` (declare with `let mut` to make mutable)"),
+                                expr.span.clone(),
+                            );
+                        }
+                    }
+                }
+
+                // Check index is integer
+                if !idx_ty.is_error() && !idx_ty.is_integer() {
+                    self.error(
+                        format!("array index must be an integer, found `{idx_ty}`"),
+                        index.span.clone(),
+                    );
+                }
+
+                // Check object is array and value type matches element type
+                match &obj_ty {
+                    Ty::Array(inner) => {
+                        if !val_ty.is_error() && !inner.is_error() && val_ty != **inner {
+                            self.error(
+                                format!("cannot assign `{val_ty}` to array of `{inner}`"),
+                                value.span.clone(),
+                            );
+                        }
+                    }
+                    Ty::Error => {}
+                    _ => {
+                        self.error(
+                            format!("cannot index-assign into `{obj_ty}`"),
+                            object.span.clone(),
+                        );
+                    }
                 }
 
                 Ty::Unit

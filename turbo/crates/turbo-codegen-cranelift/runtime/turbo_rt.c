@@ -87,6 +87,15 @@ long long rt_array_get(const void *arr, long long index) {
     return ((const long long*)arr)[1 + index];
 }
 
+void rt_array_set(void *arr, long long index, long long value) {
+    long long len = *(const long long*)arr;
+    if (index < 0 || index >= len) {
+        fprintf(stderr, "runtime error: array index %lld out of bounds (length %lld)\n", index, len);
+        exit(1);
+    }
+    ((long long*)arr)[1 + index] = value;
+}
+
 long long rt_array_len(const void *arr) {
     return *(const long long*)arr;
 }

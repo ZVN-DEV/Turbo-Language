@@ -166,6 +166,15 @@ extern "C" fn rt_array_get(arr: *const u8, index: i64) -> i64 {
     unsafe { *((arr as *const i64).add(1 + index as usize)) }
 }
 
+extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) {
+    let len = unsafe { *(arr as *const i64) };
+    if index < 0 || index >= len {
+        eprintln!("runtime error: array index {} out of bounds (length {})", index, len);
+        std::process::exit(1);
+    }
+    unsafe { *((arr as *mut i64).add(1 + index as usize)) = value; }
+}
+
 extern "C" fn rt_array_len(arr: *const u8) -> i64 {
     unsafe { *(arr as *const i64) }
 }
@@ -371,6 +380,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_str_eq", rt_str_eq as *const u8);
     jit_builder.symbol("rt_array_alloc", rt_array_alloc as *const u8);
     jit_builder.symbol("rt_array_get", rt_array_get as *const u8);
+    jit_builder.symbol("rt_array_set", rt_array_set as *const u8);
     jit_builder.symbol("rt_array_len", rt_array_len as *const u8);
     jit_builder.symbol("rt_str_len", rt_str_len as *const u8);
     jit_builder.symbol("rt_struct_alloc", rt_struct_alloc as *const u8);
@@ -562,6 +572,15 @@ fn extract_closures_from_expr<'a>(
         Expr::Assign { value, .. } | Expr::CompoundAssign { value, .. } => {
             extract_closures_from_expr(value, out, counter);
         }
+        Expr::FieldAssign { object, value, .. } => {
+            extract_closures_from_expr(object, out, counter);
+            extract_closures_from_expr(value, out, counter);
+        }
+        Expr::IndexAssign { object, index, value } => {
+            extract_closures_from_expr(object, out, counter);
+            extract_closures_from_expr(index, out, counter);
+            extract_closures_from_expr(value, out, counter);
+        }
         Expr::OkExpr(value) | Expr::ErrExpr(value) => {
             extract_closures_from_expr(value, out, counter);
         }
@@ -610,6 +629,7 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_str_eq", &[ptr_type, ptr_type], Some(types::I8))?;
     declare_rt_fn(module, &mut rt_fns, "rt_array_alloc", &[types::I64], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_array_get", &[ptr_type, types::I64], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_array_set", &[ptr_type, types::I64, types::I64], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_array_len", &[ptr_type], Some(types::I64))?;
     declare_rt_fn(module, &mut rt_fns, "rt_str_len", &[ptr_type], Some(types::I64))?;
     declare_rt_fn(module, &mut rt_fns, "rt_struct_alloc", &[types::I64], Some(ptr_type))?;
@@ -1176,6 +1196,66 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             let lhs = cx.builder.use_var(var);
             let result = compile_binop(cx, lhs, *op, rhs)?;
             cx.builder.def_var(var, result);
+            Ok(None)
+        }
+
+        Expr::FieldAssign { object, field, value } => {
+            let (obj_ptr, obj_tty) = compile_expr(cx, object)?.unwrap();
+            let (val, _) = compile_expr(cx, value)?.unwrap();
+
+            let struct_name = match &obj_tty {
+                TurboTy::Struct(name) => name.clone(),
+                _ => return Err(CodegenError { message: "field assignment on non-struct type".to_string() }),
+            };
+
+            let struct_layout = cx.struct_fields.get(&struct_name)
+                .ok_or_else(|| CodegenError { message: format!("undefined struct: {struct_name}") })?
+                .clone();
+
+            let field_index = struct_layout.iter()
+                .position(|(n, _)| n == field)
+                .ok_or_else(|| CodegenError { message: format!("struct `{struct_name}` has no field `{field}`") })?;
+
+            let offset = (field_index * 8) as i32;
+
+            // Widen smaller types to 64-bit for uniform storage
+            let val_ty = cx.builder.func.dfg.value_type(val);
+            let val = if val_ty.bits() < 64 && val_ty.is_int() {
+                cx.builder.ins().sextend(types::I64, val)
+            } else if val_ty.is_float() && val_ty.bits() == 64 {
+                cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
+            } else if val_ty.is_float() && val_ty.bits() == 32 {
+                let extended = cx.builder.ins().fpromote(types::F64, val);
+                cx.builder.ins().bitcast(types::I64, MemFlags::new(), extended)
+            } else {
+                val
+            };
+
+            cx.builder.ins().store(MemFlags::new(), val, obj_ptr, offset);
+            Ok(None)
+        }
+
+        Expr::IndexAssign { object, index, value } => {
+            let (arr, _arr_tty) = compile_expr(cx, object)?.unwrap();
+            let (idx, _) = compile_expr(cx, index)?.unwrap();
+            let (val, _) = compile_expr(cx, value)?.unwrap();
+
+            // Widen smaller types to 64-bit for uniform storage
+            let val_ty = cx.builder.func.dfg.value_type(val);
+            let val = if val_ty.bits() < 64 && val_ty.is_int() {
+                cx.builder.ins().sextend(types::I64, val)
+            } else if val_ty.is_float() && val_ty.bits() == 64 {
+                cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
+            } else if val_ty.is_float() && val_ty.bits() == 32 {
+                let extended = cx.builder.ins().fpromote(types::F64, val);
+                cx.builder.ins().bitcast(types::I64, MemFlags::new(), extended)
+            } else {
+                val
+            };
+
+            let set_fid = cx.rt_fns["rt_array_set"];
+            let set_ref = cx.module.declare_func_in_func(set_fid, cx.builder.func);
+            cx.builder.ins().call(set_ref, &[arr, idx, val]);
             Ok(None)
         }
 

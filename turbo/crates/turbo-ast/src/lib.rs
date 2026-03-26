@@ -164,6 +164,18 @@ pub enum Expr {
         op: BinOp,
         value: Box<Spanned<Expr>>,
     },
+    /// Field assignment: obj.field = value
+    FieldAssign {
+        object: Box<Spanned<Expr>>,
+        field: String,
+        value: Box<Spanned<Expr>>,
+    },
+    /// Index assignment: arr[index] = value
+    IndexAssign {
+        object: Box<Spanned<Expr>>,
+        index: Box<Spanned<Expr>>,
+        value: Box<Spanned<Expr>>,
+    },
     /// While loop: while condition { body }
     While {
         condition: Box<Spanned<Expr>>,
