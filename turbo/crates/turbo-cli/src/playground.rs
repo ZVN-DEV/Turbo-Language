@@ -62,7 +62,7 @@ pub fn serve(port: u16) {
                 .unwrap_or("");
 
             let result = run_code(body);
-            let json = serde_json(&result.0, &result.1, result.2);
+            let json = format_json(&result.0, &result.1, result.2);
 
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -114,8 +114,8 @@ fn run_code(source: &str) -> (String, String, bool) {
     }
 }
 
-/// Manual JSON serialization (no serde dependency needed)
-fn serde_json(stdout: &str, stderr: &str, success: bool) -> String {
+/// Manual JSON serialization (no external dependency needed)
+fn format_json(stdout: &str, stderr: &str, success: bool) -> String {
     format!(
         r#"{{"stdout":{},"stderr":{},"success":{}}}"#,
         json_string(stdout),

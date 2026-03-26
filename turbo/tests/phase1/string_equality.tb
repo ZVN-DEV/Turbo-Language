@@ -1,0 +1,11 @@
+fn main() {
+    let a = "hello"
+    let b = "hello"
+    let c = "world"
+    if a == b {
+        print("a equals b")
+    }
+    if a != c {
+        print("a not equals c")
+    }
+}

@@ -1,0 +1,10 @@
+fn main() {
+    let rows = [1, 2, 3]
+    let mut sum = 0
+    for r in rows {
+        for c in [10, 20, 30] {
+            sum += r * c
+        }
+    }
+    print(sum)
+}

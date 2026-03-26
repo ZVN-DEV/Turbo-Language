@@ -1,0 +1,12 @@
+fn main() {
+    let name = "Turbo"
+    let greeting = "Hello, " + name + "!"
+    print(greeting)
+
+    if "yes" == "yes" {
+        print("match")
+    }
+    if "yes" != "no" {
+        print("different")
+    }
+}

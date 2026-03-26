@@ -1,0 +1,6 @@
+fn main() {
+    let a = "Hello, "
+    let b = "world!"
+    let c = a + b
+    print(c)
+}

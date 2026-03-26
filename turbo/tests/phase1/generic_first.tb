@@ -1,0 +1,6 @@
+fn first<T>(a: T, b: T) -> T { a }
+
+fn main() {
+    print(first(10, 20))
+    print(first("a", "b"))
+}

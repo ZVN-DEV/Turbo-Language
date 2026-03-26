@@ -1,0 +1,9 @@
+fn main() {
+    let s1 = to_str(42)
+    let s2 = to_str(true)
+    let s3 = to_str("already a string")
+    print(s1)
+    print(s2)
+    print(s3)
+    print("The answer is " + to_str(42))
+}

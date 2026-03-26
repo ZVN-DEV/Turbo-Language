@@ -1,0 +1,14 @@
+fn to_word(n: i64) -> str {
+    match n {
+        1 => "one"
+        2 => "two"
+        3 => "three"
+        _ => "other"
+    }
+}
+
+fn main() {
+    print(to_word(1))
+    print(to_word(2))
+    print(to_word(99))
+}

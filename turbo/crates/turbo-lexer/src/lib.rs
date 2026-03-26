@@ -126,6 +126,10 @@ pub enum Token {
     #[token("/=")]
     SlashEq,
 
+    // --- Single pipe (for closures) ---
+    #[token("|")]
+    Bar,
+
     // --- Single-char operators ---
     #[token("+")]
     Plus,
@@ -178,11 +182,41 @@ pub enum Token {
     #[regex(r"//[^\n]*", logos::skip)]
     LineComment,
 
-    #[regex(r"/\*([^*]|\*[^/])*\*/", logos::skip)]
+    #[token("/*", lex_block_comment)]
     BlockComment,
 
     #[token("\n")]
     Newline,
+}
+
+fn lex_block_comment(lex: &mut logos::Lexer<Token>) -> logos::FilterResult<(), ()> {
+    let remainder = lex.remainder();
+    let mut depth: u32 = 1;
+    let mut chars = remainder.char_indices();
+    while let Some((_i, c)) = chars.next() {
+        match c {
+            '/' => {
+                if let Some((_, '*')) = chars.clone().next() {
+                    chars.next();
+                    depth += 1;
+                }
+            }
+            '*' => {
+                if let Some((j, '/')) = chars.clone().next() {
+                    chars.next();
+                    depth -= 1;
+                    if depth == 0 {
+                        lex.bump(j + 1);
+                        return logos::FilterResult::Skip;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Unclosed comment - bump to end
+    lex.bump(remainder.len());
+    logos::FilterResult::Skip
 }
 
 fn parse_string(lex: &mut logos::Lexer<Token>) -> Option<std::string::String> {
@@ -200,8 +234,8 @@ fn parse_string(lex: &mut logos::Lexer<Token>) -> Option<std::string::String> {
                 std::option::Option::Some('r') => result.push('\r'),
                 std::option::Option::Some('\\') => result.push('\\'),
                 std::option::Option::Some('"') => result.push('"'),
-                std::option::Option::Some('{') => result.push('{'),
-                std::option::Option::Some('}') => result.push('}'),
+                std::option::Option::Some('{') => { result.push('\\'); result.push('{'); }
+                std::option::Option::Some('}') => { result.push('\\'); result.push('}'); }
                 std::option::Option::Some(other) => {
                     result.push('\\');
                     result.push(other);
@@ -266,6 +300,7 @@ impl fmt::Display for Token {
             Token::MinusEq => write!(f, "-="),
             Token::StarEq => write!(f, "*="),
             Token::SlashEq => write!(f, "/="),
+            Token::Bar => write!(f, "|"),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),
@@ -404,5 +439,85 @@ mod tests {
         let (tokens, errors) = tokenize(source);
         assert!(errors.is_empty());
         assert!(matches!(tokens[0].value, Token::Int(1_000_000)));
+    }
+
+    #[test]
+    fn test_nested_block_comments() {
+        let source = "/* outer /* inner */ still comment */ visible";
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
+
+        // Only the identifier "visible" should remain after the nested comment is skipped
+        assert_eq!(tokens.len(), 1, "Expected 1 token, got {:?}", tokens);
+        assert!(matches!(&tokens[0].value, Token::Ident(s) if s == "visible"));
+    }
+
+    #[test]
+    fn test_empty_string_literal() {
+        let source = r#""""#;
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
+        assert_eq!(tokens.len(), 1);
+        assert!(matches!(&tokens[0].value, Token::String(s) if s.is_empty()));
+    }
+
+    #[test]
+    fn test_all_keywords_tokenize() {
+        let keywords = vec![
+            ("fn", Token::Fn),
+            ("let", Token::Let),
+            ("mut", Token::Mut),
+            ("const", Token::Const),
+            ("if", Token::If),
+            ("else", Token::Else),
+            ("while", Token::While),
+            ("for", Token::For),
+            ("in", Token::In),
+            ("return", Token::Return),
+            ("true", Token::True),
+            ("false", Token::False),
+            ("match", Token::Match),
+            ("struct", Token::Struct),
+            ("type", Token::TypeKw),
+            ("impl", Token::Impl),
+            ("trait", Token::Trait),
+            ("pub", Token::Pub),
+            ("import", Token::Import),
+            ("from", Token::From),
+            ("async", Token::Async),
+            ("await", Token::Await),
+            ("spawn", Token::Spawn),
+            ("defer", Token::Defer),
+            ("none", Token::None),
+            ("some", Token::Some),
+            ("ok", Token::Ok),
+            ("err", Token::Err),
+        ];
+        for (source, expected) in keywords {
+            let (tokens, errors) = tokenize(source);
+            assert!(errors.is_empty(), "Lex errors for `{source}`: {:?}", errors);
+            assert_eq!(tokens.len(), 1, "Expected 1 token for `{source}`, got {:?}", tokens);
+            assert_eq!(
+                tokens[0].value, expected,
+                "Keyword `{source}` should tokenize as {:?}, got {:?}",
+                expected, tokens[0].value
+            );
+            // Ensure it did NOT tokenize as an Ident
+            assert!(
+                !matches!(&tokens[0].value, Token::Ident(_)),
+                "Keyword `{source}` was incorrectly tokenized as Ident"
+            );
+        }
+    }
+
+    #[test]
+    fn test_adjacent_operators() {
+        let source = "x+y";
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
+        assert_eq!(tokens.len(), 3, "Expected 3 tokens, got {:?}", tokens);
+        assert!(matches!(&tokens[0].value, Token::Ident(s) if s == "x"));
+        assert!(matches!(&tokens[1].value, Token::Plus));
+        assert!(matches!(&tokens[2].value, Token::Ident(s) if s == "y"));
     }
 }

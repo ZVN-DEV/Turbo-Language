@@ -1,0 +1,10 @@
+fn main() {
+    let name = "Turbo"
+    print("Hello, {name}!")
+    let x = 42
+    print("x = {x}")
+    print("1 + 2 = {1 + 2}")
+    let a = true
+    print("flag is {a}")
+    print("{name} is {x} years old")
+}
