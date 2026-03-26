@@ -30,7 +30,7 @@ enum TurboTy {
     Bool,
     Str,
     Unit,
-    Array,
+    Array(Box<TurboTy>),
     Struct(String),
     Enum,
 }
@@ -51,7 +51,10 @@ fn turbo_ty_from_type_expr(te: &TypeExpr, enum_variants: &HashMap<String, Vec<St
             }
         },
         TypeExpr::Unit => TurboTy::Unit,
-        TypeExpr::Array(_) => TurboTy::Array,
+        TypeExpr::Array(inner) => {
+            let inner_tty = turbo_ty_from_type_expr(&inner.node, enum_variants);
+            TurboTy::Array(Box::new(inner_tty))
+        }
     }
 }
 
@@ -737,25 +740,48 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             let call = cx.builder.ins().call(alloc_ref, &[len_val]);
             let arr_ptr = cx.builder.inst_results(call)[0];
 
+            let mut elem_tty = TurboTy::Int; // default; overridden by first element
             for (i, elem) in elements.iter().enumerate() {
-                let (val, _) = compile_expr(cx, elem)?.unwrap();
+                let (val, tty) = compile_expr(cx, elem)?.unwrap();
+                if i == 0 {
+                    elem_tty = tty;
+                }
                 let offset = cx.builder.ins().iconst(cx.ptr_type, (8 + i * 8) as i64);
                 let elem_ptr = cx.builder.ins().iadd(arr_ptr, offset);
                 cx.builder.ins().store(MemFlags::new(), val, elem_ptr, 0);
             }
 
-            Ok(Some((arr_ptr, TurboTy::Array)))
+            Ok(Some((arr_ptr, TurboTy::Array(Box::new(elem_tty)))))
         }
 
         Expr::Index { object, index } => {
-            let (arr, _) = compile_expr(cx, object)?.unwrap();
+            let (arr, arr_tty) = compile_expr(cx, object)?.unwrap();
             let (idx, _) = compile_expr(cx, index)?.unwrap();
 
             let get_fid = cx.rt_fns["rt_array_get"];
             let get_ref = cx.module.declare_func_in_func(get_fid, cx.builder.func);
             let call = cx.builder.ins().call(get_ref, &[arr, idx]);
-            let result = cx.builder.inst_results(call)[0];
-            Ok(Some((result, TurboTy::Int)))
+            let raw = cx.builder.inst_results(call)[0];
+
+            // Extract the element TurboTy from the array type
+            let elem_tty = match arr_tty {
+                TurboTy::Array(inner) => *inner,
+                _ => TurboTy::Int, // fallback
+            };
+
+            // rt_array_get returns raw i64 bits; convert to the correct type
+            let (result, result_tty) = match &elem_tty {
+                TurboTy::Bool => {
+                    let truncated = cx.builder.ins().ireduce(types::I8, raw);
+                    (truncated, elem_tty)
+                }
+                TurboTy::Float => {
+                    let f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw);
+                    (f, elem_tty)
+                }
+                _ => (raw, elem_tty), // Int, Str, Struct, Enum — raw i64 is correct
+            };
+            Ok(Some((result, result_tty)))
         }
 
         Expr::StructLit { name, fields } => {
@@ -1165,7 +1191,7 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
                 } else { v };
                 cx.rt_call("rt_print_i64", &[v]);
             }
-            TurboTy::Array => {
+            TurboTy::Array(_) => {
                 let ptr = cx.create_string("[array]")?;
                 cx.rt_call("rt_print_str", &[ptr]);
             }
@@ -1555,12 +1581,10 @@ fn compile_match<M: Module>(
 
     // If no catchall was reached, we're in the fallthrough block (no arm matched).
     if !hit_catchall && !cx.builder.is_unreachable() {
-        if has_result {
-            // Exhaustiveness should be checked by sema; trap as safety net
-            cx.builder.ins().trap(TrapCode::unwrap_user(1));
-        } else {
-            cx.builder.ins().jump(merge_block, &[]);
-        }
+        // Call rt_panic with a clear message instead of a bare trap
+        let msg = cx.create_string("non-exhaustive match")?;
+        cx.rt_call("rt_panic", &[msg]);
+        cx.builder.ins().trap(TrapCode::unwrap_user(1));
     }
 
     cx.builder.switch_to_block(merge_block);
