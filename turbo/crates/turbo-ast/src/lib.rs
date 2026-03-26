@@ -24,6 +24,37 @@ pub struct Module {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     Function(FnDef),
+    Struct(StructDef),
+    Enum(EnumDef),
+    Impl(ImplBlock),
+}
+
+/// Impl block: methods attached to a struct type
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplBlock {
+    pub type_name: String,
+    pub methods: Vec<Spanned<FnDef>>,
+}
+
+/// Enum (sum type) definition
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<String>,
+}
+
+/// Struct definition
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<FieldDef>,
+}
+
+/// Struct field definition
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldDef {
+    pub name: String,
+    pub ty: Spanned<TypeExpr>,
 }
 
 /// Function definition
@@ -50,6 +81,17 @@ pub enum TypeExpr {
     Named(String),
     /// Unit type ()
     Unit,
+    /// Array type: [T]
+    Array(Box<Spanned<TypeExpr>>),
+}
+
+/// Part of a string interpolation
+#[derive(Debug, Clone, PartialEq)]
+pub enum InterpolPart {
+    /// Literal string segment
+    Lit(String),
+    /// Expression to be evaluated and converted to string
+    Expr(Box<Spanned<Expr>>),
 }
 
 /// Expressions
@@ -111,6 +153,46 @@ pub enum Expr {
         condition: Box<Spanned<Expr>>,
         body: Box<Spanned<Expr>>,
     },
+    /// For-in loop: for name in iterable { body }
+    ForIn {
+        var_name: String,
+        iterable: Box<Spanned<Expr>>,
+        body: Box<Spanned<Expr>>,
+    },
+    /// Range expression: start..end (exclusive)
+    Range {
+        start: Box<Spanned<Expr>>,
+        end: Box<Spanned<Expr>>,
+    },
+    /// Array literal: [expr, expr, ...]
+    ArrayLit(Vec<Spanned<Expr>>),
+    /// Index expression: expr[index]
+    Index {
+        object: Box<Spanned<Expr>>,
+        index: Box<Spanned<Expr>>,
+    },
+    /// Struct literal: Name { field: value, ... }
+    StructLit {
+        name: String,
+        fields: Vec<(String, Spanned<Expr>)>,
+    },
+    /// Field access: expr.field
+    FieldAccess {
+        object: Box<Spanned<Expr>>,
+        field: String,
+    },
+    /// Enum variant: EnumName.VariantName
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+    },
+    /// Match expression
+    Match {
+        subject: Box<Spanned<Expr>>,
+        arms: Vec<MatchArm>,
+    },
+    /// String interpolation: "text {expr} text"
+    Interpolation(Vec<InterpolPart>),
 }
 
 /// Statements (things that don't produce values in statement position)
@@ -127,6 +209,28 @@ pub enum Stmt {
     Expr(Spanned<Expr>),
     /// Return statement
     Return(Option<Spanned<Expr>>),
+}
+
+/// A match arm: pattern => body
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: Spanned<Pattern>,
+    pub body: Spanned<Expr>,
+}
+
+/// Pattern in a match expression
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    /// Named pattern (variant name or variable binding)
+    Ident(String),
+    /// Wildcard pattern _
+    Wildcard,
+    /// Integer literal pattern
+    IntLit(i64),
+    /// Boolean literal pattern
+    BoolLit(bool),
+    /// String literal pattern
+    StringLit(String),
 }
 
 /// Binary operators

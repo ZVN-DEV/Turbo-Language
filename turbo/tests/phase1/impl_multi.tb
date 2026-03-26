@@ -1,0 +1,22 @@
+struct Counter {
+    val: i64,
+}
+
+impl Counter {
+    fn value(self) -> i64 {
+        self.val
+    }
+
+    fn is_zero(self) -> bool {
+        self.val == 0
+    }
+}
+
+fn main() {
+    let c = Counter { val: 42 }
+    print(c.value())
+    print(c.is_zero())
+
+    let z = Counter { val: 0 }
+    print(z.is_zero())
+}
