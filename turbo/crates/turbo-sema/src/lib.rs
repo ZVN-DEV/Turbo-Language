@@ -923,9 +923,31 @@ impl Checker {
 
                 // Check each arm's pattern and body
                 let mut result_ty: Option<Ty> = None;
+                let mut has_wildcard = false;
+                let mut covered_variants: Vec<String> = Vec::new();
+
                 for arm in arms {
                     // Validate pattern against subject type
                     self.check_pattern(&arm.pattern, &subject_ty);
+
+                    // Track coverage for exhaustiveness
+                    match &arm.pattern.node {
+                        Pattern::Wildcard => { has_wildcard = true; }
+                        Pattern::Ident(name) => {
+                            // For enums, ident patterns are variant names
+                            if let Ty::Enum(_) = &subject_ty {
+                                covered_variants.push(name.clone());
+                            } else {
+                                // For non-enum types, an ident pattern is a
+                                // variable binding which acts as a wildcard
+                                has_wildcard = true;
+                            }
+                        }
+                        Pattern::BoolLit(b) => {
+                            covered_variants.push(b.to_string());
+                        }
+                        _ => {} // IntLit and StringLit don't cover the full domain
+                    }
 
                     let body_ty = self.check_expr(&arm.body);
 
@@ -940,6 +962,52 @@ impl Checker {
                         }
                     } else {
                         result_ty = Some(body_ty);
+                    }
+                }
+
+                // Exhaustiveness check
+                if !has_wildcard && !subject_ty.is_error() {
+                    match &subject_ty {
+                        Ty::Enum(enum_name) => {
+                            if let Some(info) = self.enums.get(enum_name).cloned() {
+                                let missing: Vec<&String> = info.variants.iter()
+                                    .filter(|v| !covered_variants.contains(v))
+                                    .collect();
+                                if !missing.is_empty() {
+                                    let missing_str: Vec<&str> = missing.iter().map(|s| s.as_str()).collect();
+                                    self.error(
+                                        format!(
+                                            "match is not exhaustive; missing variants: {}",
+                                            missing_str.join(", ")
+                                        ),
+                                        expr.span.clone(),
+                                    );
+                                }
+                            }
+                        }
+                        Ty::Bool => {
+                            let has_true = covered_variants.contains(&"true".to_string());
+                            let has_false = covered_variants.contains(&"false".to_string());
+                            if !has_true || !has_false {
+                                let mut missing = Vec::new();
+                                if !has_true { missing.push("true"); }
+                                if !has_false { missing.push("false"); }
+                                self.error(
+                                    format!(
+                                        "match is not exhaustive; missing variants: {}",
+                                        missing.join(", ")
+                                    ),
+                                    expr.span.clone(),
+                                );
+                            }
+                        }
+                        _ => {
+                            // For integers, strings, etc., a wildcard is required
+                            self.error(
+                                "match is not exhaustive; consider adding a wildcard `_` arm".to_string(),
+                                expr.span.clone(),
+                            );
+                        }
                     }
                 }
 
@@ -1325,6 +1393,82 @@ fn main() { double("hello") }"#,
         assert_has_error(
             r#"fn main() { let x: u32 = "hello" }"#,
             "type annotation `u32` doesn't match value type `str`",
+        );
+    }
+
+    // === Match exhaustiveness ===
+
+    #[test]
+    fn test_match_int_without_wildcard() {
+        assert_has_error(
+            "fn main() { let x = 1\n match x { 1 => print(1) } }",
+            "match is not exhaustive",
+        );
+    }
+
+    #[test]
+    fn test_match_int_with_wildcard_ok() {
+        assert_no_errors(
+            "fn main() { let x = 1\n match x { 1 => print(1)\n _ => print(0) } }",
+        );
+    }
+
+    #[test]
+    fn test_match_enum_missing_variant() {
+        assert_has_error(
+            r#"type Color { Red, Green, Blue }
+fn main() {
+    let c = Color.Red
+    match c {
+        Red => print(1)
+        Green => print(2)
+    }
+}"#,
+            "match is not exhaustive",
+        );
+    }
+
+    #[test]
+    fn test_match_enum_all_variants_ok() {
+        assert_no_errors(
+            r#"type Color { Red, Green, Blue }
+fn main() {
+    let c = Color.Red
+    match c {
+        Red => print(1)
+        Green => print(2)
+        Blue => print(3)
+    }
+}"#,
+        );
+    }
+
+    #[test]
+    fn test_match_enum_with_wildcard_ok() {
+        assert_no_errors(
+            r#"type Color { Red, Green, Blue }
+fn main() {
+    let c = Color.Red
+    match c {
+        Red => print(1)
+        _ => print(0)
+    }
+}"#,
+        );
+    }
+
+    #[test]
+    fn test_match_bool_not_exhaustive() {
+        assert_has_error(
+            "fn main() { let x = true\n match x { true => print(1) } }",
+            "match is not exhaustive",
+        );
+    }
+
+    #[test]
+    fn test_match_bool_exhaustive_ok() {
+        assert_no_errors(
+            "fn main() { let x = true\n match x { true => print(1)\n false => print(0) } }",
         );
     }
 }
