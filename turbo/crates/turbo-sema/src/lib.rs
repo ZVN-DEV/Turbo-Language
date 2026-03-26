@@ -151,10 +151,24 @@ impl Checker {
 
     // === Check module ===
 
+    fn is_builtin_function(name: &str) -> bool {
+        matches!(name, "print" | "panic" | "assert")
+    }
+
     fn check_module(&mut self, module: &Module) {
         // First pass: register all function signatures
         for item in &module.items {
             let Item::Function(f) = &item.node;
+
+            // Reject shadowing of builtin functions
+            if Self::is_builtin_function(&f.name) {
+                self.error(
+                    format!("cannot redefine builtin function `{}`", f.name),
+                    item.span.clone(),
+                );
+                continue;
+            }
+
             if self.functions.contains_key(&f.name) {
                 self.error(
                     format!("function `{}` is already defined", f.name),
@@ -209,10 +223,12 @@ impl Checker {
             self.error("no `main` function found".to_string(), span);
         }
 
-        // Second pass: check function bodies
+        // Second pass: check function bodies (skip those not registered, e.g. builtin shadows)
         for item in &module.items {
             let Item::Function(f) = &item.node;
-            self.check_function(f);
+            if self.functions.contains_key(&f.name) {
+                self.check_function(f);
+            }
         }
     }
 
@@ -358,7 +374,25 @@ impl Checker {
             Expr::Call { callee, args } => {
                 if let Expr::Ident(name) = &callee.node {
                     // Built-in functions
-                    if name == "print" || name == "panic" {
+                    if name == "print" {
+                        if args.len() > 1 {
+                            self.error(
+                                format!("print() takes at most 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                        }
+                        for arg in args {
+                            self.check_expr(arg);
+                        }
+                        return Ty::Unit;
+                    }
+                    if name == "panic" {
+                        if args.len() > 1 {
+                            self.error(
+                                format!("panic() takes at most 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                        }
                         for arg in args {
                             self.check_expr(arg);
                         }
@@ -370,7 +404,13 @@ impl Checker {
                                 "assert() requires at least one argument".to_string(),
                                 callee.span.clone(),
                             );
-                        } else {
+                        } else if args.len() > 2 {
+                            self.error(
+                                format!("assert() takes at most 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                        }
+                        if !args.is_empty() {
                             let cond_ty = self.check_expr(&args[0]);
                             if !cond_ty.is_error() && cond_ty != Ty::Bool {
                                 self.error(
@@ -381,6 +421,10 @@ impl Checker {
                             // Optional message argument
                             if args.len() > 1 {
                                 self.check_expr(&args[1]);
+                            }
+                            // Type-check remaining args even if too many
+                            for arg in args.iter().skip(2) {
+                                self.check_expr(arg);
                             }
                         }
                         return Ty::Unit;
@@ -570,12 +614,23 @@ impl Checker {
                     match resolve_type_expr(&ty_expr.node) {
                         Some(t) => {
                             if !val_ty.is_error() && t != val_ty {
-                                self.error(
-                                    format!(
-                                        "type annotation `{t}` doesn't match value type `{val_ty}`"
-                                    ),
-                                    ty_expr.span.clone(),
-                                );
+                                // Allow integer literal coercion: i64 literal -> i32, u32, u64
+                                let is_int_literal_coercion = val_ty == Ty::I64
+                                    && matches!(t, Ty::I32 | Ty::U32 | Ty::U64)
+                                    && matches!(&value.node, Expr::IntLit(n) if
+                                        match t {
+                                            Ty::U32 | Ty::U64 => *n >= 0,
+                                            _ => true,
+                                        }
+                                    );
+                                if !is_int_literal_coercion {
+                                    self.error(
+                                        format!(
+                                            "type annotation `{t}` doesn't match value type `{val_ty}`"
+                                        ),
+                                        ty_expr.span.clone(),
+                                    );
+                                }
                             }
                             t
                         }
@@ -771,6 +826,111 @@ fn main() { double("hello") }"#,
         assert_has_error(
             "fn foo() { }",
             "no `main` function found",
+        );
+    }
+
+    // === Task 1: Builtin function shadowing ===
+
+    #[test]
+    fn test_shadow_builtin() {
+        assert_has_error(
+            "fn print() { }\nfn main() { }",
+            "cannot redefine builtin",
+        );
+    }
+
+    #[test]
+    fn test_shadow_builtin_panic() {
+        assert_has_error(
+            "fn panic() { }\nfn main() { }",
+            "cannot redefine builtin function `panic`",
+        );
+    }
+
+    #[test]
+    fn test_shadow_builtin_assert() {
+        assert_has_error(
+            "fn assert(x: bool) { }\nfn main() { }",
+            "cannot redefine builtin function `assert`",
+        );
+    }
+
+    // === Task 2: Builtin argument count validation ===
+
+    #[test]
+    fn test_print_too_many_args() {
+        assert_has_error(
+            r#"fn main() { print("a", "b") }"#,
+            "print() takes at most 1 argument, got 2",
+        );
+    }
+
+    #[test]
+    fn test_print_zero_args_ok() {
+        assert_no_errors("fn main() { print() }");
+    }
+
+    #[test]
+    fn test_print_one_arg_ok() {
+        assert_no_errors(r#"fn main() { print("hello") }"#);
+    }
+
+    #[test]
+    fn test_panic_too_many_args() {
+        assert_has_error(
+            r#"fn main() { panic("a", "b") }"#,
+            "panic() takes at most 1 argument, got 2",
+        );
+    }
+
+    #[test]
+    fn test_assert_too_many_args() {
+        assert_has_error(
+            r#"fn main() { assert(true, "msg", "extra") }"#,
+            "assert() takes at most 2 arguments, got 3",
+        );
+    }
+
+    #[test]
+    fn test_assert_one_arg_ok() {
+        assert_no_errors("fn main() { assert(true) }");
+    }
+
+    #[test]
+    fn test_assert_two_args_ok() {
+        assert_no_errors(r#"fn main() { assert(true, "ok") }"#);
+    }
+
+    // === Task 3: Integer literal coercion ===
+
+    #[test]
+    fn test_unsigned_literal_assignment() {
+        assert_no_errors("fn main() { let x: u32 = 5 }");
+    }
+
+    #[test]
+    fn test_u64_literal_assignment() {
+        assert_no_errors("fn main() { let x: u64 = 100 }");
+    }
+
+    #[test]
+    fn test_i32_literal_assignment() {
+        assert_no_errors("fn main() { let x: i32 = 42 }");
+    }
+
+    #[test]
+    fn test_negative_literal_to_unsigned_rejected() {
+        assert_has_error(
+            "fn main() { let x: u32 = -1 }",
+            "type annotation `u32` doesn't match value type",
+        );
+    }
+
+    #[test]
+    fn test_string_to_u32_still_rejected() {
+        assert_has_error(
+            r#"fn main() { let x: u32 = "hello" }"#,
+            "type annotation `u32` doesn't match value type `str`",
         );
     }
 }
