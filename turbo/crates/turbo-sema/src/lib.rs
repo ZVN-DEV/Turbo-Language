@@ -749,7 +749,6 @@ impl Checker {
                         // Before reporting "undefined function", check if this is a UFCS method call.
                         // The parser transforms `obj.method(args)` into `method(obj, args)`,
                         // so the first arg is the receiver.
-                        let mut found_method = false;
                         if !args.is_empty() {
                             let first_arg_ty = self.check_expr(&args[0]);
                             if let Ty::Struct(ref type_name) = first_arg_ty {
@@ -758,7 +757,6 @@ impl Checker {
                                     .and_then(|m| m.get(name))
                                     .cloned()
                                 {
-                                    found_method = true;
                                     // Check argument count (all args including self)
                                     if args.len() != method_sig.params.len() {
                                         self.error(
@@ -786,12 +784,10 @@ impl Checker {
                                 }
                             }
                         }
-                        if !found_method {
-                            self.error(
-                                format!("undefined function `{name}`"),
-                                callee.span.clone(),
-                            );
-                        }
+                        self.error(
+                            format!("undefined function `{name}`"),
+                            callee.span.clone(),
+                        );
                         Ty::Error
                     }
                 } else if let Expr::FieldAccess { object, field } = &callee.node {
