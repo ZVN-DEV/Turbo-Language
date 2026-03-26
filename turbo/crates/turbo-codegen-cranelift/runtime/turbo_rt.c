@@ -158,6 +158,30 @@ long long rt_result_value(const void *result) {
     return ((const long long*)result)[1];
 }
 
+/* Optional type runtime functions */
+
+void* rt_option_some(long long value) {
+    long long *ptr = (long long*)calloc(2, sizeof(long long));
+    ptr[0] = 1; /* some tag */
+    ptr[1] = value;
+    return ptr;
+}
+
+void* rt_option_none(void) {
+    long long *ptr = (long long*)calloc(2, sizeof(long long));
+    ptr[0] = 0; /* none tag */
+    ptr[1] = 0;
+    return ptr;
+}
+
+long long rt_option_tag(const void *opt) {
+    return ((const long long*)opt)[0];
+}
+
+long long rt_option_value(const void *opt) {
+    return ((const long long*)opt)[1];
+}
+
 /* Entry point: calls Turbo's main and returns 0 */
 extern void turbo_main(void);
 int main(void) {

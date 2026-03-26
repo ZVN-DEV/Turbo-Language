@@ -35,6 +35,8 @@ pub enum Ty {
     Fn(Vec<Ty>, Box<Ty>),
     /// Result type: Result<ok, err>
     Result(Box<Ty>, Box<Ty>),
+    /// Optional type: Optional<inner>
+    Optional(Box<Ty>),
     /// A generic type parameter (e.g., `T`)
     TypeParam(String),
     /// Type could not be determined (error recovery)
@@ -65,6 +67,7 @@ impl std::fmt::Display for Ty {
                 write!(f, ") -> {}", ret)
             }
             Ty::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
+            Ty::Optional(inner) => write!(f, "{}?", inner),
             Ty::TypeParam(name) => write!(f, "{name}"),
             Ty::Error => write!(f, "<error>"),
         }
@@ -101,6 +104,10 @@ fn types_compatible(expected: &Ty, actual: &Ty) -> bool {
             let ok_ok = ok1.is_error() || ok2.is_error() || ok1 == ok2;
             let err_ok = err1.is_error() || err2.is_error() || err1 == err2;
             ok_ok && err_ok
+        }
+        // Optional types with Error (unknown) inner are compatible
+        (Ty::Optional(inner1), Ty::Optional(inner2)) => {
+            inner1.is_error() || inner2.is_error() || inner1 == inner2
         }
         _ => false,
     }
@@ -163,6 +170,9 @@ fn resolve_type_expr_with_params(te: &TypeExpr, structs: Option<&HashMap<String,
             let err_ty = resolve_type_expr(&err_type.node, structs, enums)?;
             Some(Ty::Result(Box::new(ok_ty), Box::new(err_ty)))
         }
+        TypeExpr::Optional(inner) => {
+            resolve_type_expr(&inner.node, structs, enums).map(|t| Ty::Optional(Box::new(t)))
+        }
     }
 }
 
@@ -198,6 +208,20 @@ struct EnumInfo {
     variants: Vec<String>,
 }
 
+/// Trait definition info for the checker
+#[derive(Debug, Clone)]
+struct TraitInfo {
+    methods: Vec<TraitMethodInfo>,
+}
+
+/// Trait method signature info
+#[derive(Debug, Clone)]
+struct TraitMethodInfo {
+    name: String,
+    params: Vec<(String, Ty)>,
+    ret: Ty,
+}
+
 /// Type checker
 struct Checker {
     errors: Vec<SemaError>,
@@ -206,6 +230,10 @@ struct Checker {
     enums: HashMap<String, EnumInfo>,
     /// Methods: type_name -> method_name -> FnSig
     methods: HashMap<String, HashMap<String, FnSig>>,
+    /// Trait definitions: trait_name -> TraitInfo
+    traits: HashMap<String, TraitInfo>,
+    /// Trait implementations: type_name -> set of trait names
+    trait_impls: HashMap<String, Vec<String>>,
     scopes: Vec<Scope>,
     /// Return type of the current function being checked
     current_return_type: Ty,
@@ -213,12 +241,24 @@ struct Checker {
 
 impl Checker {
     fn new() -> Self {
+        // Pre-register built-in traits
+        let mut traits = HashMap::new();
+        traits.insert("Display".to_string(), TraitInfo {
+            methods: vec![TraitMethodInfo {
+                name: "to_string".to_string(),
+                params: vec![("self".to_string(), Ty::Error)], // self type filled at impl
+                ret: Ty::Str,
+            }],
+        });
+
         Self {
             errors: Vec::new(),
             functions: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
             methods: HashMap::new(),
+            traits,
+            trait_impls: HashMap::new(),
             scopes: Vec::new(),
             current_return_type: Ty::Unit,
         }
@@ -257,7 +297,8 @@ impl Checker {
     // === Check module ===
 
     fn is_builtin_function(name: &str) -> bool {
-        matches!(name, "print" | "panic" | "assert" | "len" | "abs" | "min" | "max" | "to_str")
+        matches!(name, "print" | "panic" | "assert" | "len" | "abs" | "min" | "max" | "to_str"
+            | "map" | "filter" | "reduce")
     }
 
     /// Walk a chain of FieldAccess / Index expressions to find the root variable name.
@@ -312,6 +353,58 @@ impl Checker {
             self.enums.insert(e.name.clone(), EnumInfo {
                 variants: e.variants.clone(),
             });
+        }
+
+        // Pass 0c: register all trait definitions
+        for item in &module.items {
+            let Item::Trait(t) = &item.node else { continue };
+            if self.traits.contains_key(&t.name) {
+                self.error(
+                    format!("trait `{}` is already defined", t.name),
+                    item.span.clone(),
+                );
+                continue;
+            }
+            let mut trait_methods = Vec::new();
+            for method in &t.methods {
+                let mut params = Vec::new();
+                for param in &method.params {
+                    if param.name == "self" {
+                        params.push(("self".to_string(), Ty::Error));
+                    } else {
+                        match resolve_type_expr(&param.ty.node, Some(&self.structs), Some(&self.enums)) {
+                            Some(ty) => params.push((param.name.clone(), ty)),
+                            None => {
+                                self.error(
+                                    format!("unknown type in trait method `{}`", method.name),
+                                    param.ty.span.clone(),
+                                );
+                                params.push((param.name.clone(), Ty::Error));
+                            }
+                        }
+                    }
+                }
+                let ret = if let Some(ret_type) = &method.return_type {
+                    match resolve_type_expr(&ret_type.node, Some(&self.structs), Some(&self.enums)) {
+                        Some(ty) => ty,
+                        None => {
+                            self.error(
+                                format!("unknown return type in trait method `{}`", method.name),
+                                ret_type.span.clone(),
+                            );
+                            Ty::Error
+                        }
+                    }
+                } else {
+                    Ty::Unit
+                };
+                trait_methods.push(TraitMethodInfo {
+                    name: method.name.clone(),
+                    params,
+                    ret,
+                });
+            }
+            self.traits.insert(t.name.clone(), TraitInfo { methods: trait_methods });
         }
 
         // First pass: register all function signatures
@@ -439,9 +532,53 @@ impl Checker {
 
             // Now insert all collected methods
             let type_methods = self.methods.entry(imp.type_name.clone()).or_default();
+            let method_names: Vec<String> = new_methods.iter().map(|(n, _, _)| n.clone()).collect();
             for (method_name, sig, mangled) in new_methods {
                 type_methods.insert(method_name, sig.clone());
                 self.functions.insert(mangled, sig);
+            }
+
+            // Validate trait impl: check all required methods are provided with correct signatures
+            if let Some(trait_name) = &imp.trait_name {
+                if let Some(trait_info) = self.traits.get(trait_name).cloned() {
+                    for trait_method in &trait_info.methods {
+                        if !method_names.contains(&trait_method.name) {
+                            self.error(
+                                format!(
+                                    "trait `{trait_name}` requires method `{}` but it is not implemented for `{}`",
+                                    trait_method.name, imp.type_name
+                                ),
+                                item.span.clone(),
+                            );
+                        } else {
+                            // Check return type matches
+                            let mangled = format!("{}__{}", imp.type_name, trait_method.name);
+                            if let Some(impl_sig) = self.functions.get(&mangled) {
+                                if !trait_method.ret.is_error() && !impl_sig.ret.is_error()
+                                    && trait_method.ret != impl_sig.ret
+                                {
+                                    self.error(
+                                        format!(
+                                            "method `{}` in impl of `{trait_name}` for `{}` has return type `{}`, expected `{}`",
+                                            trait_method.name, imp.type_name, impl_sig.ret, trait_method.ret
+                                        ),
+                                        item.span.clone(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    // Record this trait impl
+                    self.trait_impls
+                        .entry(imp.type_name.clone())
+                        .or_default()
+                        .push(trait_name.clone());
+                } else {
+                    self.error(
+                        format!("undefined trait `{trait_name}`"),
+                        item.span.clone(),
+                    );
+                }
             }
         }
 
@@ -798,6 +935,165 @@ impl Checker {
                         }
                         self.check_expr(&args[0]);
                         return Ty::Str;
+                    }
+
+                    // map(arr, fn) -> [U]
+                    if name == "map" {
+                        if args.len() != 2 {
+                            self.error(
+                                format!("map() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arr_ty = self.check_expr(&args[0]);
+                        let fn_ty = self.check_expr(&args[1]);
+                        let elem_ty = match &arr_ty {
+                            Ty::Array(inner) => *inner.clone(),
+                            _ if arr_ty.is_error() => Ty::Error,
+                            _ => {
+                                self.error(
+                                    format!("map() first argument must be an array, found `{arr_ty}`"),
+                                    args[0].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        };
+                        match &fn_ty {
+                            Ty::Fn(params, ret) => {
+                                if params.len() != 1 {
+                                    self.error(
+                                        format!("map() callback must take 1 parameter, takes {}", params.len()),
+                                        args[1].span.clone(),
+                                    );
+                                } else if !elem_ty.is_error() && !params[0].is_error() && elem_ty != params[0] {
+                                    self.error(
+                                        format!("map() callback parameter type `{}` doesn't match array element type `{}`", params[0], elem_ty),
+                                        args[1].span.clone(),
+                                    );
+                                }
+                                return Ty::Array(ret.clone());
+                            }
+                            _ if fn_ty.is_error() => return Ty::Error,
+                            _ => {
+                                self.error(
+                                    format!("map() second argument must be a function, found `{fn_ty}`"),
+                                    args[1].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        }
+                    }
+
+                    // filter(arr, fn) -> [T]
+                    if name == "filter" {
+                        if args.len() != 2 {
+                            self.error(
+                                format!("filter() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arr_ty = self.check_expr(&args[0]);
+                        let fn_ty = self.check_expr(&args[1]);
+                        let elem_ty = match &arr_ty {
+                            Ty::Array(inner) => *inner.clone(),
+                            _ if arr_ty.is_error() => Ty::Error,
+                            _ => {
+                                self.error(
+                                    format!("filter() first argument must be an array, found `{arr_ty}`"),
+                                    args[0].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        };
+                        match &fn_ty {
+                            Ty::Fn(params, ret) => {
+                                if params.len() != 1 {
+                                    self.error(
+                                        format!("filter() callback must take 1 parameter, takes {}", params.len()),
+                                        args[1].span.clone(),
+                                    );
+                                } else if !elem_ty.is_error() && !params[0].is_error() && elem_ty != params[0] {
+                                    self.error(
+                                        format!("filter() callback parameter type `{}` doesn't match array element type `{}`", params[0], elem_ty),
+                                        args[1].span.clone(),
+                                    );
+                                }
+                                if **ret != Ty::Bool && !ret.is_error() {
+                                    self.error(
+                                        format!("filter() callback must return `bool`, returns `{}`", ret),
+                                        args[1].span.clone(),
+                                    );
+                                }
+                                return arr_ty;
+                            }
+                            _ if fn_ty.is_error() => return Ty::Error,
+                            _ => {
+                                self.error(
+                                    format!("filter() second argument must be a function, found `{fn_ty}`"),
+                                    args[1].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        }
+                    }
+
+                    // reduce(arr, init, fn) -> U
+                    if name == "reduce" {
+                        if args.len() != 3 {
+                            self.error(
+                                format!("reduce() takes exactly 3 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arr_ty = self.check_expr(&args[0]);
+                        let init_ty = self.check_expr(&args[1]);
+                        let fn_ty = self.check_expr(&args[2]);
+                        let elem_ty = match &arr_ty {
+                            Ty::Array(inner) => *inner.clone(),
+                            _ if arr_ty.is_error() => Ty::Error,
+                            _ => {
+                                self.error(
+                                    format!("reduce() first argument must be an array, found `{arr_ty}`"),
+                                    args[0].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        };
+                        match &fn_ty {
+                            Ty::Fn(params, ret) => {
+                                if params.len() != 2 {
+                                    self.error(
+                                        format!("reduce() callback must take 2 parameters, takes {}", params.len()),
+                                        args[2].span.clone(),
+                                    );
+                                } else {
+                                    if !init_ty.is_error() && !params[0].is_error() && init_ty != params[0] {
+                                        self.error(
+                                            format!("reduce() callback first parameter type `{}` doesn't match initial value type `{}`", params[0], init_ty),
+                                            args[2].span.clone(),
+                                        );
+                                    }
+                                    if !elem_ty.is_error() && !params[1].is_error() && elem_ty != params[1] {
+                                        self.error(
+                                            format!("reduce() callback second parameter type `{}` doesn't match array element type `{}`", params[1], elem_ty),
+                                            args[2].span.clone(),
+                                        );
+                                    }
+                                }
+                                return *ret.clone();
+                            }
+                            _ if fn_ty.is_error() => return Ty::Error,
+                            _ => {
+                                self.error(
+                                    format!("reduce() third argument must be a function, found `{fn_ty}`"),
+                                    args[2].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        }
                     }
 
                     // Check if callee is a variable with fn type (closure call)
@@ -1469,6 +1765,12 @@ impl Checker {
                         Pattern::Err(_) => {
                             covered_variants.push("err".to_string());
                         }
+                        Pattern::Some(_) => {
+                            covered_variants.push("some".to_string());
+                        }
+                        Pattern::None => {
+                            covered_variants.push("none".to_string());
+                        }
                         _ => {} // IntLit and StringLit don't cover the full domain
                     }
 
@@ -1497,6 +1799,21 @@ impl Checker {
                             let ty = self.check_expr(&arm.body);
                             self.pop_scope();
                             ty
+                        }
+                        Pattern::Some(binding) => {
+                            self.push_scope();
+                            let inner_ty = if let Ty::Optional(ref inner) = subject_ty {
+                                *inner.clone()
+                            } else {
+                                Ty::Error
+                            };
+                            self.define_var(binding, VarInfo { ty: inner_ty, mutable: false }, &arm.pattern.span);
+                            let ty = self.check_expr(&arm.body);
+                            self.pop_scope();
+                            ty
+                        }
+                        Pattern::None => {
+                            self.check_expr(&arm.body)
                         }
                         _ => self.check_expr(&arm.body),
                     };
@@ -1558,6 +1875,22 @@ impl Checker {
                                 let mut missing = Vec::new();
                                 if !has_ok { missing.push("ok"); }
                                 if !has_err { missing.push("err"); }
+                                self.error(
+                                    format!(
+                                        "match is not exhaustive; missing variants: {}",
+                                        missing.join(", ")
+                                    ),
+                                    expr.span.clone(),
+                                );
+                            }
+                        }
+                        Ty::Optional(_) => {
+                            let has_some = covered_variants.contains(&"some".to_string());
+                            let has_none = covered_variants.contains(&"none".to_string());
+                            if !has_some || !has_none {
+                                let mut missing = Vec::new();
+                                if !has_some { missing.push("some"); }
+                                if !has_none { missing.push("none"); }
                                 self.error(
                                     format!(
                                         "match is not exhaustive; missing variants: {}",
@@ -1648,6 +1981,47 @@ impl Checker {
                 // Return a partial result type -- the ok type is unknown without context
                 Ty::Result(Box::new(Ty::Error), Box::new(val_ty))
             }
+
+            Expr::SomeExpr(value) => {
+                let val_ty = self.check_expr(value);
+                Ty::Optional(Box::new(val_ty))
+            }
+
+            Expr::NoneExpr => {
+                // Return a partial optional type -- the inner type is unknown without context
+                Ty::Optional(Box::new(Ty::Error))
+            }
+
+            Expr::NullCoalesce { value, default } => {
+                let val_ty = self.check_expr(value);
+                let def_ty = self.check_expr(default);
+
+                if val_ty.is_error() || def_ty.is_error() {
+                    return if def_ty.is_error() { Ty::Error } else { def_ty };
+                }
+
+                match &val_ty {
+                    Ty::Optional(inner) => {
+                        if !inner.is_error() && !def_ty.is_error() && **inner != def_ty {
+                            self.error(
+                                format!(
+                                    "`??` operator: optional inner type `{}` doesn't match default type `{def_ty}`",
+                                    inner
+                                ),
+                                default.span.clone(),
+                            );
+                        }
+                        if inner.is_error() { def_ty } else { *inner.clone() }
+                    }
+                    _ => {
+                        self.error(
+                            format!("`??` operator requires an optional type on the left, found `{val_ty}`"),
+                            value.span.clone(),
+                        );
+                        def_ty
+                    }
+                }
+            }
         }
     }
 
@@ -1706,6 +2080,22 @@ impl Checker {
                 if !subject_ty.is_error() && !matches!(subject_ty, Ty::Result(_, _)) {
                     self.error(
                         format!("err pattern cannot match `{subject_ty}`"),
+                        pattern.span.clone(),
+                    );
+                }
+            }
+            Pattern::Some(_) => {
+                if !subject_ty.is_error() && !matches!(subject_ty, Ty::Optional(_)) {
+                    self.error(
+                        format!("some pattern cannot match `{subject_ty}`"),
+                        pattern.span.clone(),
+                    );
+                }
+            }
+            Pattern::None => {
+                if !subject_ty.is_error() && !matches!(subject_ty, Ty::Optional(_)) {
+                    self.error(
+                        format!("none pattern cannot match `{subject_ty}`"),
                         pattern.span.clone(),
                     );
                 }

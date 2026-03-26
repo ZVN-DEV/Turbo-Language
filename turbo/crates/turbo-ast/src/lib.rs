@@ -27,6 +27,7 @@ pub enum Item {
     Struct(StructDef),
     Enum(EnumDef),
     Impl(ImplBlock),
+    Trait(TraitDef),
     /// Import declaration: `import { name1, name2 } from "path"`
     Import {
         names: Vec<String>,
@@ -38,7 +39,24 @@ pub enum Item {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplBlock {
     pub type_name: String,
+    /// If Some, this is a trait impl: `impl TraitName for TypeName { ... }`
+    pub trait_name: Option<String>,
     pub methods: Vec<Spanned<FnDef>>,
+}
+
+/// Trait definition: `trait Name { fn method(self) -> Type }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitDef {
+    pub name: String,
+    pub methods: Vec<TraitMethodSig>,
+}
+
+/// Trait method signature (no body)
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitMethodSig {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Option<Spanned<TypeExpr>>,
 }
 
 /// Enum (sum type) definition
@@ -99,6 +117,8 @@ pub enum TypeExpr {
         ok_type: Box<Spanned<TypeExpr>>,
         err_type: Box<Spanned<TypeExpr>>,
     },
+    /// Optional type: T?
+    Optional(Box<Spanned<TypeExpr>>),
 }
 
 /// Part of a string interpolation
@@ -231,6 +251,15 @@ pub enum Expr {
     OkExpr(Box<Spanned<Expr>>),
     /// Err constructor: err(value)
     ErrExpr(Box<Spanned<Expr>>),
+    /// Some constructor: some(value)
+    SomeExpr(Box<Spanned<Expr>>),
+    /// None literal
+    NoneExpr,
+    /// Null coalescing: expr ?? default
+    NullCoalesce {
+        value: Box<Spanned<Expr>>,
+        default: Box<Spanned<Expr>>,
+    },
 }
 
 /// Statements (things that don't produce values in statement position)
@@ -273,6 +302,10 @@ pub enum Pattern {
     Ok(String),
     /// err(binding) pattern
     Err(String),
+    /// some(binding) pattern
+    Some(String),
+    /// none pattern
+    None,
 }
 
 /// Binary operators

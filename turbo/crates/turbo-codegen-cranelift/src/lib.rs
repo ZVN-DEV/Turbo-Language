@@ -37,6 +37,8 @@ enum TurboTy {
     Fn(Vec<TurboTy>, Box<TurboTy>),
     /// Result type (heap-allocated tagged union): ok_type, err_type
     Result(Box<TurboTy>, Box<TurboTy>),
+    /// Optional type (heap-allocated tagged union): inner_type
+    Optional(Box<TurboTy>),
 }
 
 fn turbo_ty_from_type_expr(te: &TypeExpr, enum_variants: &HashMap<String, Vec<String>>) -> TurboTy {
@@ -80,6 +82,10 @@ fn turbo_ty_from_type_expr_with_params(te: &TypeExpr, enum_variants: &HashMap<St
             let ok_tty = turbo_ty_from_type_expr(&ok_type.node, enum_variants);
             let err_tty = turbo_ty_from_type_expr(&err_type.node, enum_variants);
             TurboTy::Result(Box::new(ok_tty), Box::new(err_tty))
+        }
+        TypeExpr::Optional(inner) => {
+            let inner_tty = turbo_ty_from_type_expr(&inner.node, enum_variants);
+            TurboTy::Optional(Box::new(inner_tty))
         }
     }
 }
@@ -279,6 +285,36 @@ extern "C" fn rt_result_value(result: *const u8) -> i64 {
     unsafe { *((result as *const i64).add(1)) }
 }
 
+// ── Optional type runtime functions ──────────────────────────────────
+
+extern "C" fn rt_option_some(value: i64) -> *mut u8 {
+    let layout = std::alloc::Layout::from_size_align(16, 8).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    unsafe {
+        *(ptr as *mut i64) = 1; // tag = some
+        *((ptr as *mut i64).add(1)) = value;
+    }
+    ptr
+}
+
+extern "C" fn rt_option_none() -> *mut u8 {
+    let layout = std::alloc::Layout::from_size_align(16, 8).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    unsafe {
+        *(ptr as *mut i64) = 0; // tag = none
+        *((ptr as *mut i64).add(1)) = 0;
+    }
+    ptr
+}
+
+extern "C" fn rt_option_tag(opt: *const u8) -> i64 {
+    unsafe { *(opt as *const i64) }
+}
+
+extern "C" fn rt_option_value(opt: *const u8) -> i64 {
+    unsafe { *((opt as *const i64).add(1)) }
+}
+
 // ── Runtime C source for AOT linking ────────────────────────────────
 
 const RUNTIME_C: &str = include_str!("../runtime/turbo_rt.c");
@@ -310,6 +346,8 @@ struct Ctx<'a, M: Module> {
     enum_variants: &'a HashMap<String, Vec<String>>,
     /// Map from closure span start offset to (synthetic function name, TurboTy::Fn)
     closure_fns: &'a HashMap<usize, (String, TurboTy)>,
+    /// Trait implementations: type_name -> set of trait names
+    trait_impls: &'a HashMap<String, Vec<String>>,
     /// Current function inlining depth (0 = no inlining)
     inline_depth: usize,
 }
@@ -413,6 +451,10 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_result_err", rt_result_err as *const u8);
     jit_builder.symbol("rt_result_tag", rt_result_tag as *const u8);
     jit_builder.symbol("rt_result_value", rt_result_value as *const u8);
+    jit_builder.symbol("rt_option_some", rt_option_some as *const u8);
+    jit_builder.symbol("rt_option_none", rt_option_none as *const u8);
+    jit_builder.symbol("rt_option_tag", rt_option_tag as *const u8);
+    jit_builder.symbol("rt_option_value", rt_option_value as *const u8);
 
     let mut module = JITModule::new(jit_builder);
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
@@ -547,7 +589,11 @@ fn has_return(expr: &Expr) -> bool {
             has_return(&subject.node) ||
             arms.iter().any(|a| has_return(&a.body.node))
         }
-        Expr::OkExpr(e) | Expr::ErrExpr(e) => has_return(&e.node),
+        Expr::OkExpr(e) | Expr::ErrExpr(e) | Expr::SomeExpr(e) => has_return(&e.node),
+        Expr::NoneExpr => false,
+        Expr::NullCoalesce { value, default } => {
+            has_return(&value.node) || has_return(&default.node)
+        }
         Expr::Interpolation(parts) => {
             parts.iter().any(|p| {
                 if let InterpolPart::Expr(e) = p { has_return(&e.node) } else { false }
@@ -572,6 +618,7 @@ fn turbo_ty_to_cl_type(tty: &TurboTy, ptr_type: types::Type) -> types::Type {
         TurboTy::Struct(_) => ptr_type,
         TurboTy::Enum => types::I64,
         TurboTy::Result(_, _) => ptr_type,
+        TurboTy::Optional(_) => ptr_type,
     }
 }
 
@@ -664,10 +711,14 @@ fn extract_closures_from_expr<'a>(
             extract_closures_from_expr(index, out, counter);
             extract_closures_from_expr(value, out, counter);
         }
-        Expr::OkExpr(value) | Expr::ErrExpr(value) => {
+        Expr::OkExpr(value) | Expr::ErrExpr(value) | Expr::SomeExpr(value) => {
             extract_closures_from_expr(value, out, counter);
         }
-        _ => {} // Literals, Ident, Unit, etc. -- no sub-expressions with closures
+        Expr::NullCoalesce { value, default } => {
+            extract_closures_from_expr(value, out, counter);
+            extract_closures_from_expr(default, out, counter);
+        }
+        _ => {} // Literals, Ident, Unit, NoneExpr, etc. -- no sub-expressions with closures
     }
 }
 
@@ -723,6 +774,10 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_result_err", &[types::I64], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_result_tag", &[ptr_type], Some(types::I64))?;
     declare_rt_fn(module, &mut rt_fns, "rt_result_value", &[ptr_type], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_option_some", &[types::I64], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_option_none", &[], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_option_tag", &[ptr_type], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_option_value", &[ptr_type], Some(types::I64))?;
 
     // Build enum variants map
     let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();
@@ -740,6 +795,16 @@ fn compile_module<M: Module>(
             .map(|f| (f.name.clone(), turbo_ty_from_type_expr(&f.ty.node, &enum_variants)))
             .collect();
         struct_fields.insert(s.name.clone(), fields);
+    }
+
+    // Build trait implementations map: type_name -> vec of trait names
+    let mut trait_impls: HashMap<String, Vec<String>> = HashMap::new();
+    for item in &ast_module.items {
+        if let Item::Impl(imp) = &item.node {
+            if let Some(trait_name) = &imp.trait_name {
+                trait_impls.entry(imp.type_name.clone()).or_default().push(trait_name.clone());
+            }
+        }
     }
 
     // Declare all user functions + build return type map
@@ -881,6 +946,7 @@ fn compile_module<M: Module>(
                 struct_fields: &struct_fields,
                 enum_variants: &enum_variants,
                 closure_fns: &closure_fns_map,
+                trait_impls: &trait_impls,
                 inline_depth: 0,
             };
 
@@ -955,6 +1021,7 @@ fn compile_module<M: Module>(
                 struct_fields: &struct_fields,
                 enum_variants: &enum_variants,
                 closure_fns: &closure_fns_map,
+                trait_impls: &trait_impls,
                 inline_depth: 0,
             };
 
@@ -1044,6 +1111,7 @@ fn compile_module<M: Module>(
                     struct_fields: &struct_fields,
                     enum_variants: &enum_variants,
                     closure_fns: &closure_fns_map,
+                    trait_impls: &trait_impls,
                     inline_depth: 0,
                 };
 
@@ -1145,6 +1213,7 @@ fn resolve_cl_type(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &HashMap
         TypeExpr::Array(_) => Ok(ptr_type), // Arrays are represented as pointers at runtime
         TypeExpr::FnType { .. } => Ok(ptr_type), // Function pointers are pointers
         TypeExpr::Result { .. } => Ok(ptr_type), // Result types are heap-allocated tagged unions
+        TypeExpr::Optional(_) => Ok(ptr_type), // Optional types are heap-allocated tagged unions
     }
 }
 
@@ -1559,6 +1628,85 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             let call = cx.builder.ins().call(fref, &[val]);
             let ptr = cx.builder.inst_results(call)[0];
             Ok(Some((ptr, TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Int)))))
+        }
+
+        Expr::SomeExpr(value) => {
+            let (val, _tty) = compile_expr(cx, value)?.unwrap();
+            // Widen to i64 if needed (bools, etc.)
+            let val_ty = cx.builder.func.dfg.value_type(val);
+            let val = if val_ty.is_int() && val_ty.bits() < 64 {
+                cx.builder.ins().sextend(types::I64, val)
+            } else if val_ty.is_float() {
+                cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
+            } else {
+                val
+            };
+            let fid = cx.rt_fns["rt_option_some"];
+            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+            let call = cx.builder.ins().call(fref, &[val]);
+            let ptr = cx.builder.inst_results(call)[0];
+            Ok(Some((ptr, TurboTy::Optional(Box::new(TurboTy::Int)))))
+        }
+
+        Expr::NoneExpr => {
+            let fid = cx.rt_fns["rt_option_none"];
+            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+            let call = cx.builder.ins().call(fref, &[]);
+            let ptr = cx.builder.inst_results(call)[0];
+            Ok(Some((ptr, TurboTy::Optional(Box::new(TurboTy::Int)))))
+        }
+
+        Expr::NullCoalesce { value, default } => {
+            // Compile the optional value
+            let (opt_val, _opt_tty) = compile_expr(cx, value)?.unwrap();
+
+            // Extract tag
+            let tag_fid = cx.rt_fns["rt_option_tag"];
+            let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+            let tag_call = cx.builder.ins().call(tag_fref, &[opt_val]);
+            let tag = cx.builder.inst_results(tag_call)[0];
+
+            // Check if tag == 1 (some)
+            let one = cx.builder.ins().iconst(types::I64, 1);
+            let is_some = cx.builder.ins().icmp(IntCC::Equal, tag, one);
+
+            let some_block = cx.builder.create_block();
+            let none_block = cx.builder.create_block();
+            let merge_block = cx.builder.create_block();
+
+            cx.builder.ins().brif(is_some, some_block, &[], none_block, &[]);
+
+            // Some path: extract value
+            cx.builder.switch_to_block(some_block);
+            cx.builder.seal_block(some_block);
+            let val_fid = cx.rt_fns["rt_option_value"];
+            let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
+            let val_call = cx.builder.ins().call(val_fref, &[opt_val]);
+            let some_val = cx.builder.inst_results(val_call)[0];
+            cx.builder.ins().jump(merge_block, &[some_val]);
+
+            // None path: compile default
+            cx.builder.switch_to_block(none_block);
+            cx.builder.seal_block(none_block);
+            let (def_val, def_tty) = compile_expr(cx, default)?.unwrap();
+            // Widen default to i64 if needed for consistency
+            let def_ty = cx.builder.func.dfg.value_type(def_val);
+            let def_val = if def_ty.is_int() && def_ty.bits() < 64 {
+                cx.builder.ins().sextend(types::I64, def_val)
+            } else if def_ty.is_float() {
+                cx.builder.ins().bitcast(types::I64, MemFlags::new(), def_val)
+            } else {
+                def_val
+            };
+            cx.builder.ins().jump(merge_block, &[def_val]);
+
+            // Merge block
+            cx.builder.append_block_param(merge_block, types::I64);
+            cx.builder.switch_to_block(merge_block);
+            cx.builder.seal_block(merge_block);
+            let result = cx.builder.block_params(merge_block)[0];
+
+            Ok(Some((result, def_tty)))
         }
     }
 }
@@ -2043,9 +2191,25 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
                 let ptr = cx.create_string("[array]")?;
                 cx.rt_call("rt_print_str", &[ptr]);
             }
-            TurboTy::Struct(name) => {
-                let ptr = cx.create_string(&format!("[struct {}]", name))?;
-                cx.rt_call("rt_print_str", &[ptr]);
+            TurboTy::Struct(ref name) => {
+                // Check if struct implements Display trait
+                let has_display = cx.trait_impls.get(name)
+                    .map_or(false, |traits| traits.contains(&"Display".to_string()));
+                if has_display {
+                    let mangled = format!("{name}__to_string");
+                    if let Some(&fid) = cx.user_fns.get(&mangled) {
+                        let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                        let call = cx.builder.ins().call(fref, &[v]);
+                        let str_val = cx.builder.inst_results(call)[0];
+                        cx.rt_call("rt_print_str", &[str_val]);
+                    } else {
+                        let ptr = cx.create_string(&format!("[struct {}]", name))?;
+                        cx.rt_call("rt_print_str", &[ptr]);
+                    }
+                } else {
+                    let ptr = cx.create_string(&format!("[struct {}]", name))?;
+                    cx.rt_call("rt_print_str", &[ptr]);
+                }
             }
             TurboTy::Fn(_, _) => {
                 let ptr = cx.create_string("[function]")?;
@@ -2053,6 +2217,10 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
             }
             TurboTy::Result(_, _) => {
                 let ptr = cx.create_string("[result]")?;
+                cx.rt_call("rt_print_str", &[ptr]);
+            }
+            TurboTy::Optional(_) => {
+                let ptr = cx.create_string("[optional]")?;
                 cx.rt_call("rt_print_str", &[ptr]);
             }
         }
@@ -2163,6 +2331,289 @@ fn compile_to_str_builtin<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
     let (val, tty) = compile_expr(cx, &args[0])?.unwrap();
     let str_val = convert_to_str(cx, val, &tty)?;
     Ok(Some((str_val, TurboTy::Str)))
+}
+
+
+// ── map/filter/reduce builtins ──────────────────────────────────────
+
+/// compile_builtin_map: map(arr, fn) -> [U]
+/// Allocates a new array of the same length, iterates the source array,
+/// calls fn_ptr on each element via call_indirect, and stores results.
+fn compile_builtin_map<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (arr_ptr, _arr_tty) = compile_expr(cx, &args[0])?.unwrap();
+    let (fn_ptr, fn_tty) = compile_expr(cx, &args[1])?.unwrap();
+
+    let (param_tty, ret_tty) = match &fn_tty {
+        TurboTy::Fn(params, ret) => (params[0].clone(), *ret.clone()),
+        _ => (TurboTy::Int, TurboTy::Int),
+    };
+
+    let len_fid = cx.rt_fns["rt_array_len"];
+    let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
+    let call = cx.builder.ins().call(len_ref, &[arr_ptr]);
+    let arr_len = cx.builder.inst_results(call)[0];
+
+    let alloc_fid = cx.rt_fns["rt_array_alloc"];
+    let alloc_ref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+    let alloc_call = cx.builder.ins().call(alloc_ref, &[arr_len]);
+    let result_ptr = cx.builder.inst_results(alloc_call)[0];
+
+    let mut sig = cx.module.make_signature();
+    sig.call_conv = CallConv::Fast;
+    let param_cl_ty = turbo_ty_to_cl_type(&param_tty, cx.ptr_type);
+    sig.params.push(AbiParam::new(param_cl_ty));
+    if ret_tty != TurboTy::Unit {
+        let ret_cl_ty = turbo_ty_to_cl_type(&ret_tty, cx.ptr_type);
+        sig.returns.push(AbiParam::new(ret_cl_ty));
+    }
+    let sig_ref = cx.builder.import_signature(sig);
+
+    let idx_var = cx.fresh_var(types::I64, TurboTy::Int);
+    let zero = cx.builder.ins().iconst(types::I64, 0);
+    cx.builder.def_var(idx_var, zero);
+
+    let header_block = cx.builder.create_block();
+    let body_block = cx.builder.create_block();
+    let exit_block = cx.builder.create_block();
+
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.switch_to_block(header_block);
+    let idx = cx.builder.use_var(idx_var);
+    let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, arr_len);
+    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+
+    cx.builder.switch_to_block(body_block);
+    cx.builder.seal_block(body_block);
+
+    let get_fid = cx.rt_fns["rt_array_get"];
+    let get_ref = cx.module.declare_func_in_func(get_fid, cx.builder.func);
+    let idx_val = cx.builder.use_var(idx_var);
+    let get_call = cx.builder.ins().call(get_ref, &[arr_ptr, idx_val]);
+    let raw_elem = cx.builder.inst_results(get_call)[0];
+
+    let typed_elem = match &param_tty {
+        TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_elem),
+        TurboTy::Float => cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_elem),
+        _ => raw_elem,
+    };
+
+    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[typed_elem]);
+    let mapped_val = cx.builder.inst_results(indirect_call)[0];
+
+    let store_val = match &ret_tty {
+        TurboTy::Bool => cx.builder.ins().sextend(types::I64, mapped_val),
+        TurboTy::Float => cx.builder.ins().bitcast(types::I64, MemFlags::new(), mapped_val),
+        _ => mapped_val,
+    };
+
+    let set_fid = cx.rt_fns["rt_array_set"];
+    let set_ref = cx.module.declare_func_in_func(set_fid, cx.builder.func);
+    let idx_val2 = cx.builder.use_var(idx_var);
+    cx.builder.ins().call(set_ref, &[result_ptr, idx_val2, store_val]);
+
+    let current_idx = cx.builder.use_var(idx_var);
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let next_idx = cx.builder.ins().iadd(current_idx, one);
+    cx.builder.def_var(idx_var, next_idx);
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.seal_block(header_block);
+
+    cx.builder.switch_to_block(exit_block);
+    cx.builder.seal_block(exit_block);
+
+    let result_elem_tty = ret_tty;
+    Ok(Some((result_ptr, TurboTy::Array(Box::new(result_elem_tty)))))
+}
+
+/// compile_builtin_filter: filter(arr, fn) -> [T]
+/// Allocates same-size array, filters elements by predicate, patches length.
+fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (arr_ptr, arr_tty) = compile_expr(cx, &args[0])?.unwrap();
+    let (fn_ptr, fn_tty) = compile_expr(cx, &args[1])?.unwrap();
+
+    let elem_tty = match &arr_tty {
+        TurboTy::Array(inner) => *inner.clone(),
+        _ => TurboTy::Int,
+    };
+
+    let param_tty = match &fn_tty {
+        TurboTy::Fn(params, _) => params[0].clone(),
+        _ => TurboTy::Int,
+    };
+
+    let len_fid = cx.rt_fns["rt_array_len"];
+    let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
+    let call = cx.builder.ins().call(len_ref, &[arr_ptr]);
+    let arr_len = cx.builder.inst_results(call)[0];
+
+    let alloc_fid = cx.rt_fns["rt_array_alloc"];
+    let alloc_ref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+    let alloc_call = cx.builder.ins().call(alloc_ref, &[arr_len]);
+    let result_ptr = cx.builder.inst_results(alloc_call)[0];
+
+    let mut sig = cx.module.make_signature();
+    sig.call_conv = CallConv::Fast;
+    let param_cl_ty = turbo_ty_to_cl_type(&param_tty, cx.ptr_type);
+    sig.params.push(AbiParam::new(param_cl_ty));
+    sig.returns.push(AbiParam::new(types::I8));
+    let sig_ref = cx.builder.import_signature(sig);
+
+    let idx_var = cx.fresh_var(types::I64, TurboTy::Int);
+    let zero = cx.builder.ins().iconst(types::I64, 0);
+    cx.builder.def_var(idx_var, zero);
+
+    let out_var = cx.fresh_var(types::I64, TurboTy::Int);
+    let zero2 = cx.builder.ins().iconst(types::I64, 0);
+    cx.builder.def_var(out_var, zero2);
+
+    let header_block = cx.builder.create_block();
+    let body_block = cx.builder.create_block();
+    let store_block = cx.builder.create_block();
+    let inc_block = cx.builder.create_block();
+    let exit_block = cx.builder.create_block();
+
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.switch_to_block(header_block);
+    let idx = cx.builder.use_var(idx_var);
+    let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, arr_len);
+    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+
+    cx.builder.switch_to_block(body_block);
+    cx.builder.seal_block(body_block);
+
+    let get_fid = cx.rt_fns["rt_array_get"];
+    let get_ref = cx.module.declare_func_in_func(get_fid, cx.builder.func);
+    let idx_val = cx.builder.use_var(idx_var);
+    let get_call = cx.builder.ins().call(get_ref, &[arr_ptr, idx_val]);
+    let raw_elem = cx.builder.inst_results(get_call)[0];
+
+    let typed_elem = match &param_tty {
+        TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_elem),
+        TurboTy::Float => cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_elem),
+        _ => raw_elem,
+    };
+
+    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[typed_elem]);
+    let pred_result = cx.builder.inst_results(indirect_call)[0];
+
+    cx.builder.ins().brif(pred_result, store_block, &[], inc_block, &[]);
+
+    cx.builder.switch_to_block(store_block);
+    cx.builder.seal_block(store_block);
+
+    let set_fid = cx.rt_fns["rt_array_set"];
+    let set_ref = cx.module.declare_func_in_func(set_fid, cx.builder.func);
+    let out_idx = cx.builder.use_var(out_var);
+    cx.builder.ins().call(set_ref, &[result_ptr, out_idx, raw_elem]);
+
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let next_out = cx.builder.ins().iadd(out_idx, one);
+    cx.builder.def_var(out_var, next_out);
+
+    cx.builder.ins().jump(inc_block, &[]);
+
+    cx.builder.switch_to_block(inc_block);
+    cx.builder.seal_block(inc_block);
+
+    let current_idx = cx.builder.use_var(idx_var);
+    let one2 = cx.builder.ins().iconst(types::I64, 1);
+    let next_idx = cx.builder.ins().iadd(current_idx, one2);
+    cx.builder.def_var(idx_var, next_idx);
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.seal_block(header_block);
+
+    cx.builder.switch_to_block(exit_block);
+    cx.builder.seal_block(exit_block);
+
+    let final_count = cx.builder.use_var(out_var);
+    cx.builder.ins().store(MemFlags::new(), final_count, result_ptr, 0);
+
+    Ok(Some((result_ptr, TurboTy::Array(Box::new(elem_tty)))))
+}
+
+/// compile_builtin_reduce: reduce(arr, init, fn) -> U
+/// Folds through the array calling fn(acc, elem) for each element.
+fn compile_builtin_reduce<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (arr_ptr, _arr_tty) = compile_expr(cx, &args[0])?.unwrap();
+    let (init_val, init_tty) = compile_expr(cx, &args[1])?.unwrap();
+    let (fn_ptr, fn_tty) = compile_expr(cx, &args[2])?.unwrap();
+
+    let (acc_tty, elem_tty, ret_tty) = match &fn_tty {
+        TurboTy::Fn(params, ret) => (params[0].clone(), params[1].clone(), *ret.clone()),
+        _ => (TurboTy::Int, TurboTy::Int, TurboTy::Int),
+    };
+
+    let acc_cl_ty = turbo_ty_to_cl_type(&acc_tty, cx.ptr_type);
+    let elem_cl_ty = turbo_ty_to_cl_type(&elem_tty, cx.ptr_type);
+    let ret_cl_ty = turbo_ty_to_cl_type(&ret_tty, cx.ptr_type);
+
+    let len_fid = cx.rt_fns["rt_array_len"];
+    let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
+    let call = cx.builder.ins().call(len_ref, &[arr_ptr]);
+    let arr_len = cx.builder.inst_results(call)[0];
+
+    let mut sig = cx.module.make_signature();
+    sig.call_conv = CallConv::Fast;
+    sig.params.push(AbiParam::new(acc_cl_ty));
+    sig.params.push(AbiParam::new(elem_cl_ty));
+    sig.returns.push(AbiParam::new(ret_cl_ty));
+    let sig_ref = cx.builder.import_signature(sig);
+
+    let acc_var = cx.fresh_var(acc_cl_ty, acc_tty.clone());
+    cx.builder.def_var(acc_var, init_val);
+
+    let idx_var = cx.fresh_var(types::I64, TurboTy::Int);
+    let zero = cx.builder.ins().iconst(types::I64, 0);
+    cx.builder.def_var(idx_var, zero);
+
+    let header_block = cx.builder.create_block();
+    let body_block = cx.builder.create_block();
+    let exit_block = cx.builder.create_block();
+
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.switch_to_block(header_block);
+    let idx = cx.builder.use_var(idx_var);
+    let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, arr_len);
+    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+
+    cx.builder.switch_to_block(body_block);
+    cx.builder.seal_block(body_block);
+
+    let get_fid = cx.rt_fns["rt_array_get"];
+    let get_ref = cx.module.declare_func_in_func(get_fid, cx.builder.func);
+    let idx_val = cx.builder.use_var(idx_var);
+    let get_call = cx.builder.ins().call(get_ref, &[arr_ptr, idx_val]);
+    let raw_elem = cx.builder.inst_results(get_call)[0];
+
+    let typed_elem = match &elem_tty {
+        TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_elem),
+        TurboTy::Float => cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_elem),
+        _ => raw_elem,
+    };
+
+    let current_acc = cx.builder.use_var(acc_var);
+    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[current_acc, typed_elem]);
+    let new_acc = cx.builder.inst_results(indirect_call)[0];
+    cx.builder.def_var(acc_var, new_acc);
+
+    let current_idx = cx.builder.use_var(idx_var);
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let next_idx = cx.builder.ins().iadd(current_idx, one);
+    cx.builder.def_var(idx_var, next_idx);
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.seal_block(header_block);
+
+    cx.builder.switch_to_block(exit_block);
+    cx.builder.seal_block(exit_block);
+
+    let final_acc = cx.builder.use_var(acc_var);
+    Ok(Some((final_acc, init_tty)))
 }
 
 // ── If expression ───────────────────────────────────────────────────
@@ -2346,14 +2797,31 @@ fn convert_to_str<M: Module>(
         TurboTy::Array(_) => {
             cx.create_string("[array]")
         }
-        TurboTy::Struct(name) => {
-            cx.create_string(&format!("[struct {}]", name))
+        TurboTy::Struct(ref name) => {
+            // Check if struct implements Display trait
+            let has_display = cx.trait_impls.get(name)
+                .map_or(false, |traits| traits.contains(&"Display".to_string()));
+            if has_display {
+                let mangled = format!("{name}__to_string");
+                if let Some(&fid) = cx.user_fns.get(&mangled) {
+                    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                    let call = cx.builder.ins().call(fref, &[val]);
+                    Ok(cx.builder.inst_results(call)[0])
+                } else {
+                    cx.create_string(&format!("[struct {}]", name))
+                }
+            } else {
+                cx.create_string(&format!("[struct {}]", name))
+            }
         }
         TurboTy::Fn(_, _) => {
             cx.create_string("[function]")
         }
         TurboTy::Result(_, _) => {
             cx.create_string("[result]")
+        }
+        TurboTy::Optional(_) => {
+            cx.create_string("[optional]")
         }
     }
 }
@@ -2659,6 +3127,24 @@ fn compile_match<M: Module>(
                 let one = cx.builder.ins().iconst(types::I64, 1);
                 cx.builder.ins().icmp(IntCC::Equal, tag, one)
             }
+            Pattern::Some(_binding) => {
+                // Extract tag from optional pointer; some = tag 1
+                let tag_fid = cx.rt_fns["rt_option_tag"];
+                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+                let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
+                let tag = cx.builder.inst_results(tag_call)[0];
+                let one = cx.builder.ins().iconst(types::I64, 1);
+                cx.builder.ins().icmp(IntCC::Equal, tag, one)
+            }
+            Pattern::None => {
+                // Extract tag from optional pointer; none = tag 0
+                let tag_fid = cx.rt_fns["rt_option_tag"];
+                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+                let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
+                let tag = cx.builder.inst_results(tag_call)[0];
+                let zero = cx.builder.ins().iconst(types::I64, 0);
+                cx.builder.ins().icmp(IntCC::Equal, tag, zero)
+            }
         };
 
         let match_block = cx.builder.create_block();
@@ -2670,7 +3156,7 @@ fn compile_match<M: Module>(
         cx.builder.switch_to_block(match_block);
         cx.builder.seal_block(match_block);
 
-        // For ok/err patterns, extract the value and bind as a variable
+        // For ok/err/some patterns, extract the value and bind as a variable
         let saved_vars = cx.vars.clone();
         match &arm.pattern.node {
             Pattern::Ok(binding) | Pattern::Err(binding) => {
@@ -2693,6 +3179,24 @@ fn compile_match<M: Module>(
                             *err_tty.clone()
                         }
                     }
+                    _ => TurboTy::Int, // fallback
+                };
+                cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
+            }
+            Pattern::Some(binding) => {
+                let val_fid = cx.rt_fns["rt_option_value"];
+                let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
+                let val_call = cx.builder.ins().call(val_fref, &[subj_val]);
+                let raw_val = cx.builder.inst_results(val_call)[0];
+
+                let var = Variable::new(cx.next_var);
+                cx.next_var += 1;
+                cx.builder.declare_var(var, types::I64);
+                cx.builder.def_var(var, raw_val);
+
+                // Get the inner type from the subject's Optional(inner_tty)
+                let turbo_ty = match &subj_tty {
+                    TurboTy::Optional(inner_tty) => *inner_tty.clone(),
                     _ => TurboTy::Int, // fallback
                 };
                 cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
