@@ -1161,7 +1161,7 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                 .ok_or_else(|| CodegenError { message: format!("undefined variable: {target}") })?;
             let var = *var;
             cx.builder.def_var(var, val);
-            // Update the turbo type in case it changed (shouldn't in Phase 1, but safe)
+            // Update the turbo type in case it changed
             if let Some(entry) = cx.vars.get_mut(target) {
                 entry.2 = tty;
             }

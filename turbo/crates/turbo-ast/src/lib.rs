@@ -80,7 +80,7 @@ pub struct Param {
     pub span: Span,
 }
 
-/// Type expressions (Phase 1: just basic types)
+/// Type expressions
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeExpr {
     /// Named type: i32, f64, bool, str, ()

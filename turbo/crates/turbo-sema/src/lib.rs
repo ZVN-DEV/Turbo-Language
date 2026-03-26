@@ -88,10 +88,6 @@ impl Ty {
         matches!(self, Ty::Error)
     }
 
-    #[allow(dead_code)]
-    fn is_type_param(&self) -> bool {
-        matches!(self, Ty::TypeParam(_))
-    }
 }
 
 /// Check if two types are compatible (allowing partial Result types where Error = unknown).
