@@ -30,6 +30,7 @@ pub enum Item {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnDef {
     pub name: String,
+    pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
     pub body: Spanned<Expr>,

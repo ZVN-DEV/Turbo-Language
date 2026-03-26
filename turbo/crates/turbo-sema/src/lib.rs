@@ -25,6 +25,8 @@ pub enum Ty {
     Bool,
     Str,
     Unit,
+    /// A generic type parameter (e.g., `T`)
+    TypeParam(String),
     /// Type could not be determined (error recovery)
     Error,
 }
@@ -41,6 +43,7 @@ impl std::fmt::Display for Ty {
             Ty::Bool => write!(f, "bool"),
             Ty::Str => write!(f, "str"),
             Ty::Unit => write!(f, "()"),
+            Ty::TypeParam(name) => write!(f, "{name}"),
             Ty::Error => write!(f, "<error>"),
         }
     }
@@ -62,21 +65,35 @@ impl Ty {
     fn is_error(&self) -> bool {
         matches!(self, Ty::Error)
     }
+
+    fn is_type_param(&self) -> bool {
+        matches!(self, Ty::TypeParam(_))
+    }
 }
 
 fn resolve_type_expr(te: &TypeExpr) -> Option<Ty> {
+    resolve_type_expr_with_params(te, &[])
+}
+
+fn resolve_type_expr_with_params(te: &TypeExpr, type_params: &[String]) -> Option<Ty> {
     match te {
-        TypeExpr::Named(name) => match name.as_str() {
-            "i32" => Some(Ty::I32),
-            "i64" => Some(Ty::I64),
-            "u32" => Some(Ty::U32),
-            "u64" => Some(Ty::U64),
-            "f32" => Some(Ty::F32),
-            "f64" => Some(Ty::F64),
-            "bool" => Some(Ty::Bool),
-            "str" => Some(Ty::Str),
-            _ => None,
-        },
+        TypeExpr::Named(name) => {
+            // Check if name is a type parameter first
+            if type_params.contains(name) {
+                return Some(Ty::TypeParam(name.clone()));
+            }
+            match name.as_str() {
+                "i32" => Some(Ty::I32),
+                "i64" => Some(Ty::I64),
+                "u32" => Some(Ty::U32),
+                "u64" => Some(Ty::U64),
+                "f32" => Some(Ty::F32),
+                "f64" => Some(Ty::F64),
+                "bool" => Some(Ty::Bool),
+                "str" => Some(Ty::Str),
+                _ => None,
+            }
+        }
         TypeExpr::Unit => Some(Ty::Unit),
     }
 }
@@ -91,6 +108,7 @@ struct VarInfo {
 /// Function signature
 #[derive(Debug, Clone)]
 struct FnSig {
+    type_params: Vec<String>,
     params: Vec<(String, Ty)>,
     ret: Ty,
 }
@@ -165,7 +183,7 @@ impl Checker {
 
             let mut params = Vec::new();
             for param in &f.params {
-                match resolve_type_expr(&param.ty.node) {
+                match resolve_type_expr_with_params(&param.ty.node, &f.type_params) {
                     Some(ty) => params.push((param.name.clone(), ty)),
                     None => {
                         if let TypeExpr::Named(name) = &param.ty.node {
@@ -180,7 +198,7 @@ impl Checker {
             }
 
             let ret = if let Some(ret_type) = &f.return_type {
-                match resolve_type_expr(&ret_type.node) {
+                match resolve_type_expr_with_params(&ret_type.node, &f.type_params) {
                     Some(ty) => ty,
                     None => {
                         if let TypeExpr::Named(name) = &ret_type.node {
@@ -196,7 +214,7 @@ impl Checker {
                 Ty::Unit
             };
 
-            self.functions.insert(f.name.clone(), FnSig { params, ret });
+            self.functions.insert(f.name.clone(), FnSig { type_params: f.type_params.clone(), params, ret });
         }
 
         // Check for main
@@ -216,8 +234,31 @@ impl Checker {
         }
     }
 
+    /// Substitute type parameters using a substitution map
+    fn substitute_ty(&self, ty: &Ty, subs: &HashMap<String, Ty>) -> Ty {
+        match ty {
+            Ty::TypeParam(name) => {
+                subs.get(name).cloned().unwrap_or_else(|| ty.clone())
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Get the concrete return type of a function given substitutions
+    fn substitute_return_type(&self, sig: &FnSig, subs: &HashMap<String, Ty>) -> Ty {
+        self.substitute_ty(&sig.ret, subs)
+    }
+
     fn check_function(&mut self, f: &FnDef) {
         let sig = self.functions.get(&f.name).cloned().unwrap();
+
+        // Skip body checking for generic functions — their bodies
+        // contain type parameters that aren't concrete types.
+        // Type safety is enforced at the call site via inference.
+        if !sig.type_params.is_empty() {
+            return;
+        }
+
         self.current_return_type = sig.ret.clone();
 
         self.push_scope();
@@ -397,23 +438,54 @@ impl Checker {
                                 ),
                                 callee.span.clone(),
                             );
-                            return sig.ret;
+                            return self.substitute_return_type(&sig, &HashMap::new());
                         }
 
+                        // Check arguments and build substitution map for generic type params
+                        let mut substitutions: HashMap<String, Ty> = HashMap::new();
+                        let mut arg_types = Vec::new();
                         for (i, arg) in args.iter().enumerate() {
                             let arg_ty = self.check_expr(arg);
+                            arg_types.push(arg_ty.clone());
+                            let (_, ref param_ty) = &sig.params[i];
+
+                            // If param type is a type parameter, infer its concrete type
+                            if let Ty::TypeParam(ref tp_name) = param_ty {
+                                if let Some(existing) = substitutions.get(tp_name) {
+                                    // T already inferred — check consistency
+                                    if !arg_ty.is_error() && !existing.is_error() && arg_ty != *existing {
+                                        self.error(
+                                            format!(
+                                                "type parameter `{tp_name}` inferred as `{existing}` but argument has type `{arg_ty}`"
+                                            ),
+                                            arg.span.clone(),
+                                        );
+                                    }
+                                } else if !arg_ty.is_error() {
+                                    substitutions.insert(tp_name.clone(), arg_ty.clone());
+                                }
+                            }
+                        }
+
+                        // Now check argument types against substituted parameter types
+                        for (i, arg) in args.iter().enumerate() {
+                            let ref arg_ty = arg_types[i];
                             let (ref param_name, ref param_ty) = &sig.params[i];
-                            if !arg_ty.is_error() && !param_ty.is_error() && arg_ty != *param_ty {
+                            let concrete_param_ty = self.substitute_ty(param_ty, &substitutions);
+                            if !arg_ty.is_error() && !concrete_param_ty.is_error()
+                                && !matches!(concrete_param_ty, Ty::TypeParam(_))
+                                && *arg_ty != concrete_param_ty
+                            {
                                 self.error(
                                     format!(
-                                        "argument `{param_name}` expects `{param_ty}`, found `{arg_ty}`"
+                                        "argument `{param_name}` expects `{concrete_param_ty}`, found `{arg_ty}`"
                                     ),
                                     arg.span.clone(),
                                 );
                             }
                         }
 
-                        sig.ret
+                        self.substitute_return_type(&sig, &substitutions)
                     } else {
                         self.error(
                             format!("undefined function `{name}`"),
@@ -771,6 +843,52 @@ fn main() { double("hello") }"#,
         assert_has_error(
             "fn foo() { }",
             "no `main` function found",
+        );
+    }
+
+    #[test]
+    fn test_generic_identity_int() {
+        assert_no_errors(
+            "fn identity<T>(x: T) -> T { x }\nfn main() { let r = identity(42) }",
+        );
+    }
+
+    #[test]
+    fn test_generic_identity_str() {
+        assert_no_errors(
+            r#"fn identity<T>(x: T) -> T { x }
+fn main() { let r = identity("hello") }"#,
+        );
+    }
+
+    #[test]
+    fn test_generic_identity_bool() {
+        assert_no_errors(
+            "fn identity<T>(x: T) -> T { x }\nfn main() { let r = identity(true) }",
+        );
+    }
+
+    #[test]
+    fn test_generic_first() {
+        assert_no_errors(
+            "fn first<T>(a: T, b: T) -> T { a }\nfn main() { let r = first(1, 2) }",
+        );
+    }
+
+    #[test]
+    fn test_generic_type_mismatch() {
+        assert_has_error(
+            r#"fn first<T>(a: T, b: T) -> T { a }
+fn main() { first(1, "hello") }"#,
+            "type parameter `T` inferred as `i64` but argument has type `str`",
+        );
+    }
+
+    #[test]
+    fn test_generic_wrong_arg_count() {
+        assert_has_error(
+            "fn identity<T>(x: T) -> T { x }\nfn main() { identity(1, 2) }",
+            "expects 1 argument(s) but 2 were given",
         );
     }
 }

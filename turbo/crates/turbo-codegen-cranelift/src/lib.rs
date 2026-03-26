@@ -31,15 +31,21 @@ enum TurboTy {
     Unit,
 }
 
-fn turbo_ty_from_type_expr(te: &TypeExpr) -> TurboTy {
+fn turbo_ty_from_type_expr(te: &TypeExpr, type_params: &[String]) -> TurboTy {
     match te {
-        TypeExpr::Named(name) => match name.as_str() {
-            "i32" | "i64" | "u32" | "u64" => TurboTy::Int,
-            "f32" | "f64" => TurboTy::Float,
-            "bool" => TurboTy::Bool,
-            "str" => TurboTy::Str,
-            _ => TurboTy::Unit,
-        },
+        TypeExpr::Named(name) => {
+            // Type parameters use Int representation (I64/ptr sized)
+            if type_params.contains(name) {
+                return TurboTy::Int;
+            }
+            match name.as_str() {
+                "i32" | "i64" | "u32" | "u64" => TurboTy::Int,
+                "f32" | "f64" => TurboTy::Float,
+                "bool" => TurboTy::Bool,
+                "str" => TurboTy::Str,
+                _ => TurboTy::Unit,
+            }
+        }
         TypeExpr::Unit => TurboTy::Unit,
     }
 }
@@ -119,6 +125,7 @@ struct Ctx<'a, M: Module> {
     user_fns: &'a HashMap<String, FuncId>,
     fn_ret_types: &'a HashMap<String, TurboTy>,
     fn_asts: &'a HashMap<String, &'a FnDef>,
+    fn_type_params: &'a HashMap<String, Vec<String>>,
     rt_fns: &'a HashMap<String, FuncId>,
     vars: HashMap<String, (Variable, types::Type, TurboTy)>,
     next_var: usize,
@@ -342,12 +349,12 @@ fn compile_module<M: Module>(
             sig.call_conv = CallConv::Fast;
         }
         for param in &f.params {
-            sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type)?));
+            sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &f.type_params)?));
         }
         let ret_turbo = if let Some(ret_ty) = &f.return_type {
-            let cl = resolve_cl_type(&ret_ty.node, ptr_type)?;
+            let cl = resolve_cl_type(&ret_ty.node, ptr_type, &f.type_params)?;
             sig.returns.push(AbiParam::new(cl));
-            turbo_ty_from_type_expr(&ret_ty.node)
+            turbo_ty_from_type_expr(&ret_ty.node, &f.type_params)
         } else {
             TurboTy::Unit
         };
@@ -359,11 +366,13 @@ fn compile_module<M: Module>(
         fn_ret_types.insert(f.name.clone(), ret_turbo);
     }
 
-    // Build fn_asts map for inline expansion
+    // Build fn_asts map for inline expansion and fn_type_params for generics
     let mut fn_asts: HashMap<String, &FnDef> = HashMap::new();
+    let mut fn_type_params: HashMap<String, Vec<String>> = HashMap::new();
     for item in &ast_module.items {
         let Item::Function(f) = &item.node;
         fn_asts.insert(f.name.clone(), f);
+        fn_type_params.insert(f.name.clone(), f.type_params.clone());
     }
 
     // Define all user functions
@@ -380,10 +389,10 @@ fn compile_module<M: Module>(
             cl_ctx.func.signature.call_conv = CallConv::Fast;
         }
         for param in &f.params {
-            cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type)?));
+            cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &f.type_params)?));
         }
         if let Some(ret_ty) = &f.return_type {
-            cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type)?));
+            cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &f.type_params)?));
         }
 
         let mut fn_ctx = FunctionBuilderContext::new();
@@ -395,6 +404,7 @@ fn compile_module<M: Module>(
                 user_fns: &user_fns,
                 fn_ret_types: &fn_ret_types,
                 fn_asts: &fn_asts,
+                fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
                 vars: HashMap::new(),
                 next_var: 0,
@@ -411,8 +421,8 @@ fn compile_module<M: Module>(
 
             // Define parameters as variables
             for (i, param) in f.params.iter().enumerate() {
-                let cl_ty = resolve_cl_type(&param.ty.node, ptr_type)?;
-                let turbo_ty = turbo_ty_from_type_expr(&param.ty.node);
+                let cl_ty = resolve_cl_type(&param.ty.node, ptr_type, &f.type_params)?;
+                let turbo_ty = turbo_ty_from_type_expr(&param.ty.node, &f.type_params);
                 let var = cx.fresh_var(cl_ty, turbo_ty);
                 let val = cx.builder.block_params(entry)[i];
                 cx.builder.def_var(var, val);
@@ -466,19 +476,25 @@ fn declare_rt_fn<M: Module>(
     Ok(())
 }
 
-fn resolve_cl_type(ty: &TypeExpr, ptr_type: types::Type) -> Result<types::Type, CodegenError> {
+fn resolve_cl_type(ty: &TypeExpr, ptr_type: types::Type, type_params: &[String]) -> Result<types::Type, CodegenError> {
     match ty {
-        TypeExpr::Named(name) => match name.as_str() {
-            "i32" => Ok(types::I32),
-            "i64" => Ok(types::I64),
-            "u32" => Ok(types::I32),
-            "u64" => Ok(types::I64),
-            "f32" => Ok(types::F32),
-            "f64" => Ok(types::F64),
-            "bool" => Ok(types::I8),
-            "str" => Ok(ptr_type),
-            _ => Err(CodegenError { message: format!("unknown type: {name}") }),
-        },
+        TypeExpr::Named(name) => {
+            // Type parameters are represented as I64 (same size as ptr on 64-bit)
+            if type_params.contains(name) {
+                return Ok(types::I64);
+            }
+            match name.as_str() {
+                "i32" => Ok(types::I32),
+                "i64" => Ok(types::I64),
+                "u32" => Ok(types::I32),
+                "u64" => Ok(types::I64),
+                "f32" => Ok(types::F32),
+                "f64" => Ok(types::F64),
+                "bool" => Ok(types::I8),
+                "str" => Ok(ptr_type),
+                _ => Err(CodegenError { message: format!("unknown type: {name}") }),
+            }
+        }
         TypeExpr::Unit => Err(CodegenError { message: "unit type has no runtime representation".to_string() }),
     }
 }
@@ -801,12 +817,63 @@ fn compile_call<M: Module>(
                 .ok_or_else(|| CodegenError { message: format!("undefined function: {name}") })?;
 
             let ret_tty = cx.fn_ret_types.get(name.as_str()).copied().unwrap_or(TurboTy::Unit);
+            let type_params = cx.fn_type_params.get(name.as_str()).cloned().unwrap_or_default();
 
             let func_ref = cx.module.declare_func_in_func(func_id, cx.builder.func);
             let mut arg_values = Vec::new();
+            let mut arg_ttys = Vec::new();
             for arg in args {
-                if let Some((val, _)) = compile_expr(cx, arg)? {
+                if let Some((val, tty)) = compile_expr(cx, arg)? {
                     arg_values.push(val);
+                    arg_ttys.push(tty);
+                }
+            }
+
+            // For generic functions, infer the actual return TurboTy from args.
+            // The generic function's return type (T) maps to the concrete type of
+            // the first argument whose parameter is typed as T.
+            let actual_ret_tty = if !type_params.is_empty() {
+                if let Some(f_def) = cx.fn_asts.get(name.as_str()) {
+                    if let Some(ret_ty) = &f_def.return_type {
+                        if let TypeExpr::Named(ref ret_name) = ret_ty.node {
+                            if type_params.contains(ret_name) {
+                                // Find which param has this type parameter
+                                let mut inferred = None;
+                                for (i, param) in f_def.params.iter().enumerate() {
+                                    if let TypeExpr::Named(ref pname) = param.ty.node {
+                                        if pname == ret_name {
+                                            if i < arg_ttys.len() {
+                                                inferred = Some(arg_ttys[i]);
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                                inferred.unwrap_or(ret_tty)
+                            } else {
+                                ret_tty
+                            }
+                        } else {
+                            ret_tty
+                        }
+                    } else {
+                        ret_tty
+                    }
+                } else {
+                    ret_tty
+                }
+            } else {
+                ret_tty
+            };
+
+            // For generic functions, widen bool args (I8) to I64 since
+            // the generic function's parameter is compiled as I64.
+            if !type_params.is_empty() {
+                for val in &mut arg_values {
+                    let vty = cx.builder.func.dfg.value_type(*val);
+                    if vty.bits() < 64 {
+                        *val = cx.builder.ins().sextend(types::I64, *val);
+                    }
                 }
             }
 
@@ -815,7 +882,7 @@ fn compile_call<M: Module>(
             if results.is_empty() {
                 Ok(None)
             } else {
-                Ok(Some((results[0], ret_tty)))
+                Ok(Some((results[0], actual_ret_tty)))
             }
         }
     }
@@ -834,7 +901,15 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
         match tty {
             TurboTy::Str => cx.rt_call("rt_print_str", &[v]),
             TurboTy::Float => cx.rt_call("rt_print_f64", &[v]),
-            TurboTy::Bool => cx.rt_call("rt_print_bool", &[v]),
+            TurboTy::Bool => {
+                let ty = cx.builder.func.dfg.value_type(v);
+                let v = if ty.bits() > 8 {
+                    cx.builder.ins().ireduce(types::I8, v)
+                } else {
+                    v
+                };
+                cx.rt_call("rt_print_bool", &[v]);
+            }
             TurboTy::Int => {
                 let ty = cx.builder.func.dfg.value_type(v);
                 let v = if ty.bits() < 64 {
