@@ -29,6 +29,8 @@ pub enum Ty {
     Array(Box<Ty>),
     /// Struct type (by name)
     Struct(String),
+    /// Enum type (by name)
+    Enum(String),
     /// Type could not be determined (error recovery)
     Error,
 }
@@ -47,6 +49,7 @@ impl std::fmt::Display for Ty {
             Ty::Unit => write!(f, "()"),
             Ty::Array(inner) => write!(f, "[{}]", inner),
             Ty::Struct(name) => write!(f, "{}", name),
+            Ty::Enum(name) => write!(f, "{}", name),
             Ty::Error => write!(f, "<error>"),
         }
     }
@@ -70,7 +73,7 @@ impl Ty {
     }
 }
 
-fn resolve_type_expr(te: &TypeExpr, structs: Option<&HashMap<String, StructInfo>>) -> Option<Ty> {
+fn resolve_type_expr(te: &TypeExpr, structs: Option<&HashMap<String, StructInfo>>, enums: Option<&HashMap<String, EnumInfo>>) -> Option<Ty> {
     match te {
         TypeExpr::Named(name) => match name.as_str() {
             "i32" => Some(Ty::I32),
@@ -88,12 +91,18 @@ fn resolve_type_expr(te: &TypeExpr, structs: Option<&HashMap<String, StructInfo>
                         return Some(Ty::Struct(name.clone()));
                     }
                 }
+                // Check if it's an enum type
+                if let Some(e) = enums {
+                    if e.contains_key(name.as_str()) {
+                        return Some(Ty::Enum(name.clone()));
+                    }
+                }
                 None
             }
         },
         TypeExpr::Unit => Some(Ty::Unit),
         TypeExpr::Array(inner) => {
-            resolve_type_expr(&inner.node, structs).map(|t| Ty::Array(Box::new(t)))
+            resolve_type_expr(&inner.node, structs, enums).map(|t| Ty::Array(Box::new(t)))
         }
     }
 }
@@ -123,11 +132,18 @@ struct StructInfo {
     fields: Vec<(String, Ty)>,
 }
 
+/// Enum info (variant names)
+#[derive(Debug, Clone)]
+struct EnumInfo {
+    variants: Vec<String>,
+}
+
 /// Type checker
 struct Checker {
     errors: Vec<SemaError>,
     functions: HashMap<String, FnSig>,
     structs: HashMap<String, StructInfo>,
+    enums: HashMap<String, EnumInfo>,
     scopes: Vec<Scope>,
     /// Return type of the current function being checked
     current_return_type: Ty,
@@ -139,6 +155,7 @@ impl Checker {
             errors: Vec::new(),
             functions: HashMap::new(),
             structs: HashMap::new(),
+            enums: HashMap::new(),
             scopes: Vec::new(),
             current_return_type: Ty::Unit,
         }
@@ -193,7 +210,7 @@ impl Checker {
             }
             let mut fields = Vec::new();
             for field in &s.fields {
-                match resolve_type_expr(&field.ty.node, Some(&self.structs)) {
+                match resolve_type_expr(&field.ty.node, Some(&self.structs), Some(&self.enums)) {
                     Some(ty) => fields.push((field.name.clone(), ty)),
                     None => {
                         if let TypeExpr::Named(name) = &field.ty.node {
@@ -207,6 +224,21 @@ impl Checker {
                 }
             }
             self.structs.insert(s.name.clone(), StructInfo { fields });
+        }
+
+        // Pass 0b: register all enum definitions
+        for item in &module.items {
+            let Item::Enum(e) = &item.node else { continue };
+            if self.enums.contains_key(&e.name) {
+                self.error(
+                    format!("enum `{}` is already defined", e.name),
+                    item.span.clone(),
+                );
+                continue;
+            }
+            self.enums.insert(e.name.clone(), EnumInfo {
+                variants: e.variants.clone(),
+            });
         }
 
         // First pass: register all function signatures
@@ -232,7 +264,7 @@ impl Checker {
 
             let mut params = Vec::new();
             for param in &f.params {
-                match resolve_type_expr(&param.ty.node, Some(&self.structs)) {
+                match resolve_type_expr(&param.ty.node, Some(&self.structs), Some(&self.enums)) {
                     Some(ty) => params.push((param.name.clone(), ty)),
                     None => {
                         if let TypeExpr::Named(name) = &param.ty.node {
@@ -247,7 +279,7 @@ impl Checker {
             }
 
             let ret = if let Some(ret_type) = &f.return_type {
-                match resolve_type_expr(&ret_type.node, Some(&self.structs)) {
+                match resolve_type_expr(&ret_type.node, Some(&self.structs), Some(&self.enums)) {
                     Some(ty) => ty,
                     None => {
                         if let TypeExpr::Named(name) = &ret_type.node {
@@ -815,6 +847,19 @@ impl Checker {
             }
 
             Expr::FieldAccess { object, field } => {
+                // Check if this is actually an enum variant access: EnumName.VariantName
+                if let Expr::Ident(ref name) = object.node {
+                    if let Some(info) = self.enums.get(name).cloned() {
+                        if !info.variants.contains(field) {
+                            self.error(
+                                format!("enum `{name}` has no variant `{field}`"),
+                                expr.span.clone(),
+                            );
+                        }
+                        return Ty::Enum(name.clone());
+                    }
+                }
+
                 let obj_ty = self.check_expr(object);
                 match &obj_ty {
                     Ty::Struct(struct_name) => {
@@ -846,6 +891,106 @@ impl Checker {
                     }
                 }
             }
+
+            Expr::EnumVariant { enum_name, variant } => {
+                if let Some(info) = self.enums.get(enum_name) {
+                    if !info.variants.contains(variant) {
+                        self.error(
+                            format!("enum `{enum_name}` has no variant `{variant}`"),
+                            expr.span.clone(),
+                        );
+                    }
+                    Ty::Enum(enum_name.clone())
+                } else {
+                    self.error(
+                        format!("undefined enum `{enum_name}`"),
+                        expr.span.clone(),
+                    );
+                    Ty::Error
+                }
+            }
+
+            Expr::Match { subject, arms } => {
+                let subject_ty = self.check_expr(subject);
+
+                if arms.is_empty() {
+                    self.error(
+                        "match expression has no arms".to_string(),
+                        expr.span.clone(),
+                    );
+                    return Ty::Error;
+                }
+
+                // Check each arm's pattern and body
+                let mut result_ty: Option<Ty> = None;
+                for arm in arms {
+                    // Validate pattern against subject type
+                    self.check_pattern(&arm.pattern, &subject_ty);
+
+                    let body_ty = self.check_expr(&arm.body);
+
+                    if let Some(ref expected) = result_ty {
+                        if !body_ty.is_error() && !expected.is_error() && body_ty != *expected {
+                            self.error(
+                                format!(
+                                    "match arms have different types: `{expected}` and `{body_ty}`"
+                                ),
+                                arm.body.span.clone(),
+                            );
+                        }
+                    } else {
+                        result_ty = Some(body_ty);
+                    }
+                }
+
+                result_ty.unwrap_or(Ty::Unit)
+            }
+        }
+    }
+
+    fn check_pattern(&mut self, pattern: &Spanned<Pattern>, subject_ty: &Ty) {
+        match &pattern.node {
+            Pattern::Wildcard => {
+                // Wildcard matches anything
+            }
+            Pattern::Ident(name) => {
+                // If subject is an enum, check that name is a valid variant
+                if let Ty::Enum(enum_name) = subject_ty {
+                    if let Some(info) = self.enums.get(enum_name) {
+                        if !info.variants.contains(name) {
+                            self.error(
+                                format!("enum `{enum_name}` has no variant `{name}`"),
+                                pattern.span.clone(),
+                            );
+                        }
+                    }
+                }
+                // For non-enum types, Ident pattern is treated as a variable binding
+            }
+            Pattern::IntLit(_) => {
+                if !subject_ty.is_error() && !subject_ty.is_integer() {
+                    self.error(
+                        format!("integer pattern cannot match `{subject_ty}`"),
+                        pattern.span.clone(),
+                    );
+                }
+            }
+            Pattern::BoolLit(_) => {
+                if !subject_ty.is_error() && *subject_ty != Ty::Bool {
+                    self.error(
+                        format!("boolean pattern cannot match `{subject_ty}`"),
+                        pattern.span.clone(),
+                    );
+                }
+            }
+            Pattern::StringLit(_) => {
+                if !subject_ty.is_error() && *subject_ty != Ty::Str {
+                    self.error(
+                        format!("string pattern cannot match `{subject_ty}`"),
+                        pattern.span.clone(),
+                    );
+                }
+            }
         }
     }
 
@@ -855,7 +1000,7 @@ impl Checker {
                 let val_ty = self.check_expr(value);
 
                 let declared_ty = if let Some(ty_expr) = ty {
-                    match resolve_type_expr(&ty_expr.node, Some(&self.structs)) {
+                    match resolve_type_expr(&ty_expr.node, Some(&self.structs), Some(&self.enums)) {
                         Some(t) => {
                             if !val_ty.is_error() && t != val_ty {
                                 // Allow integer literal coercion: i64 literal -> i32, u32, u64

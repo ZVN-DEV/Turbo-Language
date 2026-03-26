@@ -32,16 +32,23 @@ enum TurboTy {
     Unit,
     Array,
     Struct(String),
+    Enum,
 }
 
-fn turbo_ty_from_type_expr(te: &TypeExpr) -> TurboTy {
+fn turbo_ty_from_type_expr(te: &TypeExpr, enum_variants: &HashMap<String, Vec<String>>) -> TurboTy {
     match te {
         TypeExpr::Named(name) => match name.as_str() {
             "i32" | "i64" | "u32" | "u64" => TurboTy::Int,
             "f32" | "f64" => TurboTy::Float,
             "bool" => TurboTy::Bool,
             "str" => TurboTy::Str,
-            _ => TurboTy::Struct(name.clone()),
+            _ => {
+                if enum_variants.contains_key(name.as_str()) {
+                    TurboTy::Enum
+                } else {
+                    TurboTy::Struct(name.clone())
+                }
+            }
         },
         TypeExpr::Unit => TurboTy::Unit,
         TypeExpr::Array(_) => TurboTy::Array,
@@ -206,6 +213,8 @@ struct Ctx<'a, M: Module> {
     ptr_type: types::Type,
     /// Struct field layouts: struct_name -> vec of (field_name, TurboTy)
     struct_fields: &'a HashMap<String, Vec<(String, TurboTy)>>,
+    /// Enum variant lists: enum_name -> vec of variant names
+    enum_variants: &'a HashMap<String, Vec<String>>,
 }
 
 impl<'a, M: Module> Ctx<'a, M> {
@@ -394,12 +403,20 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_str_len", &[ptr_type], Some(types::I64))?;
     declare_rt_fn(module, &mut rt_fns, "rt_struct_alloc", &[types::I64], Some(ptr_type))?;
 
+    // Build enum variants map
+    let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();
+    for item in &ast_module.items {
+        if let Item::Enum(e) = &item.node {
+            enum_variants.insert(e.name.clone(), e.variants.clone());
+        }
+    }
+
     // Build struct field layouts from AST
     let mut struct_fields: HashMap<String, Vec<(String, TurboTy)>> = HashMap::new();
     for item in &ast_module.items {
         let Item::Struct(s) = &item.node else { continue };
         let fields: Vec<(String, TurboTy)> = s.fields.iter()
-            .map(|f| (f.name.clone(), turbo_ty_from_type_expr(&f.ty.node)))
+            .map(|f| (f.name.clone(), turbo_ty_from_type_expr(&f.ty.node, &enum_variants)))
             .collect();
         struct_fields.insert(s.name.clone(), fields);
     }
@@ -417,12 +434,12 @@ fn compile_module<M: Module>(
             sig.call_conv = CallConv::Fast;
         }
         for param in &f.params {
-            sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type)?));
+            sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants)?));
         }
         let ret_turbo = if let Some(ret_ty) = &f.return_type {
-            let cl = resolve_cl_type(&ret_ty.node, ptr_type)?;
+            let cl = resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants)?;
             sig.returns.push(AbiParam::new(cl));
-            turbo_ty_from_type_expr(&ret_ty.node)
+            turbo_ty_from_type_expr(&ret_ty.node, &enum_variants)
         } else {
             TurboTy::Unit
         };
@@ -448,10 +465,10 @@ fn compile_module<M: Module>(
             cl_ctx.func.signature.call_conv = CallConv::Fast;
         }
         for param in &f.params {
-            cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type)?));
+            cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants)?));
         }
         if let Some(ret_ty) = &f.return_type {
-            cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type)?));
+            cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants)?));
         }
 
         let mut fn_ctx = FunctionBuilderContext::new();
@@ -469,6 +486,7 @@ fn compile_module<M: Module>(
                 string_counter: &mut string_counter,
                 ptr_type,
                 struct_fields: &struct_fields,
+                enum_variants: &enum_variants,
             };
 
             let entry = cx.builder.create_block();
@@ -484,8 +502,8 @@ fn compile_module<M: Module>(
 
             // Define parameters as variables
             for (i, param) in f.params.iter().enumerate() {
-                let cl_ty = resolve_cl_type(&param.ty.node, ptr_type)?;
-                let turbo_ty = turbo_ty_from_type_expr(&param.ty.node);
+                let cl_ty = resolve_cl_type(&param.ty.node, ptr_type, &enum_variants)?;
+                let turbo_ty = turbo_ty_from_type_expr(&param.ty.node, &enum_variants);
                 let var = cx.fresh_var(cl_ty, turbo_ty.clone());
                 let val = cx.builder.block_params(entry)[i];
                 cx.builder.def_var(var, val);
@@ -541,7 +559,7 @@ fn declare_rt_fn<M: Module>(
     Ok(())
 }
 
-fn resolve_cl_type(ty: &TypeExpr, ptr_type: types::Type) -> Result<types::Type, CodegenError> {
+fn resolve_cl_type(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &HashMap<String, Vec<String>>) -> Result<types::Type, CodegenError> {
     match ty {
         TypeExpr::Named(name) => match name.as_str() {
             "i32" => Ok(types::I32),
@@ -552,7 +570,13 @@ fn resolve_cl_type(ty: &TypeExpr, ptr_type: types::Type) -> Result<types::Type, 
             "f64" => Ok(types::F64),
             "bool" => Ok(types::I8),
             "str" => Ok(ptr_type),
-            _ => Ok(ptr_type), // Struct types are represented as pointers at runtime
+            _ => {
+                if enum_variants.contains_key(name.as_str()) {
+                    Ok(types::I64) // enums are represented as i64 tags
+                } else {
+                    Ok(ptr_type) // Struct types are represented as pointers at runtime
+                }
+            }
         },
         TypeExpr::Unit => Err(CodegenError { message: "unit type has no runtime representation".to_string() }),
         TypeExpr::Array(_) => Ok(ptr_type), // Arrays are represented as pointers at runtime
@@ -777,6 +801,16 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
         }
 
         Expr::FieldAccess { object, field } => {
+            // Check if this is actually an enum variant access: EnumName.VariantName
+            if let Expr::Ident(ref name) = object.node {
+                if let Some(variants) = cx.enum_variants.get(name.as_str()) {
+                    let index = variants.iter().position(|v| v == field)
+                        .ok_or_else(|| CodegenError { message: format!("enum `{name}` has no variant `{field}`") })?;
+                    let val = cx.builder.ins().iconst(types::I64, index as i64);
+                    return Ok(Some((val, TurboTy::Enum)));
+                }
+            }
+
             let (obj_ptr, obj_tty) = compile_expr(cx, object)?.unwrap();
 
             let struct_name = match &obj_tty {
@@ -816,6 +850,17 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
 
             Ok(Some((val, tty)))
         }
+
+        Expr::EnumVariant { enum_name, variant } => {
+            let variants = cx.enum_variants.get(enum_name.as_str())
+                .ok_or_else(|| CodegenError { message: format!("undefined enum: {enum_name}") })?;
+            let index = variants.iter().position(|v| v == variant)
+                .ok_or_else(|| CodegenError { message: format!("enum `{enum_name}` has no variant `{variant}`") })?;
+            let val = cx.builder.ins().iconst(types::I64, index as i64);
+            Ok(Some((val, TurboTy::Enum)))
+        }
+
+        Expr::Match { subject, arms } => compile_match(cx, subject, arms),
     }
 }
 
@@ -1112,6 +1157,13 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
             TurboTy::Unit => {
                 let ptr = cx.create_string("()")?;
                 cx.rt_call("rt_print_str", &[ptr]);
+            }
+            TurboTy::Enum => {
+                // Print enum value as its integer tag
+                let v = if cx.builder.func.dfg.value_type(v).bits() < 64 {
+                    cx.builder.ins().sextend(types::I64, v)
+                } else { v };
+                cx.rt_call("rt_print_i64", &[v]);
             }
             TurboTy::Array => {
                 let ptr = cx.create_string("[array]")?;
@@ -1411,4 +1463,150 @@ fn compile_for_in<M: Module>(
     cx.builder.seal_block(exit_block);
 
     Ok(None)
+}
+
+// ── Match expression ────────────────────────────────────────────────
+
+fn compile_match<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    subject: &Spanned<Expr>,
+    arms: &[MatchArm],
+) -> Result<MaybeTyped, CodegenError> {
+    let (subj_val, _subj_tty) = compile_expr(cx, subject)?.unwrap();
+
+    if arms.is_empty() {
+        return Ok(None);
+    }
+
+    let merge_block = cx.builder.create_block();
+    let mut has_result = false;
+    let mut result_turbo_ty = TurboTy::Unit;
+    let mut hit_catchall = false;
+
+    for (i, arm) in arms.iter().enumerate() {
+        let is_last = i == arms.len() - 1;
+        let is_catchall = matches!(&arm.pattern.node, Pattern::Wildcard)
+            || matches!(&arm.pattern.node, Pattern::Ident(name)
+                if lookup_variant_tag_static(cx.enum_variants, name).is_none());
+
+        if is_catchall {
+            // Unconditional arm -- compile body and jump to merge
+            let body_result = compile_expr(cx, &arm.body)?;
+            emit_match_arm_jump(cx, merge_block, body_result, &mut has_result, &mut result_turbo_ty);
+            hit_catchall = true;
+
+            // Create a dead block if there are more arms after this
+            if !is_last {
+                let dead_block = cx.builder.create_block();
+                cx.builder.switch_to_block(dead_block);
+                cx.builder.seal_block(dead_block);
+            }
+            break;
+        }
+
+        // Conditional arm: compute whether the pattern matches
+        let matches_cond = match &arm.pattern.node {
+            Pattern::Ident(name) => {
+                // Must be an enum variant (checked above: non-variant idents are catchall)
+                let tag_val = lookup_variant_tag_static(cx.enum_variants, name).unwrap();
+                let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
+                cx.builder.ins().icmp(IntCC::Equal, subj_val, pat_val)
+            }
+            Pattern::IntLit(n) => {
+                let pat_val = cx.builder.ins().iconst(types::I64, *n);
+                cx.builder.ins().icmp(IntCC::Equal, subj_val, pat_val)
+            }
+            Pattern::BoolLit(b) => {
+                let pat_val = cx.builder.ins().iconst(types::I8, *b as i64);
+                let subj_narrowed = if cx.builder.func.dfg.value_type(subj_val) != types::I8 {
+                    cx.builder.ins().ireduce(types::I8, subj_val)
+                } else {
+                    subj_val
+                };
+                cx.builder.ins().icmp(IntCC::Equal, subj_narrowed, pat_val)
+            }
+            Pattern::StringLit(s) => {
+                let pat_ptr = cx.create_string(s)?;
+                let fid = cx.rt_fns["rt_str_eq"];
+                let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                let call = cx.builder.ins().call(fref, &[subj_val, pat_ptr]);
+                let eq_result = cx.builder.inst_results(call)[0];
+                let zero = cx.builder.ins().iconst(types::I8, 0);
+                cx.builder.ins().icmp(IntCC::NotEqual, eq_result, zero)
+            }
+            Pattern::Wildcard => unreachable!(), // handled above
+        };
+
+        let match_block = cx.builder.create_block();
+        let next_block = cx.builder.create_block();
+
+        cx.builder.ins().brif(matches_cond, match_block, &[], next_block, &[]);
+
+        // Compile the arm body
+        cx.builder.switch_to_block(match_block);
+        cx.builder.seal_block(match_block);
+        let body_result = compile_expr(cx, &arm.body)?;
+        emit_match_arm_jump(cx, merge_block, body_result, &mut has_result, &mut result_turbo_ty);
+
+        // Continue to next arm's check
+        cx.builder.switch_to_block(next_block);
+        cx.builder.seal_block(next_block);
+    }
+
+    // If no catchall was reached, we're in the fallthrough block (no arm matched).
+    if !hit_catchall && !cx.builder.is_unreachable() {
+        if has_result {
+            // Exhaustiveness should be checked by sema; trap as safety net
+            cx.builder.ins().trap(TrapCode::unwrap_user(1));
+        } else {
+            cx.builder.ins().jump(merge_block, &[]);
+        }
+    }
+
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
+
+    if has_result {
+        let param = cx.builder.block_params(merge_block)[0];
+        Ok(Some((param, result_turbo_ty)))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Helper: emit the jump from a compiled match arm body to the merge block.
+fn emit_match_arm_jump<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    merge_block: cranelift::prelude::Block,
+    body_result: MaybeTyped,
+    has_result: &mut bool,
+    result_turbo_ty: &mut TurboTy,
+) {
+    let needs_jump = !cx.builder.is_unreachable();
+    if let Some((val, tty)) = body_result {
+        if !*has_result {
+            *has_result = true;
+            let cl_ty = cx.builder.func.dfg.value_type(val);
+            *result_turbo_ty = tty;
+            cx.builder.append_block_param(merge_block, cl_ty);
+        }
+        if needs_jump {
+            cx.builder.ins().jump(merge_block, &[val]);
+        }
+    } else if needs_jump {
+        cx.builder.ins().jump(merge_block, &[]);
+    }
+}
+
+/// Look up the integer tag for a variant name across all known enums.
+fn lookup_variant_tag_static(
+    enum_variants: &HashMap<String, Vec<String>>,
+    variant_name: &str,
+) -> Option<usize> {
+    for (_enum_name, variants) in enum_variants.iter() {
+        if let Some(pos) = variants.iter().position(|v| v == variant_name) {
+            return Some(pos);
+        }
+    }
+    None
 }

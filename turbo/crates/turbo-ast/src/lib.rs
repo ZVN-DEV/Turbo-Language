@@ -25,6 +25,14 @@ pub struct Module {
 pub enum Item {
     Function(FnDef),
     Struct(StructDef),
+    Enum(EnumDef),
+}
+
+/// Enum (sum type) definition
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<String>,
 }
 
 /// Struct definition
@@ -156,6 +164,16 @@ pub enum Expr {
         object: Box<Spanned<Expr>>,
         field: String,
     },
+    /// Enum variant: EnumName.VariantName
+    EnumVariant {
+        enum_name: String,
+        variant: String,
+    },
+    /// Match expression
+    Match {
+        subject: Box<Spanned<Expr>>,
+        arms: Vec<MatchArm>,
+    },
 }
 
 /// Statements (things that don't produce values in statement position)
@@ -172,6 +190,28 @@ pub enum Stmt {
     Expr(Spanned<Expr>),
     /// Return statement
     Return(Option<Spanned<Expr>>),
+}
+
+/// A match arm: pattern => body
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: Spanned<Pattern>,
+    pub body: Spanned<Expr>,
+}
+
+/// Pattern in a match expression
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    /// Named pattern (variant name or variable binding)
+    Ident(String),
+    /// Wildcard pattern _
+    Wildcard,
+    /// Integer literal pattern
+    IntLit(i64),
+    /// Boolean literal pattern
+    BoolLit(bool),
+    /// String literal pattern
+    StringLit(String),
 }
 
 /// Binary operators

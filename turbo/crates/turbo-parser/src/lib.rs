@@ -106,9 +106,9 @@ impl Parser {
                 Ok(item) => items.push(item),
                 Err(e) => {
                     self.errors.push(e);
-                    // Skip to next `fn` or `struct` to recover
+                    // Skip to next `fn`, `struct`, or `type` to recover
                     self.pos += 1;
-                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Struct)) {
+                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Struct) | Some(Token::TypeKw)) {
                         self.pos += 1;
                     }
                 }
@@ -132,11 +132,16 @@ impl Parser {
                     .unwrap_or(start);
                 Ok(Spanned::new(Item::Struct(s), start..end))
             }
+            Some(Token::TypeKw) => {
+                let e = self.parse_enum_def()?;
+                let end = self.tokens[self.pos - 1].span.end;
+                Ok(Spanned::new(Item::Enum(e), start..end))
+            }
             _ => {
                 let span = self.peek_span();
                 let found = self.peek().map(|t| format!("`{t}`")).unwrap_or("end of file".to_string());
                 Err(ParseError {
-                    message: format!("expected `fn` or `struct`, found {found}"),
+                    message: format!("expected `fn`, `struct`, or `type`, found {found}"),
                     span,
                 })
             }
@@ -160,6 +165,22 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
         Ok(StructDef { name, fields })
+    }
+
+    fn parse_enum_def(&mut self) -> Result<EnumDef, ParseError> {
+        self.expect(&Token::TypeKw)?;
+        let (name, _) = self.expect_ident()?;
+        self.expect(&Token::LBrace)?;
+        let mut variants = Vec::new();
+        while !matches!(self.peek(), Some(Token::RBrace) | None) {
+            let (variant_name, _) = self.expect_ident()?;
+            variants.push(variant_name);
+            if matches!(self.peek(), Some(Token::Comma)) {
+                self.advance();
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(EnumDef { name, variants })
     }
 
     fn parse_fn_def(&mut self) -> Result<FnDef, ParseError> {
@@ -512,7 +533,7 @@ impl Parser {
                     span,
                 );
             } else if matches!(self.peek(), Some(Token::Dot)) {
-                // Field access: expr.field
+                // Dot access: field access or enum variant (resolved in sema)
                 self.advance(); // consume .
                 let (field_name, field_span) = self.expect_ident()?;
                 let span = expr.span.start..field_span.end;
@@ -681,6 +702,7 @@ impl Parser {
             Some(Token::If) => self.parse_if_expr(),
             Some(Token::While) => self.parse_while_expr(),
             Some(Token::For) => self.parse_for_in(),
+            Some(Token::Match) => self.parse_match_expr(),
             Some(Token::LBrace) => self.parse_block(),
             _ => {
                 let span = self.peek_span();
@@ -761,6 +783,80 @@ impl Parser {
             },
             start..end,
         ))
+    }
+    fn parse_match_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let start = self.peek_span().start;
+        self.expect(&Token::Match)?;
+        let subject = self.parse_expr()?;
+        self.expect(&Token::LBrace)?;
+
+        let mut arms = Vec::new();
+        while !matches!(self.peek(), Some(Token::RBrace) | None) {
+            let pattern = self.parse_pattern()?;
+            self.expect(&Token::FatArrow)?;
+            let body = self.parse_expr()?;
+            arms.push(MatchArm { pattern, body });
+        }
+
+        let end = self.peek_span().end;
+        self.expect(&Token::RBrace)?;
+
+        Ok(Spanned::new(
+            Expr::Match {
+                subject: Box::new(subject),
+                arms,
+            },
+            start..end,
+        ))
+    }
+
+    fn parse_pattern(&mut self) -> Result<Spanned<Pattern>, ParseError> {
+        match self.peek() {
+            Some(Token::Ident(name)) if name == "_" => {
+                let span = self.advance().span.clone();
+                Ok(Spanned::new(Pattern::Wildcard, span))
+            }
+            Some(Token::Ident(_)) => {
+                let (name, span) = self.expect_ident()?;
+                Ok(Spanned::new(Pattern::Ident(name), span))
+            }
+            Some(Token::Int(_)) => {
+                let tok = self.advance();
+                if let Token::Int(n) = &tok.value {
+                    let n = *n;
+                    let span = tok.span.clone();
+                    Ok(Spanned::new(Pattern::IntLit(n), span))
+                } else {
+                    unreachable!()
+                }
+            }
+            Some(Token::True) => {
+                let span = self.advance().span.clone();
+                Ok(Spanned::new(Pattern::BoolLit(true), span))
+            }
+            Some(Token::False) => {
+                let span = self.advance().span.clone();
+                Ok(Spanned::new(Pattern::BoolLit(false), span))
+            }
+            Some(Token::String(_)) => {
+                let tok = self.advance();
+                if let Token::String(s) = &tok.value {
+                    let s = s.clone();
+                    let span = tok.span.clone();
+                    Ok(Spanned::new(Pattern::StringLit(s), span))
+                } else {
+                    unreachable!()
+                }
+            }
+            _ => {
+                let span = self.peek_span();
+                let found = self.peek().map(|t| format!("`{t}`")).unwrap_or("end of file".to_string());
+                Err(ParseError {
+                    message: format!("expected pattern, found {found}"),
+                    span,
+                })
+            }
+        }
     }
 }
 
