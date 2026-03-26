@@ -109,9 +109,10 @@ const RUNTIME_C: &str = include_str!("../runtime/turbo_rt.c");
 
 // ── Codegen context (generic over Module type) ──────────────────────
 
-/// Max depth for inlining recursive functions.
-/// Depth 3 = 8x fewer real function calls (from ~204M to ~25M for fib(40)).
-const MAX_INLINE_DEPTH: usize = 3;
+/// Max depth for inlining recursive functions at call sites.
+/// Depth 2 reduces function calls by ~4x while keeping JIT compile time low.
+/// Higher depths generate too much IR for Cranelift to compile efficiently.
+const MAX_INLINE_DEPTH: usize = 2;
 
 struct Ctx<'a, M: Module> {
     builder: FunctionBuilder<'a>,
@@ -162,6 +163,19 @@ impl<'a, M: Module> Ctx<'a, M> {
         let fref = self.module.declare_func_in_func(fid, self.builder.func);
         self.builder.ins().call(fref, args);
     }
+
+    /// Convert a value to an I8 boolean for use in `brif`.
+    /// If the value is already I8 (e.g. from `icmp` or a bool variable),
+    /// return it directly — avoiding a redundant `icmp(NotEqual, val, 0)`.
+    fn to_bool(&mut self, val: Value) -> Value {
+        let ty = self.builder.func.dfg.value_type(val);
+        if ty == types::I8 {
+            val
+        } else {
+            let zero = self.builder.ins().iconst(ty, 0);
+            self.builder.ins().icmp(IntCC::NotEqual, val, zero)
+        }
+    }
 }
 
 // ── Public entry points ─────────────────────────────────────────────
@@ -170,7 +184,9 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     let mut flag_builder = settings::builder();
     flag_builder.set("use_colocated_libcalls", "false").unwrap();
     flag_builder.set("is_pic", "false").unwrap();
-    flag_builder.set("opt_level", "speed").unwrap();
+    flag_builder.set("opt_level", "speed_and_size").unwrap();
+    flag_builder.set("enable_verifier", "false").unwrap();
+    flag_builder.set("enable_alias_analysis", "true").unwrap();
 
     let isa_builder = cranelift_native::builder()
         .map_err(|e| CodegenError { message: e.to_string() })?;
@@ -215,7 +231,9 @@ pub fn aot_compile(
     flag_builder.set("use_colocated_libcalls", "false").unwrap();
     flag_builder.set("is_pic", "true").unwrap(); // Required for AOT linking on macOS
     if optimize {
-        flag_builder.set("opt_level", "speed").unwrap();
+        flag_builder.set("opt_level", "speed_and_size").unwrap();
+        flag_builder.set("enable_verifier", "false").unwrap();
+        flag_builder.set("enable_alias_analysis", "true").unwrap();
     }
 
     let isa_builder = cranelift_native::builder()
@@ -737,12 +755,7 @@ fn compile_short_circuit<M: Module>(
     right: &Spanned<Expr>,
 ) -> Result<MaybeTyped, CodegenError> {
     let (lhs, _) = compile_expr(cx, left)?.unwrap();
-
-    let lhs_ty = cx.builder.func.dfg.value_type(lhs);
-    let lhs_bool = {
-        let zero = cx.builder.ins().iconst(lhs_ty, 0);
-        cx.builder.ins().icmp(IntCC::NotEqual, lhs, zero)
-    };
+    let lhs_bool = cx.to_bool(lhs);
 
     let eval_rhs_block = cx.builder.create_block();
     let merge_block = cx.builder.create_block();
@@ -802,7 +815,7 @@ fn compile_call<M: Module>(
 
             let ret_tty = cx.fn_ret_types.get(name.as_str()).copied().unwrap_or(TurboTy::Unit);
 
-            let func_ref = cx.module.declare_func_in_func(func_id, cx.builder.func);
+            // Compile argument values first (always needed, whether inlining or not).
             let mut arg_values = Vec::new();
             for arg in args {
                 if let Some((val, _)) = compile_expr(cx, arg)? {
@@ -810,6 +823,38 @@ fn compile_call<M: Module>(
                 }
             }
 
+            // Try inline expansion: inline the callee body at this call site
+            // if we haven't exceeded the depth limit and the function is inlineable.
+            if cx.inline_depth < MAX_INLINE_DEPTH {
+                if let Some(callee_def) = cx.fn_asts.get(name.as_str()).cloned() {
+                    if !has_return(&callee_def.body.node) && callee_def.params.len() == arg_values.len() {
+                        // Save and restore outer variable scope so inlined
+                        // parameter bindings don't leak out.
+                        let saved_vars = cx.vars.clone();
+                        let saved_depth = cx.inline_depth;
+                        cx.inline_depth += 1;
+
+                        // Bind each parameter to the already-compiled argument value.
+                        for (i, param) in callee_def.params.iter().enumerate() {
+                            let cl_ty = resolve_cl_type(&param.ty.node, cx.ptr_type)?;
+                            let turbo_ty = turbo_ty_from_type_expr(&param.ty.node);
+                            let var = cx.fresh_var(cl_ty, turbo_ty);
+                            cx.builder.def_var(var, arg_values[i]);
+                            cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
+                        }
+
+                        let result = compile_expr(cx, &callee_def.body)?;
+
+                        cx.vars = saved_vars;
+                        cx.inline_depth = saved_depth;
+
+                        return Ok(result);
+                    }
+                }
+            }
+
+            // Fall back to a normal call instruction.
+            let func_ref = cx.module.declare_func_in_func(func_id, cx.builder.func);
             let call = cx.builder.ins().call(func_ref, &arg_values);
             let results = cx.builder.inst_results(call);
             if results.is_empty() {
@@ -878,12 +923,7 @@ fn compile_assert<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Res
     }
 
     let (cond, _) = compile_expr(cx, &args[0])?.unwrap();
-
-    let cond_ty = cx.builder.func.dfg.value_type(cond);
-    let cond_bool = {
-        let zero = cx.builder.ins().iconst(cond_ty, 0);
-        cx.builder.ins().icmp(IntCC::NotEqual, cond, zero)
-    };
+    let cond_bool = cx.to_bool(cond);
 
     let fail_block = cx.builder.create_block();
     let ok_block = cx.builder.create_block();
@@ -917,12 +957,7 @@ fn compile_if<M: Module>(
     else_branch: Option<&Spanned<Expr>>,
 ) -> Result<MaybeTyped, CodegenError> {
     let (cond, _) = compile_expr(cx, condition)?.unwrap();
-
-    let cond_ty = cx.builder.func.dfg.value_type(cond);
-    let cond_bool = {
-        let zero = cx.builder.ins().iconst(cond_ty, 0);
-        cx.builder.ins().icmp(IntCC::NotEqual, cond, zero)
-    };
+    let cond_bool = cx.to_bool(cond);
 
     let then_block = cx.builder.create_block();
     let else_block = cx.builder.create_block();
@@ -990,12 +1025,7 @@ fn compile_while<M: Module>(
     // Header: evaluate condition
     cx.builder.switch_to_block(header_block);
     let (cond, _) = compile_expr(cx, condition)?.unwrap();
-
-    let cond_ty = cx.builder.func.dfg.value_type(cond);
-    let cond_bool = {
-        let zero = cx.builder.ins().iconst(cond_ty, 0);
-        cx.builder.ins().icmp(IntCC::NotEqual, cond, zero)
-    };
+    let cond_bool = cx.to_bool(cond);
 
     cx.builder.ins().brif(cond_bool, body_block, &[], exit_block, &[]);
 
