@@ -49,6 +49,11 @@ void rt_div_by_zero(void) {
     exit(1);
 }
 
+void rt_int_overflow(void) {
+    fprintf(stderr, "runtime error: integer overflow\n");
+    exit(1);
+}
+
 /* Entry point: calls Turbo's main and returns 0 */
 extern void turbo_main(void);
 int main(void) {

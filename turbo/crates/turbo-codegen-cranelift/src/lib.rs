@@ -103,29 +103,28 @@ extern "C" fn rt_div_by_zero() {
     std::process::exit(1);
 }
 
+extern "C" fn rt_int_overflow() {
+    eprintln!("runtime error: integer overflow");
+    std::process::exit(1);
+}
+
 // ── Runtime C source for AOT linking ────────────────────────────────
 
 const RUNTIME_C: &str = include_str!("../runtime/turbo_rt.c");
 
 // ── Codegen context (generic over Module type) ──────────────────────
 
-/// Max depth for inlining recursive functions.
-/// Depth 3 = 8x fewer real function calls (from ~204M to ~25M for fib(40)).
-const MAX_INLINE_DEPTH: usize = 3;
-
 struct Ctx<'a, M: Module> {
     builder: FunctionBuilder<'a>,
     module: &'a mut M,
     user_fns: &'a HashMap<String, FuncId>,
     fn_ret_types: &'a HashMap<String, TurboTy>,
-    fn_asts: &'a HashMap<String, &'a FnDef>,
     rt_fns: &'a HashMap<String, FuncId>,
     vars: HashMap<String, (Variable, types::Type, TurboTy)>,
     next_var: usize,
     data_desc: &'a mut DataDescription,
     string_counter: &'a mut usize,
     ptr_type: types::Type,
-    inline_depth: usize,
 }
 
 impl<'a, M: Module> Ctx<'a, M> {
@@ -138,6 +137,12 @@ impl<'a, M: Module> Ctx<'a, M> {
     }
 
     fn create_string(&mut self, s: &str) -> Result<Value, CodegenError> {
+        if s.contains('\0') {
+            return Err(CodegenError {
+                message: "string literal contains null byte, which is not supported".to_string(),
+            });
+        }
+
         let name = format!(".str.{}", *self.string_counter);
         *self.string_counter += 1;
 
@@ -190,6 +195,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_panic", rt_panic as *const u8);
     jit_builder.symbol("rt_assert_fail", rt_assert_fail as *const u8);
     jit_builder.symbol("rt_div_by_zero", rt_div_by_zero as *const u8);
+    jit_builder.symbol("rt_int_overflow", rt_int_overflow as *const u8);
 
     let mut module = JITModule::new(jit_builder);
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
@@ -240,7 +246,7 @@ pub fn aot_compile(
         .map_err(|e| CodegenError { message: format!("failed to emit object: {e}") })?;
 
     // Write object file and runtime to temp, then link with cc
-    let tmp_dir = std::env::temp_dir().join("turbo_aot");
+    let tmp_dir = std::env::temp_dir().join(format!("turbo_aot_{}", std::process::id()));
     std::fs::create_dir_all(&tmp_dir)
         .map_err(|e| CodegenError { message: format!("failed to create temp dir: {e}") })?;
 
@@ -267,47 +273,10 @@ pub fn aot_compile(
         });
     }
 
-    // Clean up temp files
-    let _ = std::fs::remove_file(&obj_path);
-    let _ = std::fs::remove_file(&rt_path);
+    // Clean up temp directory and all files within
+    let _ = std::fs::remove_dir_all(&tmp_dir);
 
     Ok(())
-}
-
-// ── Inlining helpers ────────────────────────────────────────────────
-
-/// Returns true if an expression subtree contains any return statement.
-/// Functions with returns can't be safely inlined (would need merge blocks).
-fn has_return(expr: &Expr) -> bool {
-    match expr {
-        Expr::Block { stmts, tail_expr } => {
-            for stmt in stmts {
-                match &stmt.node {
-                    Stmt::Return(_) => return true,
-                    Stmt::Let { value, .. } => { if has_return(&value.node) { return true; } }
-                    Stmt::Expr(e) => { if has_return(&e.node) { return true; } }
-                }
-            }
-            tail_expr.as_ref().is_some_and(|t| has_return(&t.node))
-        }
-        Expr::If { condition, then_branch, else_branch } => {
-            has_return(&condition.node) ||
-            has_return(&then_branch.node) ||
-            else_branch.as_ref().is_some_and(|e| has_return(&e.node))
-        }
-        Expr::While { condition, body } => {
-            has_return(&condition.node) || has_return(&body.node)
-        }
-        Expr::BinaryOp { left, right, .. } => {
-            has_return(&left.node) || has_return(&right.node)
-        }
-        Expr::UnaryOp { expr, .. } => has_return(&expr.node),
-        Expr::Call { callee, args } => {
-            has_return(&callee.node) || args.iter().any(|a| has_return(&a.node))
-        }
-        Expr::Assign { value, .. } | Expr::CompoundAssign { value, .. } => has_return(&value.node),
-        _ => false,
-    }
 }
 
 // ── Shared module compilation ───────────────────────────────────────
@@ -328,6 +297,7 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_panic", &[ptr_type], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_assert_fail", &[ptr_type], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_div_by_zero", &[], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_int_overflow", &[], None)?;
 
     // Declare all user functions + build return type map
     let mut user_fns: HashMap<String, FuncId> = HashMap::new();
@@ -359,13 +329,6 @@ fn compile_module<M: Module>(
         fn_ret_types.insert(f.name.clone(), ret_turbo);
     }
 
-    // Build fn_asts map for inline expansion
-    let mut fn_asts: HashMap<String, &FnDef> = HashMap::new();
-    for item in &ast_module.items {
-        let Item::Function(f) = &item.node;
-        fn_asts.insert(f.name.clone(), f);
-    }
-
     // Define all user functions
     let mut cl_ctx = module.make_context();
     let mut data_desc = DataDescription::new();
@@ -394,20 +357,24 @@ fn compile_module<M: Module>(
                 module,
                 user_fns: &user_fns,
                 fn_ret_types: &fn_ret_types,
-                fn_asts: &fn_asts,
                 rt_fns: &rt_fns,
                 vars: HashMap::new(),
                 next_var: 0,
                 data_desc: &mut data_desc,
                 string_counter: &mut string_counter,
                 ptr_type,
-                inline_depth: 0,
             };
 
             let entry = cx.builder.create_block();
             cx.builder.append_block_params_for_function_params(entry);
             cx.builder.switch_to_block(entry);
             cx.builder.seal_block(entry);
+
+            // Ensure the entry block is always in the layout, even if the
+            // function body is empty (no instructions). Without this,
+            // FunctionBuilder::is_unreachable() misidentifies the entry block
+            // as unreachable because layout.entry_block() returns None.
+            cx.builder.ensure_inserted_block();
 
             // Define parameters as variables
             for (i, param) in f.params.iter().enumerate() {
@@ -426,7 +393,9 @@ fn compile_module<M: Module>(
                     if let Some((val, _)) = result {
                         cx.builder.ins().return_(&[val]);
                     } else {
-                        cx.builder.ins().return_(&[]);
+                        // Function claims to return a value but body returns unit.
+                        // This should have been caught by sema; emit a trap as a safety net.
+                        cx.builder.ins().trap(TrapCode::unwrap_user(1));
                     }
                 } else {
                     cx.builder.ins().return_(&[]);
@@ -690,6 +659,7 @@ fn compile_binop<M: Module>(
             BinOp::Mul => cx.builder.ins().imul(lhs, rhs),
             BinOp::Div | BinOp::Mod => {
                 emit_div_zero_check(cx, rhs);
+                emit_int_overflow_check(cx, lhs, rhs);
                 if op == BinOp::Div {
                     cx.builder.ins().sdiv(lhs, rhs)
                 } else {
@@ -722,6 +692,34 @@ fn emit_div_zero_check<M: Module>(cx: &mut Ctx<'_, M>, divisor: Value) {
     cx.builder.switch_to_block(trap_block);
     cx.builder.seal_block(trap_block);
     cx.rt_call("rt_div_by_zero", &[]);
+    cx.builder.ins().trap(TrapCode::unwrap_user(1));
+
+    cx.builder.switch_to_block(ok_block);
+    cx.builder.seal_block(ok_block);
+}
+
+fn emit_int_overflow_check<M: Module>(cx: &mut Ctx<'_, M>, dividend: Value, divisor: Value) {
+    let ty = cx.builder.func.dfg.value_type(dividend);
+
+    // Check if divisor is -1
+    let neg_one = cx.builder.ins().iconst(ty, -1i64);
+    let is_neg_one = cx.builder.ins().icmp(IntCC::Equal, divisor, neg_one);
+
+    // Check if dividend is INT_MIN (0x8000...0)
+    let int_min = cx.builder.ins().iconst(ty, i64::MIN);
+    let is_int_min = cx.builder.ins().icmp(IntCC::Equal, dividend, int_min);
+
+    // Both conditions must be true for overflow
+    let is_overflow = cx.builder.ins().band(is_neg_one, is_int_min);
+
+    let trap_block = cx.builder.create_block();
+    let ok_block = cx.builder.create_block();
+
+    cx.builder.ins().brif(is_overflow, trap_block, &[], ok_block, &[]);
+
+    cx.builder.switch_to_block(trap_block);
+    cx.builder.seal_block(trap_block);
+    cx.rt_call("rt_int_overflow", &[]);
     cx.builder.ins().trap(TrapCode::unwrap_user(1));
 
     cx.builder.switch_to_block(ok_block);
