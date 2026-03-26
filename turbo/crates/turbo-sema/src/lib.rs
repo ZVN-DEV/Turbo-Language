@@ -144,6 +144,8 @@ struct Checker {
     functions: HashMap<String, FnSig>,
     structs: HashMap<String, StructInfo>,
     enums: HashMap<String, EnumInfo>,
+    /// Methods: type_name -> method_name -> FnSig
+    methods: HashMap<String, HashMap<String, FnSig>>,
     scopes: Vec<Scope>,
     /// Return type of the current function being checked
     current_return_type: Ty,
@@ -156,6 +158,7 @@ impl Checker {
             functions: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
+            methods: HashMap::new(),
             scopes: Vec::new(),
             current_return_type: Ty::Unit,
         }
@@ -298,6 +301,80 @@ impl Checker {
             self.functions.insert(f.name.clone(), FnSig { params, ret });
         }
 
+        // Pass 2: register impl block methods
+        for item in &module.items {
+            let Item::Impl(imp) = &item.node else { continue };
+
+            if !self.structs.contains_key(&imp.type_name) {
+                self.error(
+                    format!("impl block for undefined type `{}`", imp.type_name),
+                    item.span.clone(),
+                );
+                continue;
+            }
+
+            // Collect method sigs first, then insert into self.methods
+            // (avoids simultaneous mutable borrows of self)
+            let mut new_methods: Vec<(String, FnSig, String)> = Vec::new(); // (method_name, sig, mangled_name)
+
+            for method_spanned in &imp.methods {
+                let method = &method_spanned.node;
+
+                // Check duplicate via a temporary lookup
+                let already_exists = self.methods.get(&imp.type_name)
+                    .map_or(false, |m| m.contains_key(&method.name));
+                if already_exists {
+                    self.error(
+                        format!("method `{}` is already defined for `{}`", method.name, imp.type_name),
+                        method_spanned.span.clone(),
+                    );
+                    continue;
+                }
+
+                let mut params = Vec::new();
+                for param in &method.params {
+                    if param.name == "self" {
+                        params.push(("self".to_string(), Ty::Struct(imp.type_name.clone())));
+                    } else {
+                        match resolve_type_expr(&param.ty.node, Some(&self.structs), Some(&self.enums)) {
+                            Some(ty) => params.push((param.name.clone(), ty)),
+                            None => {
+                                if let TypeExpr::Named(name) = &param.ty.node {
+                                    self.error(format!("unknown type `{name}`"), param.ty.span.clone());
+                                }
+                                params.push((param.name.clone(), Ty::Error));
+                            }
+                        }
+                    }
+                }
+
+                let ret = if let Some(ret_type) = &method.return_type {
+                    match resolve_type_expr(&ret_type.node, Some(&self.structs), Some(&self.enums)) {
+                        Some(ty) => ty,
+                        None => {
+                            if let TypeExpr::Named(name) = &ret_type.node {
+                                self.error(format!("unknown return type `{name}`"), ret_type.span.clone());
+                            }
+                            Ty::Error
+                        }
+                    }
+                } else {
+                    Ty::Unit
+                };
+
+                let mangled = format!("{}__{}", imp.type_name, method.name);
+                let sig = FnSig { params, ret };
+                new_methods.push((method.name.clone(), sig, mangled));
+            }
+
+            // Now insert all collected methods
+            let type_methods = self.methods.entry(imp.type_name.clone()).or_default();
+            for (method_name, sig, mangled) in new_methods {
+                type_methods.insert(method_name, sig.clone());
+                self.functions.insert(mangled, sig);
+            }
+        }
+
         // Check for main
         if !self.functions.contains_key("main") {
             let span = if module.items.is_empty() {
@@ -313,6 +390,19 @@ impl Checker {
             let Item::Function(f) = &item.node else { continue };
             if self.functions.contains_key(&f.name) {
                 self.check_function(f);
+            }
+        }
+
+        // Check impl method bodies
+        for item in &module.items {
+            let Item::Impl(imp) = &item.node else { continue };
+            if !self.structs.contains_key(&imp.type_name) { continue; }
+            for method_spanned in &imp.methods {
+                let method = &method_spanned.node;
+                let mangled = format!("{}__{}", imp.type_name, method.name);
+                if self.functions.contains_key(&mangled) {
+                    self.check_function_with_name(method, &mangled);
+                }
             }
         }
     }
@@ -342,6 +432,29 @@ impl Checker {
                     "function `{}` should return `{}` but body returns `{}`",
                     f.name, sig.ret, body_ty
                 ),
+                f.body.span.clone(),
+            );
+        }
+
+        self.pop_scope();
+    }
+
+    /// Check a function body using a different name for looking up its signature (for methods).
+    fn check_function_with_name(&mut self, f: &FnDef, sig_name: &str) {
+        let sig = self.functions.get(sig_name).cloned().unwrap();
+        self.current_return_type = sig.ret.clone();
+
+        self.push_scope();
+
+        for (name, ty) in &sig.params {
+            self.define_var(name, VarInfo { ty: ty.clone(), mutable: false }, &(0..0));
+        }
+
+        let body_ty = self.check_expr(&f.body);
+
+        if !sig.ret.is_error() && !body_ty.is_error() && sig.ret != Ty::Unit && body_ty != sig.ret {
+            self.error(
+                format!("method `{}` should return `{}` but body returns `{}`", f.name, sig.ret, body_ty),
                 f.body.span.clone(),
             );
         }
@@ -581,8 +694,97 @@ impl Checker {
 
                         sig.ret
                     } else {
+                        // Before reporting "undefined function", check if this is a UFCS method call.
+                        // The parser transforms `obj.method(args)` into `method(obj, args)`,
+                        // so the first arg is the receiver.
+                        let mut found_method = false;
+                        if !args.is_empty() {
+                            let first_arg_ty = self.check_expr(&args[0]);
+                            if let Ty::Struct(ref type_name) = first_arg_ty {
+                                if let Some(method_sig) = self.methods
+                                    .get(type_name)
+                                    .and_then(|m| m.get(name))
+                                    .cloned()
+                                {
+                                    found_method = true;
+                                    // Check argument count (all args including self)
+                                    if args.len() != method_sig.params.len() {
+                                        self.error(
+                                            format!(
+                                                "method `{name}` on `{type_name}` expects {} argument(s) but {} were given",
+                                                method_sig.params.len() - 1,
+                                                args.len() - 1
+                                            ),
+                                            callee.span.clone(),
+                                        );
+                                        return method_sig.ret;
+                                    }
+                                    // Check argument types (skip self at index 0, already checked)
+                                    for (i, arg) in args.iter().skip(1).enumerate() {
+                                        let arg_ty = self.check_expr(arg);
+                                        let (ref param_name, ref param_ty) = method_sig.params[i + 1];
+                                        if !arg_ty.is_error() && !param_ty.is_error() && arg_ty != *param_ty {
+                                            self.error(
+                                                format!("argument `{param_name}` expects `{param_ty}`, found `{arg_ty}`"),
+                                                arg.span.clone(),
+                                            );
+                                        }
+                                    }
+                                    return method_sig.ret;
+                                }
+                            }
+                        }
+                        if !found_method {
+                            self.error(
+                                format!("undefined function `{name}`"),
+                                callee.span.clone(),
+                            );
+                        }
+                        Ty::Error
+                    }
+                } else if let Expr::FieldAccess { object, field } = &callee.node {
+                    // Method call: object.method(args) — fallback for non-UFCS path
+                    let obj_ty = self.check_expr(object);
+                    if let Ty::Struct(ref type_name) = obj_ty {
+                        if let Some(method_sig) = self.methods
+                            .get(type_name)
+                            .and_then(|m| m.get(field))
+                            .cloned()
+                        {
+                            let expected_args = method_sig.params.len() - 1;
+                            if args.len() != expected_args {
+                                self.error(
+                                    format!(
+                                        "method `{field}` on `{type_name}` expects {} argument(s) but {} were given",
+                                        expected_args, args.len()
+                                    ),
+                                    callee.span.clone(),
+                                );
+                                return method_sig.ret;
+                            }
+                            for (i, arg) in args.iter().enumerate() {
+                                let arg_ty = self.check_expr(arg);
+                                let (ref param_name, ref param_ty) = method_sig.params[i + 1];
+                                if !arg_ty.is_error() && !param_ty.is_error() && arg_ty != *param_ty {
+                                    self.error(
+                                        format!("argument `{param_name}` expects `{param_ty}`, found `{arg_ty}`"),
+                                        arg.span.clone(),
+                                    );
+                                }
+                            }
+                            method_sig.ret
+                        } else {
+                            self.error(
+                                format!("no method `{field}` found on type `{type_name}`"),
+                                callee.span.clone(),
+                            );
+                            Ty::Error
+                        }
+                    } else if obj_ty.is_error() {
+                        Ty::Error
+                    } else {
                         self.error(
-                            format!("undefined function `{name}`"),
+                            format!("cannot call method `{field}` on type `{obj_ty}`"),
                             callee.span.clone(),
                         );
                         Ty::Error
@@ -1012,6 +1214,15 @@ impl Checker {
                 }
 
                 result_ty.unwrap_or(Ty::Unit)
+            }
+
+            Expr::Interpolation(parts) => {
+                for part in parts {
+                    if let InterpolPart::Expr(expr) = part {
+                        self.check_expr(expr);
+                    }
+                }
+                Ty::Str
             }
         }
     }

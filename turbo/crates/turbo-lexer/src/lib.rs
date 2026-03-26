@@ -230,8 +230,8 @@ fn parse_string(lex: &mut logos::Lexer<Token>) -> Option<std::string::String> {
                 std::option::Option::Some('r') => result.push('\r'),
                 std::option::Option::Some('\\') => result.push('\\'),
                 std::option::Option::Some('"') => result.push('"'),
-                std::option::Option::Some('{') => result.push('{'),
-                std::option::Option::Some('}') => result.push('}'),
+                std::option::Option::Some('{') => { result.push('\\'); result.push('{'); }
+                std::option::Option::Some('}') => { result.push('\\'); result.push('}'); }
                 std::option::Option::Some(other) => {
                     result.push('\\');
                     result.push(other);

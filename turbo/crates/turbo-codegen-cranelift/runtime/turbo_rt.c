@@ -101,6 +101,30 @@ void* rt_struct_alloc(long long num_fields) {
     return calloc(1, size);
 }
 
+const char* rt_i64_to_str(long long n) {
+    char *buf = malloc(32);
+    snprintf(buf, 32, "%lld", n);
+    return buf;
+}
+
+const char* rt_f64_to_str(double n) {
+    char *buf = malloc(32);
+    snprintf(buf, 32, "%g", n);
+    return buf;
+}
+
+const char* rt_bool_to_str(char b) {
+    if (b) {
+        char *buf = malloc(5);
+        memcpy(buf, "true", 5);
+        return buf;
+    } else {
+        char *buf = malloc(6);
+        memcpy(buf, "false", 6);
+        return buf;
+    }
+}
+
 /* Entry point: calls Turbo's main and returns 0 */
 extern void turbo_main(void);
 int main(void) {

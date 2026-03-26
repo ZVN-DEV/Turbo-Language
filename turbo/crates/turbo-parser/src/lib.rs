@@ -137,11 +137,18 @@ impl Parser {
                 let end = self.tokens[self.pos - 1].span.end;
                 Ok(Spanned::new(Item::Enum(e), start..end))
             }
+            Some(Token::Impl) => {
+                let imp = self.parse_impl_block()?;
+                let end = self.tokens.get(self.pos.saturating_sub(1))
+                    .map(|t| t.span.end)
+                    .unwrap_or(start);
+                Ok(Spanned::new(Item::Impl(imp), start..end))
+            }
             _ => {
                 let span = self.peek_span();
                 let found = self.peek().map(|t| format!("`{t}`")).unwrap_or("end of file".to_string());
                 Err(ParseError {
-                    message: format!("expected `fn`, `struct`, or `type`, found {found}"),
+                    message: format!("expected `fn`, `struct`, `type`, or `impl`, found {found}"),
                     span,
                 })
             }
@@ -183,6 +190,21 @@ impl Parser {
         Ok(EnumDef { name, variants })
     }
 
+    fn parse_impl_block(&mut self) -> Result<ImplBlock, ParseError> {
+        self.expect(&Token::Impl)?;
+        let (type_name, _) = self.expect_ident()?;
+        self.expect(&Token::LBrace)?;
+        let mut methods = Vec::new();
+        while !matches!(self.peek(), Some(Token::RBrace) | None) {
+            let start = self.peek_span().start;
+            let f = self.parse_fn_def()?;
+            let end = f.body.span.end;
+            methods.push(Spanned::new(f, start..end));
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(ImplBlock { type_name, methods })
+    }
+
     fn parse_fn_def(&mut self) -> Result<FnDef, ParseError> {
         self.expect(&Token::Fn)?;
         let (name, _) = self.expect_ident()?;
@@ -216,15 +238,28 @@ impl Parser {
 
         loop {
             let start = self.peek_span().start;
-            let (name, _) = self.expect_ident()?;
-            self.expect(&Token::Colon)?;
-            let ty = self.parse_type()?;
-            let end = ty.span.end;
-            params.push(Param {
-                name,
-                ty,
-                span: start..end,
-            });
+            let (name, name_span) = self.expect_ident()?;
+
+            // Special case: bare `self` parameter (no type annotation)
+            if name == "self" && !matches!(self.peek(), Some(Token::Colon)) {
+                let end = name_span.end;
+                // Use a placeholder type; sema/codegen will fill in the real struct type
+                let ty = Spanned::new(TypeExpr::Named("Self".to_string()), name_span.clone());
+                params.push(Param {
+                    name,
+                    ty,
+                    span: start..end,
+                });
+            } else {
+                self.expect(&Token::Colon)?;
+                let ty = self.parse_type()?;
+                let end = ty.span.end;
+                params.push(Param {
+                    name,
+                    ty,
+                    span: start..end,
+                });
+            }
 
             if matches!(self.peek(), Some(Token::Comma)) {
                 self.advance();
@@ -406,7 +441,46 @@ impl Parser {
             ));
         }
 
-        self.parse_binary(lhs, 0)
+        let mut result = self.parse_binary(lhs, 0)?;
+
+        // Pipe operator |> (lowest precedence, left-associative)
+        // Desugars: `a |> f` => `f(a)`, `a |> f(b, c)` => `f(a, b, c)`
+        while matches!(self.peek(), Some(Token::Pipe)) {
+            self.advance(); // consume |>
+            // Parse RHS at full binary precedence (everything binds tighter than pipe)
+            let rhs_start = self.parse_unary()?;
+            let rhs = self.parse_binary(rhs_start, 0)?;
+            // Desugar based on RHS shape
+            let result_start = result.span.start;
+            match rhs.node {
+                Expr::Call { callee, mut args } => {
+                    // a |> f(b, c) => f(a, b, c)
+                    let end = args.last().map(|a| a.span.end).unwrap_or(callee.span.end);
+                    args.insert(0, result);
+                    let span = result_start..end;
+                    result = Spanned::new(Expr::Call { callee, args }, span);
+                }
+                Expr::Ident(_) => {
+                    // a |> f => f(a)
+                    let span = result_start..rhs.span.end;
+                    result = Spanned::new(
+                        Expr::Call {
+                            callee: Box::new(rhs),
+                            args: vec![result],
+                        },
+                        span,
+                    );
+                }
+                _ => {
+                    return Err(ParseError {
+                        message: "pipe operator `|>` requires a function name or function call on the right side".to_string(),
+                        span: rhs.span,
+                    });
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     fn peek_compound_assign(&self) -> Option<BinOp> {
@@ -533,17 +607,38 @@ impl Parser {
                     span,
                 );
             } else if matches!(self.peek(), Some(Token::Dot)) {
-                // Dot access: field access or enum variant (resolved in sema)
+                // Dot access: method call, field access, or enum variant (resolved in sema)
                 self.advance(); // consume .
-                let (field_name, field_span) = self.expect_ident()?;
-                let span = expr.span.start..field_span.end;
-                expr = Spanned::new(
-                    Expr::FieldAccess {
-                        object: Box::new(expr),
-                        field: field_name,
-                    },
-                    span,
-                );
+                let (name, name_span) = self.expect_ident()?;
+
+                if matches!(self.peek(), Some(Token::LParen)) {
+                    // Method-style call: expr.method(args) => method(expr, args)
+                    let expr_start = expr.span.start;
+                    self.advance(); // consume (
+                    let mut args = self.parse_call_args()?;
+                    let end = self.peek_span().end;
+                    self.expect(&Token::RParen)?;
+                    args.insert(0, expr);
+                    let callee = Spanned::new(Expr::Ident(name), name_span);
+                    let span = expr_start..end;
+                    expr = Spanned::new(
+                        Expr::Call {
+                            callee: Box::new(callee),
+                            args,
+                        },
+                        span,
+                    );
+                } else {
+                    // Field access or enum variant (existing behavior)
+                    let span = expr.span.start..name_span.end;
+                    expr = Spanned::new(
+                        Expr::FieldAccess {
+                            object: Box::new(expr),
+                            field: name,
+                        },
+                        span,
+                    );
+                }
             } else if let Expr::Ident(ref name) = expr.node {
                 if matches!(self.peek(), Some(Token::LBrace)) {
                     // Possible struct literal: Name { field: value, ... }
@@ -858,6 +953,112 @@ impl Parser {
             }
         }
     }
+
+    /// Parse a string interpolation like "Hello, {name}!"
+    fn parse_interpolation(&mut self, s: &str, span: &Span) -> Result<Spanned<Expr>, ParseError> {
+        let parts = split_interpolation_parts(s, span)?;
+        Ok(Spanned::new(Expr::Interpolation(parts), span.clone()))
+    }
+}
+
+/// Check if a string contains an unescaped `{` (interpolation marker).
+fn has_unescaped_brace(s: &str) -> bool {
+    let chars: Vec<char> = s.chars().collect();
+    for i in 0..chars.len() {
+        if chars[i] == '{' && (i == 0 || chars[i - 1] != '\\') {
+            return true;
+        }
+    }
+    false
+}
+
+/// Replace `\{` with `{` and `\}` with `}` in a string.
+fn unescape_braces(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.peek() {
+                Some('{') => { chars.next(); result.push('{'); }
+                Some('}') => { chars.next(); result.push('}'); }
+                _ => result.push(c),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Split a string with interpolation markers into parts.
+fn split_interpolation_parts(s: &str, span: &Span) -> Result<Vec<InterpolPart>, ParseError> {
+    let mut parts = Vec::new();
+    let mut current_lit = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() && (chars[i + 1] == '{' || chars[i + 1] == '}') {
+            current_lit.push(chars[i + 1]);
+            i += 2;
+        } else if chars[i] == '{' {
+            if !current_lit.is_empty() {
+                parts.push(InterpolPart::Lit(current_lit.clone()));
+                current_lit.clear();
+            }
+            i += 1;
+            let mut depth = 1;
+            let mut expr_str = String::new();
+            while i < chars.len() && depth > 0 {
+                if chars[i] == '{' {
+                    depth += 1;
+                    expr_str.push(chars[i]);
+                } else if chars[i] == '}' {
+                    depth -= 1;
+                    if depth > 0 {
+                        expr_str.push(chars[i]);
+                    }
+                } else {
+                    expr_str.push(chars[i]);
+                }
+                i += 1;
+            }
+            if depth != 0 {
+                return Err(ParseError {
+                    message: "unterminated interpolation expression in string".to_string(),
+                    span: span.clone(),
+                });
+            }
+            let (tokens, lex_errors) = turbo_lexer::tokenize(&expr_str);
+            if !lex_errors.is_empty() {
+                return Err(ParseError {
+                    message: format!("lex error in interpolation expression: `{}`", expr_str),
+                    span: span.clone(),
+                });
+            }
+            let mut sub_parser = Parser::new(tokens);
+            let expr = sub_parser.parse_expr().map_err(|e| ParseError {
+                message: format!("error in interpolation expression: {}", e.message),
+                span: span.clone(),
+            })?;
+            if !sub_parser.at_end() {
+                return Err(ParseError {
+                    message: format!("unexpected tokens after interpolation expression: `{}`", expr_str),
+                    span: span.clone(),
+                });
+            }
+            parts.push(InterpolPart::Expr(Box::new(expr)));
+        } else {
+            current_lit.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    if !current_lit.is_empty() {
+        parts.push(InterpolPart::Lit(current_lit));
+    }
+
+    Ok(parts)
 }
 
 /// Parse a token stream into a Module.
@@ -1135,6 +1336,140 @@ mod tests {
             assert!(tail_expr.is_some()); // x + 1 is the tail expr
         } else {
             panic!("Expected block");
+        }
+    }
+
+    #[test]
+    fn test_pipe_simple() {
+        // 5 |> double desugars to double(5)
+        let source = "fn double(x: i64) -> i64 { x * 2 }\nfn main() { 5 |> double }";
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[1].node else { panic!("Expected function") };
+        if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+            if let Expr::Call { callee, args } = &tail.node {
+                assert!(matches!(&callee.node, Expr::Ident(name) if name == "double"));
+                assert_eq!(args.len(), 1);
+                assert!(matches!(&args[0].node, Expr::IntLit(5)));
+            } else {
+                panic!("Expected Call, got {:?}", tail.node);
+            }
+        } else {
+            panic!("Expected tail expr");
+        }
+    }
+
+    #[test]
+    fn test_pipe_with_args() {
+        // 5 |> add(10) desugars to add(5, 10)
+        let source = "fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { 5 |> add(10) }";
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[1].node else { panic!("Expected function") };
+        if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+            if let Expr::Call { callee, args } = &tail.node {
+                assert!(matches!(&callee.node, Expr::Ident(name) if name == "add"));
+                assert_eq!(args.len(), 2);
+                assert!(matches!(&args[0].node, Expr::IntLit(5)));
+                assert!(matches!(&args[1].node, Expr::IntLit(10)));
+            } else {
+                panic!("Expected Call, got {:?}", tail.node);
+            }
+        } else {
+            panic!("Expected tail expr");
+        }
+    }
+
+    #[test]
+    fn test_pipe_chained() {
+        // 5 |> double |> add(10) desugars to add(double(5), 10)
+        let source = "fn double(x: i64) -> i64 { x * 2 }\nfn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { 5 |> double |> add(10) }";
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[2].node else { panic!("Expected function") };
+        if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+            if let Expr::Call { callee, args } = &tail.node {
+                assert!(matches!(&callee.node, Expr::Ident(name) if name == "add"));
+                assert_eq!(args.len(), 2);
+                if let Expr::Call { callee: inner_callee, args: inner_args } = &args[0].node {
+                    assert!(matches!(&inner_callee.node, Expr::Ident(name) if name == "double"));
+                    assert_eq!(inner_args.len(), 1);
+                    assert!(matches!(&inner_args[0].node, Expr::IntLit(5)));
+                } else {
+                    panic!("Expected inner Call, got {:?}", args[0].node);
+                }
+                assert!(matches!(&args[1].node, Expr::IntLit(10)));
+            } else {
+                panic!("Expected Call, got {:?}", tail.node);
+            }
+        } else {
+            panic!("Expected tail expr");
+        }
+    }
+
+    #[test]
+    fn test_method_style_call() {
+        // a.len() desugars to len(a)
+        let source = "fn main() { let a = [1, 2, 3]\n a.len() }";
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
+        if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+            if let Expr::Call { callee, args } = &tail.node {
+                assert!(matches!(&callee.node, Expr::Ident(name) if name == "len"));
+                assert_eq!(args.len(), 1);
+                assert!(matches!(&args[0].node, Expr::Ident(name) if name == "a"));
+            } else {
+                panic!("Expected Call, got {:?}", tail.node);
+            }
+        } else {
+            panic!("Expected tail expr");
+        }
+    }
+
+    #[test]
+    fn test_method_style_with_args() {
+        // a.push(5) desugars to push(a, 5)
+        let source = "fn main() { let a = [1, 2, 3]\n a.push(5) }";
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
+        if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+            if let Expr::Call { callee, args } = &tail.node {
+                assert!(matches!(&callee.node, Expr::Ident(name) if name == "push"));
+                assert_eq!(args.len(), 2);
+                assert!(matches!(&args[0].node, Expr::Ident(name) if name == "a"));
+                assert!(matches!(&args[1].node, Expr::IntLit(5)));
+            } else {
+                panic!("Expected Call, got {:?}", tail.node);
+            }
+        } else {
+            panic!("Expected tail expr");
+        }
+    }
+
+    #[test]
+    fn test_field_access_still_works() {
+        // expr.field (without parens) should still be FieldAccess
+        let source = "fn main() { let p = Point { x: 1, y: 2 }\n p.x }";
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
+        if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+            assert!(matches!(&tail.node, Expr::FieldAccess { field, .. } if field == "x"));
+        } else {
+            panic!("Expected tail expr");
+        }
+    }
+
+    #[test]
+    fn test_string_interpolation() {
+        let source = r#"fn main() { print("Hello, {name}!") }"#;
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
+        if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+            if let Expr::Call { args, .. } = &tail.node {
+                assert!(matches!(&args[0].node, Expr::Interpolation(_)),
+                    "Expected Interpolation, got: {:?}", args[0].node);
+            } else {
+                panic!("Expected Call, got: {:?}", tail.node);
+            }
+        } else {
+            panic!("Expected Block with tail expr, got: {:?}", f.body.node);
         }
     }
 }

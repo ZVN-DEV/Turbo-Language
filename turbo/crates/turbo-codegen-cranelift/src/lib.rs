@@ -196,6 +196,24 @@ extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
     unsafe { std::alloc::alloc_zeroed(layout) }
 }
 
+extern "C" fn rt_i64_to_str(n: i64) -> *const u8 {
+    let s = format!("{}", n);
+    let c = std::ffi::CString::new(s).unwrap();
+    c.into_raw() as *const u8
+}
+
+extern "C" fn rt_f64_to_str(n: f64) -> *const u8 {
+    let s = format!("{}", n);
+    let c = std::ffi::CString::new(s).unwrap();
+    c.into_raw() as *const u8
+}
+
+extern "C" fn rt_bool_to_str(b: i8) -> *const u8 {
+    let s = if b != 0 { "true" } else { "false" };
+    let c = std::ffi::CString::new(s).unwrap();
+    c.into_raw() as *const u8
+}
+
 // ── Runtime C source for AOT linking ────────────────────────────────
 
 const RUNTIME_C: &str = include_str!("../runtime/turbo_rt.c");
@@ -296,6 +314,9 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_array_len", rt_array_len as *const u8);
     jit_builder.symbol("rt_str_len", rt_str_len as *const u8);
     jit_builder.symbol("rt_struct_alloc", rt_struct_alloc as *const u8);
+    jit_builder.symbol("rt_i64_to_str", rt_i64_to_str as *const u8);
+    jit_builder.symbol("rt_f64_to_str", rt_f64_to_str as *const u8);
+    jit_builder.symbol("rt_bool_to_str", rt_bool_to_str as *const u8);
 
     let mut module = JITModule::new(jit_builder);
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
@@ -405,6 +426,9 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_array_len", &[ptr_type], Some(types::I64))?;
     declare_rt_fn(module, &mut rt_fns, "rt_str_len", &[ptr_type], Some(types::I64))?;
     declare_rt_fn(module, &mut rt_fns, "rt_struct_alloc", &[types::I64], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_i64_to_str", &[types::I64], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_f64_to_str", &[types::F64], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_bool_to_str", &[types::I8], Some(ptr_type))?;
 
     // Build enum variants map
     let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();
@@ -452,6 +476,39 @@ fn compile_module<M: Module>(
             .map_err(|e| CodegenError { message: e.to_string() })?;
         user_fns.insert(f.name.clone(), id);
         fn_ret_types.insert(f.name.clone(), ret_turbo);
+    }
+
+    // Declare all methods from impl blocks
+    for item in &ast_module.items {
+        let Item::Impl(imp) = &item.node else { continue };
+        for method_spanned in &imp.methods {
+            let method = &method_spanned.node;
+            let mangled = format!("{}__{}", imp.type_name, method.name);
+
+            let mut sig = module.make_signature();
+            sig.call_conv = CallConv::Fast;
+
+            for param in &method.params {
+                if param.name == "self" {
+                    sig.params.push(AbiParam::new(ptr_type));
+                } else {
+                    sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants)?));
+                }
+            }
+
+            let ret_turbo = if let Some(ret_ty) = &method.return_type {
+                let cl = resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants)?;
+                sig.returns.push(AbiParam::new(cl));
+                turbo_ty_from_type_expr(&ret_ty.node, &enum_variants)
+            } else {
+                TurboTy::Unit
+            };
+
+            let id = module.declare_function(&mangled, Linkage::Local, &sig)
+                .map_err(|e| CodegenError { message: e.to_string() })?;
+            user_fns.insert(mangled.clone(), id);
+            fn_ret_types.insert(mangled, ret_turbo);
+        }
     }
 
     // Define all user functions
@@ -535,6 +592,90 @@ fn compile_module<M: Module>(
         module.define_function(func_id, &mut cl_ctx)
             .map_err(|e| CodegenError { message: e.to_string() })?;
         module.clear_context(&mut cl_ctx);
+    }
+
+    // Define all methods from impl blocks
+    for item in &ast_module.items {
+        let Item::Impl(imp) = &item.node else { continue };
+        for method_spanned in &imp.methods {
+            let method = &method_spanned.node;
+            let mangled = format!("{}__{}", imp.type_name, method.name);
+            let func_id = user_fns[&mangled];
+
+            cl_ctx.func.signature = module.make_signature();
+            cl_ctx.func.signature.call_conv = CallConv::Fast;
+
+            for param in &method.params {
+                if param.name == "self" {
+                    cl_ctx.func.signature.params.push(AbiParam::new(ptr_type));
+                } else {
+                    cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants)?));
+                }
+            }
+            if let Some(ret_ty) = &method.return_type {
+                cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants)?));
+            }
+
+            let mut fn_ctx = FunctionBuilderContext::new();
+            {
+                let builder = FunctionBuilder::new(&mut cl_ctx.func, &mut fn_ctx);
+                let mut cx = Ctx {
+                    builder,
+                    module,
+                    user_fns: &user_fns,
+                    fn_ret_types: &fn_ret_types,
+                    rt_fns: &rt_fns,
+                    vars: HashMap::new(),
+                    next_var: 0,
+                    data_desc: &mut data_desc,
+                    string_counter: &mut string_counter,
+                    ptr_type,
+                    struct_fields: &struct_fields,
+                    enum_variants: &enum_variants,
+                };
+
+                let entry = cx.builder.create_block();
+                cx.builder.append_block_params_for_function_params(entry);
+                cx.builder.switch_to_block(entry);
+                cx.builder.seal_block(entry);
+                cx.builder.ensure_inserted_block();
+
+                // Define parameters as variables
+                for (i, param) in method.params.iter().enumerate() {
+                    let (cl_ty, turbo_ty) = if param.name == "self" {
+                        (ptr_type, TurboTy::Struct(imp.type_name.clone()))
+                    } else {
+                        let cl_ty = resolve_cl_type(&param.ty.node, ptr_type, &enum_variants)?;
+                        let turbo_ty = turbo_ty_from_type_expr(&param.ty.node, &enum_variants);
+                        (cl_ty, turbo_ty)
+                    };
+                    let var = cx.fresh_var(cl_ty, turbo_ty.clone());
+                    let val = cx.builder.block_params(entry)[i];
+                    cx.builder.def_var(var, val);
+                    cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
+                }
+
+                let result = compile_expr(&mut cx, &method.body)?;
+
+                if !cx.builder.is_unreachable() {
+                    if method.return_type.is_some() {
+                        if let Some((val, _)) = result {
+                            cx.builder.ins().return_(&[val]);
+                        } else {
+                            cx.builder.ins().trap(TrapCode::unwrap_user(1));
+                        }
+                    } else {
+                        cx.builder.ins().return_(&[]);
+                    }
+                }
+
+                cx.builder.finalize();
+            }
+
+            module.define_function(func_id, &mut cl_ctx)
+                .map_err(|e| CodegenError { message: e.to_string() })?;
+            module.clear_context(&mut cl_ctx);
+        }
     }
 
     Ok(user_fns)
@@ -887,6 +1028,8 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
         }
 
         Expr::Match { subject, arms } => compile_match(cx, subject, arms),
+
+        Expr::Interpolation(parts) => compile_interpolation(cx, parts),
     }
 }
 
@@ -1107,6 +1250,32 @@ fn compile_call<M: Module>(
     callee: &Spanned<Expr>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
+    // Handle method calls: expr.method(args)
+    if let Expr::FieldAccess { ref object, ref field } = callee.node {
+        let (obj_val, obj_tty) = compile_expr(cx, object)?.unwrap();
+        if let TurboTy::Struct(ref type_name) = obj_tty {
+            let mangled = format!("{}__{}", type_name, field);
+            if let Some(&fid) = cx.user_fns.get(&mangled) {
+                let mut arg_vals = vec![obj_val];
+                for arg in args {
+                    if let Some((v, _)) = compile_expr(cx, arg)? {
+                        arg_vals.push(v);
+                    }
+                }
+                let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                let call = cx.builder.ins().call(fref, &arg_vals);
+                let results = cx.builder.inst_results(call);
+                let ret_tty = cx.fn_ret_types.get(&mangled).cloned().unwrap_or(TurboTy::Unit);
+                if results.is_empty() {
+                    return Ok(None);
+                } else {
+                    return Ok(Some((results[0], ret_tty)));
+                }
+            }
+        }
+        return Err(CodegenError { message: format!("no method `{field}` found") });
+    }
+
     let Expr::Ident(name) = &callee.node else {
         return Err(CodegenError { message: "indirect function calls not yet supported".to_string() });
     };
@@ -1117,6 +1286,32 @@ fn compile_call<M: Module>(
         "assert" => compile_assert(cx, args),
         "len" => compile_len(cx, args),
         _ => {
+            // Check if this is a method call (UFCS: parser rewrites obj.method(args) -> method(obj, args))
+            if cx.user_fns.get(name.as_str()).is_none() && !args.is_empty() {
+                // Compile first arg to get its type, then check for method
+                let (first_val, first_tty) = compile_expr(cx, &args[0])?.unwrap();
+                if let TurboTy::Struct(ref type_name) = first_tty {
+                    let mangled = format!("{}__{}", type_name, name);
+                    if let Some(&fid) = cx.user_fns.get(&mangled) {
+                        let mut arg_vals = vec![first_val];
+                        for arg in &args[1..] {
+                            if let Some((v, _)) = compile_expr(cx, arg)? {
+                                arg_vals.push(v);
+                            }
+                        }
+                        let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                        let call = cx.builder.ins().call(fref, &arg_vals);
+                        let results = cx.builder.inst_results(call);
+                        let ret_tty = cx.fn_ret_types.get(&mangled).cloned().unwrap_or(TurboTy::Unit);
+                        if results.is_empty() {
+                            return Ok(None);
+                        } else {
+                            return Ok(Some((results[0], ret_tty)));
+                        }
+                    }
+                }
+            }
+
             let func_id = *cx.user_fns.get(name.as_str())
                 .ok_or_else(|| CodegenError { message: format!("undefined function: {name}") })?;
 
@@ -1378,6 +1573,99 @@ fn compile_str_compare<M: Module>(
         result
     };
     Ok(Some((result, TurboTy::Bool)))
+}
+
+// ── String interpolation ────────────────────────────────────────────
+
+fn compile_interpolation<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    parts: &[turbo_ast::InterpolPart],
+) -> Result<MaybeTyped, CodegenError> {
+    let mut result: Option<Value> = None;
+
+    for part in parts {
+        let part_str = match part {
+            turbo_ast::InterpolPart::Lit(s) => {
+                cx.create_string(s)?
+            }
+            turbo_ast::InterpolPart::Expr(expr) => {
+                let (val, tty) = compile_expr(cx, expr)?.unwrap();
+                convert_to_str(cx, val, &tty)?
+            }
+        };
+
+        result = Some(match result {
+            None => part_str,
+            Some(acc) => {
+                let fid = cx.rt_fns["rt_str_concat"];
+                let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                let call = cx.builder.ins().call(fref, &[acc, part_str]);
+                cx.builder.inst_results(call)[0]
+            }
+        });
+    }
+
+    match result {
+        Some(val) => Ok(Some((val, TurboTy::Str))),
+        None => {
+            let ptr = cx.create_string("")?;
+            Ok(Some((ptr, TurboTy::Str)))
+        }
+    }
+}
+
+fn convert_to_str<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    val: Value,
+    tty: &TurboTy,
+) -> Result<Value, CodegenError> {
+    match tty {
+        TurboTy::Str => Ok(val),
+        TurboTy::Int => {
+            let ty = cx.builder.func.dfg.value_type(val);
+            let val = if ty.bits() < 64 {
+                cx.builder.ins().sextend(types::I64, val)
+            } else {
+                val
+            };
+            let fid = cx.rt_fns["rt_i64_to_str"];
+            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+            let call = cx.builder.ins().call(fref, &[val]);
+            Ok(cx.builder.inst_results(call)[0])
+        }
+        TurboTy::Float => {
+            let fid = cx.rt_fns["rt_f64_to_str"];
+            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+            let call = cx.builder.ins().call(fref, &[val]);
+            Ok(cx.builder.inst_results(call)[0])
+        }
+        TurboTy::Bool => {
+            let fid = cx.rt_fns["rt_bool_to_str"];
+            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+            let call = cx.builder.ins().call(fref, &[val]);
+            Ok(cx.builder.inst_results(call)[0])
+        }
+        TurboTy::Unit => {
+            cx.create_string("()")
+        }
+        TurboTy::Enum => {
+            let val = if cx.builder.func.dfg.value_type(val).bits() < 64 {
+                cx.builder.ins().sextend(types::I64, val)
+            } else {
+                val
+            };
+            let fid = cx.rt_fns["rt_i64_to_str"];
+            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+            let call = cx.builder.ins().call(fref, &[val]);
+            Ok(cx.builder.inst_results(call)[0])
+        }
+        TurboTy::Array => {
+            cx.create_string("[array]")
+        }
+        TurboTy::Struct(name) => {
+            cx.create_string(&format!("[struct {}]", name))
+        }
+    }
 }
 
 // ── While loop ──────────────────────────────────────────────────────

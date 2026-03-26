@@ -26,6 +26,14 @@ pub enum Item {
     Function(FnDef),
     Struct(StructDef),
     Enum(EnumDef),
+    Impl(ImplBlock),
+}
+
+/// Impl block: methods attached to a struct type
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplBlock {
+    pub type_name: String,
+    pub methods: Vec<Spanned<FnDef>>,
 }
 
 /// Enum (sum type) definition
@@ -75,6 +83,15 @@ pub enum TypeExpr {
     Unit,
     /// Array type: [T]
     Array(Box<Spanned<TypeExpr>>),
+}
+
+/// Part of a string interpolation
+#[derive(Debug, Clone, PartialEq)]
+pub enum InterpolPart {
+    /// Literal string segment
+    Lit(String),
+    /// Expression to be evaluated and converted to string
+    Expr(Box<Spanned<Expr>>),
 }
 
 /// Expressions
@@ -174,6 +191,8 @@ pub enum Expr {
         subject: Box<Spanned<Expr>>,
         arms: Vec<MatchArm>,
     },
+    /// String interpolation: "text {expr} text"
+    Interpolation(Vec<InterpolPart>),
 }
 
 /// Statements (things that don't produce values in statement position)
