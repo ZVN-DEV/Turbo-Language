@@ -1,0 +1,8 @@
+fn main() {
+    let nums = [10, 20, 30, 40]
+    let mut total = 0
+    for n in nums {
+        total += n
+    }
+    print(total)
+}

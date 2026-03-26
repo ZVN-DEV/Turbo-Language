@@ -1,0 +1,6 @@
+import { Color, color_name } from "./color_lib"
+
+fn main() {
+    let c = Color.Green
+    print(color_name(c))
+}

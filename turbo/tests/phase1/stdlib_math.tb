@@ -1,0 +1,11 @@
+fn main() {
+    print(abs(-42))
+    print(abs(42))
+    print(abs(0))
+    print(min(10, 20))
+    print(max(10, 20))
+    print(min(-5, 5))
+    print(max(-5, 5))
+    print(min(7, 7))
+    print(max(7, 7))
+}

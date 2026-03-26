@@ -1,0 +1,8 @@
+struct Point {
+    x: i64,
+    y: i64
+}
+
+fn make_point(x: i64, y: i64) -> Point {
+    Point { x: x, y: y }
+}

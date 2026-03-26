@@ -1,0 +1,21 @@
+type Color {
+    Red,
+    Green,
+    Blue,
+}
+
+fn describe(c: Color) -> str {
+    match c {
+        Red => "red"
+        Green => "green"
+        Blue => "blue"
+    }
+}
+
+fn main() {
+    let c = Color.Green
+    print(describe(c))
+
+    let r = Color.Red
+    print(describe(r))
+}

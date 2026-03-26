@@ -1,5 +1,8 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use turbo_ast::{Item, Module};
+use ariadne::{Color, Label, Report, ReportKind, Source};
 
 mod playground;
 
@@ -52,11 +55,37 @@ fn main() {
     }
 }
 
+/// Print a rich error diagnostic using ariadne.
+fn report_error(source: &str, filename: &str, message: &str, span: &std::ops::Range<usize>, help: Option<&str>) {
+    // Clamp span to source bounds to avoid panics on edge-case spans
+    let start = span.start.min(source.len());
+    let end = span.end.min(source.len()).max(start);
+    let clamped = start..end;
+
+    let mut builder = Report::build(ReportKind::Error, filename, clamped.start)
+        .with_message(message);
+
+    builder = builder.with_label(
+        Label::new((filename, clamped))
+            .with_message(message)
+            .with_color(Color::Red),
+    );
+
+    if let Some(help_text) = help {
+        builder = builder.with_help(help_text);
+    }
+
+    builder
+        .finish()
+        .eprint((filename, Source::from(source)))
+        .unwrap();
+}
+
 fn run_file(path: &std::path::Path, verbose: bool) {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error: could not read file `{}`: {e}", path.display());
+            eprintln!("\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}", path.display());
             std::process::exit(1);
         }
     };
@@ -72,10 +101,13 @@ fn run_file(path: &std::path::Path, verbose: bool) {
 
     if !lex_errors.is_empty() {
         for span in &lex_errors {
-            let (line, col) = line_col(&source, span.start);
-            eprintln!(
-                "error: unexpected character at {filename}:{line}:{col}: `{}`",
-                &source[span.clone()]
+            let snippet = &source[span.clone()];
+            report_error(
+                &source,
+                &filename,
+                &format!("unexpected character `{snippet}`"),
+                span,
+                Some("remove this character or check for typos"),
             );
         }
         std::process::exit(1);
@@ -91,19 +123,40 @@ fn run_file(path: &std::path::Path, verbose: bool) {
 
     // Parse
     let parse_start = std::time::Instant::now();
-    let (module, parse_errors) = turbo_parser::parse(tokens);
+    let (mut module, parse_errors) = turbo_parser::parse(tokens);
     let parse_time = parse_start.elapsed();
 
     if !parse_errors.is_empty() {
         for err in &parse_errors {
-            let (line, col) = line_col(&source, err.span.start);
-            eprintln!("error: {} at {filename}:{line}:{col}", err.message);
+            report_error(
+                &source,
+                &filename,
+                &err.message,
+                &err.span,
+                None,
+            );
         }
         std::process::exit(1);
     }
 
+    // Resolve imports
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let canonical_self = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut loading = HashSet::new();
+    loading.insert(canonical_self);
+    if let Err(e) = resolve_imports(&mut module, base_dir, &mut loading) {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+
     if module.items.is_empty() {
-        eprintln!("error: no functions defined in {filename}");
+        report_error(
+            &source,
+            &filename,
+            "no functions defined",
+            &(0..source.len().min(1)),
+            Some("add a `fn main() { ... }` function to get started"),
+        );
         std::process::exit(1);
     }
 
@@ -126,8 +179,14 @@ fn run_file(path: &std::path::Path, verbose: bool) {
 
     if !sema_errors.is_empty() {
         for err in &sema_errors {
-            let (line, col) = line_col(&source, err.span.start);
-            eprintln!("error: {} at {filename}:{line}:{col}", err.message);
+            let help = sema_help(&err.message);
+            report_error(
+                &source,
+                &filename,
+                &err.message,
+                &err.span,
+                help.as_deref(),
+            );
         }
         std::process::exit(1);
     }
@@ -147,7 +206,7 @@ fn run_file(path: &std::path::Path, verbose: bool) {
             }
         }
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("\x1b[1;31merror\x1b[0m: {e}");
             std::process::exit(1);
         }
     }
@@ -157,7 +216,7 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error: could not read file `{}`: {e}", path.display());
+            eprintln!("\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}", path.display());
             std::process::exit(1);
         }
     };
@@ -179,10 +238,13 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
 
     if !lex_errors.is_empty() {
         for span in &lex_errors {
-            let (line, col) = line_col(&source, span.start);
-            eprintln!(
-                "error: unexpected character at {filename}:{line}:{col}: `{}`",
-                &source[span.clone()]
+            let snippet = &source[span.clone()];
+            report_error(
+                &source,
+                &filename,
+                &format!("unexpected character `{snippet}`"),
+                span,
+                Some("remove this character or check for typos"),
             );
         }
         std::process::exit(1);
@@ -194,19 +256,40 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
 
     // Parse
     let parse_start = std::time::Instant::now();
-    let (module, parse_errors) = turbo_parser::parse(tokens);
+    let (mut module, parse_errors) = turbo_parser::parse(tokens);
     let parse_time = parse_start.elapsed();
 
     if !parse_errors.is_empty() {
         for err in &parse_errors {
-            let (line, col) = line_col(&source, err.span.start);
-            eprintln!("error: {} at {filename}:{line}:{col}", err.message);
+            report_error(
+                &source,
+                &filename,
+                &err.message,
+                &err.span,
+                None,
+            );
         }
         std::process::exit(1);
     }
 
+    // Resolve imports
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let canonical_self = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut loading = HashSet::new();
+    loading.insert(canonical_self);
+    if let Err(e) = resolve_imports(&mut module, base_dir, &mut loading) {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+
     if module.items.is_empty() {
-        eprintln!("error: no functions defined in {filename}");
+        report_error(
+            &source,
+            &filename,
+            "no functions defined",
+            &(0..source.len().min(1)),
+            Some("add a `fn main() { ... }` function to get started"),
+        );
         std::process::exit(1);
     }
 
@@ -221,8 +304,14 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
 
     if !sema_errors.is_empty() {
         for err in &sema_errors {
-            let (line, col) = line_col(&source, err.span.start);
-            eprintln!("error: {} at {filename}:{line}:{col}", err.message);
+            let help = sema_help(&err.message);
+            report_error(
+                &source,
+                &filename,
+                &err.message,
+                &err.span,
+                help.as_deref(),
+            );
         }
         std::process::exit(1);
     }
@@ -243,14 +332,175 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
             }
         }
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("\x1b[1;31merror\x1b[0m: {e}");
             std::process::exit(1);
         }
     }
 }
 
-fn line_col(source: &str, offset: usize) -> (usize, usize) {
-    let line = source[..offset].matches('\n').count() + 1;
-    let col = offset - source[..offset].rfind('\n').map(|p| p + 1).unwrap_or(0) + 1;
-    (line, col)
+/// Resolve the file path for an import.
+/// The `.tb` extension is appended if not already present.
+/// The path is resolved relative to `base_dir`.
+fn resolve_import_path(base_dir: &Path, import_path: &str) -> PathBuf {
+    let mut path = base_dir.join(import_path);
+    if path.extension().is_none() {
+        path.set_extension("tb");
+    }
+    path
+}
+
+/// Resolve all `import` items in the module by reading, lexing, and parsing
+/// the imported files and inlining the requested items.
+/// `loading` tracks files currently being loaded (for circular import detection).
+fn resolve_imports(
+    module: &mut Module,
+    base_dir: &Path,
+    loading: &mut HashSet<PathBuf>,
+) -> Result<(), String> {
+    let mut import_items = Vec::new();
+
+    for item in &module.items {
+        if let Item::Import { names, path } = &item.node {
+            let resolved_path = resolve_import_path(base_dir, path);
+            let canonical = resolved_path.canonicalize().map_err(|e| {
+                format!("could not resolve import path `{}`: {e}", resolved_path.display())
+            })?;
+
+            // Circular import detection
+            if loading.contains(&canonical) {
+                return Err(format!(
+                    "circular import detected: `{}`",
+                    resolved_path.display()
+                ));
+            }
+
+            loading.insert(canonical.clone());
+
+            let source = std::fs::read_to_string(&resolved_path).map_err(|e| {
+                format!("could not read imported file `{}`: {e}", resolved_path.display())
+            })?;
+
+            let (tokens, lex_errors) = turbo_lexer::tokenize(&source);
+            if !lex_errors.is_empty() {
+                return Err(format!(
+                    "lex errors in imported file `{}`",
+                    resolved_path.display()
+                ));
+            }
+
+            let (mut imported_module, parse_errors) = turbo_parser::parse(tokens);
+            if !parse_errors.is_empty() {
+                return Err(format!(
+                    "parse errors in imported file `{}`: {}",
+                    resolved_path.display(),
+                    parse_errors[0].message
+                ));
+            }
+
+            // Recursively resolve imports in the imported file
+            let imported_dir = resolved_path.parent().unwrap_or(base_dir);
+            resolve_imports(&mut imported_module, imported_dir, loading)?;
+
+            loading.remove(&canonical);
+
+            // Extract the requested items
+            for imported_item in imported_module.items {
+                match &imported_item.node {
+                    Item::Function(f) if names.contains(&f.name) => {
+                        import_items.push(imported_item);
+                    }
+                    Item::Struct(s) if names.contains(&s.name) => {
+                        import_items.push(imported_item);
+                    }
+                    Item::Enum(e) if names.contains(&e.name) => {
+                        import_items.push(imported_item);
+                    }
+                    Item::Impl(imp) if names.contains(&imp.type_name) => {
+                        import_items.push(imported_item);
+                    }
+                    _ => {}
+                }
+            }
+
+            // Check that all requested names were found
+            for name in names {
+                let found = import_items.iter().any(|item| match &item.node {
+                    Item::Function(f) => &f.name == name,
+                    Item::Struct(s) => &s.name == name,
+                    Item::Enum(e) => &e.name == name,
+                    Item::Impl(imp) => &imp.type_name == name,
+                    _ => false,
+                });
+                if !found {
+                    return Err(format!(
+                        "name `{name}` not found in `{}`",
+                        resolved_path.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    // Remove import items and prepend imported items
+    module.items.retain(|item| !matches!(&item.node, Item::Import { .. }));
+    let mut new_items = import_items;
+    new_items.append(&mut module.items);
+    module.items = new_items;
+
+    Ok(())
+}
+
+/// Generate contextual help text for common sema error patterns.
+fn sema_help(message: &str) -> Option<String> {
+    if message.contains("undefined variable") {
+        // Extract variable name from backticks
+        if let Some(name) = extract_backtick_name(message) {
+            return Some(format!("did you mean to declare `{name}` with `let {name} = ...`?"));
+        }
+        return Some("check the variable name for typos, or declare it with `let`".to_string());
+    }
+    if message.contains("undefined function") {
+        if let Some(name) = extract_backtick_name(message) {
+            return Some(format!("define `{name}` with `fn {name}(...) {{ ... }}`"));
+        }
+        return Some("check the function name for typos, or define it with `fn`".to_string());
+    }
+    if message.contains("cannot assign to immutable variable") {
+        return Some("declare with `let mut` to make it mutable".to_string());
+    }
+    if message.contains("no `main` function found") {
+        return Some("add a `fn main() { ... }` as the entry point".to_string());
+    }
+    if message.contains("mismatched types in arithmetic") {
+        return Some("both sides of an arithmetic operation must have the same numeric type".to_string());
+    }
+    if message.contains("cannot perform arithmetic on") {
+        return Some("arithmetic operators (`+`, `-`, `*`, `/`, `%`) only work on numeric types (`i32`, `i64`, `f32`, `f64`)".to_string());
+    }
+    if message.contains("type annotation") && message.contains("doesn't match") {
+        return Some("either change the type annotation or the assigned value".to_string());
+    }
+    if message.contains("should return") && message.contains("but body returns") {
+        return Some("make sure the last expression in the function body matches the declared return type".to_string());
+    }
+    if message.contains("if/else branches have different types") {
+        return Some("both branches of an if/else expression must produce the same type".to_string());
+    }
+    if message.contains("if condition must be `bool`") || message.contains("while condition must be `bool`") {
+        return Some("conditions must be `bool`; use a comparison like `x > 0` instead".to_string());
+    }
+    if message.contains("expects") && message.contains("argument(s) but") {
+        return Some("check the function signature for the correct number of arguments".to_string());
+    }
+    if message.contains("argument") && message.contains("expects") && message.contains("found") {
+        return Some("the argument type doesn't match the parameter type in the function signature".to_string());
+    }
+    None
+}
+
+/// Extract the first name enclosed in backticks from a message.
+fn extract_backtick_name(message: &str) -> Option<&str> {
+    let start = message.find('`')? + 1;
+    let end = message[start..].find('`')? + start;
+    Some(&message[start..end])
 }

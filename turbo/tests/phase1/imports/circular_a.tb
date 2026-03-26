@@ -1,0 +1,7 @@
+import { bar } from "./circular_b"
+
+fn foo() -> i64 { 1 }
+
+fn main() {
+    print(bar())
+}
