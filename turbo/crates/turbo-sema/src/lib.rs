@@ -448,12 +448,23 @@ impl Checker {
                             let arg_ty = self.check_expr(arg);
                             let (ref param_name, ref param_ty) = &sig.params[i];
                             if !arg_ty.is_error() && !param_ty.is_error() && arg_ty != *param_ty {
-                                self.error(
-                                    format!(
-                                        "argument `{param_name}` expects `{param_ty}`, found `{arg_ty}`"
-                                    ),
-                                    arg.span.clone(),
-                                );
+                                // Allow integer literal coercion: i64 literal -> i32, u32, u64
+                                let is_int_literal_coercion = arg_ty == Ty::I64
+                                    && matches!(param_ty, Ty::I32 | Ty::U32 | Ty::U64)
+                                    && matches!(&arg.node, Expr::IntLit(n) if
+                                        match param_ty {
+                                            Ty::U32 | Ty::U64 => *n >= 0,
+                                            _ => true,
+                                        }
+                                    );
+                                if !is_int_literal_coercion {
+                                    self.error(
+                                        format!(
+                                            "argument `{param_name}` expects `{param_ty}`, found `{arg_ty}`"
+                                        ),
+                                        arg.span.clone(),
+                                    );
+                                }
                             }
                         }
 

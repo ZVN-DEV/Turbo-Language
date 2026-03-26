@@ -531,14 +531,24 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
         }
 
         Expr::Block { stmts, tail_expr } => {
+            let saved_vars = cx.vars.clone();
+
             for stmt in stmts {
                 compile_stmt(cx, stmt)?;
             }
-            if let Some(tail) = tail_expr {
+            let result = if let Some(tail) = tail_expr {
                 compile_expr(cx, tail)
             } else {
                 Ok(None)
-            }
+            };
+
+            // Restore variable scope: this ensures inner `let` bindings
+            // that shadow outer names don't leak out of the block.
+            // Actual SSA values in Cranelift variables are unaffected —
+            // only the name-to-Variable mapping is restored.
+            cx.vars = saved_vars;
+
+            result
         }
 
         Expr::Assign { target, value } => {
@@ -801,9 +811,27 @@ fn compile_call<M: Module>(
             let ret_tty = cx.fn_ret_types.get(name.as_str()).copied().unwrap_or(TurboTy::Unit);
 
             let func_ref = cx.module.declare_func_in_func(func_id, cx.builder.func);
+            let sig = cx.builder.func.dfg.ext_funcs[func_ref].signature;
+            let param_types: Vec<types::Type> = cx.builder.func.dfg.signatures[sig]
+                .params.iter().map(|p| p.value_type).collect();
             let mut arg_values = Vec::new();
-            for arg in args {
+            for (i, arg) in args.iter().enumerate() {
                 if let Some((val, _)) = compile_expr(cx, arg)? {
+                    let val = if i < param_types.len() {
+                        let expected = param_types[i];
+                        let actual = cx.builder.func.dfg.value_type(val);
+                        if actual != expected && actual.is_int() && expected.is_int() {
+                            if actual.bits() > expected.bits() {
+                                cx.builder.ins().ireduce(expected, val)
+                            } else {
+                                cx.builder.ins().sextend(expected, val)
+                            }
+                        } else {
+                            val
+                        }
+                    } else {
+                        val
+                    };
                     arg_values.push(val);
                 }
             }
