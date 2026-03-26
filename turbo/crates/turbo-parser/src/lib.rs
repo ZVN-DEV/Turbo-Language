@@ -250,6 +250,25 @@ impl Parser {
         self.expect(&Token::Fn)?;
         let (name, _) = self.expect_ident()?;
 
+        // Parse optional type parameters: <T> or <T, U, ...>
+        let type_params = if matches!(self.peek(), Some(Token::Less)) {
+            self.advance(); // consume <
+            let mut params = Vec::new();
+            loop {
+                let (tp_name, _) = self.expect_ident()?;
+                params.push(tp_name);
+                if matches!(self.peek(), Some(Token::Comma)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(&Token::Greater)?;
+            params
+        } else {
+            Vec::new()
+        };
+
         self.expect(&Token::LParen)?;
         let params = self.parse_params()?;
         self.expect(&Token::RParen)?;
@@ -265,6 +284,7 @@ impl Parser {
 
         Ok(FnDef {
             name,
+            type_params,
             params,
             return_type,
             body,
@@ -1682,5 +1702,39 @@ mod tests {
         } else {
             panic!("Expected Block with tail expr, got: {:?}", f.body.node);
         }
+    }
+
+    #[test]
+    fn test_generic_function() {
+        let source = "fn identity<T>(x: T) -> T { x }";
+        let module = parse_source(source);
+        assert_eq!(module.items.len(), 1);
+        if let Item::Function(f) = &module.items[0].node {
+            assert_eq!(f.name, "identity");
+            assert_eq!(f.type_params, vec!["T".to_string()]);
+            assert_eq!(f.params.len(), 1);
+            assert_eq!(f.params[0].name, "x");
+            assert!(matches!(&f.params[0].ty.node, TypeExpr::Named(n) if n == "T"));
+            assert!(matches!(&f.return_type.as_ref().unwrap().node, TypeExpr::Named(n) if n == "T"));
+        }
+    }
+
+    #[test]
+    fn test_non_generic_function_has_empty_type_params() {
+        let source = "fn add(a: i64, b: i64) -> i64 { a + b }";
+        let module = parse_source(source);
+        if let Item::Function(f) = &module.items[0].node {
+            assert!(f.type_params.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_generic_function_with_program() {
+        let source = r#"
+            fn identity<T>(x: T) -> T { x }
+            fn main() { print(identity(42)) }
+        "#;
+        let module = parse_source(source);
+        assert_eq!(module.items.len(), 2);
     }
 }
