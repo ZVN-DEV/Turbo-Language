@@ -24,6 +24,21 @@ pub struct Module {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     Function(FnDef),
+    Struct(StructDef),
+}
+
+/// Struct definition
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<FieldDef>,
+}
+
+/// Struct field definition
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldDef {
+    pub name: String,
+    pub ty: Spanned<TypeExpr>,
 }
 
 /// Function definition
@@ -50,6 +65,8 @@ pub enum TypeExpr {
     Named(String),
     /// Unit type ()
     Unit,
+    /// Array type: [T]
+    Array(Box<Spanned<TypeExpr>>),
 }
 
 /// Expressions
@@ -110,6 +127,34 @@ pub enum Expr {
     While {
         condition: Box<Spanned<Expr>>,
         body: Box<Spanned<Expr>>,
+    },
+    /// For-in loop: for name in iterable { body }
+    ForIn {
+        var_name: String,
+        iterable: Box<Spanned<Expr>>,
+        body: Box<Spanned<Expr>>,
+    },
+    /// Range expression: start..end (exclusive)
+    Range {
+        start: Box<Spanned<Expr>>,
+        end: Box<Spanned<Expr>>,
+    },
+    /// Array literal: [expr, expr, ...]
+    ArrayLit(Vec<Spanned<Expr>>),
+    /// Index expression: expr[index]
+    Index {
+        object: Box<Spanned<Expr>>,
+        index: Box<Spanned<Expr>>,
+    },
+    /// Struct literal: Name { field: value, ... }
+    StructLit {
+        name: String,
+        fields: Vec<(String, Spanned<Expr>)>,
+    },
+    /// Field access: expr.field
+    FieldAccess {
+        object: Box<Spanned<Expr>>,
+        field: String,
     },
 }
 

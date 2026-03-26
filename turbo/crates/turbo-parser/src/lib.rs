@@ -106,9 +106,9 @@ impl Parser {
                 Ok(item) => items.push(item),
                 Err(e) => {
                     self.errors.push(e);
-                    // Skip to next `fn` to recover
+                    // Skip to next `fn` or `struct` to recover
                     self.pos += 1;
-                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn)) {
+                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Struct)) {
                         self.pos += 1;
                     }
                 }
@@ -125,15 +125,41 @@ impl Parser {
                 let end = f.body.span.end;
                 Ok(Spanned::new(Item::Function(f), start..end))
             }
+            Some(Token::Struct) => {
+                let s = self.parse_struct_def()?;
+                let end = self.tokens.get(self.pos.saturating_sub(1))
+                    .map(|t| t.span.end)
+                    .unwrap_or(start);
+                Ok(Spanned::new(Item::Struct(s), start..end))
+            }
             _ => {
                 let span = self.peek_span();
                 let found = self.peek().map(|t| format!("`{t}`")).unwrap_or("end of file".to_string());
                 Err(ParseError {
-                    message: format!("expected `fn`, found {found}"),
+                    message: format!("expected `fn` or `struct`, found {found}"),
                     span,
                 })
             }
         }
+    }
+
+    fn parse_struct_def(&mut self) -> Result<StructDef, ParseError> {
+        self.expect(&Token::Struct)?;
+        let (name, _) = self.expect_ident()?;
+        self.expect(&Token::LBrace)?;
+        let mut fields = Vec::new();
+        while !matches!(self.peek(), Some(Token::RBrace) | None) {
+            let (field_name, _) = self.expect_ident()?;
+            self.expect(&Token::Colon)?;
+            let ty = self.parse_type()?;
+            fields.push(FieldDef { name: field_name, ty });
+            // Optional comma
+            if matches!(self.peek(), Some(Token::Comma)) {
+                self.advance();
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(StructDef { name, fields })
     }
 
     fn parse_fn_def(&mut self) -> Result<FnDef, ParseError> {
@@ -203,6 +229,15 @@ impl Parser {
             }
             // Not a unit type, backtrack
             self.pos = lp_pos;
+        }
+
+        // Array type [T]
+        if matches!(self.peek(), Some(Token::LBracket)) {
+            self.advance();
+            let elem_type = self.parse_type()?;
+            let end = self.peek_span().end;
+            self.expect(&Token::RBracket)?;
+            return Ok(Spanned::new(TypeExpr::Array(Box::new(elem_type)), start..end));
         }
 
         // Named type
@@ -336,6 +371,20 @@ impl Parser {
             }
         }
 
+        // Check for range operator (..)
+        if matches!(self.peek(), Some(Token::DotDot)) {
+            self.advance();
+            let rhs = self.parse_unary()?;
+            let span = lhs.span.start..rhs.span.end;
+            return Ok(Spanned::new(
+                Expr::Range {
+                    start: Box::new(lhs),
+                    end: Box::new(rhs),
+                },
+                span,
+            ));
+        }
+
         self.parse_binary(lhs, 0)
     }
 
@@ -448,12 +497,85 @@ impl Parser {
                     },
                     span,
                 );
+            } else if matches!(self.peek(), Some(Token::LBracket)) {
+                // Index expression: expr[index]
+                self.advance(); // consume [
+                let index = self.parse_expr()?;
+                let end = self.peek_span().end;
+                self.expect(&Token::RBracket)?;
+                let span = expr.span.start..end;
+                expr = Spanned::new(
+                    Expr::Index {
+                        object: Box::new(expr),
+                        index: Box::new(index),
+                    },
+                    span,
+                );
+            } else if matches!(self.peek(), Some(Token::Dot)) {
+                // Field access: expr.field
+                self.advance(); // consume .
+                let (field_name, field_span) = self.expect_ident()?;
+                let span = expr.span.start..field_span.end;
+                expr = Spanned::new(
+                    Expr::FieldAccess {
+                        object: Box::new(expr),
+                        field: field_name,
+                    },
+                    span,
+                );
+            } else if let Expr::Ident(ref name) = expr.node {
+                if matches!(self.peek(), Some(Token::LBrace)) {
+                    // Possible struct literal: Name { field: value, ... }
+                    // Disambiguate: if after `{` we see `ident :`, it's a struct literal
+                    let save_pos = self.pos;
+                    self.advance(); // consume {
+                    let is_struct_lit = if matches!(self.peek(), Some(Token::Ident(_))) {
+                        let save_pos2 = self.pos;
+                        self.advance(); // consume ident
+                        let result = matches!(self.peek(), Some(Token::Colon));
+                        self.pos = save_pos2;
+                        result
+                    } else if matches!(self.peek(), Some(Token::RBrace)) {
+                        // Empty struct literal: Name {}
+                        true
+                    } else {
+                        false
+                    };
+                    self.pos = save_pos; // backtrack
+
+                    if is_struct_lit {
+                        let struct_name = name.clone();
+                        let start = expr.span.start;
+                        expr = self.parse_struct_lit(struct_name, start)?;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
             } else {
                 break;
             }
         }
 
         Ok(expr)
+    }
+
+    fn parse_struct_lit(&mut self, name: String, start: usize) -> Result<Spanned<Expr>, ParseError> {
+        self.expect(&Token::LBrace)?;
+        let mut fields = Vec::new();
+        while !matches!(self.peek(), Some(Token::RBrace) | None) {
+            let (field_name, _) = self.expect_ident()?;
+            self.expect(&Token::Colon)?;
+            let value = self.parse_expr()?;
+            fields.push((field_name, value));
+            if matches!(self.peek(), Some(Token::Comma)) {
+                self.advance();
+            }
+        }
+        let end = self.peek_span().end;
+        self.expect(&Token::RBrace)?;
+        Ok(Spanned::new(Expr::StructLit { name, fields }, start..end))
     }
 
     fn parse_call_args(&mut self) -> Result<Vec<Spanned<Expr>>, ParseError> {
@@ -538,8 +660,27 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 Ok(expr)
             }
+            Some(Token::LBracket) => {
+                // Array literal: [expr, expr, ...]
+                self.advance(); // consume [
+                let mut elements = Vec::new();
+                if !matches!(self.peek(), Some(Token::RBracket)) {
+                    loop {
+                        elements.push(self.parse_expr()?);
+                        if matches!(self.peek(), Some(Token::Comma)) {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                let end = self.peek_span().end;
+                self.expect(&Token::RBracket)?;
+                Ok(Spanned::new(Expr::ArrayLit(elements), start..end))
+            }
             Some(Token::If) => self.parse_if_expr(),
             Some(Token::While) => self.parse_while_expr(),
+            Some(Token::For) => self.parse_for_in(),
             Some(Token::LBrace) => self.parse_block(),
             _ => {
                 let span = self.peek_span();
@@ -602,6 +743,25 @@ impl Parser {
             start..end,
         ))
     }
+
+    fn parse_for_in(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let start = self.peek_span().start;
+        self.expect(&Token::For)?;
+        let (var_name, _) = self.expect_ident()?;
+        self.expect(&Token::In)?;
+        let iterable = self.parse_expr()?;
+        let body = self.parse_block()?;
+        let end = body.span.end;
+
+        Ok(Spanned::new(
+            Expr::ForIn {
+                var_name,
+                iterable: Box::new(iterable),
+                body: Box::new(body),
+            },
+            start..end,
+        ))
+    }
 }
 
 /// Parse a token stream into a Module.
@@ -629,7 +789,7 @@ mod tests {
     fn test_empty_main() {
         let module = parse_source("fn main() { }");
         assert_eq!(module.items.len(), 1);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         assert_eq!(f.name, "main");
         assert!(f.params.is_empty());
         assert!(f.return_type.is_none());
@@ -648,7 +808,7 @@ mod tests {
     fn test_let_binding() {
         let source = "fn main() { let x = 42 }";
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { stmts, .. } = &f.body.node {
             assert_eq!(stmts.len(), 1);
             if let Stmt::Let { name, mutable, .. } = &stmts[0].node {
@@ -666,7 +826,7 @@ mod tests {
     fn test_let_mut() {
         let source = "fn main() { let mut x = 0 }";
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { stmts, .. } = &f.body.node {
             if let Stmt::Let { name, mutable, .. } = &stmts[0].node {
                 assert_eq!(name, "x");
@@ -679,7 +839,7 @@ mod tests {
     fn test_binary_precedence() {
         let source = "fn main() { 1 + 2 * 3 }";
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
             // Should be Add(1, Mul(2, 3)) due to precedence
             if let Expr::BinaryOp { op, left, right } = &tail.node {
@@ -702,7 +862,7 @@ mod tests {
     fn test_if_else() {
         let source = "fn main() { if true { 1 } else { 2 } }";
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
             assert!(matches!(tail.node, Expr::If { .. }));
         } else {
@@ -714,7 +874,7 @@ mod tests {
     fn test_function_with_params() {
         let source = "fn add(a: i32, b: i32) -> i32 { a + b }";
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         assert_eq!(f.name, "add");
         assert_eq!(f.params.len(), 2);
         assert_eq!(f.params[0].name, "a");
@@ -726,7 +886,7 @@ mod tests {
     fn test_function_call() {
         let source = r#"fn main() { print("hello") }"#;
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
             assert!(matches!(tail.node, Expr::Call { .. }));
         }
@@ -753,7 +913,7 @@ mod tests {
     fn test_unary_neg() {
         let source = "fn main() { -42 }";
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
             assert!(matches!(tail.node, Expr::UnaryOp { op: UnaryOp::Neg, .. }));
         }
@@ -763,7 +923,7 @@ mod tests {
     fn test_comparison() {
         let source = "fn main() { x > 25 }";
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
             if let Expr::BinaryOp { op, .. } = &tail.node {
                 assert_eq!(*op, BinOp::Greater);
@@ -775,7 +935,7 @@ mod tests {
     fn test_logical_operators() {
         let source = "fn main() { a && b || c }";
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
             // Should be Or(And(a, b), c) since && binds tighter
             if let Expr::BinaryOp { op, .. } = &tail.node {
@@ -788,7 +948,7 @@ mod tests {
     fn test_stmt_then_tail() {
         let source = "fn main() { let x = 1\n x + 2 }";
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { stmts, tail_expr } = &f.body.node {
             assert_eq!(stmts.len(), 1);
             assert!(tail_expr.is_some());
@@ -799,7 +959,7 @@ mod tests {
     fn test_return_statement() {
         let source = "fn foo() -> i32 { return 42 }";
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { stmts, .. } = &f.body.node {
             assert_eq!(stmts.len(), 1);
             assert!(matches!(&stmts[0].node, Stmt::Return(Some(_))));
@@ -810,7 +970,7 @@ mod tests {
     fn test_let_with_type() {
         let source = "fn main() { let x: i32 = 42 }";
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { stmts, .. } = &f.body.node {
             if let Stmt::Let { ty: Some(ty), .. } = &stmts[0].node {
                 assert!(matches!(&ty.node, TypeExpr::Named(n) if n == "i32"));
@@ -831,7 +991,7 @@ mod tests {
         }"#;
         let module = parse_source(source);
         assert_eq!(module.items.len(), 1);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { stmts, tail_expr } = &f.body.node {
             assert_eq!(stmts.len(), 2); // two let bindings
             assert!(tail_expr.is_some()); // if-else is tail expr
@@ -842,7 +1002,7 @@ mod tests {
     fn test_assignment() {
         let source = "fn main() { let mut x = 1\n x = 2 }";
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { stmts, tail_expr } = &f.body.node {
             assert_eq!(stmts.len(), 1); // let
             if let Some(tail) = tail_expr {
@@ -855,7 +1015,7 @@ mod tests {
     fn test_compound_assignment() {
         let source = "fn main() { let mut x = 1\n x += 2 }";
         let module = parse_source(source);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { stmts, tail_expr } = &f.body.node {
             assert_eq!(stmts.len(), 1);
             if let Some(tail) = tail_expr {
@@ -873,7 +1033,7 @@ mod tests {
         let source = "fn main() { let x = 5; print(x); x + 1 }";
         let module = parse_source(source);
         assert_eq!(module.items.len(), 1);
-        let Item::Function(f) = &module.items[0].node;
+        let Item::Function(f) = &module.items[0].node else { panic!("Expected function") };
         if let Expr::Block { stmts, tail_expr } = &f.body.node {
             assert_eq!(stmts.len(), 2); // let x = 5 and print(x)
             assert!(tail_expr.is_some()); // x + 1 is the tail expr

@@ -25,6 +25,10 @@ pub enum Ty {
     Bool,
     Str,
     Unit,
+    /// Array of a given element type
+    Array(Box<Ty>),
+    /// Struct type (by name)
+    Struct(String),
     /// Type could not be determined (error recovery)
     Error,
 }
@@ -41,6 +45,8 @@ impl std::fmt::Display for Ty {
             Ty::Bool => write!(f, "bool"),
             Ty::Str => write!(f, "str"),
             Ty::Unit => write!(f, "()"),
+            Ty::Array(inner) => write!(f, "[{}]", inner),
+            Ty::Struct(name) => write!(f, "{}", name),
             Ty::Error => write!(f, "<error>"),
         }
     }
@@ -64,7 +70,7 @@ impl Ty {
     }
 }
 
-fn resolve_type_expr(te: &TypeExpr) -> Option<Ty> {
+fn resolve_type_expr(te: &TypeExpr, structs: Option<&HashMap<String, StructInfo>>) -> Option<Ty> {
     match te {
         TypeExpr::Named(name) => match name.as_str() {
             "i32" => Some(Ty::I32),
@@ -75,9 +81,20 @@ fn resolve_type_expr(te: &TypeExpr) -> Option<Ty> {
             "f64" => Some(Ty::F64),
             "bool" => Some(Ty::Bool),
             "str" => Some(Ty::Str),
-            _ => None,
+            _ => {
+                // Check if it's a struct type
+                if let Some(s) = structs {
+                    if s.contains_key(name.as_str()) {
+                        return Some(Ty::Struct(name.clone()));
+                    }
+                }
+                None
+            }
         },
         TypeExpr::Unit => Some(Ty::Unit),
+        TypeExpr::Array(inner) => {
+            resolve_type_expr(&inner.node, structs).map(|t| Ty::Array(Box::new(t)))
+        }
     }
 }
 
@@ -100,10 +117,17 @@ struct Scope {
     vars: HashMap<String, VarInfo>,
 }
 
+/// Struct field info for the checker
+#[derive(Debug, Clone)]
+struct StructInfo {
+    fields: Vec<(String, Ty)>,
+}
+
 /// Type checker
 struct Checker {
     errors: Vec<SemaError>,
     functions: HashMap<String, FnSig>,
+    structs: HashMap<String, StructInfo>,
     scopes: Vec<Scope>,
     /// Return type of the current function being checked
     current_return_type: Ty,
@@ -114,6 +138,7 @@ impl Checker {
         Self {
             errors: Vec::new(),
             functions: HashMap::new(),
+            structs: HashMap::new(),
             scopes: Vec::new(),
             current_return_type: Ty::Unit,
         }
@@ -152,13 +177,41 @@ impl Checker {
     // === Check module ===
 
     fn is_builtin_function(name: &str) -> bool {
-        matches!(name, "print" | "panic" | "assert")
+        matches!(name, "print" | "panic" | "assert" | "len")
     }
 
     fn check_module(&mut self, module: &Module) {
+        // Pass 0: register all struct definitions
+        for item in &module.items {
+            let Item::Struct(s) = &item.node else { continue };
+            if self.structs.contains_key(&s.name) {
+                self.error(
+                    format!("struct `{}` is already defined", s.name),
+                    item.span.clone(),
+                );
+                continue;
+            }
+            let mut fields = Vec::new();
+            for field in &s.fields {
+                match resolve_type_expr(&field.ty.node, Some(&self.structs)) {
+                    Some(ty) => fields.push((field.name.clone(), ty)),
+                    None => {
+                        if let TypeExpr::Named(name) = &field.ty.node {
+                            self.error(
+                                format!("unknown type `{name}` in struct `{}`", s.name),
+                                field.ty.span.clone(),
+                            );
+                        }
+                        fields.push((field.name.clone(), Ty::Error));
+                    }
+                }
+            }
+            self.structs.insert(s.name.clone(), StructInfo { fields });
+        }
+
         // First pass: register all function signatures
         for item in &module.items {
-            let Item::Function(f) = &item.node;
+            let Item::Function(f) = &item.node else { continue };
 
             // Reject shadowing of builtin functions
             if Self::is_builtin_function(&f.name) {
@@ -179,7 +232,7 @@ impl Checker {
 
             let mut params = Vec::new();
             for param in &f.params {
-                match resolve_type_expr(&param.ty.node) {
+                match resolve_type_expr(&param.ty.node, Some(&self.structs)) {
                     Some(ty) => params.push((param.name.clone(), ty)),
                     None => {
                         if let TypeExpr::Named(name) = &param.ty.node {
@@ -194,7 +247,7 @@ impl Checker {
             }
 
             let ret = if let Some(ret_type) = &f.return_type {
-                match resolve_type_expr(&ret_type.node) {
+                match resolve_type_expr(&ret_type.node, Some(&self.structs)) {
                     Some(ty) => ty,
                     None => {
                         if let TypeExpr::Named(name) = &ret_type.node {
@@ -225,7 +278,7 @@ impl Checker {
 
         // Second pass: check function bodies (skip those not registered, e.g. builtin shadows)
         for item in &module.items {
-            let Item::Function(f) = &item.node;
+            let Item::Function(f) = &item.node else { continue };
             if self.functions.contains_key(&f.name) {
                 self.check_function(f);
             }
@@ -296,6 +349,10 @@ impl Checker {
 
                 match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                        // String concatenation: str + str
+                        if *op == BinOp::Add && lhs == Ty::Str && rhs == Ty::Str {
+                            return Ty::Str;
+                        }
                         if !lhs.is_numeric() {
                             self.error(
                                 format!("cannot perform arithmetic on `{lhs}`"),
@@ -428,6 +485,28 @@ impl Checker {
                             }
                         }
                         return Ty::Unit;
+                    }
+                    if name == "len" {
+                        if args.len() != 1 {
+                            self.error(
+                                format!("len() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arg_ty = self.check_expr(&args[0]);
+                        match &arg_ty {
+                            Ty::Array(_) => return Ty::I64,
+                            Ty::Str => return Ty::I64,
+                            _ if arg_ty.is_error() => return Ty::Error,
+                            _ => {
+                                self.error(
+                                    format!("len() expects array or string, found `{arg_ty}`"),
+                                    args[0].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        }
                     }
 
                     // User-defined function
@@ -613,6 +692,160 @@ impl Checker {
                 self.check_expr(body);
                 Ty::Unit
             }
+
+            Expr::Range { start, end } => {
+                let start_ty = self.check_expr(start);
+                let end_ty = self.check_expr(end);
+                if !start_ty.is_error() && !start_ty.is_integer() {
+                    self.error(
+                        format!("range start must be an integer, found `{start_ty}`"),
+                        start.span.clone(),
+                    );
+                }
+                if !end_ty.is_error() && !end_ty.is_integer() {
+                    self.error(
+                        format!("range end must be an integer, found `{end_ty}`"),
+                        end.span.clone(),
+                    );
+                }
+                Ty::Unit // Range type (treated as unit for now)
+            }
+
+            Expr::ForIn { var_name, iterable, body } => {
+                // Check the iterable expression
+                let _iter_ty = self.check_expr(iterable);
+                // The loop variable is i64 (from range)
+                self.push_scope();
+                self.define_var(var_name, VarInfo { ty: Ty::I64, mutable: false }, &expr.span);
+                self.check_expr(body);
+                self.pop_scope();
+                Ty::Unit
+            }
+
+            Expr::ArrayLit(elements) => {
+                if elements.is_empty() {
+                    self.error("cannot infer type of empty array".to_string(), expr.span.clone());
+                    return Ty::Error;
+                }
+                let first_ty = self.check_expr(&elements[0]);
+                for elem in &elements[1..] {
+                    let elem_ty = self.check_expr(elem);
+                    if !elem_ty.is_error() && !first_ty.is_error() && elem_ty != first_ty {
+                        self.error(
+                            format!("array elements must all have the same type, expected `{first_ty}` but found `{elem_ty}`"),
+                            elem.span.clone(),
+                        );
+                    }
+                }
+                Ty::Array(Box::new(first_ty))
+            }
+
+            Expr::Index { object, index } => {
+                let obj_ty = self.check_expr(object);
+                let idx_ty = self.check_expr(index);
+                if !idx_ty.is_error() && !idx_ty.is_integer() {
+                    self.error(
+                        format!("array index must be an integer, found `{idx_ty}`"),
+                        index.span.clone(),
+                    );
+                }
+                match &obj_ty {
+                    Ty::Array(inner) => *inner.clone(),
+                    Ty::Error => Ty::Error,
+                    _ => {
+                        self.error(
+                            format!("cannot index into `{obj_ty}`"),
+                            object.span.clone(),
+                        );
+                        Ty::Error
+                    }
+                }
+            }
+
+            Expr::StructLit { name, fields } => {
+                let Some(struct_info) = self.structs.get(name).cloned() else {
+                    self.error(
+                        format!("undefined struct `{name}`"),
+                        expr.span.clone(),
+                    );
+                    // Still check field value expressions
+                    for (_, value) in fields {
+                        self.check_expr(value);
+                    }
+                    return Ty::Error;
+                };
+
+                // Check that all fields are provided and types match
+                let expected_fields: HashMap<&str, &Ty> = struct_info.fields.iter()
+                    .map(|(n, t)| (n.as_str(), t)).collect();
+
+                let mut provided = std::collections::HashSet::new();
+                for (field_name, value) in fields {
+                    let val_ty = self.check_expr(value);
+                    if let Some(expected_ty) = expected_fields.get(field_name.as_str()) {
+                        if !val_ty.is_error() && !expected_ty.is_error() && &val_ty != *expected_ty {
+                            self.error(
+                                format!(
+                                    "field `{field_name}` of struct `{name}` expects `{}`, found `{val_ty}`",
+                                    expected_ty
+                                ),
+                                value.span.clone(),
+                            );
+                        }
+                        provided.insert(field_name.as_str());
+                    } else {
+                        self.error(
+                            format!("struct `{name}` has no field `{field_name}`"),
+                            value.span.clone(),
+                        );
+                    }
+                }
+
+                // Check for missing fields
+                for (field_name, _) in &struct_info.fields {
+                    if !provided.contains(field_name.as_str()) {
+                        self.error(
+                            format!("missing field `{field_name}` in struct `{name}`"),
+                            expr.span.clone(),
+                        );
+                    }
+                }
+
+                Ty::Struct(name.clone())
+            }
+
+            Expr::FieldAccess { object, field } => {
+                let obj_ty = self.check_expr(object);
+                match &obj_ty {
+                    Ty::Struct(struct_name) => {
+                        if let Some(struct_info) = self.structs.get(struct_name).cloned() {
+                            if let Some((_, field_ty)) = struct_info.fields.iter().find(|(n, _)| n == field) {
+                                field_ty.clone()
+                            } else {
+                                self.error(
+                                    format!("struct `{struct_name}` has no field `{field}`"),
+                                    expr.span.clone(),
+                                );
+                                Ty::Error
+                            }
+                        } else {
+                            self.error(
+                                format!("undefined struct `{struct_name}`"),
+                                expr.span.clone(),
+                            );
+                            Ty::Error
+                        }
+                    }
+                    Ty::Error => Ty::Error,
+                    _ => {
+                        self.error(
+                            format!("cannot access field `{field}` on type `{obj_ty}`"),
+                            object.span.clone(),
+                        );
+                        Ty::Error
+                    }
+                }
+            }
         }
     }
 
@@ -622,7 +855,7 @@ impl Checker {
                 let val_ty = self.check_expr(value);
 
                 let declared_ty = if let Some(ty_expr) = ty {
-                    match resolve_type_expr(&ty_expr.node) {
+                    match resolve_type_expr(&ty_expr.node, Some(&self.structs)) {
                         Some(t) => {
                             if !val_ty.is_error() && t != val_ty {
                                 // Allow integer literal coercion: i64 literal -> i32, u32, u64
@@ -742,9 +975,14 @@ mod tests {
     }
 
     #[test]
-    fn test_string_arithmetic() {
+    fn test_string_concat_ok() {
+        assert_no_errors(r#"fn main() { let x = "a" + "b" }"#);
+    }
+
+    #[test]
+    fn test_string_subtraction_rejected() {
         assert_has_error(
-            r#"fn main() { let x = "a" + "b" }"#,
+            r#"fn main() { let x = "a" - "b" }"#,
             "cannot perform arithmetic on `str`",
         );
     }

@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 void rt_print_str(const char *s) {
     if (s)
@@ -52,6 +53,52 @@ void rt_div_by_zero(void) {
 void rt_int_overflow(void) {
     fprintf(stderr, "runtime error: integer overflow\n");
     exit(1);
+}
+
+const char* rt_str_concat(const char *a, const char *b) {
+    size_t a_len = a ? strlen(a) : 0;
+    size_t b_len = b ? strlen(b) : 0;
+    char *result = malloc(a_len + b_len + 1);
+    if (a) memcpy(result, a, a_len);
+    if (b) memcpy(result + a_len, b, b_len);
+    result[a_len + b_len] = '\0';
+    return result;
+}
+
+char rt_str_eq(const char *a, const char *b) {
+    if (!a && !b) return 1;
+    if (!a || !b) return 0;
+    return strcmp(a, b) == 0 ? 1 : 0;
+}
+
+void* rt_array_alloc(long long len) {
+    size_t total = 8 + len * 8;
+    void *ptr = calloc(1, total);
+    *(long long*)ptr = len;
+    return ptr;
+}
+
+long long rt_array_get(const void *arr, long long index) {
+    long long len = *(const long long*)arr;
+    if (index < 0 || index >= len) {
+        fprintf(stderr, "runtime error: array index %lld out of bounds (length %lld)\n", index, len);
+        exit(1);
+    }
+    return ((const long long*)arr)[1 + index];
+}
+
+long long rt_array_len(const void *arr) {
+    return *(const long long*)arr;
+}
+
+long long rt_str_len(const char *s) {
+    return s ? (long long)strlen(s) : 0;
+}
+
+void* rt_struct_alloc(long long num_fields) {
+    size_t size = num_fields * 8;
+    if (size < 8) size = 8;
+    return calloc(1, size);
 }
 
 /* Entry point: calls Turbo's main and returns 0 */

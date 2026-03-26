@@ -22,13 +22,16 @@ impl std::error::Error for CodegenError {}
 
 /// Turbo-level type tag — needed because on ARM64 ptr_type == I64,
 /// so Cranelift IR types alone can't distinguish strings from ints.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 enum TurboTy {
     Int,
     Float,
     Bool,
     Str,
     Unit,
+    Array,
+    Struct(String),
 }
 
 fn turbo_ty_from_type_expr(te: &TypeExpr) -> TurboTy {
@@ -38,9 +41,10 @@ fn turbo_ty_from_type_expr(te: &TypeExpr) -> TurboTy {
             "f32" | "f64" => TurboTy::Float,
             "bool" => TurboTy::Bool,
             "str" => TurboTy::Str,
-            _ => TurboTy::Unit,
+            _ => TurboTy::Struct(name.clone()),
         },
         TypeExpr::Unit => TurboTy::Unit,
+        TypeExpr::Array(_) => TurboTy::Array,
     }
 }
 
@@ -108,12 +112,87 @@ extern "C" fn rt_int_overflow() {
     std::process::exit(1);
 }
 
+extern "C" fn rt_array_alloc(len: i64) -> *mut u8 {
+    let total_bytes = 8 + (len as usize) * 8; // 8 for length + 8 per element
+    let layout = std::alloc::Layout::from_size_align(total_bytes, 8).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    // Store length at the start
+    unsafe { *(ptr as *mut i64) = len; }
+    ptr
+}
+
+extern "C" fn rt_array_get(arr: *const u8, index: i64) -> i64 {
+    let len = unsafe { *(arr as *const i64) };
+    if index < 0 || index >= len {
+        eprintln!("runtime error: array index {} out of bounds (length {})", index, len);
+        std::process::exit(1);
+    }
+    unsafe { *((arr as *const i64).add(1 + index as usize)) }
+}
+
+extern "C" fn rt_array_len(arr: *const u8) -> i64 {
+    unsafe { *(arr as *const i64) }
+}
+
+extern "C" fn rt_str_len(s: *const u8) -> i64 {
+    if s.is_null() { return 0; }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) };
+    cstr.to_bytes().len() as i64
+}
+
+extern "C" fn rt_str_concat(a: *const u8, b: *const u8) -> *const u8 {
+    let a_str = if a.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(a as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let b_str = if b.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(b as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let mut result = String::with_capacity(a_str.len() + b_str.len());
+    result.push_str(a_str);
+    result.push_str(b_str);
+    let c_string = std::ffi::CString::new(result).unwrap();
+    c_string.into_raw() as *const u8 // leaked — no GC
+}
+
+extern "C" fn rt_str_eq(a: *const u8, b: *const u8) -> i8 {
+    let a_str = if a.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(a as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let b_str = if b.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(b as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    if a_str == b_str { 1 } else { 0 }
+}
+
+extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
+    let size = (num_fields as usize) * 8;
+    let layout = std::alloc::Layout::from_size_align(size.max(8), 8).unwrap();
+    unsafe { std::alloc::alloc_zeroed(layout) }
+}
+
 // ── Runtime C source for AOT linking ────────────────────────────────
 
 const RUNTIME_C: &str = include_str!("../runtime/turbo_rt.c");
 
 // ── Codegen context (generic over Module type) ──────────────────────
 
+#[allow(dead_code)]
 struct Ctx<'a, M: Module> {
     builder: FunctionBuilder<'a>,
     module: &'a mut M,
@@ -125,6 +204,8 @@ struct Ctx<'a, M: Module> {
     data_desc: &'a mut DataDescription,
     string_counter: &'a mut usize,
     ptr_type: types::Type,
+    /// Struct field layouts: struct_name -> vec of (field_name, TurboTy)
+    struct_fields: &'a HashMap<String, Vec<(String, TurboTy)>>,
 }
 
 impl<'a, M: Module> Ctx<'a, M> {
@@ -196,6 +277,13 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_assert_fail", rt_assert_fail as *const u8);
     jit_builder.symbol("rt_div_by_zero", rt_div_by_zero as *const u8);
     jit_builder.symbol("rt_int_overflow", rt_int_overflow as *const u8);
+    jit_builder.symbol("rt_str_concat", rt_str_concat as *const u8);
+    jit_builder.symbol("rt_str_eq", rt_str_eq as *const u8);
+    jit_builder.symbol("rt_array_alloc", rt_array_alloc as *const u8);
+    jit_builder.symbol("rt_array_get", rt_array_get as *const u8);
+    jit_builder.symbol("rt_array_len", rt_array_len as *const u8);
+    jit_builder.symbol("rt_str_len", rt_str_len as *const u8);
+    jit_builder.symbol("rt_struct_alloc", rt_struct_alloc as *const u8);
 
     let mut module = JITModule::new(jit_builder);
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
@@ -298,13 +386,30 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_assert_fail", &[ptr_type], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_div_by_zero", &[], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_int_overflow", &[], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_concat", &[ptr_type, ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_eq", &[ptr_type, ptr_type], Some(types::I8))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_array_alloc", &[types::I64], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_array_get", &[ptr_type, types::I64], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_array_len", &[ptr_type], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_len", &[ptr_type], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_struct_alloc", &[types::I64], Some(ptr_type))?;
+
+    // Build struct field layouts from AST
+    let mut struct_fields: HashMap<String, Vec<(String, TurboTy)>> = HashMap::new();
+    for item in &ast_module.items {
+        let Item::Struct(s) = &item.node else { continue };
+        let fields: Vec<(String, TurboTy)> = s.fields.iter()
+            .map(|f| (f.name.clone(), turbo_ty_from_type_expr(&f.ty.node)))
+            .collect();
+        struct_fields.insert(s.name.clone(), fields);
+    }
 
     // Declare all user functions + build return type map
     let mut user_fns: HashMap<String, FuncId> = HashMap::new();
     let mut fn_ret_types: HashMap<String, TurboTy> = HashMap::new();
 
     for item in &ast_module.items {
-        let Item::Function(f) = &item.node;
+        let Item::Function(f) = &item.node else { continue };
         let mut sig = module.make_signature();
         // Use fast calling convention for internal functions (not main)
         // — reduces prologue/epilogue overhead on the hot recursive path
@@ -335,7 +440,7 @@ fn compile_module<M: Module>(
     let mut string_counter: usize = 0;
 
     for item in &ast_module.items {
-        let Item::Function(f) = &item.node;
+        let Item::Function(f) = &item.node else { continue };
         let func_id = user_fns[&f.name];
 
         cl_ctx.func.signature = module.make_signature();
@@ -363,6 +468,7 @@ fn compile_module<M: Module>(
                 data_desc: &mut data_desc,
                 string_counter: &mut string_counter,
                 ptr_type,
+                struct_fields: &struct_fields,
             };
 
             let entry = cx.builder.create_block();
@@ -380,7 +486,7 @@ fn compile_module<M: Module>(
             for (i, param) in f.params.iter().enumerate() {
                 let cl_ty = resolve_cl_type(&param.ty.node, ptr_type)?;
                 let turbo_ty = turbo_ty_from_type_expr(&param.ty.node);
-                let var = cx.fresh_var(cl_ty, turbo_ty);
+                let var = cx.fresh_var(cl_ty, turbo_ty.clone());
                 let val = cx.builder.block_params(entry)[i];
                 cx.builder.def_var(var, val);
                 cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
@@ -446,9 +552,10 @@ fn resolve_cl_type(ty: &TypeExpr, ptr_type: types::Type) -> Result<types::Type, 
             "f64" => Ok(types::F64),
             "bool" => Ok(types::I8),
             "str" => Ok(ptr_type),
-            _ => Err(CodegenError { message: format!("unknown type: {name}") }),
+            _ => Ok(ptr_type), // Struct types are represented as pointers at runtime
         },
         TypeExpr::Unit => Err(CodegenError { message: "unit type has no runtime representation".to_string() }),
+        TypeExpr::Array(_) => Ok(ptr_type), // Arrays are represented as pointers at runtime
     }
 }
 
@@ -477,7 +584,7 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
         Expr::Ident(name) => {
             let (var, _cl_ty, turbo_ty) = cx.vars.get(name)
                 .ok_or_else(|| CodegenError { message: format!("undefined variable: {name}") })?;
-            let turbo_ty = *turbo_ty;
+            let turbo_ty = turbo_ty.clone();
             let val = cx.builder.use_var(*var);
             Ok(Some((val, turbo_ty)))
         }
@@ -489,7 +596,21 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             }
 
             let (lhs, lhs_tty) = compile_expr(cx, left)?.unwrap();
-            let (rhs, _) = compile_expr(cx, right)?.unwrap();
+            let (rhs, rhs_tty) = compile_expr(cx, right)?.unwrap();
+
+            // String operations
+            if lhs_tty == TurboTy::Str && rhs_tty == TurboTy::Str {
+                match op {
+                    BinOp::Add => {
+                        return compile_str_concat(cx, lhs, rhs);
+                    }
+                    BinOp::Eq | BinOp::NotEq => {
+                        return compile_str_compare(cx, lhs, rhs, *op);
+                    }
+                    _ => {}
+                }
+            }
+
             let result = compile_binop(cx, lhs, *op, rhs)?;
 
             // Comparison/logical ops produce Bool, arithmetic preserves input type
@@ -576,6 +697,125 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
         }
 
         Expr::While { condition, body } => compile_while(cx, condition, body),
+
+        Expr::ForIn { var_name, iterable, body } => compile_for_in(cx, var_name, iterable, body),
+
+        Expr::Range { .. } => {
+            Err(CodegenError { message: "range expressions can only be used in for-in loops".to_string() })
+        }
+
+        Expr::ArrayLit(elements) => {
+            let len = elements.len() as i64;
+            let len_val = cx.builder.ins().iconst(types::I64, len);
+
+            let alloc_fid = cx.rt_fns["rt_array_alloc"];
+            let alloc_ref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+            let call = cx.builder.ins().call(alloc_ref, &[len_val]);
+            let arr_ptr = cx.builder.inst_results(call)[0];
+
+            for (i, elem) in elements.iter().enumerate() {
+                let (val, _) = compile_expr(cx, elem)?.unwrap();
+                let offset = cx.builder.ins().iconst(cx.ptr_type, (8 + i * 8) as i64);
+                let elem_ptr = cx.builder.ins().iadd(arr_ptr, offset);
+                cx.builder.ins().store(MemFlags::new(), val, elem_ptr, 0);
+            }
+
+            Ok(Some((arr_ptr, TurboTy::Array)))
+        }
+
+        Expr::Index { object, index } => {
+            let (arr, _) = compile_expr(cx, object)?.unwrap();
+            let (idx, _) = compile_expr(cx, index)?.unwrap();
+
+            let get_fid = cx.rt_fns["rt_array_get"];
+            let get_ref = cx.module.declare_func_in_func(get_fid, cx.builder.func);
+            let call = cx.builder.ins().call(get_ref, &[arr, idx]);
+            let result = cx.builder.inst_results(call)[0];
+            Ok(Some((result, TurboTy::Int)))
+        }
+
+        Expr::StructLit { name, fields } => {
+            let struct_layout = cx.struct_fields.get(name)
+                .ok_or_else(|| CodegenError { message: format!("undefined struct: {name}") })?
+                .clone();
+
+            let num_fields = struct_layout.len() as i64;
+            let num_fields_val = cx.builder.ins().iconst(types::I64, num_fields);
+
+            // Call rt_struct_alloc to allocate memory
+            let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+            let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+            let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
+            let ptr = cx.builder.inst_results(call)[0];
+
+            // Store each field at its offset
+            for (field_name, field_value) in fields {
+                let field_index = struct_layout.iter()
+                    .position(|(n, _)| n == field_name)
+                    .ok_or_else(|| CodegenError { message: format!("struct `{name}` has no field `{field_name}`") })?;
+
+                let (val, _tty) = compile_expr(cx, field_value)?.unwrap();
+                let offset = (field_index * 8) as i32;
+
+                // Widen smaller types to 64-bit for uniform storage
+                let val_ty = cx.builder.func.dfg.value_type(val);
+                let val = if val_ty.bits() < 64 && val_ty.is_int() {
+                    cx.builder.ins().sextend(types::I64, val)
+                } else if val_ty.is_float() && val_ty.bits() == 64 {
+                    cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
+                } else if val_ty.is_float() && val_ty.bits() == 32 {
+                    let extended = cx.builder.ins().fpromote(types::F64, val);
+                    cx.builder.ins().bitcast(types::I64, MemFlags::new(), extended)
+                } else {
+                    val
+                };
+
+                cx.builder.ins().store(MemFlags::new(), val, ptr, offset);
+            }
+
+            Ok(Some((ptr, TurboTy::Struct(name.clone()))))
+        }
+
+        Expr::FieldAccess { object, field } => {
+            let (obj_ptr, obj_tty) = compile_expr(cx, object)?.unwrap();
+
+            let struct_name = match &obj_tty {
+                TurboTy::Struct(name) => name.clone(),
+                _ => return Err(CodegenError { message: format!("field access on non-struct type") }),
+            };
+
+            let struct_layout = cx.struct_fields.get(&struct_name)
+                .ok_or_else(|| CodegenError { message: format!("undefined struct: {struct_name}") })?
+                .clone();
+
+            let field_index = struct_layout.iter()
+                .position(|(n, _)| n == field)
+                .ok_or_else(|| CodegenError { message: format!("struct `{struct_name}` has no field `{field}`") })?;
+
+            let field_tty = struct_layout[field_index].1.clone();
+            let offset = (field_index * 8) as i32;
+
+            // Load from the struct pointer
+            let raw_val = cx.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, offset);
+
+            // Convert back to the appropriate type
+            let (val, tty) = match &field_tty {
+                TurboTy::Int => (raw_val, TurboTy::Int),
+                TurboTy::Bool => {
+                    let truncated = cx.builder.ins().ireduce(types::I8, raw_val);
+                    (truncated, TurboTy::Bool)
+                }
+                TurboTy::Float => {
+                    let f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val);
+                    (f, TurboTy::Float)
+                }
+                TurboTy::Str => (raw_val, TurboTy::Str),
+                TurboTy::Struct(name) => (raw_val, TurboTy::Struct(name.clone())),
+                _ => (raw_val, field_tty),
+            };
+
+            Ok(Some((val, tty)))
+        }
     }
 }
 
@@ -804,11 +1044,12 @@ fn compile_call<M: Module>(
         "print" => compile_print(cx, args),
         "panic" => compile_panic(cx, args),
         "assert" => compile_assert(cx, args),
+        "len" => compile_len(cx, args),
         _ => {
             let func_id = *cx.user_fns.get(name.as_str())
                 .ok_or_else(|| CodegenError { message: format!("undefined function: {name}") })?;
 
-            let ret_tty = cx.fn_ret_types.get(name.as_str()).copied().unwrap_or(TurboTy::Unit);
+            let ret_tty = cx.fn_ret_types.get(name.as_str()).cloned().unwrap_or(TurboTy::Unit);
 
             let func_ref = cx.module.declare_func_in_func(func_id, cx.builder.func);
             let sig = cx.builder.func.dfg.ext_funcs[func_ref].signature;
@@ -872,6 +1113,14 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
                 let ptr = cx.create_string("()")?;
                 cx.rt_call("rt_print_str", &[ptr]);
             }
+            TurboTy::Array => {
+                let ptr = cx.create_string("[array]")?;
+                cx.rt_call("rt_print_str", &[ptr]);
+            }
+            TurboTy::Struct(name) => {
+                let ptr = cx.create_string(&format!("[struct {}]", name))?;
+                cx.rt_call("rt_print_str", &[ptr]);
+            }
         }
     } else {
         let ptr = cx.create_string("()")?;
@@ -932,6 +1181,26 @@ fn compile_assert<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Res
     cx.builder.seal_block(ok_block);
 
     Ok(None)
+}
+
+fn compile_len<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    if args.is_empty() {
+        return Err(CodegenError { message: "len() requires exactly 1 argument".to_string() });
+    }
+    let (val, tty) = compile_expr(cx, &args[0])?.unwrap();
+    if tty == TurboTy::Str {
+        let len_fid = cx.rt_fns["rt_str_len"];
+        let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
+        let call = cx.builder.ins().call(len_ref, &[val]);
+        let result = cx.builder.inst_results(call)[0];
+        Ok(Some((result, TurboTy::Int)))
+    } else {
+        let len_fid = cx.rt_fns["rt_array_len"];
+        let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
+        let call = cx.builder.ins().call(len_ref, &[val]);
+        let result = cx.builder.inst_results(call)[0];
+        Ok(Some((result, TurboTy::Int)))
+    }
 }
 
 // ── If expression ───────────────────────────────────────────────────
@@ -1000,6 +1269,39 @@ fn compile_if<M: Module>(
     }
 }
 
+// ── String operations ───────────────────────────────────────────────
+
+fn compile_str_concat<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    lhs: Value,
+    rhs: Value,
+) -> Result<MaybeTyped, CodegenError> {
+    let fid = cx.rt_fns["rt_str_concat"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[lhs, rhs]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+fn compile_str_compare<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    lhs: Value,
+    rhs: Value,
+    op: BinOp,
+) -> Result<MaybeTyped, CodegenError> {
+    let fid = cx.rt_fns["rt_str_eq"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[lhs, rhs]);
+    let result = cx.builder.inst_results(call)[0];
+    let result = if op == BinOp::NotEq {
+        let one = cx.builder.ins().iconst(types::I8, 1);
+        cx.builder.ins().bxor(result, one)
+    } else {
+        result
+    };
+    Ok(Some((result, TurboTy::Bool)))
+}
+
 // ── While loop ──────────────────────────────────────────────────────
 
 fn compile_while<M: Module>(
@@ -1036,6 +1338,75 @@ fn compile_while<M: Module>(
 
     cx.builder.seal_block(header_block);
 
+    cx.builder.switch_to_block(exit_block);
+    cx.builder.seal_block(exit_block);
+
+    Ok(None)
+}
+
+// ── For-in loop ─────────────────────────────────────────────────────
+
+fn compile_for_in<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    var_name: &str,
+    iterable: &Spanned<Expr>,
+    body: &Spanned<Expr>,
+) -> Result<MaybeTyped, CodegenError> {
+    // Extract range bounds
+    let (range_start, range_end) = match &iterable.node {
+        Expr::Range { start, end } => {
+            let (s, _) = compile_expr(cx, start)?.unwrap();
+            let (e, _) = compile_expr(cx, end)?.unwrap();
+            (s, e)
+        }
+        _ => return Err(CodegenError {
+            message: "for-in currently only supports range expressions".to_string(),
+        }),
+    };
+
+    // Create loop variable
+    let var = Variable::new(cx.next_var);
+    cx.next_var += 1;
+    cx.builder.declare_var(var, types::I64);
+    cx.builder.def_var(var, range_start);
+    cx.vars.insert(var_name.to_string(), (var, types::I64, TurboTy::Int));
+
+    // Create blocks: header, body, exit
+    let header_block = cx.builder.create_block();
+    let body_block = cx.builder.create_block();
+    let exit_block = cx.builder.create_block();
+
+    cx.builder.ins().jump(header_block, &[]);
+
+    // Header: check i < end
+    // Do NOT seal header yet -- it has two predecessors (entry + back edge)
+    cx.builder.switch_to_block(header_block);
+
+    let current_i = cx.builder.use_var(var);
+    let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, current_i, range_end);
+    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+
+    // Body
+    cx.builder.switch_to_block(body_block);
+    cx.builder.seal_block(body_block);
+
+    compile_expr(cx, body)?;
+
+    // Increment: i = i + 1
+    if !cx.builder.is_unreachable() {
+        let current_i = cx.builder.use_var(var);
+        let one = cx.builder.ins().iconst(types::I64, 1);
+        let next_i = cx.builder.ins().iadd(current_i, one);
+        cx.builder.def_var(var, next_i);
+
+        // Back edge
+        cx.builder.ins().jump(header_block, &[]);
+    }
+
+    // NOW seal the header (both predecessors are known)
+    cx.builder.seal_block(header_block);
+
+    // Exit
     cx.builder.switch_to_block(exit_block);
     cx.builder.seal_block(exit_block);
 
