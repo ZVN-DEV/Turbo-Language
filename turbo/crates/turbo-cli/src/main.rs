@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use turbo_ast::{Item, Module};
 
 mod playground;
 
@@ -91,7 +93,7 @@ fn run_file(path: &std::path::Path, verbose: bool) {
 
     // Parse
     let parse_start = std::time::Instant::now();
-    let (module, parse_errors) = turbo_parser::parse(tokens);
+    let (mut module, parse_errors) = turbo_parser::parse(tokens);
     let parse_time = parse_start.elapsed();
 
     if !parse_errors.is_empty() {
@@ -99,6 +101,16 @@ fn run_file(path: &std::path::Path, verbose: bool) {
             let (line, col) = line_col(&source, err.span.start);
             eprintln!("error: {} at {filename}:{line}:{col}", err.message);
         }
+        std::process::exit(1);
+    }
+
+    // Resolve imports
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let canonical_self = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut loading = HashSet::new();
+    loading.insert(canonical_self);
+    if let Err(e) = resolve_imports(&mut module, base_dir, &mut loading) {
+        eprintln!("error: {e}");
         std::process::exit(1);
     }
 
@@ -194,7 +206,7 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
 
     // Parse
     let parse_start = std::time::Instant::now();
-    let (module, parse_errors) = turbo_parser::parse(tokens);
+    let (mut module, parse_errors) = turbo_parser::parse(tokens);
     let parse_time = parse_start.elapsed();
 
     if !parse_errors.is_empty() {
@@ -202,6 +214,16 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
             let (line, col) = line_col(&source, err.span.start);
             eprintln!("error: {} at {filename}:{line}:{col}", err.message);
         }
+        std::process::exit(1);
+    }
+
+    // Resolve imports
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let canonical_self = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut loading = HashSet::new();
+    loading.insert(canonical_self);
+    if let Err(e) = resolve_imports(&mut module, base_dir, &mut loading) {
+        eprintln!("error: {e}");
         std::process::exit(1);
     }
 
@@ -247,6 +269,118 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
             std::process::exit(1);
         }
     }
+}
+
+/// Resolve the file path for an import.
+/// The `.tb` extension is appended if not already present.
+/// The path is resolved relative to `base_dir`.
+fn resolve_import_path(base_dir: &Path, import_path: &str) -> PathBuf {
+    let mut path = base_dir.join(import_path);
+    if path.extension().is_none() {
+        path.set_extension("tb");
+    }
+    path
+}
+
+/// Resolve all `import` items in the module by reading, lexing, and parsing
+/// the imported files and inlining the requested items.
+/// `loading` tracks files currently being loaded (for circular import detection).
+fn resolve_imports(
+    module: &mut Module,
+    base_dir: &Path,
+    loading: &mut HashSet<PathBuf>,
+) -> Result<(), String> {
+    let mut import_items = Vec::new();
+
+    for item in &module.items {
+        if let Item::Import { names, path } = &item.node {
+            let resolved_path = resolve_import_path(base_dir, path);
+            let canonical = resolved_path.canonicalize().map_err(|e| {
+                format!("could not resolve import path `{}`: {e}", resolved_path.display())
+            })?;
+
+            // Circular import detection
+            if loading.contains(&canonical) {
+                return Err(format!(
+                    "circular import detected: `{}`",
+                    resolved_path.display()
+                ));
+            }
+
+            loading.insert(canonical.clone());
+
+            let source = std::fs::read_to_string(&resolved_path).map_err(|e| {
+                format!("could not read imported file `{}`: {e}", resolved_path.display())
+            })?;
+
+            let (tokens, lex_errors) = turbo_lexer::tokenize(&source);
+            if !lex_errors.is_empty() {
+                return Err(format!(
+                    "lex errors in imported file `{}`",
+                    resolved_path.display()
+                ));
+            }
+
+            let (mut imported_module, parse_errors) = turbo_parser::parse(tokens);
+            if !parse_errors.is_empty() {
+                return Err(format!(
+                    "parse errors in imported file `{}`: {}",
+                    resolved_path.display(),
+                    parse_errors[0].message
+                ));
+            }
+
+            // Recursively resolve imports in the imported file
+            let imported_dir = resolved_path.parent().unwrap_or(base_dir);
+            resolve_imports(&mut imported_module, imported_dir, loading)?;
+
+            loading.remove(&canonical);
+
+            // Extract the requested items
+            for imported_item in imported_module.items {
+                match &imported_item.node {
+                    Item::Function(f) if names.contains(&f.name) => {
+                        import_items.push(imported_item);
+                    }
+                    Item::Struct(s) if names.contains(&s.name) => {
+                        import_items.push(imported_item);
+                    }
+                    Item::Enum(e) if names.contains(&e.name) => {
+                        import_items.push(imported_item);
+                    }
+                    Item::Impl(imp) if names.contains(&imp.type_name) => {
+                        import_items.push(imported_item);
+                    }
+                    _ => {}
+                }
+            }
+
+            // Check that all requested names were found
+            for name in names {
+                let found = import_items.iter().any(|item| match &item.node {
+                    Item::Function(f) => &f.name == name,
+                    Item::Struct(s) => &s.name == name,
+                    Item::Enum(e) => &e.name == name,
+                    Item::Impl(imp) => &imp.type_name == name,
+                    _ => false,
+                });
+                if !found {
+                    return Err(format!(
+                        "name `{name}` not found in `{}`",
+                        resolved_path.display()
+                    ));
+                }
+            }
+        }
+    }
+
+    // Remove import items and prepend imported items
+    module.items.retain(|item| !matches!(&item.node, Item::Import { .. }));
+    let mut new_items = import_items;
+    new_items.append(&mut module.items);
+    module.items = new_items;
+
+    Ok(())
 }
 
 fn line_col(source: &str, offset: usize) -> (usize, usize) {

@@ -27,6 +27,11 @@ pub enum Item {
     Struct(StructDef),
     Enum(EnumDef),
     Impl(ImplBlock),
+    /// Import declaration: `import { name1, name2 } from "path"`
+    Import {
+        names: Vec<String>,
+        path: String,
+    },
 }
 
 /// Impl block: methods attached to a struct type
@@ -87,6 +92,11 @@ pub enum TypeExpr {
     FnType {
         params: Vec<Spanned<TypeExpr>>,
         ret: Box<Spanned<TypeExpr>>,
+    },
+    /// Result type: T ! E
+    Result {
+        ok_type: Box<Spanned<TypeExpr>>,
+        err_type: Box<Spanned<TypeExpr>>,
     },
 }
 
@@ -204,6 +214,10 @@ pub enum Expr {
         return_type: Option<Spanned<TypeExpr>>,
         body: Box<Spanned<Expr>>,
     },
+    /// Ok constructor: ok(value)
+    OkExpr(Box<Spanned<Expr>>),
+    /// Err constructor: err(value)
+    ErrExpr(Box<Spanned<Expr>>),
 }
 
 /// Statements (things that don't produce values in statement position)
@@ -242,6 +256,10 @@ pub enum Pattern {
     BoolLit(bool),
     /// String literal pattern
     StringLit(String),
+    /// ok(binding) pattern
+    Ok(String),
+    /// err(binding) pattern
+    Err(String),
 }
 
 /// Binary operators

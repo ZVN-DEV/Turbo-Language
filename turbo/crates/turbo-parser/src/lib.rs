@@ -108,7 +108,7 @@ impl Parser {
                     self.errors.push(e);
                     // Skip to next `fn`, `struct`, or `type` to recover
                     self.pos += 1;
-                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Struct) | Some(Token::TypeKw)) {
+                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Struct) | Some(Token::TypeKw) | Some(Token::Import)) {
                         self.pos += 1;
                     }
                 }
@@ -144,11 +144,18 @@ impl Parser {
                     .unwrap_or(start);
                 Ok(Spanned::new(Item::Impl(imp), start..end))
             }
+            Some(Token::Import) => {
+                let (names, path) = self.parse_import()?;
+                let end = self.tokens.get(self.pos.saturating_sub(1))
+                    .map(|t| t.span.end)
+                    .unwrap_or(start);
+                Ok(Spanned::new(Item::Import { names, path }, start..end))
+            }
             _ => {
                 let span = self.peek_span();
                 let found = self.peek().map(|t| format!("`{t}`")).unwrap_or("end of file".to_string());
                 Err(ParseError {
-                    message: format!("expected `fn`, `struct`, `type`, or `impl`, found {found}"),
+                    message: format!("expected `fn`, `struct`, `type`, `impl`, or `import`, found {found}"),
                     span,
                 })
             }
@@ -203,6 +210,40 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
         Ok(ImplBlock { type_name, methods })
+    }
+
+    fn parse_import(&mut self) -> Result<(Vec<String>, String), ParseError> {
+        self.expect(&Token::Import)?;
+        self.expect(&Token::LBrace)?;
+        let mut names = Vec::new();
+        loop {
+            let (name, _) = self.expect_ident()?;
+            names.push(name);
+            if matches!(self.peek(), Some(Token::Comma)) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        self.expect(&Token::From)?;
+        let path = match self.peek() {
+            Some(Token::String(_)) => {
+                let tok = self.advance();
+                if let Token::String(s) = &tok.value {
+                    s.clone()
+                } else {
+                    unreachable!()
+                }
+            }
+            _ => {
+                return Err(ParseError {
+                    message: "expected path string after `from`".to_string(),
+                    span: self.peek_span(),
+                });
+            }
+        };
+        Ok((names, path))
     }
 
     fn parse_fn_def(&mut self) -> Result<FnDef, ParseError> {

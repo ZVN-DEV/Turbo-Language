@@ -1,0 +1,6 @@
+import { square, cube } from "./math_lib"
+
+fn main() {
+    print(square(5))
+    print(cube(3))
+}

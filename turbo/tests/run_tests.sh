@@ -67,6 +67,13 @@ for f in tests/regression/*.tb; do
 done
 
 echo ""
+echo "=== Import Tests ==="
+for f in tests/phase1/imports/*.tb; do
+    [ -f "$f" ] || continue
+    run_test "$f"
+done
+
+echo ""
 echo "=== Adversarial Tests ==="
 for f in tests/adversarial/*.tb; do
     [ -f "$f" ] && run_test "$f"

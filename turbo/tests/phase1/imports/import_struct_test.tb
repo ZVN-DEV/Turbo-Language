@@ -1,0 +1,7 @@
+import { Point, make_point } from "./point_lib"
+
+fn main() {
+    let p = make_point(3, 4)
+    print(p.x)
+    print(p.y)
+}

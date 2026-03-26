@@ -33,6 +33,8 @@ pub enum Ty {
     Enum(String),
     /// Function type: fn(params) -> ret
     Fn(Vec<Ty>, Box<Ty>),
+    /// Result type: Result<ok, err>
+    Result(Box<Ty>, Box<Ty>),
     /// Type could not be determined (error recovery)
     Error,
 }
@@ -60,6 +62,7 @@ impl std::fmt::Display for Ty {
                 }
                 write!(f, ") -> {}", ret)
             }
+            Ty::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
             Ty::Error => write!(f, "<error>"),
         }
     }
@@ -80,6 +83,22 @@ impl Ty {
 
     fn is_error(&self) -> bool {
         matches!(self, Ty::Error)
+    }
+}
+
+/// Check if two types are compatible (allowing partial Result types where Error = unknown).
+fn types_compatible(expected: &Ty, actual: &Ty) -> bool {
+    if expected == actual {
+        return true;
+    }
+    // Result types with Error (unknown) components are compatible with concrete Result types
+    match (expected, actual) {
+        (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
+            let ok_ok = ok1.is_error() || ok2.is_error() || ok1 == ok2;
+            let err_ok = err1.is_error() || err2.is_error() || err1 == err2;
+            ok_ok && err_ok
+        }
+        _ => false,
     }
 }
 
@@ -124,6 +143,11 @@ fn resolve_type_expr(te: &TypeExpr, structs: Option<&HashMap<String, StructInfo>
             }
             let ret_ty = resolve_type_expr(&ret.node, structs, enums)?;
             Some(Ty::Fn(param_tys, Box::new(ret_ty)))
+        }
+        TypeExpr::Result { ok_type, err_type } => {
+            let ok_ty = resolve_type_expr(&ok_type.node, structs, enums)?;
+            let err_ty = resolve_type_expr(&err_type.node, structs, enums)?;
+            Some(Ty::Result(Box::new(ok_ty), Box::new(err_ty)))
         }
     }
 }
@@ -218,7 +242,7 @@ impl Checker {
     // === Check module ===
 
     fn is_builtin_function(name: &str) -> bool {
-        matches!(name, "print" | "panic" | "assert" | "len")
+        matches!(name, "print" | "panic" | "assert" | "len" | "abs" | "min" | "max" | "to_str")
     }
 
     fn check_module(&mut self, module: &Module) {
@@ -447,7 +471,7 @@ impl Checker {
         let body_ty = self.check_expr(&f.body);
 
         // Check return type matches
-        if !sig.ret.is_error() && !body_ty.is_error() && sig.ret != Ty::Unit && body_ty != sig.ret {
+        if !sig.ret.is_error() && !body_ty.is_error() && sig.ret != Ty::Unit && !types_compatible(&sig.ret, &body_ty) {
             self.error(
                 format!(
                     "function `{}` should return `{}` but body returns `{}`",
@@ -473,7 +497,7 @@ impl Checker {
 
         let body_ty = self.check_expr(&f.body);
 
-        if !sig.ret.is_error() && !body_ty.is_error() && sig.ret != Ty::Unit && body_ty != sig.ret {
+        if !sig.ret.is_error() && !body_ty.is_error() && sig.ret != Ty::Unit && !types_compatible(&sig.ret, &body_ty) {
             self.error(
                 format!("method `{}` should return `{}` but body returns `{}`", f.name, sig.ret, body_ty),
                 f.body.span.clone(),
@@ -673,6 +697,59 @@ impl Checker {
                                 return Ty::Error;
                             }
                         }
+                    }
+
+                    if name == "abs" {
+                        if args.len() != 1 {
+                            self.error(
+                                format!("abs() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arg_ty = self.check_expr(&args[0]);
+                        if !arg_ty.is_error() && !arg_ty.is_integer() {
+                            self.error(
+                                format!("abs() expects integer, found `{arg_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::I64;
+                    }
+                    if name == "min" || name == "max" {
+                        if args.len() != 2 {
+                            self.error(
+                                format!("{}() takes exactly 2 arguments, got {}", name, args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let a_ty = self.check_expr(&args[0]);
+                        let b_ty = self.check_expr(&args[1]);
+                        if !a_ty.is_error() && !a_ty.is_integer() {
+                            self.error(
+                                format!("{}() expects integers, found `{a_ty}`", name),
+                                args[0].span.clone(),
+                            );
+                        }
+                        if !b_ty.is_error() && !b_ty.is_integer() {
+                            self.error(
+                                format!("{}() expects integers, found `{b_ty}`", name),
+                                args[1].span.clone(),
+                            );
+                        }
+                        return Ty::I64;
+                    }
+                    if name == "to_str" {
+                        if args.len() != 1 {
+                            self.error(
+                                format!("to_str() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        self.check_expr(&args[0]);
+                        return Ty::Str;
                     }
 
                     // Check if callee is a variable with fn type (closure call)
@@ -1206,10 +1283,43 @@ impl Checker {
                         Pattern::BoolLit(b) => {
                             covered_variants.push(b.to_string());
                         }
+                        Pattern::Ok(_) => {
+                            covered_variants.push("ok".to_string());
+                        }
+                        Pattern::Err(_) => {
+                            covered_variants.push("err".to_string());
+                        }
                         _ => {} // IntLit and StringLit don't cover the full domain
                     }
 
-                    let body_ty = self.check_expr(&arm.body);
+                    // For ok/err patterns, bind the variable in a scope
+                    let body_ty = match &arm.pattern.node {
+                        Pattern::Ok(binding) => {
+                            self.push_scope();
+                            let ok_ty = if let Ty::Result(ref ok, _) = subject_ty {
+                                *ok.clone()
+                            } else {
+                                Ty::Error
+                            };
+                            self.define_var(binding, VarInfo { ty: ok_ty, mutable: false }, &arm.pattern.span);
+                            let ty = self.check_expr(&arm.body);
+                            self.pop_scope();
+                            ty
+                        }
+                        Pattern::Err(binding) => {
+                            self.push_scope();
+                            let err_ty = if let Ty::Result(_, ref err) = subject_ty {
+                                *err.clone()
+                            } else {
+                                Ty::Error
+                            };
+                            self.define_var(binding, VarInfo { ty: err_ty, mutable: false }, &arm.pattern.span);
+                            let ty = self.check_expr(&arm.body);
+                            self.pop_scope();
+                            ty
+                        }
+                        _ => self.check_expr(&arm.body),
+                    };
 
                     if let Some(ref expected) = result_ty {
                         if !body_ty.is_error() && !expected.is_error() && body_ty != *expected {
@@ -1252,6 +1362,22 @@ impl Checker {
                                 let mut missing = Vec::new();
                                 if !has_true { missing.push("true"); }
                                 if !has_false { missing.push("false"); }
+                                self.error(
+                                    format!(
+                                        "match is not exhaustive; missing variants: {}",
+                                        missing.join(", ")
+                                    ),
+                                    expr.span.clone(),
+                                );
+                            }
+                        }
+                        Ty::Result(_, _) => {
+                            let has_ok = covered_variants.contains(&"ok".to_string());
+                            let has_err = covered_variants.contains(&"err".to_string());
+                            if !has_ok || !has_err {
+                                let mut missing = Vec::new();
+                                if !has_ok { missing.push("ok"); }
+                                if !has_err { missing.push("err"); }
                                 self.error(
                                     format!(
                                         "match is not exhaustive; missing variants: {}",
@@ -1330,6 +1456,18 @@ impl Checker {
 
                 Ty::Fn(param_types, Box::new(ret_ty))
             }
+
+            Expr::OkExpr(value) => {
+                let val_ty = self.check_expr(value);
+                // Return a partial result type -- the error type is unknown without context
+                Ty::Result(Box::new(val_ty), Box::new(Ty::Error))
+            }
+
+            Expr::ErrExpr(value) => {
+                let val_ty = self.check_expr(value);
+                // Return a partial result type -- the ok type is unknown without context
+                Ty::Result(Box::new(Ty::Error), Box::new(val_ty))
+            }
         }
     }
 
@@ -1372,6 +1510,22 @@ impl Checker {
                 if !subject_ty.is_error() && *subject_ty != Ty::Str {
                     self.error(
                         format!("string pattern cannot match `{subject_ty}`"),
+                        pattern.span.clone(),
+                    );
+                }
+            }
+            Pattern::Ok(_) => {
+                if !subject_ty.is_error() && !matches!(subject_ty, Ty::Result(_, _)) {
+                    self.error(
+                        format!("ok pattern cannot match `{subject_ty}`"),
+                        pattern.span.clone(),
+                    );
+                }
+            }
+            Pattern::Err(_) => {
+                if !subject_ty.is_error() && !matches!(subject_ty, Ty::Result(_, _)) {
+                    self.error(
+                        format!("err pattern cannot match `{subject_ty}`"),
                         pattern.span.clone(),
                     );
                 }
