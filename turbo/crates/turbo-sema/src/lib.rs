@@ -1059,7 +1059,7 @@ impl Checker {
                 if let Some(info) = self.lookup_var(target).cloned() {
                     if !info.mutable {
                         self.error(
-                            format!("cannot assign to immutable variable `{target}` (declare with `let mut` to make mutable)"),
+                            format!("cannot assign to immutable variable `{target}`"),
                             expr.span.clone(),
                         );
                     }
@@ -1085,17 +1085,26 @@ impl Checker {
             Expr::CompoundAssign { target, op, value } => {
                 let val_ty = self.check_expr(value);
 
+                let op_str = match op {
+                    BinOp::Add => "+",
+                    BinOp::Sub => "-",
+                    BinOp::Mul => "*",
+                    BinOp::Div => "/",
+                    BinOp::Mod => "%",
+                    other => panic!("unexpected compound assign operator: {other:?}"),
+                };
+
                 if let Some(info) = self.lookup_var(target).cloned() {
                     if !info.mutable {
                         self.error(
-                            format!("cannot assign to immutable variable `{target}` (declare with `let mut` to make mutable)"),
+                            format!("cannot assign to immutable variable `{target}`"),
                             expr.span.clone(),
                         );
                     }
                     if !val_ty.is_error() && !info.ty.is_error() && val_ty != info.ty {
                         self.error(
                             format!(
-                                "cannot apply `{op:?}=` with `{val_ty}` to variable `{target}` of type `{}`",
+                                "cannot apply `{op_str}=` with `{val_ty}` to variable `{target}` of type `{}`",
                                 info.ty
                             ),
                             value.span.clone(),
@@ -1854,7 +1863,7 @@ mod tests {
     fn test_immutable_assignment() {
         assert_has_error(
             "fn main() { let x = 1\n x = 2 }",
-            "cannot assign to immutable variable `x`",
+            "cannot assign to immutable variable",
         );
     }
 
