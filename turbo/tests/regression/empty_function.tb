@@ -1,0 +1,5 @@
+fn noop() { }
+fn main() {
+    noop()
+    print("after noop")
+}
