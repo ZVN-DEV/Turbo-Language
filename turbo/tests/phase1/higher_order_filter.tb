@@ -1,0 +1,9 @@
+fn main() {
+    let nums = [1, 2, 3, 4, 5, 6]
+
+    let evens = filter(nums, |x: i64| -> bool { x % 2 == 0 })
+    for n in evens { print(n) }
+
+    let big = filter(nums, |x: i64| -> bool { x > 3 })
+    for n in big { print(n) }
+}

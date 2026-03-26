@@ -1956,6 +1956,9 @@ fn compile_call<M: Module>(
         "min" => compile_min(cx, args),
         "max" => compile_max(cx, args),
         "to_str" => compile_to_str_builtin(cx, args),
+        "map" => compile_builtin_map(cx, args),
+        "filter" => compile_builtin_filter(cx, args),
+        "reduce" => compile_builtin_reduce(cx, args),
         _ => {
             // Check if this is a method call (UFCS: parser rewrites obj.method(args) -> method(obj, args))
             if cx.user_fns.get(name.as_str()).is_none() && !args.is_empty() {
