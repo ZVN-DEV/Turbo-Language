@@ -550,6 +550,9 @@ fn extract_closures_from_expr<'a>(
         Expr::Assign { value, .. } | Expr::CompoundAssign { value, .. } => {
             extract_closures_from_expr(value, out, counter);
         }
+        Expr::OkExpr(value) | Expr::ErrExpr(value) => {
+            extract_closures_from_expr(value, out, counter);
+        }
         _ => {} // Literals, Ident, Unit, etc. -- no sub-expressions with closures
     }
 }
@@ -1338,7 +1341,7 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
             let call = cx.builder.ins().call(fref, &[val]);
             let ptr = cx.builder.inst_results(call)[0];
-            Ok(Some((ptr, TurboTy::Result)))
+            Ok(Some((ptr, TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Int)))))
         }
 
         Expr::ErrExpr(value) => {
@@ -1356,7 +1359,7 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
             let call = cx.builder.ins().call(fref, &[val]);
             let ptr = cx.builder.inst_results(call)[0];
-            Ok(Some((ptr, TurboTy::Result)))
+            Ok(Some((ptr, TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Int)))))
         }
     }
 }
@@ -1768,7 +1771,7 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
                 let ptr = cx.create_string("[function]")?;
                 cx.rt_call("rt_print_str", &[ptr]);
             }
-            TurboTy::Result => {
+            TurboTy::Result(_, _) => {
                 let ptr = cx.create_string("[result]")?;
                 cx.rt_call("rt_print_str", &[ptr]);
             }
@@ -2079,7 +2082,7 @@ fn convert_to_str<M: Module>(
         TurboTy::Fn(_, _) => {
             cx.create_string("[function]")
         }
-        TurboTy::Result => {
+        TurboTy::Result(_, _) => {
             cx.create_string("[result]")
         }
     }
@@ -2310,7 +2313,7 @@ fn compile_match<M: Module>(
     subject: &Spanned<Expr>,
     arms: &[MatchArm],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (subj_val, _subj_tty) = compile_expr(cx, subject)?.unwrap();
+    let (subj_val, subj_tty) = compile_expr(cx, subject)?.unwrap();
 
     if arms.is_empty() {
         return Ok(None);
@@ -2402,127 +2405,30 @@ fn compile_match<M: Module>(
         cx.builder.switch_to_block(match_block);
         cx.builder.seal_block(match_block);
 
-        // For ok/err patterns, bind the extracted value as a variable
+        // For ok/err patterns, extract the value and bind as a variable
         let saved_vars = cx.vars.clone();
         match &arm.pattern.node {
             Pattern::Ok(binding) | Pattern::Err(binding) => {
-                // Extract the value from the result
                 let val_fid = cx.rt_fns["rt_result_value"];
                 let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
                 let val_call = cx.builder.ins().call(val_fref, &[subj_val]);
                 let raw_val = cx.builder.inst_results(val_call)[0];
-                // Bind to variable (all values stored as i64 in the result, including string pointers)
+
                 let var = Variable::new(cx.next_var);
                 cx.next_var += 1;
-                // Determine the type: strings/pointers are ptr_type, others are i64
-                // For simplicity, use the raw i64 from rt_result_value.
-                // Strings are pointers which fit in i64, so this works on 64-bit.
                 cx.builder.declare_var(var, types::I64);
                 cx.builder.def_var(var, raw_val);
-                // Determine the TurboTy for the binding based on whether
-                // it's an ok or err pattern. Since we don't have full type
-                // info at codegen level, use a heuristic: for strings in
-                // result types, the value is a pointer (i64-sized).
-                // We'll use the subject's TurboTy to decide, but since
-                // TurboTy::Result doesn't carry inner types, we default
-                // to using the raw value. The print function and string
-                // interpolation will need to know the type.
-                // For now, we store as Int and let print handle it.
-                // Actually, we need to determine the correct type. Since
-                // we can't from TurboTy::Result alone, we'll use a simple
-                // heuristic: check if the pattern is ok or err and see if
-                // the arm body uses it as a string (by examining patterns).
-                // Simpler: just store the ptr_type for the binding and
-                // mark it as Str when the pattern is err (since err values
-                // in our test cases are strings), but that's wrong in general.
-                //
-                // Better approach: use ptr_type for the variable since
-                // rt_result_value returns i64 which on 64-bit == ptr size.
-                // Mark both as Int initially; the actual TurboTy doesn't
-                // matter much since print() will be called with the raw value.
-                //
-                // Actually, the correct thing is: the inner types of the
-                // result ARE known from the function return type, but
-                // TurboTy::Result doesn't store them. Let's store them
-                // at ptr_type (== i64 on 64-bit) and try to figure out
-                // the TurboTy from context.
-                //
-                // For the MVP, we'll check if the subject's TurboTy is
-                // Result and check the function's return type annotation
-                // from the AST. But that's complex. Instead, let's just
-                // mark ok bindings as Int and err bindings as Str
-                // (the most common pattern). This is a simplification
-                // that works for the test cases.
-                //
-                // ACTUALLY: The cleanest approach for the MVP is to
-                // store the value at ptr_type and use a special
-                // ResultValue TurboTy that can be printed correctly.
-                // But since we don't have that, let's just figure
-                // it out from the subject type at sema level.
-                //
-                // For now, since we need to decide the TurboTy:
-                // - The ok/err values are stored as i64 in the heap
-                // - If the value is actually a string pointer, it's also i64
-                // - We need to pick the right print function
-                //
-                // Let's use a simple approach: store as ptr_type (=i64),
-                // and figure out the type from how the binding is used.
-                // Since we can't do that easily, let's store type info
-                // alongside the result.
-                //
-                // SIMPLEST: Just use ptr_type and TurboTy::Int for ok,
-                // TurboTy::Str for err. This matches the common pattern
-                // where ok wraps a numeric value and err wraps a string.
-                // BUT this is fragile. Let's do better.
-                //
-                // Let's look at how the value flows. The ok(value) call
-                // stores an i64. If the original value was a string pointer,
-                // rt_result_value returns the pointer as i64. We just need
-                // to reinterpret it correctly.
-                //
-                // Since we can't determine the type from TurboTy::Result
-                // (it doesn't carry inner types), let's enhance it.
-                // But that's a bigger change.
-                //
-                // For MVP: we'll treat the binding as having the same
-                // Cranelift type as ptr_type (i64) and the TurboTy
-                // based on the match usage pattern. But we need to
-                // figure this out NOW.
-                //
-                // OK - let me take a pragmatic approach. Since:
-                // 1. ok(v) stores v as i64 (integers store directly, strings store pointer)
-                // 2. err(e) stores e as i64 (same)
-                // 3. rt_result_value returns i64
-                //
-                // The binding variable just gets the i64 value. For print,
-                // we need to know if it's Int or Str. Since we can't determine
-                // this from TurboTy::Result alone, I'll check what type the
-                // print call expects by looking at string interpolation usage.
-                //
-                // PRAGMATIC SOLUTION: Look at the arm body. If it prints
-                // the variable, we need the right type. Let's just check
-                // if the body contains string interpolation with this var.
-                //
-                // ACTUALLY - the simplest correct approach: enhance the
-                // subject TurboTy to carry type info. But we already set
-                // TurboTy::Result without inner types.
-                //
-                // FINAL APPROACH: Use `_subj_tty` which is the TurboTy
-                // of the subject. Since it's TurboTy::Result (no inner types),
-                // we can't determine the binding type from it alone.
-                //
-                // Let me look at this from the fn_ret_types perspective.
-                // When we compile a function call, we know its return type.
-                // The subject of the match is the result of such a call.
-                // So the subject TurboTy is TurboTy::Result.
-                //
-                // I'll just declare ok bindings as Int and err bindings as Str
-                // for now, which matches our test cases. A full implementation
-                // would enhance TurboTy::Result to carry inner types.
-                let turbo_ty = if matches!(&arm.pattern.node, Pattern::Ok(_)) {
-                    TurboTy::Int
-                } else {
-                    TurboTy::Str
+
+                // Get the inner type from the subject's Result(ok_tty, err_tty)
+                let turbo_ty = match &subj_tty {
+                    TurboTy::Result(ok_tty, err_tty) => {
+                        if matches!(&arm.pattern.node, Pattern::Ok(_)) {
+                            *ok_tty.clone()
+                        } else {
+                            *err_tty.clone()
+                        }
+                    }
+                    _ => TurboTy::Int, // fallback
                 };
                 cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
             }
