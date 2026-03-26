@@ -2376,8 +2376,8 @@ fn compile_match<M: Module>(
                 cx.builder.ins().icmp(IntCC::NotEqual, eq_result, zero)
             }
             Pattern::Wildcard => unreachable!(), // handled above
-            Pattern::Ok(binding) => {
-                // Extract tag from result pointer
+            Pattern::Ok(_binding) => {
+                // Extract tag from result pointer; ok = tag 0
                 let tag_fid = cx.rt_fns["rt_result_tag"];
                 let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
                 let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
@@ -2385,8 +2385,8 @@ fn compile_match<M: Module>(
                 let zero = cx.builder.ins().iconst(types::I64, 0);
                 cx.builder.ins().icmp(IntCC::Equal, tag, zero)
             }
-            Pattern::Err(binding) => {
-                // Extract tag from result pointer
+            Pattern::Err(_binding) => {
+                // Extract tag from result pointer; err = tag 1
                 let tag_fid = cx.rt_fns["rt_result_tag"];
                 let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
                 let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);

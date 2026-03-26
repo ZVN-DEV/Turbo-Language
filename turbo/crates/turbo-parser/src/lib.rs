@@ -367,7 +367,23 @@ impl Parser {
 
         // Named type
         let (name, span) = self.expect_ident()?;
-        Ok(Spanned::new(TypeExpr::Named(name), span))
+        let mut ty = Spanned::new(TypeExpr::Named(name), span);
+
+        // Check for result type: T ! E
+        if matches!(self.peek(), Some(Token::Bang)) {
+            self.advance();
+            let err_ty = self.parse_type()?;
+            let end = err_ty.span.end;
+            ty = Spanned::new(
+                TypeExpr::Result {
+                    ok_type: Box::new(ty),
+                    err_type: Box::new(err_ty),
+                },
+                start..end,
+            );
+        }
+
+        Ok(ty)
     }
 
     // === Block ===
@@ -870,6 +886,22 @@ impl Parser {
                 self.expect(&Token::RBracket)?;
                 Ok(Spanned::new(Expr::ArrayLit(elements), start..end))
             }
+            Some(Token::Ok) => {
+                let start = self.advance().span.start;
+                self.expect(&Token::LParen)?;
+                let value = self.parse_expr()?;
+                let end = self.peek_span().end;
+                self.expect(&Token::RParen)?;
+                Ok(Spanned::new(Expr::OkExpr(Box::new(value)), start..end))
+            }
+            Some(Token::Err) => {
+                let start = self.advance().span.start;
+                self.expect(&Token::LParen)?;
+                let value = self.parse_expr()?;
+                let end = self.peek_span().end;
+                self.expect(&Token::RParen)?;
+                Ok(Spanned::new(Expr::ErrExpr(Box::new(value)), start..end))
+            }
             Some(Token::If) => self.parse_if_expr(),
             Some(Token::While) => self.parse_while_expr(),
             Some(Token::For) => self.parse_for_in(),
@@ -1070,6 +1102,22 @@ impl Parser {
 
     fn parse_pattern(&mut self) -> Result<Spanned<Pattern>, ParseError> {
         match self.peek() {
+            Some(Token::Ok) => {
+                let start = self.advance().span.start;
+                self.expect(&Token::LParen)?;
+                let (name, _) = self.expect_ident()?;
+                let end = self.peek_span().end;
+                self.expect(&Token::RParen)?;
+                Ok(Spanned::new(Pattern::Ok(name), start..end))
+            }
+            Some(Token::Err) => {
+                let start = self.advance().span.start;
+                self.expect(&Token::LParen)?;
+                let (name, _) = self.expect_ident()?;
+                let end = self.peek_span().end;
+                self.expect(&Token::RParen)?;
+                Ok(Spanned::new(Pattern::Err(name), start..end))
+            }
             Some(Token::Ident(name)) if name == "_" => {
                 let span = self.advance().span.clone();
                 Ok(Spanned::new(Pattern::Wildcard, span))

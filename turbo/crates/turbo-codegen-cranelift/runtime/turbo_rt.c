@@ -125,6 +125,30 @@ const char* rt_bool_to_str(char b) {
     }
 }
 
+/* Result type runtime functions */
+
+void* rt_result_ok(long long value) {
+    long long *ptr = (long long*)calloc(2, sizeof(long long));
+    ptr[0] = 0; /* ok tag */
+    ptr[1] = value;
+    return ptr;
+}
+
+void* rt_result_err(long long value) {
+    long long *ptr = (long long*)calloc(2, sizeof(long long));
+    ptr[0] = 1; /* err tag */
+    ptr[1] = value;
+    return ptr;
+}
+
+long long rt_result_tag(const void *result) {
+    return ((const long long*)result)[0];
+}
+
+long long rt_result_value(const void *result) {
+    return ((const long long*)result)[1];
+}
+
 /* Entry point: calls Turbo's main and returns 0 */
 extern void turbo_main(void);
 int main(void) {

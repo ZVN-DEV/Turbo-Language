@@ -940,7 +940,7 @@ impl Checker {
                 if let Some(else_expr) = else_branch {
                     let else_ty = self.check_expr(else_expr);
                     // If used as expression (both branches must match)
-                    if !then_ty.is_error() && !else_ty.is_error() && then_ty != else_ty {
+                    if !then_ty.is_error() && !else_ty.is_error() && !types_compatible(&then_ty, &else_ty) {
                         // Only warn if both are non-unit (meaning it's used as an expression)
                         if then_ty != Ty::Unit && else_ty != Ty::Unit {
                             self.error(
