@@ -336,6 +336,20 @@ impl Parser {
             }
         }
 
+        // Check for range operator (..)
+        if matches!(self.peek(), Some(Token::DotDot)) {
+            self.advance();
+            let rhs = self.parse_unary()?;
+            let span = lhs.span.start..rhs.span.end;
+            return Ok(Spanned::new(
+                Expr::Range {
+                    start: Box::new(lhs),
+                    end: Box::new(rhs),
+                },
+                span,
+            ));
+        }
+
         self.parse_binary(lhs, 0)
     }
 
@@ -540,6 +554,7 @@ impl Parser {
             }
             Some(Token::If) => self.parse_if_expr(),
             Some(Token::While) => self.parse_while_expr(),
+            Some(Token::For) => self.parse_for_in(),
             Some(Token::LBrace) => self.parse_block(),
             _ => {
                 let span = self.peek_span();
@@ -597,6 +612,25 @@ impl Parser {
         Ok(Spanned::new(
             Expr::While {
                 condition: Box::new(condition),
+                body: Box::new(body),
+            },
+            start..end,
+        ))
+    }
+
+    fn parse_for_in(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let start = self.peek_span().start;
+        self.expect(&Token::For)?;
+        let (var_name, _) = self.expect_ident()?;
+        self.expect(&Token::In)?;
+        let iterable = self.parse_expr()?;
+        let body = self.parse_block()?;
+        let end = body.span.end;
+
+        Ok(Spanned::new(
+            Expr::ForIn {
+                var_name,
+                iterable: Box::new(iterable),
                 body: Box::new(body),
             },
             start..end,

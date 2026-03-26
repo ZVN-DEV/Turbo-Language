@@ -597,6 +597,12 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
         }
 
         Expr::While { condition, body } => compile_while(cx, condition, body),
+
+        Expr::ForIn { var_name, iterable, body } => compile_for_in(cx, var_name, iterable, body),
+
+        Expr::Range { .. } => {
+            Err(CodegenError { message: "range expressions can only be used in for-in loops".to_string() })
+        }
     }
 }
 
@@ -1010,6 +1016,75 @@ fn compile_while<M: Module>(
 
     cx.builder.seal_block(header_block);
 
+    cx.builder.switch_to_block(exit_block);
+    cx.builder.seal_block(exit_block);
+
+    Ok(None)
+}
+
+// ── For-in loop ─────────────────────────────────────────────────────
+
+fn compile_for_in<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    var_name: &str,
+    iterable: &Spanned<Expr>,
+    body: &Spanned<Expr>,
+) -> Result<MaybeTyped, CodegenError> {
+    // Extract range bounds
+    let (range_start, range_end) = match &iterable.node {
+        Expr::Range { start, end } => {
+            let (s, _) = compile_expr(cx, start)?.unwrap();
+            let (e, _) = compile_expr(cx, end)?.unwrap();
+            (s, e)
+        }
+        _ => return Err(CodegenError {
+            message: "for-in currently only supports range expressions".to_string(),
+        }),
+    };
+
+    // Create loop variable
+    let var = Variable::new(cx.next_var);
+    cx.next_var += 1;
+    cx.builder.declare_var(var, types::I64);
+    cx.builder.def_var(var, range_start);
+    cx.vars.insert(var_name.to_string(), (var, types::I64, TurboTy::Int));
+
+    // Create blocks: header, body, exit
+    let header_block = cx.builder.create_block();
+    let body_block = cx.builder.create_block();
+    let exit_block = cx.builder.create_block();
+
+    cx.builder.ins().jump(header_block, &[]);
+
+    // Header: check i < end
+    // Do NOT seal header yet -- it has two predecessors (entry + back edge)
+    cx.builder.switch_to_block(header_block);
+
+    let current_i = cx.builder.use_var(var);
+    let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, current_i, range_end);
+    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+
+    // Body
+    cx.builder.switch_to_block(body_block);
+    cx.builder.seal_block(body_block);
+
+    compile_expr(cx, body)?;
+
+    // Increment: i = i + 1
+    if !cx.builder.is_unreachable() {
+        let current_i = cx.builder.use_var(var);
+        let one = cx.builder.ins().iconst(types::I64, 1);
+        let next_i = cx.builder.ins().iadd(current_i, one);
+        cx.builder.def_var(var, next_i);
+
+        // Back edge
+        cx.builder.ins().jump(header_block, &[]);
+    }
+
+    // NOW seal the header (both predecessors are known)
+    cx.builder.seal_block(header_block);
+
+    // Exit
     cx.builder.switch_to_block(exit_block);
     cx.builder.seal_block(exit_block);
 

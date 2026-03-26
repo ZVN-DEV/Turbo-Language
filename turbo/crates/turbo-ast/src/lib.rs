@@ -111,6 +111,17 @@ pub enum Expr {
         condition: Box<Spanned<Expr>>,
         body: Box<Spanned<Expr>>,
     },
+    /// For-in loop: for name in iterable { body }
+    ForIn {
+        var_name: String,
+        iterable: Box<Spanned<Expr>>,
+        body: Box<Spanned<Expr>>,
+    },
+    /// Range expression: start..end (exclusive)
+    Range {
+        start: Box<Spanned<Expr>>,
+        end: Box<Spanned<Expr>>,
+    },
 }
 
 /// Statements (things that don't produce values in statement position)

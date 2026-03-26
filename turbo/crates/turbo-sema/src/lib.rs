@@ -558,6 +558,35 @@ impl Checker {
                 self.check_expr(body);
                 Ty::Unit
             }
+
+            Expr::Range { start, end } => {
+                let start_ty = self.check_expr(start);
+                let end_ty = self.check_expr(end);
+                if !start_ty.is_error() && !start_ty.is_integer() {
+                    self.error(
+                        format!("range start must be an integer, found `{start_ty}`"),
+                        start.span.clone(),
+                    );
+                }
+                if !end_ty.is_error() && !end_ty.is_integer() {
+                    self.error(
+                        format!("range end must be an integer, found `{end_ty}`"),
+                        end.span.clone(),
+                    );
+                }
+                Ty::Unit // Range type (treated as unit for now)
+            }
+
+            Expr::ForIn { var_name, iterable, body } => {
+                // Check the iterable expression
+                let _iter_ty = self.check_expr(iterable);
+                // The loop variable is i64 (from range)
+                self.push_scope();
+                self.define_var(var_name, VarInfo { ty: Ty::I64, mutable: false }, &expr.span);
+                self.check_expr(body);
+                self.pop_scope();
+                Ty::Unit
+            }
         }
     }
 
