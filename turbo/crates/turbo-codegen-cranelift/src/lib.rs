@@ -1877,6 +1877,7 @@ fn compile_call<M: Module>(
                 .ok_or_else(|| CodegenError { message: format!("undefined function: {name}") })?;
 
             let ret_tty = cx.fn_ret_types.get(name.as_str()).cloned().unwrap_or(TurboTy::Unit);
+            let ret_is_result = matches!(&ret_tty, TurboTy::Result(_, _));
             let type_params = cx.fn_type_params.get(name.as_str()).cloned().unwrap_or_default();
 
             let func_ref = cx.module.declare_func_in_func(func_id, cx.builder.func);
@@ -1955,7 +1956,10 @@ fn compile_call<M: Module>(
 
             // Try inline expansion: inline the callee body at this call site
             // if we haven't exceeded the depth limit and the function is inlineable.
-            if cx.inline_depth < MAX_INLINE_DEPTH {
+            // Skip inlining for generic functions (type parameter inference needs
+            // normal call path) and for Result-returning functions (heap-allocated
+            // tagged unions require proper call/return semantics).
+            if cx.inline_depth < MAX_INLINE_DEPTH && type_params.is_empty() && !ret_is_result {
                 if let Some(callee_def) = cx.fn_asts.get(name.as_str()).cloned() {
                     if !has_return(&callee_def.body.node) && callee_def.params.len() == arg_values.len() {
                         // Save and restore outer variable scope so inlined
