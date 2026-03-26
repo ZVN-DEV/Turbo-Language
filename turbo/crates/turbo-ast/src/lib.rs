@@ -83,6 +83,11 @@ pub enum TypeExpr {
     Unit,
     /// Array type: [T]
     Array(Box<Spanned<TypeExpr>>),
+    /// Function type: fn(T, T) -> T
+    FnType {
+        params: Vec<Spanned<TypeExpr>>,
+        ret: Box<Spanned<TypeExpr>>,
+    },
 }
 
 /// Part of a string interpolation
@@ -193,6 +198,12 @@ pub enum Expr {
     },
     /// String interpolation: "text {expr} text"
     Interpolation(Vec<InterpolPart>),
+    /// Closure / lambda: |params| -> ret { body }
+    Closure {
+        params: Vec<Param>,
+        return_type: Option<Spanned<TypeExpr>>,
+        body: Box<Spanned<Expr>>,
+    },
 }
 
 /// Statements (things that don't produce values in statement position)

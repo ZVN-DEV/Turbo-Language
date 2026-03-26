@@ -296,6 +296,34 @@ impl Parser {
             return Ok(Spanned::new(TypeExpr::Array(Box::new(elem_type)), start..end));
         }
 
+        // Function type: fn(T, T) -> T
+        if matches!(self.peek(), Some(Token::Fn)) {
+            self.advance();
+            self.expect(&Token::LParen)?;
+            let mut params = Vec::new();
+            if !matches!(self.peek(), Some(Token::RParen)) {
+                loop {
+                    params.push(self.parse_type()?);
+                    if matches!(self.peek(), Some(Token::Comma)) {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.expect(&Token::RParen)?;
+            self.expect(&Token::Arrow)?;
+            let ret = self.parse_type()?;
+            let end = ret.span.end;
+            return Ok(Spanned::new(
+                TypeExpr::FnType {
+                    params,
+                    ret: Box::new(ret),
+                },
+                start..end,
+            ));
+        }
+
         // Named type
         let (name, span) = self.expect_ident()?;
         Ok(Spanned::new(TypeExpr::Named(name), span))
@@ -741,7 +769,14 @@ impl Parser {
                 if let Token::String(s) = &tok.value {
                     let s = s.clone();
                     let span = tok.span.clone();
-                    Ok(Spanned::new(Expr::StringLit(s), span))
+                    // Check for string interpolation: unescaped { inside the string
+                    if has_unescaped_brace(&s) {
+                        self.parse_interpolation(&s, &span)
+                    } else {
+                        // Replace escaped braces with literal braces
+                        let s = unescape_braces(&s);
+                        Ok(Spanned::new(Expr::StringLit(s), span))
+                    }
                 } else {
                     unreachable!()
                 }
@@ -799,6 +834,44 @@ impl Parser {
             Some(Token::For) => self.parse_for_in(),
             Some(Token::Match) => self.parse_match_expr(),
             Some(Token::LBrace) => self.parse_block(),
+            Some(Token::Bar) => {
+                // Closure: |params| -> ret { body }
+                self.parse_closure()
+            }
+            Some(Token::Or) => {
+                // Empty-param closure: || -> ret { body }
+                // But only if followed by Arrow or LBrace (otherwise it's a binary Or)
+                let save_pos = self.pos;
+                self.advance(); // consume ||
+                if matches!(self.peek(), Some(Token::Arrow) | Some(Token::LBrace)) {
+                    // It's an empty closure
+                    let return_type = if matches!(self.peek(), Some(Token::Arrow)) {
+                        self.advance();
+                        Some(self.parse_type()?)
+                    } else {
+                        None
+                    };
+                    let body = self.parse_block()?;
+                    let end = body.span.end;
+                    Ok(Spanned::new(
+                        Expr::Closure {
+                            params: Vec::new(),
+                            return_type,
+                            body: Box::new(body),
+                        },
+                        start..end,
+                    ))
+                } else {
+                    // Not a closure, backtrack -- it was binary Or
+                    self.pos = save_pos;
+                    let span = self.peek_span();
+                    let found = self.peek().map(|t| format!("`{t}`")).unwrap_or("end of file".to_string());
+                    Err(ParseError {
+                        message: format!("expected expression, found {found}"),
+                        span,
+                    })
+                }
+            }
             _ => {
                 let span = self.peek_span();
                 let found = self.peek().map(|t| format!("`{t}`")).unwrap_or("end of file".to_string());
@@ -900,6 +973,55 @@ impl Parser {
             Expr::Match {
                 subject: Box::new(subject),
                 arms,
+            },
+            start..end,
+        ))
+    }
+
+    fn parse_closure(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let start = self.peek_span().start;
+        self.expect(&Token::Bar)?;
+
+        // Parse parameters
+        let mut params = Vec::new();
+        if !matches!(self.peek(), Some(Token::Bar)) {
+            loop {
+                let param_start = self.peek_span().start;
+                let (name, _) = self.expect_ident()?;
+                self.expect(&Token::Colon)?;
+                let ty = self.parse_type()?;
+                let param_end = ty.span.end;
+                params.push(Param {
+                    name,
+                    ty,
+                    span: param_start..param_end,
+                });
+                if matches!(self.peek(), Some(Token::Comma)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect(&Token::Bar)?; // closing |
+
+        // Optional return type
+        let return_type = if matches!(self.peek(), Some(Token::Arrow)) {
+            self.advance();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        // Body (must be a block)
+        let body = self.parse_block()?;
+        let end = body.span.end;
+
+        Ok(Spanned::new(
+            Expr::Closure {
+                params,
+                return_type,
+                body: Box::new(body),
             },
             start..end,
         ))

@@ -126,6 +126,10 @@ pub enum Token {
     #[token("/=")]
     SlashEq,
 
+    // --- Single pipe (for closures) ---
+    #[token("|")]
+    Bar,
+
     // --- Single-char operators ---
     #[token("+")]
     Plus,
@@ -296,6 +300,7 @@ impl fmt::Display for Token {
             Token::MinusEq => write!(f, "-="),
             Token::StarEq => write!(f, "*="),
             Token::SlashEq => write!(f, "/="),
+            Token::Bar => write!(f, "|"),
             Token::Plus => write!(f, "+"),
             Token::Minus => write!(f, "-"),
             Token::Star => write!(f, "*"),

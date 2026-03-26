@@ -31,6 +31,8 @@ pub enum Ty {
     Struct(String),
     /// Enum type (by name)
     Enum(String),
+    /// Function type: fn(params) -> ret
+    Fn(Vec<Ty>, Box<Ty>),
     /// Type could not be determined (error recovery)
     Error,
 }
@@ -50,6 +52,14 @@ impl std::fmt::Display for Ty {
             Ty::Array(inner) => write!(f, "[{}]", inner),
             Ty::Struct(name) => write!(f, "{}", name),
             Ty::Enum(name) => write!(f, "{}", name),
+            Ty::Fn(params, ret) => {
+                write!(f, "fn(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{}", p)?;
+                }
+                write!(f, ") -> {}", ret)
+            }
             Ty::Error => write!(f, "<error>"),
         }
     }
@@ -103,6 +113,17 @@ fn resolve_type_expr(te: &TypeExpr, structs: Option<&HashMap<String, StructInfo>
         TypeExpr::Unit => Some(Ty::Unit),
         TypeExpr::Array(inner) => {
             resolve_type_expr(&inner.node, structs, enums).map(|t| Ty::Array(Box::new(t)))
+        }
+        TypeExpr::FnType { params, ret } => {
+            let mut param_tys = Vec::new();
+            for p in params {
+                match resolve_type_expr(&p.node, structs, enums) {
+                    Some(ty) => param_tys.push(ty),
+                    None => return None,
+                }
+            }
+            let ret_ty = resolve_type_expr(&ret.node, structs, enums)?;
+            Some(Ty::Fn(param_tys, Box::new(ret_ty)))
         }
     }
 }
@@ -654,6 +675,37 @@ impl Checker {
                         }
                     }
 
+                    // Check if callee is a variable with fn type (closure call)
+                    if let Some(info) = self.lookup_var(name).cloned() {
+                        if let Ty::Fn(ref param_tys, ref ret_ty) = info.ty {
+                            if args.len() != param_tys.len() {
+                                self.error(
+                                    format!(
+                                        "closure expects {} argument(s) but {} were given",
+                                        param_tys.len(),
+                                        args.len()
+                                    ),
+                                    callee.span.clone(),
+                                );
+                                return *ret_ty.clone();
+                            }
+                            for (i, arg) in args.iter().enumerate() {
+                                let arg_ty = self.check_expr(arg);
+                                if !arg_ty.is_error() && !param_tys[i].is_error() && arg_ty != param_tys[i] {
+                                    self.error(
+                                        format!(
+                                            "argument {} expects `{}`, found `{arg_ty}`",
+                                            i + 1, param_tys[i]
+                                        ),
+                                        arg.span.clone(),
+                                    );
+                                }
+                            }
+                            return *ret_ty.clone();
+                        }
+                        // Variable exists but is not a function type -- fall through to check named functions
+                    }
+
                     // User-defined function
                     if let Some(sig) = self.functions.get(name).cloned() {
                         if args.len() != sig.params.len() {
@@ -947,10 +999,20 @@ impl Checker {
 
             Expr::ForIn { var_name, iterable, body } => {
                 // Check the iterable expression
-                let _iter_ty = self.check_expr(iterable);
-                // The loop variable is i64 (from range)
+                let iter_ty = self.check_expr(iterable);
+
+                // Infer element type from the iterable
+                let elem_ty = match &iter_ty {
+                    Ty::Array(inner) => *inner.clone(),
+                    _ if !iter_ty.is_error() => {
+                        // Range or unknown -- default to I64 for ranges
+                        Ty::I64
+                    }
+                    _ => Ty::Error,
+                };
+
                 self.push_scope();
-                self.define_var(var_name, VarInfo { ty: Ty::I64, mutable: false }, &expr.span);
+                self.define_var(var_name, VarInfo { ty: elem_ty, mutable: false }, &expr.span);
                 self.check_expr(body);
                 self.pop_scope();
                 Ty::Unit
@@ -1223,6 +1285,54 @@ impl Checker {
                     }
                 }
                 Ty::Str
+            }
+
+            Expr::Closure { params, return_type, body } => {
+                let mut param_types = Vec::new();
+                self.push_scope();
+                for param in params {
+                    let ty = match resolve_type_expr(&param.ty.node, Some(&self.structs), Some(&self.enums)) {
+                        Some(ty) => ty,
+                        None => {
+                            self.error(
+                                format!("unknown type in closure parameter `{}`", param.name),
+                                param.ty.span.clone(),
+                            );
+                            Ty::Error
+                        }
+                    };
+                    self.define_var(&param.name, VarInfo { ty: ty.clone(), mutable: false }, &param.span);
+                    param_types.push(ty);
+                }
+                let body_ty = self.check_expr(body);
+                self.pop_scope();
+
+                let ret_ty = if let Some(rt) = return_type {
+                    match resolve_type_expr(&rt.node, Some(&self.structs), Some(&self.enums)) {
+                        Some(ty) => {
+                            if !body_ty.is_error() && !ty.is_error() && body_ty != ty {
+                                self.error(
+                                    format!(
+                                        "closure body returns `{body_ty}` but return type is `{ty}`"
+                                    ),
+                                    body.span.clone(),
+                                );
+                            }
+                            ty
+                        }
+                        None => {
+                            self.error(
+                                "unknown closure return type".to_string(),
+                                rt.span.clone(),
+                            );
+                            body_ty
+                        }
+                    }
+                } else {
+                    body_ty
+                };
+
+                Ty::Fn(param_types, Box::new(ret_ty))
             }
         }
     }
