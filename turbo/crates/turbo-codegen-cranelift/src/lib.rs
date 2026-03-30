@@ -328,6 +328,15 @@ extern "C" fn rt_option_value(opt: *const u8) -> i64 {
 // ── Standard library runtime functions ──────────────────────────────
 
 extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
+    if s.is_null() || sep.is_null() {
+        // Return a single-element array containing empty string
+        let layout = std::alloc::Layout::from_size_align(16, 8).unwrap();
+        let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+        unsafe { *(ptr as *mut i64) = 1; }
+        let empty = std::ffi::CString::new("").unwrap();
+        unsafe { *((ptr as *mut i64).add(1)) = empty.into_raw() as i64; }
+        return ptr;
+    }
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str().unwrap_or("");
     let sep = unsafe { std::ffi::CStr::from_ptr(sep as *const std::ffi::c_char) }
@@ -348,6 +357,7 @@ extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
 }
 
 extern "C" fn rt_str_trim(s: *const u8) -> *const u8 {
+    if s.is_null() { return std::ffi::CString::new("").unwrap().into_raw() as *const u8; }
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str().unwrap_or("");
     let trimmed = s.trim();
@@ -356,6 +366,7 @@ extern "C" fn rt_str_trim(s: *const u8) -> *const u8 {
 }
 
 extern "C" fn rt_str_upper(s: *const u8) -> *const u8 {
+    if s.is_null() { return std::ffi::CString::new("").unwrap().into_raw() as *const u8; }
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str().unwrap_or("");
     let upper = s.to_uppercase();
@@ -364,6 +375,7 @@ extern "C" fn rt_str_upper(s: *const u8) -> *const u8 {
 }
 
 extern "C" fn rt_str_lower(s: *const u8) -> *const u8 {
+    if s.is_null() { return std::ffi::CString::new("").unwrap().into_raw() as *const u8; }
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str().unwrap_or("");
     let lower = s.to_lowercase();
@@ -372,6 +384,7 @@ extern "C" fn rt_str_lower(s: *const u8) -> *const u8 {
 }
 
 extern "C" fn rt_str_starts_with(s: *const u8, prefix: *const u8) -> i8 {
+    if s.is_null() || prefix.is_null() { return 0; }
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str().unwrap_or("");
     let prefix = unsafe { std::ffi::CStr::from_ptr(prefix as *const std::ffi::c_char) }
@@ -380,6 +393,7 @@ extern "C" fn rt_str_starts_with(s: *const u8, prefix: *const u8) -> i8 {
 }
 
 extern "C" fn rt_str_ends_with(s: *const u8, suffix: *const u8) -> i8 {
+    if s.is_null() || suffix.is_null() { return 0; }
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str().unwrap_or("");
     let suffix = unsafe { std::ffi::CStr::from_ptr(suffix as *const std::ffi::c_char) }
@@ -388,6 +402,9 @@ extern "C" fn rt_str_ends_with(s: *const u8, suffix: *const u8) -> i8 {
 }
 
 extern "C" fn rt_str_replace(s: *const u8, from: *const u8, to: *const u8) -> *const u8 {
+    if s.is_null() || from.is_null() || to.is_null() {
+        return std::ffi::CString::new("").unwrap().into_raw() as *const u8;
+    }
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str().unwrap_or("");
     let from = unsafe { std::ffi::CStr::from_ptr(from as *const std::ffi::c_char) }
@@ -400,6 +417,10 @@ extern "C" fn rt_str_replace(s: *const u8, from: *const u8, to: *const u8) -> *c
 }
 
 extern "C" fn rt_str_char_at(s: *const u8, index: i64) -> *const u8 {
+    if s.is_null() {
+        eprintln!("runtime error: string index {} out of bounds (length 0)", index);
+        std::process::exit(1);
+    }
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str().unwrap_or("");
     if let Some(c) = s.chars().nth(index as usize) {
@@ -413,6 +434,7 @@ extern "C" fn rt_str_char_at(s: *const u8, index: i64) -> *const u8 {
 
 /// contains(s, sub) -> bool — returns true if s contains sub
 extern "C" fn rt_str_contains(s: *const u8, sub: *const u8) -> i8 {
+    if s.is_null() || sub.is_null() { return 0; }
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str().unwrap_or("");
     let sub = unsafe { std::ffi::CStr::from_ptr(sub as *const std::ffi::c_char) }
@@ -422,6 +444,7 @@ extern "C" fn rt_str_contains(s: *const u8, sub: *const u8) -> i8 {
 
 /// index_of(s, sub) -> i64 — returns byte offset or -1 if not found
 extern "C" fn rt_str_index_of(s: *const u8, sub: *const u8) -> i64 {
+    if s.is_null() || sub.is_null() { return -1; }
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str().unwrap_or("");
     let sub = unsafe { std::ffi::CStr::from_ptr(sub as *const std::ffi::c_char) }
@@ -434,6 +457,9 @@ extern "C" fn rt_str_index_of(s: *const u8, sub: *const u8) -> i64 {
 
 /// join(arr, sep) -> str — join string array elements with separator
 extern "C" fn rt_str_join(arr: *const u8, sep: *const u8) -> *const u8 {
+    if arr.is_null() || sep.is_null() {
+        return std::ffi::CString::new("").unwrap().into_raw() as *const u8;
+    }
     let sep = unsafe { std::ffi::CStr::from_ptr(sep as *const std::ffi::c_char) }
         .to_str().unwrap_or("");
     // arr is a Turbo array: first 8 bytes = length, then 8 bytes per element (string pointers)
@@ -452,6 +478,7 @@ extern "C" fn rt_str_join(arr: *const u8, sep: *const u8) -> *const u8 {
 
 /// repeat(s, n) -> str — repeat string n times
 extern "C" fn rt_str_repeat(s: *const u8, n: i64) -> *const u8 {
+    if s.is_null() { return std::ffi::CString::new("").unwrap().into_raw() as *const u8; }
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str().unwrap_or("");
     let repeated = s.repeat(n.max(0) as usize);

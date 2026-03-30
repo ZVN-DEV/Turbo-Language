@@ -357,13 +357,24 @@ fn run_file(path: &std::path::Path, verbose: bool) {
     if !lex_errors.is_empty() {
         for span in &lex_errors {
             let snippet = &source[span.clone()];
-            report_error(
-                &source,
-                &filename,
-                &format!("unexpected character `{snippet}`"),
-                span,
-                Some("remove this character or check for typos"),
-            );
+            let is_number = snippet.bytes().all(|b| b.is_ascii_digit() || b == b'_');
+            if is_number && !snippet.is_empty() {
+                report_error(
+                    &source,
+                    &filename,
+                    &format!("integer literal `{snippet}` is too large"),
+                    span,
+                    Some("value must fit in a 64-bit signed integer (-9223372036854775808 to 9223372036854775807)"),
+                );
+            } else {
+                report_error(
+                    &source,
+                    &filename,
+                    &format!("unexpected character `{snippet}`"),
+                    span,
+                    Some("remove this character or check for typos"),
+                );
+            }
         }
         std::process::exit(1);
     }
@@ -494,13 +505,24 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
     if !lex_errors.is_empty() {
         for span in &lex_errors {
             let snippet = &source[span.clone()];
-            report_error(
-                &source,
-                &filename,
-                &format!("unexpected character `{snippet}`"),
-                span,
-                Some("remove this character or check for typos"),
-            );
+            let is_number = snippet.bytes().all(|b| b.is_ascii_digit() || b == b'_');
+            if is_number && !snippet.is_empty() {
+                report_error(
+                    &source,
+                    &filename,
+                    &format!("integer literal `{snippet}` is too large"),
+                    span,
+                    Some("value must fit in a 64-bit signed integer (-9223372036854775808 to 9223372036854775807)"),
+                );
+            } else {
+                report_error(
+                    &source,
+                    &filename,
+                    &format!("unexpected character `{snippet}`"),
+                    span,
+                    Some("remove this character or check for typos"),
+                );
+            }
         }
         std::process::exit(1);
     }
