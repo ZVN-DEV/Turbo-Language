@@ -411,6 +411,54 @@ extern "C" fn rt_str_char_at(s: *const u8, index: i64) -> *const u8 {
     }
 }
 
+/// contains(s, sub) -> bool — returns true if s contains sub
+extern "C" fn rt_str_contains(s: *const u8, sub: *const u8) -> i8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let sub = unsafe { std::ffi::CStr::from_ptr(sub as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    if s.contains(sub) { 1 } else { 0 }
+}
+
+/// index_of(s, sub) -> i64 — returns byte offset or -1 if not found
+extern "C" fn rt_str_index_of(s: *const u8, sub: *const u8) -> i64 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let sub = unsafe { std::ffi::CStr::from_ptr(sub as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    match s.find(sub) {
+        Some(pos) => pos as i64,
+        None => -1,
+    }
+}
+
+/// join(arr, sep) -> str — join string array elements with separator
+extern "C" fn rt_str_join(arr: *const u8, sep: *const u8) -> *const u8 {
+    let sep = unsafe { std::ffi::CStr::from_ptr(sep as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    // arr is a Turbo array: first 8 bytes = length, then 8 bytes per element (string pointers)
+    let len = unsafe { *(arr as *const i64) } as usize;
+    let mut parts = Vec::with_capacity(len);
+    for i in 0..len {
+        let elem_ptr = unsafe { *((arr as *const i64).add(1 + i)) } as *const u8;
+        let elem = unsafe { std::ffi::CStr::from_ptr(elem_ptr as *const std::ffi::c_char) }
+            .to_str().unwrap_or("");
+        parts.push(elem.to_string());
+    }
+    let joined = parts.join(sep);
+    let cs = std::ffi::CString::new(joined).unwrap();
+    cs.into_raw() as *const u8
+}
+
+/// repeat(s, n) -> str — repeat string n times
+extern "C" fn rt_str_repeat(s: *const u8, n: i64) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let repeated = s.repeat(n.max(0) as usize);
+    let cs = std::ffi::CString::new(repeated).unwrap();
+    cs.into_raw() as *const u8
+}
+
 extern "C" fn rt_read_line() -> *const u8 {
     let mut line = String::new();
     std::io::stdin().read_line(&mut line).unwrap_or(0);
@@ -609,6 +657,88 @@ extern "C" fn rt_await_handle(handle_ptr: *mut u8) -> i64 {
     handle.join().unwrap_or(0)
 }
 
+// ── Channel runtime functions ────────────────────────────────────────
+
+/// Create a new channel. Returns a heap-allocated struct: [sender_ptr: i64, receiver_ptr: i64].
+extern "C" fn rt_channel_create() -> *mut u8 {
+    let (tx, rx) = std::sync::mpsc::channel::<i64>();
+    let tx_box = Box::into_raw(Box::new(tx)) as i64;
+    let rx_box = Box::into_raw(Box::new(rx)) as i64;
+
+    let ptr = unsafe {
+        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(16, 8).unwrap())
+    };
+    unsafe {
+        *(ptr as *mut i64) = tx_box;
+        *((ptr as *mut i64).add(1)) = rx_box;
+    }
+    ptr
+}
+
+/// Send a value on a channel.
+extern "C" fn rt_channel_send(ch: *const u8, value: i64) {
+    let tx_ptr = unsafe { *(ch as *const i64) } as *mut std::sync::mpsc::Sender<i64>;
+    let tx = unsafe { &*tx_ptr };
+    tx.send(value).ok();
+}
+
+/// Receive a value from a channel (blocking).
+extern "C" fn rt_channel_recv(ch: *const u8) -> i64 {
+    let rx_ptr = unsafe { *((ch as *const i64).add(1)) } as *mut std::sync::mpsc::Receiver<i64>;
+    let rx = unsafe { &*rx_ptr };
+    rx.recv().unwrap_or(0)
+}
+
+/// Clone a channel's sender for passing to spawned threads.
+/// Returns a new channel handle with a cloned sender and the same receiver pointer.
+extern "C" fn rt_channel_clone_sender(ch: *const u8) -> *mut u8 {
+    let tx_ptr = unsafe { *(ch as *const i64) } as *mut std::sync::mpsc::Sender<i64>;
+    let tx = unsafe { &*tx_ptr };
+    let cloned = tx.clone();
+    let new_tx = Box::into_raw(Box::new(cloned)) as i64;
+
+    let rx_ptr = unsafe { *((ch as *const i64).add(1)) };
+    let ptr = unsafe {
+        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(16, 8).unwrap())
+    };
+    unsafe {
+        *(ptr as *mut i64) = new_tx;
+        *((ptr as *mut i64).add(1)) = rx_ptr;
+    }
+    ptr
+}
+
+// ── Mutex runtime functions ─────────────────────────────────────────
+
+/// Create a mutex wrapping an i64 value. Returns a pointer to an Arc<Mutex<i64>>.
+extern "C" fn rt_mutex_create(value: i64) -> *mut u8 {
+    let m = std::sync::Arc::new(std::sync::Mutex::new(value));
+    std::sync::Arc::into_raw(m) as *mut u8
+}
+
+/// Get the current value inside a mutex.
+extern "C" fn rt_mutex_get(m: *const u8) -> i64 {
+    let arc = unsafe { std::sync::Arc::from_raw(m as *const std::sync::Mutex<i64>) };
+    let val = *arc.lock().unwrap();
+    let _ = std::sync::Arc::into_raw(arc); // don't drop
+    val
+}
+
+/// Set the value inside a mutex.
+extern "C" fn rt_mutex_set(m: *const u8, value: i64) {
+    let arc = unsafe { std::sync::Arc::from_raw(m as *const std::sync::Mutex<i64>) };
+    *arc.lock().unwrap() = value;
+    let _ = std::sync::Arc::into_raw(arc); // don't drop
+}
+
+/// Clone a mutex handle (increments the Arc refcount). Returns a new pointer.
+extern "C" fn rt_mutex_clone(m: *const u8) -> *mut u8 {
+    let arc = unsafe { std::sync::Arc::from_raw(m as *const std::sync::Mutex<i64>) };
+    let cloned = arc.clone();
+    let _ = std::sync::Arc::into_raw(arc); // don't drop original
+    std::sync::Arc::into_raw(cloned) as *mut u8
+}
+
 // ── Runtime C source for AOT linking ────────────────────────────────
 
 const RUNTIME_C: &str = include_str!("../runtime/turbo_rt.c");
@@ -786,6 +916,16 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_http_post", rt_http_post as *const u8);
     jit_builder.symbol("rt_json_get", rt_json_get as *const u8);
     jit_builder.symbol("rt_json_stringify", rt_json_stringify as *const u8);
+    // Channel builtins
+    jit_builder.symbol("rt_channel_create", rt_channel_create as *const u8);
+    jit_builder.symbol("rt_channel_send", rt_channel_send as *const u8);
+    jit_builder.symbol("rt_channel_recv", rt_channel_recv as *const u8);
+    jit_builder.symbol("rt_channel_clone_sender", rt_channel_clone_sender as *const u8);
+    // Mutex builtins
+    jit_builder.symbol("rt_mutex_create", rt_mutex_create as *const u8);
+    jit_builder.symbol("rt_mutex_get", rt_mutex_get as *const u8);
+    jit_builder.symbol("rt_mutex_set", rt_mutex_set as *const u8);
+    jit_builder.symbol("rt_mutex_clone", rt_mutex_clone as *const u8);
 
     let mut module = JITModule::new(jit_builder);
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
@@ -907,7 +1047,7 @@ fn has_return(expr: &Expr) -> bool {
             has_return(&callee.node) || args.iter().any(|a| has_return(&a.node))
         }
         Expr::Assign { value, .. } | Expr::CompoundAssign { value, .. } => has_return(&value.node),
-        Expr::Await(inner) | Expr::Spawn(inner) => has_return(&inner.node),
+        Expr::Await(inner) | Expr::Spawn(inner) | Expr::Try(inner) => has_return(&inner.node),
         Expr::FieldAssign { object, value, .. } => {
             has_return(&object.node) || has_return(&value.node)
         }
@@ -1099,7 +1239,7 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
             collect_free_vars(&value.node, bound, free);
             collect_free_vars(&default.node, bound, free);
         }
-        Expr::Await(inner) | Expr::Spawn(inner) => {
+        Expr::Await(inner) | Expr::Spawn(inner) | Expr::Try(inner) => {
             collect_free_vars(&inner.node, bound, free);
         }
         Expr::EnumVariant { .. } | Expr::IntLit(_) | Expr::FloatLit(_)
@@ -1224,7 +1364,7 @@ fn extract_closures_from_expr<'a>(
             extract_closures_from_expr(value, out, counter);
             extract_closures_from_expr(default, out, counter);
         }
-        Expr::Await(inner) | Expr::Spawn(inner) => {
+        Expr::Await(inner) | Expr::Spawn(inner) | Expr::Try(inner) => {
             extract_closures_from_expr(inner, out, counter);
         }
         _ => {} // Literals, Ident, Unit, NoneExpr, etc. -- no sub-expressions with closures
@@ -1344,7 +1484,7 @@ fn extract_spawn_sites_from_expr(
             for arm in arms { extract_spawn_sites_from_expr(&arm.body, out, counter); }
         }
         Expr::Closure { body, .. } => { extract_spawn_sites_from_expr(body, out, counter); }
-        Expr::OkExpr(e) | Expr::ErrExpr(e) | Expr::SomeExpr(e) | Expr::Await(e) => {
+        Expr::OkExpr(e) | Expr::ErrExpr(e) | Expr::SomeExpr(e) | Expr::Await(e) | Expr::Try(e) => {
             extract_spawn_sites_from_expr(e, out, counter);
         }
         Expr::NullCoalesce { value, default } => {
@@ -1436,6 +1576,16 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_http_post", &[ptr_type, ptr_type], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_json_get", &[ptr_type, ptr_type], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_json_stringify", &[ptr_type, ptr_type], Some(ptr_type))?;
+    // Channel runtime declarations
+    declare_rt_fn(module, &mut rt_fns, "rt_channel_create", &[], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_channel_send", &[ptr_type, types::I64], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_channel_recv", &[ptr_type], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_channel_clone_sender", &[ptr_type], Some(ptr_type))?;
+    // Mutex runtime declarations
+    declare_rt_fn(module, &mut rt_fns, "rt_mutex_create", &[types::I64], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_mutex_get", &[ptr_type], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_mutex_set", &[ptr_type, types::I64], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_mutex_clone", &[ptr_type], Some(ptr_type))?;
 
     // Build enum variants map
     let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();
@@ -2351,6 +2501,11 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             compile_expr(cx, inner)
         }
 
+        // Try operator: expr? — unwrap Ok, propagate Err (simplified: just evaluate inner)
+        Expr::Try(inner) => {
+            compile_expr(cx, inner)
+        }
+
         Expr::ForIn { var_name, iterable, body } => compile_for_in(cx, var_name, iterable, body),
 
         Expr::Range { .. } => {
@@ -2744,6 +2899,41 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             Ok(Some((ptr, TurboTy::Optional(Box::new(TurboTy::Int)))))
         }
 
+        Expr::Try(inner) => {
+            // Compile the inner expression (must produce a Result pointer)
+            let (result_ptr, _result_tty) = compile_expr(cx, inner)?.unwrap();
+
+            // Get the tag: 0 = ok, 1 = err
+            let tag_fid = cx.rt_fns["rt_result_tag"];
+            let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+            let tag_call = cx.builder.ins().call(tag_fref, &[result_ptr]);
+            let tag = cx.builder.inst_results(tag_call)[0];
+
+            // Branch: if tag == 0 (ok), continue; else return the Result as-is
+            let zero = cx.builder.ins().iconst(types::I64, 0);
+            let is_ok = cx.builder.ins().icmp(IntCC::Equal, tag, zero);
+
+            let ok_block = cx.builder.create_block();
+            let err_block = cx.builder.create_block();
+
+            cx.builder.ins().brif(is_ok, ok_block, &[], err_block, &[]);
+
+            // err_block: propagate the error by returning the Result pointer
+            cx.builder.switch_to_block(err_block);
+            cx.builder.seal_block(err_block);
+            cx.builder.ins().return_(&[result_ptr]);
+
+            // ok_block: extract the ok value and continue
+            cx.builder.switch_to_block(ok_block);
+            cx.builder.seal_block(ok_block);
+            let val_fid = cx.rt_fns["rt_result_value"];
+            let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
+            let val_call = cx.builder.ins().call(val_fref, &[result_ptr]);
+            let ok_value = cx.builder.inst_results(val_call)[0];
+
+            Ok(Some((ok_value, TurboTy::Int)))
+        }
+
         Expr::NoneExpr => {
             let fid = cx.rt_fns["rt_option_none"];
             let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -3084,6 +3274,14 @@ fn compile_call<M: Module>(
         "http_post" => compile_builtin_http_post(cx, args),
         "json_get" => compile_builtin_json_get(cx, args),
         "json_stringify" => compile_builtin_json_stringify(cx, args),
+        // Channel builtins
+        "channel" => compile_builtin_channel(cx),
+        "send" => compile_builtin_send(cx, args),
+        "recv" => compile_builtin_recv(cx, args),
+        // Mutex builtins
+        "mutex" => compile_builtin_mutex(cx, args),
+        "mutex_get" => compile_builtin_mutex_get(cx, args),
+        "mutex_set" => compile_builtin_mutex_set(cx, args),
         _ => {
             // Check if this is an enum variant construction via UFCS rewrite:
             // Parser transforms Shape.Circle(5.0) into Call { callee: Ident("Circle"), args: [Ident("Shape"), 5.0] }
@@ -4733,4 +4931,88 @@ fn lookup_variant_tag_static(
         }
     }
     None
+}
+
+// ── Channel builtins ────────────────────────────────────────────────
+
+/// channel() -> Channel (pointer)
+fn compile_builtin_channel<M: Module>(cx: &mut Ctx<'_, M>) -> Result<MaybeTyped, CodegenError> {
+    let fid = cx.rt_fns["rt_channel_create"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// send(ch, value) -> ()
+fn compile_builtin_send<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (ch_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (value_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    // Ensure value is i64
+    let val_ty = cx.builder.func.dfg.value_type(value_val);
+    let value_val = if val_ty.bits() < 64 {
+        cx.builder.ins().sextend(types::I64, value_val)
+    } else {
+        value_val
+    };
+    let fid = cx.rt_fns["rt_channel_send"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    cx.builder.ins().call(fref, &[ch_val, value_val]);
+    Ok(None)
+}
+
+/// recv(ch) -> i64
+fn compile_builtin_recv<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (ch_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_channel_recv"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[ch_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+// ── Mutex builtins ──────────────────────────────────────────────────
+
+/// mutex(value) -> Mutex (pointer)
+fn compile_builtin_mutex<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (value_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    // Ensure value is i64
+    let val_ty = cx.builder.func.dfg.value_type(value_val);
+    let value_val = if val_ty.bits() < 64 {
+        cx.builder.ins().sextend(types::I64, value_val)
+    } else {
+        value_val
+    };
+    let fid = cx.rt_fns["rt_mutex_create"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[value_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// mutex_get(m) -> i64
+fn compile_builtin_mutex_get<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (m_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_mutex_get"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[m_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// mutex_set(m, value) -> ()
+fn compile_builtin_mutex_set<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (m_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (value_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    // Ensure value is i64
+    let val_ty = cx.builder.func.dfg.value_type(value_val);
+    let value_val = if val_ty.bits() < 64 {
+        cx.builder.ins().sextend(types::I64, value_val)
+    } else {
+        value_val
+    };
+    let fid = cx.rt_fns["rt_mutex_set"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    cx.builder.ins().call(fref, &[m_val, value_val]);
+    Ok(None)
 }

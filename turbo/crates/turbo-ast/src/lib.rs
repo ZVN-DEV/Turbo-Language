@@ -331,6 +331,8 @@ pub enum Expr {
     Await(Box<Spanned<Expr>>),
     /// Spawn expression: spawn expr
     Spawn(Box<Spanned<Expr>>),
+    /// Try operator: expr? — unwraps Ok, propagates Err
+    Try(Box<Spanned<Expr>>),
 }
 
 /// Statements (things that don't produce values in statement position)

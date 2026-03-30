@@ -1037,6 +1037,12 @@ impl Parser {
                 } else {
                     break;
                 }
+            } else if matches!(self.peek(), Some(Token::Question)) {
+                // Try operator: expr? — unwraps Ok, propagates Err
+                let q_span = self.tokens[self.pos].span.clone();
+                self.advance(); // consume ?
+                let span = expr.span.start..q_span.end;
+                expr = Spanned::new(Expr::Try(Box::new(expr)), span);
             } else {
                 break;
             }

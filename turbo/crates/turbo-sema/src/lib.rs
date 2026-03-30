@@ -348,7 +348,9 @@ impl Checker {
             | "read_line" | "read_file" | "write_file"
             | "pow" | "sqrt"
             | "sleep"
-            | "http_get" | "http_post" | "json_get" | "json_stringify")
+            | "http_get" | "http_post" | "json_get" | "json_stringify"
+            | "channel" | "send" | "recv"
+            | "mutex" | "mutex_get" | "mutex_set")
     }
 
     /// Walk a chain of FieldAccess / Index expressions to find the root variable name.
@@ -1305,6 +1307,86 @@ impl Checker {
                         return Ty::Str;
                     }
 
+                    // ── Channel builtins ───────────────────────────────
+                    // channel() -> i64 (channel pointer)
+                    if name == "channel" {
+                        if !args.is_empty() {
+                            self.error(format!("channel() takes no arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        return Ty::I64;
+                    }
+                    // send(ch: i64, value: i64) -> ()
+                    if name == "send" {
+                        if args.len() != 2 {
+                            self.error(format!("send() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let ch_ty = self.check_expr(&args[0]);
+                        let val_ty = self.check_expr(&args[1]);
+                        if !ch_ty.is_error() && !ch_ty.is_integer() {
+                            self.error(format!("send() first argument must be a channel (integer), found `{ch_ty}`"), args[0].span.clone());
+                        }
+                        if !val_ty.is_error() && !val_ty.is_integer() {
+                            self.error(format!("send() second argument must be integer, found `{val_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Unit;
+                    }
+                    // recv(ch: i64) -> i64
+                    if name == "recv" {
+                        if args.len() != 1 {
+                            self.error(format!("recv() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let ch_ty = self.check_expr(&args[0]);
+                        if !ch_ty.is_error() && !ch_ty.is_integer() {
+                            self.error(format!("recv() argument must be a channel (integer), found `{ch_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::I64;
+                    }
+
+                    // ── Mutex builtins ────────────────────────────────
+                    // mutex(value: i64) -> i64 (mutex pointer)
+                    if name == "mutex" {
+                        if args.len() != 1 {
+                            self.error(format!("mutex() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let val_ty = self.check_expr(&args[0]);
+                        if !val_ty.is_error() && !val_ty.is_integer() {
+                            self.error(format!("mutex() argument must be integer, found `{val_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::I64;
+                    }
+                    // mutex_get(m: i64) -> i64
+                    if name == "mutex_get" {
+                        if args.len() != 1 {
+                            self.error(format!("mutex_get() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let m_ty = self.check_expr(&args[0]);
+                        if !m_ty.is_error() && !m_ty.is_integer() {
+                            self.error(format!("mutex_get() argument must be a mutex (integer), found `{m_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::I64;
+                    }
+                    // mutex_set(m: i64, value: i64) -> ()
+                    if name == "mutex_set" {
+                        if args.len() != 2 {
+                            self.error(format!("mutex_set() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let m_ty = self.check_expr(&args[0]);
+                        let val_ty = self.check_expr(&args[1]);
+                        if !m_ty.is_error() && !m_ty.is_integer() {
+                            self.error(format!("mutex_set() first argument must be a mutex (integer), found `{m_ty}`"), args[0].span.clone());
+                        }
+                        if !val_ty.is_error() && !val_ty.is_integer() {
+                            self.error(format!("mutex_set() second argument must be integer, found `{val_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Unit;
+                    }
+
                     // map(arr, fn) -> [U]
                     if name == "map" {
                         if args.len() != 2 {
@@ -1979,6 +2061,22 @@ impl Checker {
                 }
             }
 
+            Expr::Try(inner) => {
+                let ty = self.check_expr(inner);
+                // Try operator (?) unwraps Result<T, E> to T, propagating E
+                match ty {
+                    Ty::Result(ok_ty, _) => *ok_ty,
+                    Ty::Error => Ty::Error,
+                    other => {
+                        self.error(
+                            format!("try operator `?` can only be used on Result types, found `{other}`"),
+                            expr.span.clone(),
+                        );
+                        Ty::Error
+                    }
+                }
+            }
+
             Expr::Range { start, end } => {
                 let start_ty = self.check_expr(start);
                 let end_ty = self.check_expr(end);
@@ -2516,6 +2614,35 @@ impl Checker {
             Expr::NoneExpr => {
                 // Return a partial optional type -- the inner type is unknown without context
                 Ty::Optional(Box::new(Ty::Error))
+            }
+
+            Expr::Try(inner) => {
+                let inner_ty = self.check_expr(inner);
+                if inner_ty.is_error() {
+                    return Ty::Error;
+                }
+                match &inner_ty {
+                    Ty::Result(ok_ty, _err_ty) => {
+                        // The enclosing function must also return a Result type
+                        match &self.current_return_type {
+                            Ty::Result(_, _) => {}
+                            _ => {
+                                self.error(
+                                    "`?` operator can only be used in a function that returns a Result type".to_string(),
+                                    expr.span.clone(),
+                                );
+                            }
+                        }
+                        *ok_ty.clone()
+                    }
+                    _ => {
+                        self.error(
+                            format!("`?` operator requires a Result type, found `{inner_ty}`"),
+                            inner.span.clone(),
+                        );
+                        Ty::Error
+                    }
+                }
             }
 
             Expr::NullCoalesce { value, default } => {

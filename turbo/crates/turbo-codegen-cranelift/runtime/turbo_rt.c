@@ -554,6 +554,122 @@ const char *rt_json_stringify(const char *key, const char *value) {
     return buf;
 }
 
+/* ── Channel runtime ────────────────────────────────────────────────── */
+
+/* Channel: a struct of [sender_pipe_write_fd, receiver_pipe_read_fd]
+ * For simplicity in C AOT, we implement channels using a linked-list queue
+ * protected by a mutex and condition variable.
+ */
+
+typedef struct channel_node {
+    long long value;
+    struct channel_node *next;
+} channel_node;
+
+typedef struct {
+    channel_node *head;
+    channel_node *tail;
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+} channel_queue;
+
+typedef struct {
+    long long sender_ptr;
+    long long receiver_ptr;
+} channel_handle;
+
+void *rt_channel_create(void) {
+    channel_queue *q = (channel_queue *)calloc(1, sizeof(channel_queue));
+    pthread_mutex_init(&q->lock, NULL);
+    pthread_cond_init(&q->cond, NULL);
+
+    channel_handle *h = (channel_handle *)calloc(1, sizeof(channel_handle));
+    /* Both sender and receiver point to the same queue */
+    h->sender_ptr = (long long)(size_t)q;
+    h->receiver_ptr = (long long)(size_t)q;
+    return h;
+}
+
+void rt_channel_send(const void *ch, long long value) {
+    const channel_handle *h = (const channel_handle *)ch;
+    channel_queue *q = (channel_queue *)(size_t)h->sender_ptr;
+
+    channel_node *node = (channel_node *)malloc(sizeof(channel_node));
+    node->value = value;
+    node->next = NULL;
+
+    pthread_mutex_lock(&q->lock);
+    if (q->tail) {
+        q->tail->next = node;
+    } else {
+        q->head = node;
+    }
+    q->tail = node;
+    pthread_cond_signal(&q->cond);
+    pthread_mutex_unlock(&q->lock);
+}
+
+long long rt_channel_recv(const void *ch) {
+    const channel_handle *h = (const channel_handle *)ch;
+    channel_queue *q = (channel_queue *)(size_t)h->receiver_ptr;
+
+    pthread_mutex_lock(&q->lock);
+    while (q->head == NULL) {
+        pthread_cond_wait(&q->cond, &q->lock);
+    }
+    channel_node *node = q->head;
+    q->head = node->next;
+    if (q->head == NULL) q->tail = NULL;
+    pthread_mutex_unlock(&q->lock);
+
+    long long val = node->value;
+    free(node);
+    return val;
+}
+
+void *rt_channel_clone_sender(const void *ch) {
+    const channel_handle *h = (const channel_handle *)ch;
+    channel_handle *nh = (channel_handle *)calloc(1, sizeof(channel_handle));
+    nh->sender_ptr = h->sender_ptr;
+    nh->receiver_ptr = h->receiver_ptr;
+    return nh;
+}
+
+/* ── Mutex runtime ─────────────────────────────────────────────────── */
+
+typedef struct {
+    long long value;
+    pthread_mutex_t lock;
+} turbo_mutex;
+
+void *rt_mutex_create(long long value) {
+    turbo_mutex *m = (turbo_mutex *)malloc(sizeof(turbo_mutex));
+    m->value = value;
+    pthread_mutex_init(&m->lock, NULL);
+    return m;
+}
+
+long long rt_mutex_get(const void *mptr) {
+    turbo_mutex *m = (turbo_mutex *)mptr;
+    pthread_mutex_lock(&m->lock);
+    long long val = m->value;
+    pthread_mutex_unlock(&m->lock);
+    return val;
+}
+
+void rt_mutex_set(const void *mptr, long long value) {
+    turbo_mutex *m = (turbo_mutex *)mptr;
+    pthread_mutex_lock(&m->lock);
+    m->value = value;
+    pthread_mutex_unlock(&m->lock);
+}
+
+void *rt_mutex_clone(const void *mptr) {
+    /* Mutex is shared — just return the same pointer.
+     * In the C implementation we don't use Arc, so cloning is a no-op. */
+    return (void *)mptr;
+}
+
 /* Entry point: calls Turbo's main and returns 0 */
 extern void turbo_main(void);
 int main(void) {

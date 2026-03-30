@@ -1,0 +1,16 @@
+fn producer(ch: i64) {
+    for i in 0..5 {
+        send(ch, i * 10)
+    }
+}
+
+fn main() {
+    let ch = channel()
+    spawn producer(ch)
+    let mut i = 0
+    while i < 5 {
+        let val = recv(ch)
+        print(val)
+        i += 1
+    }
+}

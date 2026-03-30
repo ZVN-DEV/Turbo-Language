@@ -1,0 +1,6 @@
+fn main() {
+    let m = mutex(0)
+    mutex_set(m, 42)
+    let val = mutex_get(m)
+    print(val)
+}
