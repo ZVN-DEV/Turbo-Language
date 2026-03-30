@@ -1,0 +1,21 @@
+tool fn search(q: str) -> str {
+    "results for: {q}"
+}
+
+tool fn calculate(x: i64) -> i64 {
+    x * 2
+}
+
+agent Assistant {
+    model: "claude-sonnet"
+    tools: [search, calculate]
+    system: "You help with tasks."
+}
+
+fn main() {
+    let a = Assistant {}
+    print(a.model)
+    print(a.system)
+    print(search("turbo"))
+    print(calculate(21))
+}

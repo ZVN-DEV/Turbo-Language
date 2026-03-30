@@ -1,0 +1,25 @@
+tool fn get_weather(city: str) -> str {
+    "Sunny, 72F in {city}"
+}
+
+tool fn get_news(topic: str) -> str {
+    "News about {topic}"
+}
+
+agent WeatherBot {
+    model: "test"
+    tools: [get_weather, get_news]
+    system: "You are a weather assistant."
+}
+
+fn main() {
+    let bot = WeatherBot {}
+    print(bot.model)
+    print(bot.system)
+
+    // Call tools directly
+    print(get_weather("NYC"))
+
+    // Get tool count
+    print(len(bot.tools))
+}

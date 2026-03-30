@@ -40,6 +40,8 @@ enum TurboTy {
     Result(Box<TurboTy>, Box<TurboTy>),
     /// Optional type (heap-allocated tagged union): inner_type
     Optional(Box<TurboTy>),
+    /// Agent type: heap-allocated struct with model/system/tools fields
+    Agent(String),
 }
 
 fn turbo_ty_from_type_expr(te: &TypeExpr, enum_variants: &HashMap<String, Vec<String>>) -> TurboTy {
@@ -451,6 +453,31 @@ extern "C" fn rt_sqrt(x: f64) -> f64 {
     x.sqrt()
 }
 
+// ── Async runtime functions ─────────────────────────────────────────
+
+/// Sleep the current thread for `ms` milliseconds.
+extern "C" fn rt_sleep_ms(ms: i64) {
+    std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+}
+
+/// Spawn a thunk (zero-arg function returning i64) on a new OS thread.
+/// Returns a pointer to a heap-allocated JoinHandle.
+extern "C" fn rt_spawn_thunk(thunk: extern "C" fn() -> i64) -> *mut u8 {
+    let handle = std::thread::spawn(move || thunk());
+    let boxed: Box<std::thread::JoinHandle<i64>> = Box::new(handle);
+    Box::into_raw(boxed) as *mut u8
+}
+
+/// Await (join) a spawned thread handle and return its result.
+extern "C" fn rt_await_handle(handle_ptr: *mut u8) -> i64 {
+    if handle_ptr.is_null() {
+        return 0;
+    }
+    let handle: Box<std::thread::JoinHandle<i64>> =
+        unsafe { Box::from_raw(handle_ptr as *mut std::thread::JoinHandle<i64>) };
+    handle.join().unwrap_or(0)
+}
+
 // ── Runtime C source for AOT linking ────────────────────────────────
 
 const RUNTIME_C: &str = include_str!("../runtime/turbo_rt.c");
@@ -496,6 +523,10 @@ struct Ctx<'a, M: Module> {
     generic_struct_field_overrides: HashMap<String, Vec<(String, TurboTy)>>,
     /// Temporary: last struct literal's concrete field types (set during StructLit compilation, consumed by Let)
     last_struct_lit_concrete_fields: Option<Vec<(String, TurboTy)>>,
+    /// Agent definitions: agent_name -> (model, tools, system_prompt)
+    agent_defs: &'a HashMap<String, (String, Vec<String>, Option<String>)>,
+    /// Spawn thunk map: spawn expr span start -> thunk function name
+    spawn_thunks: &'a HashMap<usize, String>,
 }
 
 impl<'a, M: Module> Ctx<'a, M> {
@@ -615,6 +646,10 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_write_file", rt_write_file as *const u8);
     jit_builder.symbol("rt_pow", rt_pow as *const u8);
     jit_builder.symbol("rt_sqrt", rt_sqrt as *const u8);
+    // Async runtime symbols
+    jit_builder.symbol("rt_sleep_ms", rt_sleep_ms as *const u8);
+    jit_builder.symbol("rt_spawn_thunk", rt_spawn_thunk as *const u8);
+    jit_builder.symbol("rt_await_handle", rt_await_handle as *const u8);
 
     let mut module = JITModule::new(jit_builder);
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
@@ -781,6 +816,7 @@ fn turbo_ty_to_cl_type(tty: &TurboTy, ptr_type: types::Type) -> types::Type {
         TurboTy::Enum(_) => types::I64, // both unit (tag) and data (ptr) enums fit in I64
         TurboTy::Result(_, _) => ptr_type,
         TurboTy::Optional(_) => ptr_type,
+        TurboTy::Agent(_) => ptr_type, // heap-allocated struct pointer
     }
 }
 
@@ -1078,6 +1114,132 @@ fn extract_all_closures(ast_module: &turbo_ast::Module) -> Vec<ExtractedClosure<
     closures
 }
 
+// ── Spawn site extraction ───────────────────────────────────────────
+
+/// A pre-extracted spawn site: `spawn fn_call(args...)`
+struct SpawnSite {
+    span_start: usize,
+    thunk_name: String,
+    callee_name: String,
+    num_args: usize,
+}
+
+fn extract_spawn_sites_from_expr(
+    expr: &Spanned<Expr>,
+    out: &mut Vec<SpawnSite>,
+    counter: &mut usize,
+) {
+    match &expr.node {
+        Expr::Spawn(inner) => {
+            if let Expr::Call { callee, args } = &inner.node {
+                if let Expr::Ident(name) = &callee.node {
+                    out.push(SpawnSite {
+                        span_start: expr.span.start,
+                        thunk_name: format!("__spawn_thunk_{}", *counter),
+                        callee_name: name.clone(),
+                        num_args: args.len(),
+                    });
+                    *counter += 1;
+                    for arg in args { extract_spawn_sites_from_expr(arg, out, counter); }
+                    return;
+                }
+            }
+            extract_spawn_sites_from_expr(inner, out, counter);
+        }
+        Expr::Block { stmts, tail_expr } => {
+            for stmt in stmts {
+                match &stmt.node {
+                    Stmt::Let { value, .. } => extract_spawn_sites_from_expr(value, out, counter),
+                    Stmt::Expr(e) => extract_spawn_sites_from_expr(e, out, counter),
+                    Stmt::Return(Some(e)) => extract_spawn_sites_from_expr(e, out, counter),
+                    Stmt::Return(None) => {}
+                }
+            }
+            if let Some(tail) = tail_expr { extract_spawn_sites_from_expr(tail, out, counter); }
+        }
+        Expr::If { condition, then_branch, else_branch } => {
+            extract_spawn_sites_from_expr(condition, out, counter);
+            extract_spawn_sites_from_expr(then_branch, out, counter);
+            if let Some(e) = else_branch { extract_spawn_sites_from_expr(e, out, counter); }
+        }
+        Expr::While { condition, body } => {
+            extract_spawn_sites_from_expr(condition, out, counter);
+            extract_spawn_sites_from_expr(body, out, counter);
+        }
+        Expr::ForIn { iterable, body, .. } => {
+            extract_spawn_sites_from_expr(iterable, out, counter);
+            extract_spawn_sites_from_expr(body, out, counter);
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            extract_spawn_sites_from_expr(left, out, counter);
+            extract_spawn_sites_from_expr(right, out, counter);
+        }
+        Expr::UnaryOp { expr, .. } => { extract_spawn_sites_from_expr(expr, out, counter); }
+        Expr::Call { callee, args } => {
+            extract_spawn_sites_from_expr(callee, out, counter);
+            for arg in args { extract_spawn_sites_from_expr(arg, out, counter); }
+        }
+        Expr::Assign { value, .. } | Expr::CompoundAssign { value, .. } => {
+            extract_spawn_sites_from_expr(value, out, counter);
+        }
+        Expr::FieldAssign { object, value, .. } => {
+            extract_spawn_sites_from_expr(object, out, counter);
+            extract_spawn_sites_from_expr(value, out, counter);
+        }
+        Expr::IndexAssign { object, index, value } => {
+            extract_spawn_sites_from_expr(object, out, counter);
+            extract_spawn_sites_from_expr(index, out, counter);
+            extract_spawn_sites_from_expr(value, out, counter);
+        }
+        Expr::Index { object, index } => {
+            extract_spawn_sites_from_expr(object, out, counter);
+            extract_spawn_sites_from_expr(index, out, counter);
+        }
+        Expr::Range { start, end } => {
+            extract_spawn_sites_from_expr(start, out, counter);
+            extract_spawn_sites_from_expr(end, out, counter);
+        }
+        Expr::FieldAccess { object, .. } => { extract_spawn_sites_from_expr(object, out, counter); }
+        Expr::ArrayLit(elems) => { for e in elems { extract_spawn_sites_from_expr(e, out, counter); } }
+        Expr::StructLit { fields, .. } => { for (_, e) in fields { extract_spawn_sites_from_expr(e, out, counter); } }
+        Expr::Match { subject, arms } => {
+            extract_spawn_sites_from_expr(subject, out, counter);
+            for arm in arms { extract_spawn_sites_from_expr(&arm.body, out, counter); }
+        }
+        Expr::Closure { body, .. } => { extract_spawn_sites_from_expr(body, out, counter); }
+        Expr::OkExpr(e) | Expr::ErrExpr(e) | Expr::SomeExpr(e) | Expr::Await(e) => {
+            extract_spawn_sites_from_expr(e, out, counter);
+        }
+        Expr::NullCoalesce { value, default } => {
+            extract_spawn_sites_from_expr(value, out, counter);
+            extract_spawn_sites_from_expr(default, out, counter);
+        }
+        Expr::Interpolation(parts) => {
+            for part in parts {
+                if let InterpolPart::Expr(e) = part { extract_spawn_sites_from_expr(e, out, counter); }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_all_spawn_sites(ast_module: &turbo_ast::Module) -> Vec<SpawnSite> {
+    let mut sites = Vec::new();
+    let mut counter = 0;
+    for item in &ast_module.items {
+        match &item.node {
+            Item::Function(f) => extract_spawn_sites_from_expr(&f.body, &mut sites, &mut counter),
+            Item::Impl(imp) => {
+                for method in &imp.methods {
+                    extract_spawn_sites_from_expr(&method.node.body, &mut sites, &mut counter);
+                }
+            }
+            _ => {}
+        }
+    }
+    sites
+}
+
 fn compile_module<M: Module>(
     module: &mut M,
     ast_module: &turbo_ast::Module,
@@ -1128,6 +1290,10 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_write_file", &[ptr_type, ptr_type], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_pow", &[types::I64, types::I64], Some(types::I64))?;
     declare_rt_fn(module, &mut rt_fns, "rt_sqrt", &[types::F64], Some(types::F64))?;
+    // Async runtime declarations
+    declare_rt_fn(module, &mut rt_fns, "rt_sleep_ms", &[types::I64], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_spawn_thunk", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_await_handle", &[ptr_type], Some(types::I64))?;
 
     // Build enum variants map
     let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();
@@ -1163,6 +1329,17 @@ fn compile_module<M: Module>(
             .map(|f| (f.name.clone(), turbo_ty_from_type_expr_with_params(&f.ty.node, &enum_variants, &tp_names)))
             .collect();
         struct_fields.insert(s.name.clone(), fields);
+    }
+
+    // Build agent definitions map from AST
+    let mut agent_defs: HashMap<String, (String, Vec<String>, Option<String>)> = HashMap::new();
+    for item in &ast_module.items {
+        if let Item::Agent(agent) = &item.node {
+            agent_defs.insert(
+                agent.name.clone(),
+                (agent.model.clone(), agent.tools.clone(), agent.system_prompt.clone()),
+            );
+        }
     }
 
     // Build trait implementations map: type_name -> vec of trait names
@@ -1280,6 +1457,24 @@ fn compile_module<M: Module>(
         );
     }
 
+    // Extract and declare spawn thunks
+    let spawn_sites = extract_all_spawn_sites(ast_module);
+    let mut spawn_thunk_map: HashMap<usize, String> = HashMap::new();
+
+    for site in &spawn_sites {
+        // Each spawn thunk: takes a pointer to args struct, returns i64.
+        // Uses default (SystemV/C ABI) calling convention so rt_spawn_thunk can call it.
+        let mut sig = module.make_signature();
+        // Single parameter: pointer to args struct [fn_ptr, arg0, arg1, ...]
+        sig.params.push(AbiParam::new(ptr_type));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = module.declare_function(&site.thunk_name, Linkage::Local, &sig)
+            .map_err(|e| CodegenError { message: e.to_string() })?;
+        user_fns.insert(site.thunk_name.clone(), id);
+        fn_ret_types.insert(site.thunk_name.clone(), TurboTy::Int);
+        spawn_thunk_map.insert(site.span_start, site.thunk_name.clone());
+    }
+
     // Define all user functions (and closures)
     let mut cl_ctx = module.make_context();
     let mut data_desc = DataDescription::new();
@@ -1329,6 +1524,8 @@ fn compile_module<M: Module>(
                 closure_captures: &mut closure_captures_map,
                 generic_struct_field_overrides: HashMap::new(),
                 last_struct_lit_concrete_fields: None,
+                agent_defs: &agent_defs,
+                spawn_thunks: &spawn_thunk_map,
             };
 
             let entry = cx.builder.create_block();
@@ -1424,6 +1621,8 @@ fn compile_module<M: Module>(
                     closure_captures: &mut closure_captures_map,
                     generic_struct_field_overrides: HashMap::new(),
                     last_struct_lit_concrete_fields: None,
+                    agent_defs: &agent_defs,
+                    spawn_thunks: &spawn_thunk_map,
                 };
 
                 let entry = cx.builder.create_block();
@@ -1511,6 +1710,8 @@ fn compile_module<M: Module>(
                 closure_captures: &mut closure_captures_map,
                 generic_struct_field_overrides: HashMap::new(),
                 last_struct_lit_concrete_fields: None,
+                agent_defs: &agent_defs,
+                spawn_thunks: &spawn_thunk_map,
             };
 
             let entry = cx.builder.create_block();
@@ -1911,6 +2112,42 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
         }
 
         Expr::StructLit { name, fields } => {
+            // Check if this is an agent instantiation
+            if let Some((model, tools, system_prompt)) = cx.agent_defs.get(name).cloned() {
+                // Allocate a struct with 3 slots: [model, system, tools]
+                let num_fields_val = cx.builder.ins().iconst(types::I64, 3);
+                let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+                let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+                let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
+                let ptr = cx.builder.inst_results(call)[0];
+
+                // Slot 0: model string
+                let model_val = cx.create_string(&model)?;
+                cx.builder.ins().store(MemFlags::new(), model_val, ptr, 0);
+
+                // Slot 1: system prompt string
+                let system_str = system_prompt.as_deref().unwrap_or("");
+                let system_val = cx.create_string(system_str)?;
+                cx.builder.ins().store(MemFlags::new(), system_val, ptr, 8);
+
+                // Slot 2: tools array (array of tool name strings)
+                let tools_len = tools.len() as i64;
+                let tools_len_val = cx.builder.ins().iconst(types::I64, tools_len);
+                let arr_alloc_fid = cx.rt_fns["rt_array_alloc"];
+                let arr_alloc_ref = cx.module.declare_func_in_func(arr_alloc_fid, cx.builder.func);
+                let arr_call = cx.builder.ins().call(arr_alloc_ref, &[tools_len_val]);
+                let arr_ptr = cx.builder.inst_results(arr_call)[0];
+                for (i, tool_name) in tools.iter().enumerate() {
+                    let tool_str = cx.create_string(tool_name)?;
+                    let offset = cx.builder.ins().iconst(cx.ptr_type, (8 + i * 8) as i64);
+                    let elem_ptr = cx.builder.ins().iadd(arr_ptr, offset);
+                    cx.builder.ins().store(MemFlags::new(), tool_str, elem_ptr, 0);
+                }
+                cx.builder.ins().store(MemFlags::new(), arr_ptr, ptr, 16);
+
+                return Ok(Some((ptr, TurboTy::Agent(name.clone()))));
+            }
+
             let struct_layout = cx.struct_fields.get(name)
                 .ok_or_else(|| CodegenError { message: format!("undefined struct: {name}") })?
                 .clone();
@@ -1987,6 +2224,18 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             }
 
             let (obj_ptr, obj_tty) = compile_expr(cx, object)?.unwrap();
+
+            // Handle agent field access: model (slot 0), system (slot 1), tools (slot 2)
+            if let TurboTy::Agent(_) = &obj_tty {
+                let (offset, tty) = match field.as_str() {
+                    "model" => (0i32, TurboTy::Str),
+                    "system" => (8i32, TurboTy::Str),
+                    "tools" => (16i32, TurboTy::Array(Box::new(TurboTy::Str))),
+                    _ => return Err(CodegenError { message: format!("agent has no field `{field}`") }),
+                };
+                let val = cx.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, offset);
+                return Ok(Some((val, tty)));
+            }
 
             let struct_name = match &obj_tty {
                 TurboTy::Struct(name) => name.clone(),
@@ -2526,6 +2775,8 @@ fn compile_call<M: Module>(
         // Stdlib math builtins
         "pow" => compile_stdlib_pow(cx, args),
         "sqrt" => compile_stdlib_sqrt(cx, args),
+        // Async builtins
+        "sleep" => compile_builtin_sleep(cx, args),
         "map" => compile_builtin_map(cx, args),
         "filter" => compile_builtin_filter(cx, args),
         "reduce" => compile_builtin_reduce(cx, args),
@@ -2866,6 +3117,10 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
                 let ptr = cx.create_string("[optional]")?;
                 cx.rt_call("rt_print_str", &[ptr]);
             }
+            TurboTy::Agent(ref name) => {
+                let ptr = cx.create_string(&format!("[agent {}]", name))?;
+                cx.rt_call("rt_print_str", &[ptr]);
+            }
         }
     } else {
         let ptr = cx.create_string("()")?;
@@ -3093,6 +3348,18 @@ fn compile_stdlib_sqrt<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -
     let call = cx.builder.ins().call(fref, &[x_val]);
     let result = cx.builder.inst_results(call)[0];
     Ok(Some((result, TurboTy::Float)))
+}
+
+/// sleep(ms) -> () — sleep the current thread for ms milliseconds
+fn compile_builtin_sleep<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (ms_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    // Ensure it's i64
+    let ms_ty = cx.builder.func.dfg.value_type(ms_val);
+    let ms_val = if ms_ty.bits() < 64 { cx.builder.ins().sextend(types::I64, ms_val) } else { ms_val };
+    let fid = cx.rt_fns["rt_sleep_ms"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    cx.builder.ins().call(fref, &[ms_val]);
+    Ok(None)
 }
 
 // ── map/filter/reduce builtins ──────────────────────────────────────
@@ -3603,6 +3870,9 @@ fn convert_to_str<M: Module>(
         }
         TurboTy::Optional(_) => {
             cx.create_string("[optional]")
+        }
+        TurboTy::Agent(ref name) => {
+            cx.create_string(&format!("[agent {}]", name))
         }
     }
 }
