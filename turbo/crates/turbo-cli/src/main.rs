@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use turbo_ast::{Item, Module};
 use ariadne::{Color, Label, Report, ReportKind, Source};
 
+mod formatter;
 mod playground;
 mod repl;
 
@@ -55,6 +56,9 @@ enum Commands {
     Fmt {
         /// Path to the .tb source file to format
         file: PathBuf,
+        /// Check only, don't modify (exit 1 if unformatted)
+        #[arg(long)]
+        check: bool,
     },
     /// Start the Language Server Protocol server
     Lsp,
@@ -75,19 +79,9 @@ fn main() {
         Commands::Init { name } => init_project(&name),
         Commands::Repl => repl::run_repl(),
         Commands::Playground { port } => playground::serve(port),
-        Commands::Fmt { file } => fmt_file(&file),
+        Commands::Fmt { file, check } => formatter::format_file(&file, check),
         Commands::Lsp => start_lsp(),
     }
-}
-
-fn fmt_file(path: &std::path::Path) {
-    if !path.exists() {
-        eprintln!("\x1b[1;31merror\x1b[0m: file `{}` does not exist", path.display());
-        std::process::exit(1);
-    }
-    eprintln!("\x1b[1;33mwarning\x1b[0m: `turbo fmt` is not yet implemented");
-    eprintln!("  This command will format Turbo source files in a future release.");
-    eprintln!("  File: {}", path.display());
 }
 
 fn start_lsp() {
