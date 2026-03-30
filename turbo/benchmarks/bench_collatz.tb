@@ -1,0 +1,22 @@
+// Benchmark: Longest Collatz sequence under 1,000,000
+// Measures: while loops, mutation, conditionals, arithmetic
+// Expected output: 524
+
+fn collatz_len(n: i64) -> i64 {
+    let mut x = n
+    let mut l = 0
+    while x != 1 {
+        if x % 2 == 0 { x = x / 2 } else { x = 3 * x + 1 }
+        l += 1
+    }
+    l
+}
+
+fn main() {
+    let mut max_len = 0
+    for i in 1..1000001 {
+        let l = collatz_len(i)
+        if l > max_len { max_len = l }
+    }
+    print(max_len)
+}

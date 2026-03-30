@@ -1,0 +1,433 @@
+// ============================================================
+// Turbo Language — Full Feature Showcase
+// Demonstrates 35+ language features in a single program
+// ============================================================
+
+// ── 1. Structs ──────────────────────────────────────────────
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+// ── 2. Impl blocks (methods) ────────────────────────────────
+
+impl Point {
+    fn distance_sq(self) -> i64 {
+        self.x * self.x + self.y * self.y
+    }
+
+    fn is_origin(self) -> bool {
+        self.x == 0 && self.y == 0
+    }
+}
+
+// ── 3. Display trait implementation ─────────────────────────
+
+impl Display for Point {
+    fn to_string(self) -> str {
+        "({self.x}, {self.y})"
+    }
+}
+
+// ── 4. Simple enums ─────────────────────────────────────────
+
+type Color {
+    Red,
+    Green,
+    Blue,
+}
+
+fn color_name(c: Color) -> str {
+    match c {
+        Red => "red"
+        Green => "green"
+        Blue => "blue"
+    }
+}
+
+// ── 5. Data-carrying enums ──────────────────────────────────
+
+type Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Dot,
+}
+
+fn area(s: Shape) -> f64 {
+    match s {
+        Circle(r) => 3.14159 * r * r
+        Rect(w, h) => w * h
+        Dot => 0.0
+    }
+}
+
+// ── 6. Generic structs ──────────────────────────────────────
+
+struct Pair<A, B> {
+    first: A,
+    second: B,
+}
+
+// ── 7. Generic enums ────────────────────────────────────────
+
+type List<T> {
+    Cons(T, i64),
+    Nil,
+}
+
+// ── 8. Generic functions ────────────────────────────────────
+
+fn identity<T>(x: T) -> T { x }
+fn second<A, B>(a: A, b: B) -> B { b }
+
+// ── 9. Trait bounds ─────────────────────────────────────────
+
+fn echo_display<T: Display>(val: T) -> T { val }
+
+// ── 10. Tool functions (AI-native) ──────────────────────────
+
+tool fn search(query: str) -> str {
+    "Results for: {query}"
+}
+
+tool fn calculate(expr: str) -> str {
+    "Computed: {expr}"
+}
+
+// ── 11. Agent declarations (AI-native) ──────────────────────
+
+agent Assistant {
+    model: "claude-sonnet"
+    tools: [search, calculate]
+    system: "You are a helpful assistant."
+}
+
+// ── 12. Result type (error handling) ────────────────────────
+
+fn safe_divide(a: i64, b: i64) -> i64 ! str {
+    if b == 0 { err("division by zero") }
+    else { ok(a / b) }
+}
+
+// ── 13. Try operator ────────────────────────────────────────
+
+fn double_divide(a: i64, b: i64) -> i64 ! str {
+    let v = safe_divide(a, b)?
+    ok(v * 2)
+}
+
+// ── 14. Optional type ───────────────────────────────────────
+
+fn find_index(arr: [i64], target: i64) -> i64? {
+    let mut i = 0
+    while i < len(arr) {
+        if arr[i] == target { return some(i) }
+        i += 1
+    }
+    none
+}
+
+// ── 15. Higher-order functions ──────────────────────────────
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 { f(x) }
+
+fn make_adder(n: i64) -> fn(i64) -> i64 {
+    |x: i64| -> i64 { x + n }
+}
+
+// ── 16. Pipe operator targets ───────────────────────────────
+
+fn double(x: i64) -> i64 { x * 2 }
+fn negate(x: i64) -> i64 { 0 - x }
+
+// ── 17. Recursive functions ─────────────────────────────────
+
+fn fib(n: i64) -> i64 {
+    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn factorial(n: i64) -> i64 {
+    if n <= 1 { 1 } else { n * factorial(n - 1) }
+}
+
+// ── 18. Async functions ─────────────────────────────────────
+
+async fn async_square(x: i64) -> i64 {
+    x * x
+}
+
+async fn delayed_value(ms: i64, val: i64) -> i64 {
+    await sleep(ms)
+    val
+}
+
+// ── 19. Main: exercise every feature ────────────────────────
+
+async fn main() {
+    print("=== Turbo Language Full Showcase ===")
+    print("")
+
+    // ── Structs + impl + Display ────────────────────────
+    print("--- Structs, Methods, Display ---")
+    let p = Point { x: 3, y: 4 }
+    print("Point: {p}")
+    print("Distance squared: {p.distance_sq()}")
+    print("Is origin: {p.is_origin()}")
+
+    // ── Simple enums + match ────────────────────────────
+    print("")
+    print("--- Enums + Pattern Matching ---")
+    print("Color: {color_name(Color.Red)}")
+    print("Color: {color_name(Color.Blue)}")
+
+    // ── Data-carrying enums ─────────────────────────────
+    print("Area of Circle(5): {area(Shape.Circle(5.0))}")
+    print("Area of Rect(3,4): {area(Shape.Rect(3.0, 4.0))}")
+    print("Area of Dot: {area(Shape.Dot)}")
+
+    // ── Integer match with wildcard ─────────────────────
+    let label = match 42 {
+        1 => "one"
+        2 => "two"
+        _ => "other"
+    }
+    print("Match wildcard: {label}")
+
+    // ── Generic struct ──────────────────────────────────
+    print("")
+    print("--- Generics ---")
+    let pair = Pair { first: 42, second: "hello" }
+    print("Pair: {pair.first}, {pair.second}")
+
+    // ── Generic enum ────────────────────────────────────
+    let lst = List.Cons(99, 0)
+    match lst {
+        Cons(val, next) => print("List head: {val}")
+        Nil => print("empty")
+    }
+
+    // ── Generic functions ───────────────────────────────
+    print("identity(42) = {identity(42)}")
+    let id_str = identity("hi")
+    print("identity(hi) = {id_str}")
+    let sec = second(1, "hello")
+    print("second(1, hello) = {sec}")
+
+    // ── Trait bounds ────────────────────────────────────
+    let tp = echo_display(Point { x: 10, y: 20 })
+    print("trait bound: {tp}")
+
+    // ── Closures + capture ──────────────────────────────
+    print("")
+    print("--- Closures + Higher-Order ---")
+    let multiplier = 3
+    let triple = |x: i64| -> i64 { x * multiplier }
+    print("triple(7) = {triple(7)}")
+
+    // ── Higher-order: pass closure, return closure ──────
+    let add10 = make_adder(10)
+    print("add10(5) = {apply(add10, 5)}")
+
+    // ── map / filter / reduce ───────────────────────────
+    let nums = [1, 2, 3, 4, 5]
+    let doubled = map(nums, |x: i64| -> i64 { x * 2 })
+    let sum = reduce(doubled, 0, |acc: i64, x: i64| -> i64 { acc + x })
+    print("sum(map([1..5], *2)) = {sum}")
+
+    let evens = filter(nums, |x: i64| -> bool { x % 2 == 0 })
+    for n in evens { print("  even: {n}") }
+
+    // ── Pipe operator ───────────────────────────────────
+    print("")
+    print("--- Pipe Operator ---")
+    let piped = 5 |> double
+    print("5 |> double = {piped}")
+    let chained = 10 |> negate |> double
+    print("10 |> negate |> double = {chained}")
+
+    // ── Error handling (Result type) ────────────────────
+    print("")
+    print("--- Error Handling ---")
+    match safe_divide(10, 3) {
+        ok(v) => print("10 / 3 = {v}")
+        err(e) => print("error: {e}")
+    }
+    match safe_divide(10, 0) {
+        ok(v) => print("10 / 0 = {v}")
+        err(e) => print("error: {e}")
+    }
+
+    // ── Try operator ────────────────────────────────────
+    match double_divide(100, 5) {
+        ok(v) => print("try ok: {v}")
+        err(e) => print("try err: {e}")
+    }
+    match double_divide(100, 0) {
+        ok(v) => print("try ok: {v}")
+        err(e) => print("try err: {e}")
+    }
+
+    // ── Optional type + null coalescing ─────────────────
+    print("")
+    print("--- Optionals ---")
+    let idx = find_index([10, 20, 30, 40], 30)
+    match idx {
+        some(i) => print("Found 30 at index {i}")
+        none => print("not found")
+    }
+    let missing = find_index([10, 20, 30], 99)
+    let fallback = missing ?? -1
+    print("Missing with fallback: {fallback}")
+
+    // ── String operations ───────────────────────────────
+    print("")
+    print("--- String Operations ---")
+    let s_upper = upper("turbo")
+    let s_lower = lower("LANG")
+    let s_trim = trim("  hi  ")
+    let s_replace = replace("hello world", "world", "turbo")
+    let s_contains = contains("turbo lang", "turbo")
+    let s_join = join(split("a,b,c", ","), " | ")
+    let s_repeat = repeat("go", 3)
+    print("upper: {s_upper}")
+    print("lower: {s_lower}")
+    print("trim: [{s_trim}]")
+    print("replace: {s_replace}")
+    print("contains: {s_contains}")
+    print("join: {s_join}")
+    print("repeat: {s_repeat}")
+
+    // ── Math stdlib ─────────────────────────────────────
+    print("")
+    print("--- Math ---")
+    print("abs(-42) = {abs(-42)}")
+    print("min(3,7) = {min(3, 7)}")
+    print("max(3,7) = {max(3, 7)}")
+    print("pow(2,10) = {pow(2, 10)}")
+    print("fib(10) = {fib(10)}")
+    print("10! = {factorial(10)}")
+
+    // ── Float operations ────────────────────────────────
+    let pi = 3.14159
+    let r = 5.0
+    print("pi * r^2 = {pi * r * r}")
+
+    // ── Arrays + mutation ───────────────────────────────
+    print("")
+    print("--- Arrays + Mutation ---")
+    let mut arr = [5, 3, 1, 4, 2]
+    arr[0] = 100
+    print("arr[0] = {arr[0]}")
+    print("len(arr) = {len(arr)}")
+    let mut total = 0
+    for x in arr { total += x }
+    print("sum = {total}")
+
+    // ── For-in range ────────────────────────────────────
+    let mut range_sum = 0
+    for i in 0..10 { range_sum += i }
+    print("sum(0..10) = {range_sum}")
+
+    // ── While loop + mutation ───────────────────────────
+    let mut countdown = 5
+    let mut result = ""
+    while countdown > 0 {
+        result = result + to_str(countdown)
+        if countdown > 1 { result = result + "," }
+        countdown -= 1
+    }
+    print("countdown: {result}")
+
+    // ── Boolean + short-circuit ─────────────────────────
+    print("")
+    print("--- Boolean Logic ---")
+    let t = true
+    let f = false
+    print("true && false = {t && f}")
+    print("true || false = {t || f}")
+    print("!true = {!t}")
+
+    // ── Recursion ───────────────────────────────────────
+    print("")
+    print("--- Recursion ---")
+    print("fib(20) = {fib(20)}")
+
+    // ── Tool functions (AI-native) ──────────────────────
+    print("")
+    print("--- AI-Native: Tools + Agents ---")
+    print(search("turbo language"))
+    print(calculate("2 + 2"))
+
+    // ── Agent instantiation ─────────────────────────────
+    let bot = Assistant {}
+    print("Agent model: {bot.model}")
+    print("Agent system: {bot.system}")
+    print("Agent tools: {len(bot.tools)}")
+
+    // ── Async + spawn ───────────────────────────────────
+    print("")
+    print("--- Async Runtime ---")
+    let sq = await async_square(7)
+    print("async_square(7) = {sq}")
+
+    let a = spawn delayed_value(10, 100)
+    let b = spawn delayed_value(10, 200)
+    let concurrent_sum = await a + await b
+    print("spawn+await sum = {concurrent_sum}")
+
+    // ── Bubble sort (arrays + nested loops) ─────────────
+    print("")
+    print("--- Algorithms ---")
+    let mut data = [5, 3, 1, 4, 2]
+    let n = len(data)
+    for i in 0..n {
+        for j in 0..(n - 1) {
+            if data[j] > data[j + 1] {
+                let tmp = data[j]
+                data[j] = data[j + 1]
+                data[j + 1] = tmp
+            }
+        }
+    }
+    let mut sorted_str = ""
+    for x in data {
+        if sorted_str != "" { sorted_str = sorted_str + "," }
+        sorted_str = sorted_str + to_str(x)
+    }
+    print("sorted: [{sorted_str}]")
+
+    // ── Collatz conjecture ──────────────────────────────
+    let mut steps = 0
+    let mut cx = 27
+    while cx != 1 {
+        if cx % 2 == 0 { cx = cx / 2 } else { cx = cx * 3 + 1 }
+        steps += 1
+    }
+    print("collatz(27) = {steps} steps")
+
+    // ── JSON ────────────────────────────────────────────
+    print("")
+    print("--- JSON ---")
+    let json = "\{\"name\": \"Turbo\", \"version\": \"1.0\"}"
+    let jname = json_get(json, "name")
+    let jstr = json_stringify("lang", "Turbo")
+    print("json_get: {jname}")
+    print("json_stringify: {jstr}")
+
+    // ── Concurrency primitives ──────────────────────────
+    print("")
+    print("--- Concurrency ---")
+    let m = mutex(0)
+    mutex_set(m, 42)
+    print("mutex: {mutex_get(m)}")
+
+    // ── String interpolation with expressions ───────────
+    print("")
+    print("--- String Interpolation ---")
+    let name = "Turbo"
+    print("{name} v1.0 — {1 + 2 + 3} features demonstrated")
+
+    print("")
+    print("=== All features working! ===")
+}

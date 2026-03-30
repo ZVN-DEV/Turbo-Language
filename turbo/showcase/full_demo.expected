@@ -1,0 +1,103 @@
+=== Turbo Language Full Showcase ===
+
+--- Structs, Methods, Display ---
+Point: (3, 4)
+Distance squared: 25
+Is origin: false
+
+--- Enums + Pattern Matching ---
+Color: red
+Color: blue
+Area of Circle(5): 78.53975
+Area of Rect(3,4): 12
+Area of Dot: 0
+Match wildcard: other
+
+--- Generics ---
+Pair: 42, hello
+List head: 99
+identity(42) = 42
+identity(hi) = hi
+second(1, hello) = hello
+trait bound: (10, 20)
+
+--- Closures + Higher-Order ---
+triple(7) = 21
+add10(5) = 15
+sum(map([1..5], *2)) = 30
+  even: 2
+  even: 4
+
+--- Pipe Operator ---
+5 |> double = 10
+10 |> negate |> double = -20
+
+--- Error Handling ---
+10 / 3 = 3
+error: division by zero
+try ok: 40
+try err: division by zero
+
+--- Optionals ---
+Found 30 at index 2
+Missing with fallback: -1
+
+--- String Operations ---
+upper: TURBO
+lower: lang
+trim: [hi]
+replace: hello turbo
+contains: true
+join: a | b | c
+repeat: gogogo
+
+--- Math ---
+abs(-42) = 42
+min(3,7) = 3
+max(3,7) = 7
+pow(2,10) = 1024
+fib(10) = 55
+10! = 3628800
+pi * r^2 = 78.53975
+
+--- Arrays + Mutation ---
+arr[0] = 100
+len(arr) = 5
+sum = 110
+sum(0..10) = 45
+countdown: 5,4,3,2,1
+
+--- Boolean Logic ---
+true && false = false
+true || false = true
+!true = false
+
+--- Recursion ---
+fib(20) = 6765
+
+--- AI-Native: Tools + Agents ---
+Results for: turbo language
+Computed: 2 + 2
+Agent model: claude-sonnet
+Agent system: You are a helpful assistant.
+Agent tools: 2
+
+--- Async Runtime ---
+async_square(7) = 49
+spawn+await sum = 300
+
+--- Algorithms ---
+sorted: [1,2,3,4,5]
+collatz(27) = 111 steps
+
+--- JSON ---
+json_get: Turbo
+json_stringify: {"lang":"Turbo"}
+
+--- Concurrency ---
+mutex: 42
+
+--- String Interpolation ---
+Turbo v1.0 — 6 features demonstrated
+
+=== All features working! ===
