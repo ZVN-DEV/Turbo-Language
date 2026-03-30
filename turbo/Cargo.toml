@@ -6,6 +6,7 @@ members = [
     "crates/turbo-codegen-cranelift",
     "crates/turbo-sema",
     "crates/turbo-cli",
+    "crates/turbo-lsp",
 ]
 resolver = "2"
 
