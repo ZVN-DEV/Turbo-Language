@@ -2709,7 +2709,7 @@ fn compile_builtin_map<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -
 /// Allocates same-size array, filters elements by predicate, patches length.
 fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
     let (arr_ptr, arr_tty) = compile_expr(cx, &args[0])?.unwrap();
-    let (fn_ptr, fn_tty) = compile_expr(cx, &args[1])?.unwrap();
+    let (closure_ptr, fn_tty) = compile_expr(cx, &args[1])?.unwrap();
 
     let elem_tty = match &arr_tty {
         TurboTy::Array(inner) => *inner.clone(),
@@ -2720,6 +2720,10 @@ fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
         TurboTy::Fn(params, _) => params[0].clone(),
         _ => TurboTy::Int,
     };
+
+    // Extract fn_ptr and env_ptr from closure pair struct
+    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
     let len_fid = cx.rt_fns["rt_array_len"];
     let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
@@ -2733,6 +2737,7 @@ fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
 
     let mut sig = cx.module.make_signature();
     sig.call_conv = CallConv::Fast;
+    sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
     let param_cl_ty = turbo_ty_to_cl_type(&param_tty, cx.ptr_type);
     sig.params.push(AbiParam::new(param_cl_ty));
     sig.returns.push(AbiParam::new(types::I8));
@@ -2774,7 +2779,7 @@ fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
         _ => raw_elem,
     };
 
-    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[typed_elem]);
+    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[env_ptr, typed_elem]);
     let pred_result = cx.builder.inst_results(indirect_call)[0];
 
     cx.builder.ins().brif(pred_result, store_block, &[], inc_block, &[]);
@@ -2818,12 +2823,16 @@ fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
 fn compile_builtin_reduce<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
     let (arr_ptr, _arr_tty) = compile_expr(cx, &args[0])?.unwrap();
     let (init_val, init_tty) = compile_expr(cx, &args[1])?.unwrap();
-    let (fn_ptr, fn_tty) = compile_expr(cx, &args[2])?.unwrap();
+    let (closure_ptr, fn_tty) = compile_expr(cx, &args[2])?.unwrap();
 
     let (acc_tty, elem_tty, ret_tty) = match &fn_tty {
         TurboTy::Fn(params, ret) => (params[0].clone(), params[1].clone(), *ret.clone()),
         _ => (TurboTy::Int, TurboTy::Int, TurboTy::Int),
     };
+
+    // Extract fn_ptr and env_ptr from closure pair struct
+    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
     let acc_cl_ty = turbo_ty_to_cl_type(&acc_tty, cx.ptr_type);
     let elem_cl_ty = turbo_ty_to_cl_type(&elem_tty, cx.ptr_type);
@@ -2836,6 +2845,7 @@ fn compile_builtin_reduce<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
 
     let mut sig = cx.module.make_signature();
     sig.call_conv = CallConv::Fast;
+    sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
     sig.params.push(AbiParam::new(acc_cl_ty));
     sig.params.push(AbiParam::new(elem_cl_ty));
     sig.returns.push(AbiParam::new(ret_cl_ty));
@@ -2875,7 +2885,7 @@ fn compile_builtin_reduce<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
     };
 
     let current_acc = cx.builder.use_var(acc_var);
-    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[current_acc, typed_elem]);
+    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[env_ptr, current_acc, typed_elem]);
     let new_acc = cx.builder.inst_results(indirect_call)[0];
     cx.builder.def_var(acc_var, new_acc);
 
