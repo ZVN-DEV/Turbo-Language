@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+#include <math.h>
 
 void rt_print_str(const char *s) {
     if (s)
@@ -392,6 +394,53 @@ long long rt_pow(long long base, long long exp) {
 
 double rt_sqrt(double x) {
     return sqrt(x);
+}
+
+/* ── Async runtime ─────────────────────────────────────────────── */
+
+#ifdef _WIN32
+#include <windows.h>
+void rt_sleep_ms(long long ms) { Sleep((DWORD)ms); }
+#else
+#include <unistd.h>
+void rt_sleep_ms(long long ms) {
+    usleep((unsigned int)(ms * 1000));
+}
+#endif
+
+typedef struct {
+    long long (*thunk)(void *);
+    void *args_ptr;
+    long long result;
+} spawn_ctx;
+
+static void *spawn_thread_fn(void *arg) {
+    spawn_ctx *ctx = (spawn_ctx *)arg;
+    ctx->result = ctx->thunk(ctx->args_ptr);
+    return NULL;
+}
+
+void *rt_spawn_with_args(long long (*thunk)(void *), void *args_ptr) {
+    spawn_ctx *ctx = (spawn_ctx *)malloc(sizeof(spawn_ctx));
+    ctx->thunk = thunk;
+    ctx->args_ptr = args_ptr;
+    ctx->result = 0;
+    pthread_t *handle = (pthread_t *)malloc(sizeof(pthread_t) + sizeof(spawn_ctx *));
+    /* Store ctx pointer right after the pthread_t */
+    *((spawn_ctx **)(handle + 1)) = ctx;
+    pthread_create(handle, NULL, spawn_thread_fn, ctx);
+    return handle;
+}
+
+long long rt_await_handle(void *handle_ptr) {
+    if (!handle_ptr) return 0;
+    pthread_t *handle = (pthread_t *)handle_ptr;
+    spawn_ctx *ctx = *((spawn_ctx **)(handle + 1));
+    pthread_join(*handle, NULL);
+    long long result = ctx->result;
+    free(ctx);
+    free(handle);
+    return result;
 }
 
 /* Entry point: calls Turbo's main and returns 0 */
