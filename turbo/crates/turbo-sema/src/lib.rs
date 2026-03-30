@@ -182,6 +182,7 @@ fn resolve_type_expr_with_params(te: &TypeExpr, structs: Option<&HashMap<String,
         TypeExpr::Future(inner) => {
             resolve_type_expr(&inner.node, structs, enums).map(|t| Ty::Future(Box::new(t)))
         }
+        #[allow(unreachable_patterns)] _ => None,
     }
 }
 
