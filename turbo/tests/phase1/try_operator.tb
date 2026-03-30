@@ -1,0 +1,19 @@
+fn parse(s: str) -> i64 ! str {
+    if s == "42" { ok(42) } else { err("parse failed") }
+}
+
+fn double_parse(s: str) -> i64 ! str {
+    let x = parse(s)?
+    ok(x * 2)
+}
+
+fn main() {
+    match double_parse("42") {
+        ok(v) => print("ok: {v}")
+        err(e) => print("err: {e}")
+    }
+    match double_parse("bad") {
+        ok(v) => print("ok: {v}")
+        err(e) => print("err: {e}")
+    }
+}

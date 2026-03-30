@@ -344,7 +344,7 @@ impl Checker {
         matches!(name, "print" | "panic" | "assert" | "len" | "abs" | "min" | "max" | "to_str"
             | "map" | "filter" | "reduce"
             | "split" | "trim" | "upper" | "lower" | "starts_with" | "ends_with"
-            | "replace" | "char_at"
+            | "replace" | "char_at" | "contains" | "index_of" | "join" | "repeat"
             | "read_line" | "read_file" | "write_file"
             | "pow" | "sqrt"
             | "sleep"
@@ -1163,6 +1163,67 @@ impl Checker {
                         }
                         if !idx_ty.is_error() && !idx_ty.is_integer() {
                             self.error(format!("char_at() second argument must be integer, found `{idx_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+
+                    if name == "contains" {
+                        if args.len() != 2 {
+                            self.error(format!("contains() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        let sub_ty = self.check_expr(&args[1]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(format!("contains() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                        }
+                        if !sub_ty.is_error() && sub_ty != Ty::Str {
+                            self.error(format!("contains() second argument must be str, found `{sub_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Bool;
+                    }
+                    if name == "index_of" {
+                        if args.len() != 2 {
+                            self.error(format!("index_of() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        let sub_ty = self.check_expr(&args[1]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(format!("index_of() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                        }
+                        if !sub_ty.is_error() && sub_ty != Ty::Str {
+                            self.error(format!("index_of() second argument must be str, found `{sub_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::I64;
+                    }
+                    if name == "join" {
+                        if args.len() != 2 {
+                            self.error(format!("join() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let arr_ty = self.check_expr(&args[0]);
+                        let sep_ty = self.check_expr(&args[1]);
+                        if !arr_ty.is_error() && arr_ty != Ty::Array(Box::new(Ty::Str)) {
+                            self.error(format!("join() first argument must be [str], found `{arr_ty}`"), args[0].span.clone());
+                        }
+                        if !sep_ty.is_error() && sep_ty != Ty::Str {
+                            self.error(format!("join() second argument must be str, found `{sep_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+                    if name == "repeat" {
+                        if args.len() != 2 {
+                            self.error(format!("repeat() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        let n_ty = self.check_expr(&args[1]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(format!("repeat() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                        }
+                        if !n_ty.is_error() && !n_ty.is_integer() {
+                            self.error(format!("repeat() second argument must be integer, found `{n_ty}`"), args[1].span.clone());
                         }
                         return Ty::Str;
                     }
@@ -2062,15 +2123,28 @@ impl Checker {
             }
 
             Expr::Try(inner) => {
-                let ty = self.check_expr(inner);
-                // Try operator (?) unwraps Result<T, E> to T, propagating E
-                match ty {
-                    Ty::Result(ok_ty, _) => *ok_ty,
-                    Ty::Error => Ty::Error,
-                    other => {
+                let inner_ty = self.check_expr(inner);
+                if inner_ty.is_error() {
+                    return Ty::Error;
+                }
+                match &inner_ty {
+                    Ty::Result(ok_ty, _err_ty) => {
+                        // The enclosing function must also return a Result type
+                        match &self.current_return_type {
+                            Ty::Result(_, _) => {}
+                            _ => {
+                                self.error(
+                                    "`?` operator can only be used in a function that returns a Result type".to_string(),
+                                    expr.span.clone(),
+                                );
+                            }
+                        }
+                        *ok_ty.clone()
+                    }
+                    _ => {
                         self.error(
-                            format!("try operator `?` can only be used on Result types, found `{other}`"),
-                            expr.span.clone(),
+                            format!("`?` operator requires a Result type, found `{inner_ty}`"),
+                            inner.span.clone(),
                         );
                         Ty::Error
                     }
@@ -2614,35 +2688,6 @@ impl Checker {
             Expr::NoneExpr => {
                 // Return a partial optional type -- the inner type is unknown without context
                 Ty::Optional(Box::new(Ty::Error))
-            }
-
-            Expr::Try(inner) => {
-                let inner_ty = self.check_expr(inner);
-                if inner_ty.is_error() {
-                    return Ty::Error;
-                }
-                match &inner_ty {
-                    Ty::Result(ok_ty, _err_ty) => {
-                        // The enclosing function must also return a Result type
-                        match &self.current_return_type {
-                            Ty::Result(_, _) => {}
-                            _ => {
-                                self.error(
-                                    "`?` operator can only be used in a function that returns a Result type".to_string(),
-                                    expr.span.clone(),
-                                );
-                            }
-                        }
-                        *ok_ty.clone()
-                    }
-                    _ => {
-                        self.error(
-                            format!("`?` operator requires a Result type, found `{inner_ty}`"),
-                            inner.span.clone(),
-                        );
-                        Ty::Error
-                    }
-                }
             }
 
             Expr::NullCoalesce { value, default } => {

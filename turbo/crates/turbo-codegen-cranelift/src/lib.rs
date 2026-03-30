@@ -902,6 +902,10 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_str_ends_with", rt_str_ends_with as *const u8);
     jit_builder.symbol("rt_str_replace", rt_str_replace as *const u8);
     jit_builder.symbol("rt_str_char_at", rt_str_char_at as *const u8);
+    jit_builder.symbol("rt_str_contains", rt_str_contains as *const u8);
+    jit_builder.symbol("rt_str_index_of", rt_str_index_of as *const u8);
+    jit_builder.symbol("rt_str_join", rt_str_join as *const u8);
+    jit_builder.symbol("rt_str_repeat", rt_str_repeat as *const u8);
     jit_builder.symbol("rt_read_line", rt_read_line as *const u8);
     jit_builder.symbol("rt_read_file", rt_read_file as *const u8);
     jit_builder.symbol("rt_write_file", rt_write_file as *const u8);
@@ -1562,6 +1566,10 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_str_ends_with", &[ptr_type, ptr_type], Some(types::I8))?;
     declare_rt_fn(module, &mut rt_fns, "rt_str_replace", &[ptr_type, ptr_type, ptr_type], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_str_char_at", &[ptr_type, types::I64], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_contains", &[ptr_type, ptr_type], Some(types::I8))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_index_of", &[ptr_type, ptr_type], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_join", &[ptr_type, ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_repeat", &[ptr_type, types::I64], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_read_line", &[], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_read_file", &[ptr_type], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_write_file", &[ptr_type, ptr_type], None)?;
@@ -2502,8 +2510,40 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
         }
 
         // Try operator: expr? — unwrap Ok, propagate Err (simplified: just evaluate inner)
+        // Try operator: expr? — unwrap Ok, propagate Err
         Expr::Try(inner) => {
-            compile_expr(cx, inner)
+            // Compile the inner expression (must produce a Result pointer)
+            let (result_ptr, _result_tty) = compile_expr(cx, inner)?.unwrap();
+
+            // Get the tag: 0 = ok, 1 = err
+            let tag_fid = cx.rt_fns["rt_result_tag"];
+            let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+            let tag_call = cx.builder.ins().call(tag_fref, &[result_ptr]);
+            let tag = cx.builder.inst_results(tag_call)[0];
+
+            // Branch: if tag == 0 (ok), continue; else return the Result as-is
+            let zero = cx.builder.ins().iconst(types::I64, 0);
+            let is_ok = cx.builder.ins().icmp(IntCC::Equal, tag, zero);
+
+            let ok_block = cx.builder.create_block();
+            let err_block = cx.builder.create_block();
+
+            cx.builder.ins().brif(is_ok, ok_block, &[], err_block, &[]);
+
+            // err_block: propagate the error by returning the Result pointer
+            cx.builder.switch_to_block(err_block);
+            cx.builder.seal_block(err_block);
+            cx.builder.ins().return_(&[result_ptr]);
+
+            // ok_block: extract the ok value and continue
+            cx.builder.switch_to_block(ok_block);
+            cx.builder.seal_block(ok_block);
+            let val_fid = cx.rt_fns["rt_result_value"];
+            let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
+            let val_call = cx.builder.ins().call(val_fref, &[result_ptr]);
+            let ok_value = cx.builder.inst_results(val_call)[0];
+
+            Ok(Some((ok_value, TurboTy::Int)))
         }
 
         Expr::ForIn { var_name, iterable, body } => compile_for_in(cx, var_name, iterable, body),
@@ -2899,41 +2939,6 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             Ok(Some((ptr, TurboTy::Optional(Box::new(TurboTy::Int)))))
         }
 
-        Expr::Try(inner) => {
-            // Compile the inner expression (must produce a Result pointer)
-            let (result_ptr, _result_tty) = compile_expr(cx, inner)?.unwrap();
-
-            // Get the tag: 0 = ok, 1 = err
-            let tag_fid = cx.rt_fns["rt_result_tag"];
-            let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
-            let tag_call = cx.builder.ins().call(tag_fref, &[result_ptr]);
-            let tag = cx.builder.inst_results(tag_call)[0];
-
-            // Branch: if tag == 0 (ok), continue; else return the Result as-is
-            let zero = cx.builder.ins().iconst(types::I64, 0);
-            let is_ok = cx.builder.ins().icmp(IntCC::Equal, tag, zero);
-
-            let ok_block = cx.builder.create_block();
-            let err_block = cx.builder.create_block();
-
-            cx.builder.ins().brif(is_ok, ok_block, &[], err_block, &[]);
-
-            // err_block: propagate the error by returning the Result pointer
-            cx.builder.switch_to_block(err_block);
-            cx.builder.seal_block(err_block);
-            cx.builder.ins().return_(&[result_ptr]);
-
-            // ok_block: extract the ok value and continue
-            cx.builder.switch_to_block(ok_block);
-            cx.builder.seal_block(ok_block);
-            let val_fid = cx.rt_fns["rt_result_value"];
-            let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
-            let val_call = cx.builder.ins().call(val_fref, &[result_ptr]);
-            let ok_value = cx.builder.inst_results(val_call)[0];
-
-            Ok(Some((ok_value, TurboTy::Int)))
-        }
-
         Expr::NoneExpr => {
             let fid = cx.rt_fns["rt_option_none"];
             let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -3257,6 +3262,10 @@ fn compile_call<M: Module>(
         "ends_with" => compile_stdlib_str_bool2(cx, args, "rt_str_ends_with"),
         "replace" => compile_stdlib_replace(cx, args),
         "char_at" => compile_stdlib_char_at(cx, args),
+        "contains" => compile_stdlib_str_bool2(cx, args, "rt_str_contains"),
+        "index_of" => compile_stdlib_index_of(cx, args),
+        "join" => compile_stdlib_join(cx, args),
+        "repeat" => compile_stdlib_repeat(cx, args),
         // Stdlib I/O builtins
         "read_line" => compile_stdlib_read_line(cx),
         "read_file" => compile_stdlib_read_file(cx, args),
@@ -3797,6 +3806,46 @@ fn compile_stdlib_char_at<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
     let fid = cx.rt_fns["rt_str_char_at"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, idx_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// index_of(s, sub) -> i64
+fn compile_stdlib_index_of<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (sub_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_str_index_of"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[s_val, sub_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// join(arr, sep) -> str
+fn compile_stdlib_join<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (arr_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (sep_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_str_join"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[arr_val, sep_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// repeat(s, n) -> str
+fn compile_stdlib_repeat<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (n_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    // Ensure n is i64
+    let n_ty = cx.builder.func.dfg.value_type(n_val);
+    let n_val = if n_ty.bits() < 64 {
+        cx.builder.ins().sextend(types::I64, n_val)
+    } else {
+        n_val
+    };
+    let fid = cx.rt_fns["rt_str_repeat"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[s_val, n_val]);
     let result = cx.builder.inst_results(call)[0];
     Ok(Some((result, TurboTy::Str)))
 }

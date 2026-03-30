@@ -1,0 +1,6 @@
+fn main() {
+    print(contains("hello world", "world"))
+    print(index_of("abcdef", "cd"))
+    print(join(["a", "b", "c"], "-"))
+    print(repeat("ha", 3))
+}
