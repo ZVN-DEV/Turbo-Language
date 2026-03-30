@@ -80,14 +80,38 @@ pub struct FieldDef {
     pub ty: Spanned<TypeExpr>,
 }
 
+/// A generic type parameter with optional trait bounds
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeParam {
+    pub name: String,
+    pub bounds: Vec<String>,
+}
+
+impl TypeParam {
+    pub fn new(name: String) -> Self {
+        Self { name, bounds: Vec::new() }
+    }
+
+    pub fn with_bounds(name: String, bounds: Vec<String>) -> Self {
+        Self { name, bounds }
+    }
+}
+
 /// Function definition
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnDef {
     pub name: String,
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
     pub body: Spanned<Expr>,
+}
+
+impl FnDef {
+    /// Get just the type parameter names (for codegen compatibility)
+    pub fn type_param_names(&self) -> Vec<String> {
+        self.type_params.iter().map(|tp| tp.name.clone()).collect()
+    }
 }
 
 /// Function parameter
