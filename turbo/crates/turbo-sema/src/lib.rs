@@ -41,6 +41,8 @@ pub enum Ty {
     Future(Box<Ty>),
     /// A generic type parameter (e.g., `T`)
     TypeParam(String),
+    /// Agent type (by name) — instantiated agent with model/system/tools fields
+    Agent(String),
     /// Type could not be determined (error recovery)
     Error,
 }
@@ -72,6 +74,7 @@ impl std::fmt::Display for Ty {
             Ty::Optional(inner) => write!(f, "{}?", inner),
             Ty::Future(inner) => write!(f, "Future<{inner}>"),
             Ty::TypeParam(name) => write!(f, "{name}"),
+            Ty::Agent(name) => write!(f, "{}", name),
             Ty::Error => write!(f, "<error>"),
         }
     }
@@ -343,7 +346,8 @@ impl Checker {
             | "split" | "trim" | "upper" | "lower" | "starts_with" | "ends_with"
             | "replace" | "char_at"
             | "read_line" | "read_file" | "write_file"
-            | "pow" | "sqrt")
+            | "pow" | "sqrt"
+            | "sleep")
     }
 
     /// Walk a chain of FieldAccess / Index expressions to find the root variable name.
@@ -1223,6 +1227,19 @@ impl Checker {
                         return Ty::F64;
                     }
 
+                    // sleep(ms: i64) -> () — sleep the current thread
+                    if name == "sleep" {
+                        if args.len() != 1 {
+                            self.error(format!("sleep() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let ms_ty = self.check_expr(&args[0]);
+                        if !ms_ty.is_error() && !ms_ty.is_integer() {
+                            self.error(format!("sleep() expects integer (milliseconds), found `{ms_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::Unit;
+                    }
+
                     // map(arr, fn) -> [U]
                     if name == "map" {
                         if args.len() != 2 {
@@ -1977,6 +1994,17 @@ impl Checker {
             }
 
             Expr::StructLit { name, fields } => {
+                // Check if this is an agent instantiation: AgentName {}
+                if self.agents.contains_key(name) {
+                    if !fields.is_empty() {
+                        self.error(
+                            format!("agent `{name}` does not accept field initializers; use `{name} {{}}` to instantiate"),
+                            expr.span.clone(),
+                        );
+                    }
+                    return Ty::Agent(name.clone());
+                }
+
                 let Some(struct_info) = self.structs.get(name).cloned() else {
                     self.error(
                         format!("undefined struct `{name}`"),
@@ -2087,6 +2115,20 @@ impl Checker {
                                 expr.span.clone(),
                             );
                             Ty::Error
+                        }
+                    }
+                    Ty::Agent(agent_name) => {
+                        match field.as_str() {
+                            "model" => Ty::Str,
+                            "system" => Ty::Str,
+                            "tools" => Ty::Array(Box::new(Ty::Str)),
+                            _ => {
+                                self.error(
+                                    format!("agent `{agent_name}` has no field `{field}`; available fields: model, system, tools"),
+                                    expr.span.clone(),
+                                );
+                                Ty::Error
+                            }
                         }
                     }
                     Ty::Error => Ty::Error,
