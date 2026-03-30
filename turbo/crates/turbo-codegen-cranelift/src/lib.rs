@@ -32,7 +32,8 @@ enum TurboTy {
     Unit,
     Array(Box<TurboTy>),
     Struct(String),
-    Enum,
+    /// Enum type: name of the enum. Unit-only enums are i64 tags; data enums are heap pointers.
+    Enum(String),
     /// Function pointer: param types and return type
     Fn(Vec<TurboTy>, Box<TurboTy>),
     /// Result type (heap-allocated tagged union): ok_type, err_type
@@ -59,7 +60,7 @@ fn turbo_ty_from_type_expr_with_params(te: &TypeExpr, enum_variants: &HashMap<St
             "str" => TurboTy::Str,
             _ => {
                 if enum_variants.contains_key(name.as_str()) {
-                    TurboTy::Enum
+                    TurboTy::Enum(name.clone())
                 } else {
                     TurboTy::Struct(name.clone())
                 }
@@ -344,12 +345,18 @@ struct Ctx<'a, M: Module> {
     struct_fields: &'a HashMap<String, Vec<(String, TurboTy)>>,
     /// Enum variant lists: enum_name -> vec of variant names
     enum_variants: &'a HashMap<String, Vec<String>>,
-    /// Map from closure span start offset to (synthetic function name, TurboTy::Fn)
-    closure_fns: &'a HashMap<usize, (String, TurboTy)>,
+    /// Data-carrying enum variant fields: (enum_name, variant_name) -> field TurboTys
+    enum_variant_fields: &'a HashMap<(String, String), Vec<TurboTy>>,
+    /// Max slots per data enum: enum_name -> max field count across all variants
+    enum_max_slots: &'a HashMap<String, usize>,
+    /// Map from closure span start offset to (synthetic function name, TurboTy::Fn, free_var_names)
+    closure_fns: &'a HashMap<usize, (String, TurboTy, Vec<String>)>,
     /// Trait implementations: type_name -> set of trait names
     trait_impls: &'a HashMap<String, Vec<String>>,
     /// Current function inlining depth (0 = no inlining)
     inline_depth: usize,
+    /// Capture info populated during Expr::Closure compilation
+    closure_captures: &'a mut HashMap<usize, CaptureInfo>,
 }
 
 impl<'a, M: Module> Ctx<'a, M> {
@@ -616,10 +623,172 @@ fn turbo_ty_to_cl_type(tty: &TurboTy, ptr_type: types::Type) -> types::Type {
         TurboTy::Fn(_, _) => ptr_type, // function pointers are pointers
         TurboTy::Array(_) => ptr_type,
         TurboTy::Struct(_) => ptr_type,
-        TurboTy::Enum => types::I64,
+        TurboTy::Enum(_) => types::I64, // both unit (tag) and data (ptr) enums fit in I64
         TurboTy::Result(_, _) => ptr_type,
         TurboTy::Optional(_) => ptr_type,
     }
+}
+
+// ── Closure capture analysis ────────────────────────────────────────
+
+/// Collect all free variable references in an expression.
+/// `bound` contains names defined locally (parameters, let bindings).
+/// Any Ident not in `bound` is a free variable (capture candidate).
+fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String>) {
+    match expr {
+        Expr::Ident(name) => {
+            if !bound.contains(name) && !free.contains(name) {
+                free.push(name.clone());
+            }
+        }
+        Expr::Block { stmts, tail_expr } => {
+            let orig_len = bound.len();
+            for stmt in stmts {
+                match &stmt.node {
+                    Stmt::Let { name, value, .. } => {
+                        collect_free_vars(&value.node, bound, free);
+                        bound.push(name.clone());
+                    }
+                    Stmt::Expr(e) => collect_free_vars(&e.node, bound, free),
+                    Stmt::Return(Some(e)) => collect_free_vars(&e.node, bound, free),
+                    Stmt::Return(None) => {}
+                }
+            }
+            if let Some(tail) = tail_expr {
+                collect_free_vars(&tail.node, bound, free);
+            }
+            bound.truncate(orig_len);
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            collect_free_vars(&left.node, bound, free);
+            collect_free_vars(&right.node, bound, free);
+        }
+        Expr::UnaryOp { expr: e, .. } => {
+            collect_free_vars(&e.node, bound, free);
+        }
+        Expr::Call { callee, args } => {
+            collect_free_vars(&callee.node, bound, free);
+            for arg in args {
+                collect_free_vars(&arg.node, bound, free);
+            }
+        }
+        Expr::If { condition, then_branch, else_branch } => {
+            collect_free_vars(&condition.node, bound, free);
+            collect_free_vars(&then_branch.node, bound, free);
+            if let Some(e) = else_branch {
+                collect_free_vars(&e.node, bound, free);
+            }
+        }
+        Expr::While { condition, body } => {
+            collect_free_vars(&condition.node, bound, free);
+            collect_free_vars(&body.node, bound, free);
+        }
+        Expr::ForIn { var_name, iterable, body } => {
+            collect_free_vars(&iterable.node, bound, free);
+            let orig_len = bound.len();
+            bound.push(var_name.clone());
+            collect_free_vars(&body.node, bound, free);
+            bound.truncate(orig_len);
+        }
+        Expr::Assign { target, value } => {
+            if !bound.contains(target) && !free.contains(target) {
+                free.push(target.clone());
+            }
+            collect_free_vars(&value.node, bound, free);
+        }
+        Expr::CompoundAssign { target, value, .. } => {
+            if !bound.contains(target) && !free.contains(target) {
+                free.push(target.clone());
+            }
+            collect_free_vars(&value.node, bound, free);
+        }
+        Expr::FieldAssign { object, value, .. } => {
+            collect_free_vars(&object.node, bound, free);
+            collect_free_vars(&value.node, bound, free);
+        }
+        Expr::IndexAssign { object, index, value } => {
+            collect_free_vars(&object.node, bound, free);
+            collect_free_vars(&index.node, bound, free);
+            collect_free_vars(&value.node, bound, free);
+        }
+        Expr::ArrayLit(elems) => {
+            for e in elems {
+                collect_free_vars(&e.node, bound, free);
+            }
+        }
+        Expr::Index { object, index } => {
+            collect_free_vars(&object.node, bound, free);
+            collect_free_vars(&index.node, bound, free);
+        }
+        Expr::StructLit { fields, .. } => {
+            for (_, v) in fields {
+                collect_free_vars(&v.node, bound, free);
+            }
+        }
+        Expr::FieldAccess { object, .. } => {
+            collect_free_vars(&object.node, bound, free);
+        }
+        Expr::Match { subject, arms } => {
+            collect_free_vars(&subject.node, bound, free);
+            for arm in arms {
+                let orig_len = bound.len();
+                match &arm.pattern.node {
+                    Pattern::Ok(name) | Pattern::Err(name) | Pattern::Some(name) => {
+                        bound.push(name.clone());
+                    }
+                    Pattern::Ident(name) if name != "_" => {
+                        bound.push(name.clone());
+                    }
+                    _ => {}
+                }
+                collect_free_vars(&arm.body.node, bound, free);
+                bound.truncate(orig_len);
+            }
+        }
+        Expr::Interpolation(parts) => {
+            for part in parts {
+                if let InterpolPart::Expr(e) = part {
+                    collect_free_vars(&e.node, bound, free);
+                }
+            }
+        }
+        Expr::Closure { params, body, .. } => {
+            let orig_len = bound.len();
+            for p in params {
+                bound.push(p.name.clone());
+            }
+            collect_free_vars(&body.node, bound, free);
+            bound.truncate(orig_len);
+        }
+        Expr::Range { start, end } => {
+            collect_free_vars(&start.node, bound, free);
+            collect_free_vars(&end.node, bound, free);
+        }
+        Expr::OkExpr(e) | Expr::ErrExpr(e) | Expr::SomeExpr(e) => {
+            collect_free_vars(&e.node, bound, free);
+        }
+        Expr::NullCoalesce { value, default } => {
+            collect_free_vars(&value.node, bound, free);
+            collect_free_vars(&default.node, bound, free);
+        }
+        Expr::EnumVariant { .. } | Expr::IntLit(_) | Expr::FloatLit(_)
+        | Expr::StringLit(_) | Expr::BoolLit(_) | Expr::Unit | Expr::NoneExpr => {}
+    }
+}
+
+/// Determine which variables a closure captures from its enclosing scope.
+fn find_captures(closure_params: &[Param], body: &Expr, outer_vars: &[String]) -> Vec<String> {
+    let mut bound: Vec<String> = closure_params.iter().map(|p| p.name.clone()).collect();
+    let mut free = Vec::new();
+    collect_free_vars(body, &mut bound, &mut free);
+    free.retain(|name| outer_vars.contains(name));
+    free
+}
+
+/// Info about a closure's captures, determined at creation site during compilation
+#[derive(Debug, Clone)]
+struct CaptureInfo {
+    captures: Vec<(String, TurboTy)>,
 }
 
 // ── Closure extraction ──────────────────────────────────────────────
@@ -636,6 +805,8 @@ struct ExtractedClosure<'a> {
     return_type: &'a Option<Spanned<TypeExpr>>,
     /// Closure body
     body: &'a Spanned<Expr>,
+    /// Free variable names referenced in the body (potential captures)
+    free_vars: Vec<String>,
 }
 
 /// Walk an expression tree and collect all closure nodes.
@@ -648,12 +819,16 @@ fn extract_closures_from_expr<'a>(
         Expr::Closure { params, return_type, body } => {
             let name = format!("__closure_{}", *counter);
             *counter += 1;
+            let mut bound: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+            let mut free_vars = Vec::new();
+            collect_free_vars(&body.node, &mut bound, &mut free_vars);
             out.push(ExtractedClosure {
                 span_start: expr.span.start,
                 name,
                 params,
                 return_type,
                 body,
+                free_vars,
             });
             // Also scan the closure body for nested closures
             extract_closures_from_expr(body, out, counter);
@@ -781,9 +956,25 @@ fn compile_module<M: Module>(
 
     // Build enum variants map
     let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();
+    let mut enum_variant_fields: HashMap<(String, String), Vec<TurboTy>> = HashMap::new();
+    let mut enum_max_slots: HashMap<String, usize> = HashMap::new();
     for item in &ast_module.items {
         if let Item::Enum(e) = &item.node {
-            enum_variants.insert(e.name.clone(), e.variants.clone());
+            let variant_names: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
+            let mut max_fields: usize = 0;
+            for v in &e.variants {
+                let field_tys: Vec<TurboTy> = v.fields.iter()
+                    .map(|f| turbo_ty_from_type_expr(&f.node, &enum_variants))
+                    .collect();
+                if !field_tys.is_empty() {
+                    max_fields = max_fields.max(field_tys.len());
+                    enum_variant_fields.insert((e.name.clone(), v.name.clone()), field_tys);
+                }
+            }
+            if max_fields > 0 {
+                enum_max_slots.insert(e.name.clone(), max_fields);
+            }
+            enum_variants.insert(e.name.clone(), variant_names);
         }
     }
 
@@ -820,12 +1011,12 @@ fn compile_module<M: Module>(
             sig.call_conv = CallConv::Fast;
         }
         for param in &f.params {
-            sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &f.type_params)?));
+            sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &f.type_param_names())?));
         }
         let ret_turbo = if let Some(ret_ty) = &f.return_type {
-            let cl = resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &f.type_params)?;
+            let cl = resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &f.type_param_names())?;
             sig.returns.push(AbiParam::new(cl));
-            turbo_ty_from_type_expr_with_params(&ret_ty.node, &enum_variants, &f.type_params)
+            turbo_ty_from_type_expr_with_params(&ret_ty.node, &enum_variants, &f.type_param_names())
         } else {
             TurboTy::Unit
         };
@@ -843,7 +1034,7 @@ fn compile_module<M: Module>(
     for item in &ast_module.items {
         let Item::Function(f) = &item.node else { continue };
         fn_asts.insert(f.name.clone(), f);
-        fn_type_params.insert(f.name.clone(), f.type_params.clone());
+        fn_type_params.insert(f.name.clone(), f.type_param_names());
     }
 
     // Declare all methods from impl blocks
@@ -881,12 +1072,15 @@ fn compile_module<M: Module>(
 
     // Extract and compile closures
     let extracted_closures = extract_all_closures(ast_module);
-    let mut closure_fns_map: HashMap<usize, (String, TurboTy)> = HashMap::new();
+    let mut closure_fns_map: HashMap<usize, (String, TurboTy, Vec<String>)> = HashMap::new();
+    let mut closure_captures_map: HashMap<usize, CaptureInfo> = HashMap::new();
 
-    // Declare all closure functions
+    // Declare all closure functions (with env_ptr as first hidden parameter)
     for closure in &extracted_closures {
         let mut sig = module.make_signature();
         sig.call_conv = CallConv::Fast;
+        // First parameter is always the env pointer (hidden from user)
+        sig.params.push(AbiParam::new(ptr_type));
         let mut param_turbo_tys = Vec::new();
         for param in closure.params.iter() {
             sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?));
@@ -905,7 +1099,7 @@ fn compile_module<M: Module>(
         fn_ret_types.insert(closure.name.clone(), ret_turbo.clone());
         closure_fns_map.insert(
             closure.span_start,
-            (closure.name.clone(), TurboTy::Fn(param_turbo_tys, Box::new(ret_turbo))),
+            (closure.name.clone(), TurboTy::Fn(param_turbo_tys, Box::new(ret_turbo)), closure.free_vars.clone()),
         );
     }
 
@@ -914,78 +1108,8 @@ fn compile_module<M: Module>(
     let mut data_desc = DataDescription::new();
     let mut string_counter: usize = 0;
 
-    // Compile closure function bodies first
-    for closure in &extracted_closures {
-        let func_id = user_fns[&closure.name];
-
-        cl_ctx.func.signature = module.make_signature();
-        cl_ctx.func.signature.call_conv = CallConv::Fast;
-        for param in closure.params.iter() {
-            cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?));
-        }
-        if let Some(ret_ty) = closure.return_type {
-            cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?));
-        }
-
-        let mut fn_ctx = FunctionBuilderContext::new();
-        {
-            let builder = FunctionBuilder::new(&mut cl_ctx.func, &mut fn_ctx);
-            let mut cx = Ctx {
-                builder,
-                module,
-                user_fns: &user_fns,
-                fn_ret_types: &fn_ret_types,
-                fn_asts: &fn_asts,
-                fn_type_params: &fn_type_params,
-                rt_fns: &rt_fns,
-                vars: HashMap::new(),
-                next_var: 0,
-                data_desc: &mut data_desc,
-                string_counter: &mut string_counter,
-                ptr_type,
-                struct_fields: &struct_fields,
-                enum_variants: &enum_variants,
-                closure_fns: &closure_fns_map,
-                trait_impls: &trait_impls,
-                inline_depth: 0,
-            };
-
-            let entry = cx.builder.create_block();
-            cx.builder.append_block_params_for_function_params(entry);
-            cx.builder.switch_to_block(entry);
-            cx.builder.seal_block(entry);
-
-            // Define parameters as variables
-            for (i, param) in closure.params.iter().enumerate() {
-                let cl_ty = resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?;
-                let turbo_ty = turbo_ty_from_type_expr(&param.ty.node, &enum_variants);
-                let var = cx.fresh_var(cl_ty, turbo_ty.clone());
-                let val = cx.builder.block_params(entry)[i];
-                cx.builder.def_var(var, val);
-                cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
-            }
-
-            let result = compile_expr(&mut cx, closure.body)?;
-
-            if !cx.builder.is_unreachable() {
-                if closure.return_type.is_some() {
-                    if let Some((val, _)) = result {
-                        cx.builder.ins().return_(&[val]);
-                    } else {
-                        cx.builder.ins().return_(&[]);
-                    }
-                } else {
-                    cx.builder.ins().return_(&[]);
-                }
-            }
-
-            cx.builder.finalize();
-        }
-
-        module.define_function(func_id, &mut cl_ctx)
-            .map_err(|e| CodegenError { message: e.to_string() })?;
-        module.clear_context(&mut cl_ctx);
-    }
+    // NOTE: Closure bodies are compiled AFTER function bodies, so that
+    // Expr::Closure can determine capture types from the enclosing scope.
 
     for item in &ast_module.items {
         let Item::Function(f) = &item.node else { continue };
@@ -996,10 +1120,10 @@ fn compile_module<M: Module>(
             cl_ctx.func.signature.call_conv = CallConv::Fast;
         }
         for param in &f.params {
-            cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &f.type_params)?));
+            cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &f.type_param_names())?));
         }
         if let Some(ret_ty) = &f.return_type {
-            cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &f.type_params)?));
+            cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &f.type_param_names())?));
         }
 
         let mut fn_ctx = FunctionBuilderContext::new();
@@ -1020,9 +1144,12 @@ fn compile_module<M: Module>(
                 ptr_type,
                 struct_fields: &struct_fields,
                 enum_variants: &enum_variants,
+                enum_variant_fields: &enum_variant_fields,
+                enum_max_slots: &enum_max_slots,
                 closure_fns: &closure_fns_map,
                 trait_impls: &trait_impls,
                 inline_depth: 0,
+                closure_captures: &mut closure_captures_map,
             };
 
             let entry = cx.builder.create_block();
@@ -1038,8 +1165,8 @@ fn compile_module<M: Module>(
 
             // Define parameters as variables
             for (i, param) in f.params.iter().enumerate() {
-                let cl_ty = resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &f.type_params)?;
-                let turbo_ty = turbo_ty_from_type_expr_with_params(&param.ty.node, &enum_variants, &f.type_params);
+                let cl_ty = resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &f.type_param_names())?;
+                let turbo_ty = turbo_ty_from_type_expr_with_params(&param.ty.node, &enum_variants, &f.type_param_names());
                 let var = cx.fresh_var(cl_ty, turbo_ty.clone());
                 let val = cx.builder.block_params(entry)[i];
                 cx.builder.def_var(var, val);
@@ -1110,9 +1237,12 @@ fn compile_module<M: Module>(
                     ptr_type,
                     struct_fields: &struct_fields,
                     enum_variants: &enum_variants,
+                enum_variant_fields: &enum_variant_fields,
+                enum_max_slots: &enum_max_slots,
                     closure_fns: &closure_fns_map,
                     trait_impls: &trait_impls,
                     inline_depth: 0,
+                    closure_captures: &mut closure_captures_map,
                 };
 
                 let entry = cx.builder.create_block();
@@ -1159,6 +1289,105 @@ fn compile_module<M: Module>(
         }
     }
 
+    // Compile closure function bodies (after function bodies, so capture info is available)
+    for closure in &extracted_closures {
+        let func_id = user_fns[&closure.name];
+
+        cl_ctx.func.signature = module.make_signature();
+        cl_ctx.func.signature.call_conv = CallConv::Fast;
+        // First parameter is always the env pointer
+        cl_ctx.func.signature.params.push(AbiParam::new(ptr_type));
+        for param in closure.params.iter() {
+            cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?));
+        }
+        if let Some(ret_ty) = closure.return_type {
+            cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?));
+        }
+
+        let mut fn_ctx = FunctionBuilderContext::new();
+        {
+            let builder = FunctionBuilder::new(&mut cl_ctx.func, &mut fn_ctx);
+            let mut cx = Ctx {
+                builder,
+                module,
+                user_fns: &user_fns,
+                fn_ret_types: &fn_ret_types,
+                fn_asts: &fn_asts,
+                fn_type_params: &fn_type_params,
+                rt_fns: &rt_fns,
+                vars: HashMap::new(),
+                next_var: 0,
+                data_desc: &mut data_desc,
+                string_counter: &mut string_counter,
+                ptr_type,
+                struct_fields: &struct_fields,
+                enum_variants: &enum_variants,
+                enum_variant_fields: &enum_variant_fields,
+                enum_max_slots: &enum_max_slots,
+                closure_fns: &closure_fns_map,
+                trait_impls: &trait_impls,
+                inline_depth: 0,
+                closure_captures: &mut closure_captures_map,
+            };
+
+            let entry = cx.builder.create_block();
+            cx.builder.append_block_params_for_function_params(entry);
+            cx.builder.switch_to_block(entry);
+            cx.builder.seal_block(entry);
+
+            // Block param 0 is the env pointer
+            let env_ptr_val = cx.builder.block_params(entry)[0];
+
+            // Load captured variables from the environment struct
+            let capture_info = cx.closure_captures.get(&closure.span_start).cloned();
+            if let Some(ref info) = capture_info {
+                for (cap_idx, (cap_name, cap_tty)) in info.captures.iter().enumerate() {
+                    let cl_ty = turbo_ty_to_cl_type(cap_tty, ptr_type);
+                    let var = cx.fresh_var(cl_ty, cap_tty.clone());
+                    let offset = (cap_idx * 8) as i32;
+                    let raw_val = cx.builder.ins().load(types::I64, MemFlags::new(), env_ptr_val, offset);
+                    let val = match cap_tty {
+                        TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_val),
+                        TurboTy::Float => cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val),
+                        _ => raw_val,
+                    };
+                    cx.builder.def_var(var, val);
+                    cx.vars.insert(cap_name.clone(), (var, cl_ty, cap_tty.clone()));
+                }
+            }
+
+            // Define user parameters as variables (shifted by 1 due to env_ptr)
+            for (i, param) in closure.params.iter().enumerate() {
+                let cl_ty = resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?;
+                let turbo_ty = turbo_ty_from_type_expr(&param.ty.node, &enum_variants);
+                let var = cx.fresh_var(cl_ty, turbo_ty.clone());
+                let val = cx.builder.block_params(entry)[i + 1]; // +1 for env_ptr
+                cx.builder.def_var(var, val);
+                cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
+            }
+
+            let result = compile_expr(&mut cx, closure.body)?;
+
+            if !cx.builder.is_unreachable() {
+                if closure.return_type.is_some() {
+                    if let Some((val, _)) = result {
+                        cx.builder.ins().return_(&[val]);
+                    } else {
+                        cx.builder.ins().return_(&[]);
+                    }
+                } else {
+                    cx.builder.ins().return_(&[]);
+                }
+            }
+
+            cx.builder.finalize();
+        }
+
+        module.define_function(func_id, &mut cl_ctx)
+            .map_err(|e| CodegenError { message: e.to_string() })?;
+        module.clear_context(&mut cl_ctx);
+    }
+
     Ok(user_fns)
 }
 
@@ -1185,6 +1414,16 @@ fn declare_rt_fn<M: Module>(
 }
 
 fn resolve_cl_type(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &HashMap<String, Vec<String>>, type_params: &[String]) -> Result<types::Type, CodegenError> {
+    resolve_cl_type_inner(ty, ptr_type, enum_variants, type_params, &HashMap::new())
+}
+
+/// Resolve Cranelift type, accounting for data-carrying enums that need pointer types.
+#[allow(dead_code)]
+fn resolve_cl_type_with_data(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &HashMap<String, Vec<String>>, type_params: &[String], enum_max_slots: &HashMap<String, usize>) -> Result<types::Type, CodegenError> {
+    resolve_cl_type_inner(ty, ptr_type, enum_variants, type_params, enum_max_slots)
+}
+
+fn resolve_cl_type_inner(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &HashMap<String, Vec<String>>, type_params: &[String], enum_max_slots: &HashMap<String, usize>) -> Result<types::Type, CodegenError> {
     match ty {
         TypeExpr::Named(name) => {
             // Type parameters are represented as I64 (same size as ptr on 64-bit)
@@ -1202,7 +1441,12 @@ fn resolve_cl_type(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &HashMap
             "str" => Ok(ptr_type),
             _ => {
                 if enum_variants.contains_key(name.as_str()) {
-                    Ok(types::I64) // enums are represented as i64 tags
+                    // Data-carrying enums are heap-allocated pointers
+                    if enum_max_slots.contains_key(name.as_str()) {
+                        Ok(ptr_type)
+                    } else {
+                        Ok(types::I64) // unit-only enums are i64 tags
+                    }
                 } else {
                     Ok(ptr_type) // Struct types are represented as pointers at runtime
                 }
@@ -1523,8 +1767,24 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                 if let Some(variants) = cx.enum_variants.get(name.as_str()) {
                     let index = variants.iter().position(|v| v == field)
                         .ok_or_else(|| CodegenError { message: format!("enum `{name}` has no variant `{field}`") })?;
-                    let val = cx.builder.ins().iconst(types::I64, index as i64);
-                    return Ok(Some((val, TurboTy::Enum)));
+
+                    // Check if this is a data-carrying enum
+                    if let Some(&max_slots) = cx.enum_max_slots.get(name.as_str()) {
+                        // Allocate tagged union: [tag][slot0][slot1]...[slotN]
+                        let total_slots = 1 + max_slots; // tag + payload
+                        let num_fields_val = cx.builder.ins().iconst(types::I64, total_slots as i64);
+                        let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+                        let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+                        let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
+                        let ptr = cx.builder.inst_results(call)[0];
+                        // Store tag
+                        let tag_val = cx.builder.ins().iconst(types::I64, index as i64);
+                        cx.builder.ins().store(MemFlags::new(), tag_val, ptr, 0);
+                        return Ok(Some((ptr, TurboTy::Enum(name.clone()))));
+                    } else {
+                        let val = cx.builder.ins().iconst(types::I64, index as i64);
+                        return Ok(Some((val, TurboTy::Enum(name.clone()))));
+                    }
                 }
             }
 
@@ -1573,25 +1833,105 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                 .ok_or_else(|| CodegenError { message: format!("undefined enum: {enum_name}") })?;
             let index = variants.iter().position(|v| v == variant)
                 .ok_or_else(|| CodegenError { message: format!("enum `{enum_name}` has no variant `{variant}`") })?;
-            let val = cx.builder.ins().iconst(types::I64, index as i64);
-            Ok(Some((val, TurboTy::Enum)))
+
+            // Check if this is a data-carrying enum
+            if let Some(&max_slots) = cx.enum_max_slots.get(enum_name.as_str()) {
+                // Allocate tagged union: [tag][slot0][slot1]...[slotN]
+                let total_slots = 1 + max_slots;
+                let num_fields_val = cx.builder.ins().iconst(types::I64, total_slots as i64);
+                let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+                let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+                let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
+                let ptr = cx.builder.inst_results(call)[0];
+                let tag_val = cx.builder.ins().iconst(types::I64, index as i64);
+                cx.builder.ins().store(MemFlags::new(), tag_val, ptr, 0);
+                Ok(Some((ptr, TurboTy::Enum(enum_name.clone()))))
+            } else {
+                let val = cx.builder.ins().iconst(types::I64, index as i64);
+                Ok(Some((val, TurboTy::Enum(enum_name.clone()))))
+            }
         }
 
         Expr::Match { subject, arms } => compile_match(cx, subject, arms),
 
         Expr::Interpolation(parts) => compile_interpolation(cx, parts),
 
-        Expr::Closure { .. } => {
-            // Look up the pre-compiled closure function by span start
+        Expr::Closure { params, .. } => {
+            // Look up the pre-declared closure function by span start
             let span_start = expr.span.start;
-            let (closure_name, closure_ty) = cx.closure_fns.get(&span_start)
+            let (closure_name, closure_ty, _free_vars) = cx.closure_fns.get(&span_start)
                 .ok_or_else(|| CodegenError { message: "internal error: closure not found in pre-compiled map".to_string() })?;
             let closure_ty = closure_ty.clone();
+            let closure_name = closure_name.clone();
             let func_id = *cx.user_fns.get(closure_name.as_str())
                 .ok_or_else(|| CodegenError { message: format!("internal error: closure function {} not found", closure_name) })?;
             let func_ref = cx.module.declare_func_in_func(func_id, cx.builder.func);
-            let ptr = cx.builder.ins().func_addr(cx.ptr_type, func_ref);
-            Ok(Some((ptr, closure_ty)))
+            let fn_ptr = cx.builder.ins().func_addr(cx.ptr_type, func_ref);
+
+            // Determine captures: free variables that exist in the current scope
+            let outer_var_names: Vec<String> = cx.vars.keys().cloned().collect();
+            let capture_names = find_captures(params, &expr.node, &outer_var_names);
+
+            // Build capture info with types
+            let mut captures: Vec<(String, TurboTy)> = Vec::new();
+            for cap_name in &capture_names {
+                if let Some((_var, _cl_ty, turbo_ty)) = cx.vars.get(cap_name) {
+                    captures.push((cap_name.clone(), turbo_ty.clone()));
+                }
+            }
+
+            // Store capture info for the closure body compiler
+            cx.closure_captures.insert(span_start, CaptureInfo { captures: captures.clone() });
+
+            // Allocate environment struct for captured variables
+            let num_captures = captures.len() as i64;
+            let env_ptr = if num_captures > 0 {
+                let num_fields_val = cx.builder.ins().iconst(types::I64, num_captures);
+                let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+                let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+                let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
+                let env_ptr = cx.builder.inst_results(call)[0];
+
+                // Store each captured variable into the env struct
+                for (cap_idx, (cap_name, _cap_tty)) in captures.iter().enumerate() {
+                    let (var, _cl_ty, _turbo_ty) = cx.vars.get(cap_name)
+                        .ok_or_else(|| CodegenError { message: format!("internal error: capture variable {} not found", cap_name) })?;
+                    let val = cx.builder.use_var(*var);
+                    let offset = (cap_idx * 8) as i32;
+
+                    // Widen to i64 for uniform storage
+                    let val_ty = cx.builder.func.dfg.value_type(val);
+                    let val = if val_ty.bits() < 64 && val_ty.is_int() {
+                        cx.builder.ins().sextend(types::I64, val)
+                    } else if val_ty.is_float() && val_ty.bits() == 64 {
+                        cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
+                    } else if val_ty.is_float() && val_ty.bits() == 32 {
+                        let extended = cx.builder.ins().fpromote(types::F64, val);
+                        cx.builder.ins().bitcast(types::I64, MemFlags::new(), extended)
+                    } else {
+                        val
+                    };
+                    cx.builder.ins().store(MemFlags::new(), val, env_ptr, offset);
+                }
+                env_ptr
+            } else {
+                // No captures: null env pointer
+                cx.builder.ins().iconst(cx.ptr_type, 0)
+            };
+
+            // Allocate closure pair struct: [fn_ptr, env_ptr]
+            let two = cx.builder.ins().iconst(types::I64, 2);
+            let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+            let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+            let call = cx.builder.ins().call(alloc_fref, &[two]);
+            let closure_ptr = cx.builder.inst_results(call)[0];
+
+            // Store fn_ptr at offset 0
+            cx.builder.ins().store(MemFlags::new(), fn_ptr, closure_ptr, 0);
+            // Store env_ptr at offset 8
+            cx.builder.ins().store(MemFlags::new(), env_ptr, closure_ptr, 8);
+
+            Ok(Some((closure_ptr, closure_ty)))
         }
 
         Expr::OkExpr(value) => {
@@ -1960,6 +2300,67 @@ fn compile_call<M: Module>(
         "filter" => compile_builtin_filter(cx, args),
         "reduce" => compile_builtin_reduce(cx, args),
         _ => {
+            // Check if this is an enum variant construction via UFCS rewrite:
+            // Parser transforms Shape.Circle(5.0) into Call { callee: Ident("Circle"), args: [Ident("Shape"), 5.0] }
+            if !args.is_empty() {
+                if let Expr::Ident(ref first_name) = args[0].node {
+                    if let Some(variants) = cx.enum_variants.get(first_name.as_str()) {
+                        if let Some(variant_index) = variants.iter().position(|v| v == name) {
+                            // This is an enum variant construction with data
+                            let data_args = &args[1..]; // skip the enum type name
+                            let enum_name = first_name;
+
+                            if let Some(&max_slots) = cx.enum_max_slots.get(enum_name.as_str()) {
+                                // Data-carrying enum: allocate tagged union
+                                let total_slots = 1 + max_slots; // tag + payload
+                                let num_fields_val = cx.builder.ins().iconst(types::I64, total_slots as i64);
+                                let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+                                let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+                                let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
+                                let ptr = cx.builder.inst_results(call)[0];
+
+                                // Store tag at offset 0
+                                let tag_val = cx.builder.ins().iconst(types::I64, variant_index as i64);
+                                cx.builder.ins().store(MemFlags::new(), tag_val, ptr, 0);
+
+                                // Get the field types for this variant
+                                let _field_tys = cx.enum_variant_fields
+                                    .get(&(enum_name.clone(), name.to_string()))
+                                    .cloned()
+                                    .unwrap_or_default();
+
+                                // Store each field at offset (i+1)*8
+                                for (i, arg) in data_args.iter().enumerate() {
+                                    let (val, _tty) = compile_expr(cx, arg)?.unwrap();
+                                    let offset = ((i + 1) * 8) as i32;
+
+                                    // Widen/convert to i64 for uniform storage
+                                    let val_ty = cx.builder.func.dfg.value_type(val);
+                                    let store_val = if val_ty.is_float() && val_ty.bits() == 64 {
+                                        cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
+                                    } else if val_ty.is_float() && val_ty.bits() == 32 {
+                                        let extended = cx.builder.ins().fpromote(types::F64, val);
+                                        cx.builder.ins().bitcast(types::I64, MemFlags::new(), extended)
+                                    } else if val_ty.bits() < 64 && val_ty.is_int() {
+                                        cx.builder.ins().sextend(types::I64, val)
+                                    } else {
+                                        val
+                                    };
+
+                                    cx.builder.ins().store(MemFlags::new(), store_val, ptr, offset);
+                                }
+
+                                return Ok(Some((ptr, TurboTy::Enum(enum_name.clone()))));
+                            } else {
+                                // Unit-only enum, but called with args (shouldn't happen after sema check)
+                                let val = cx.builder.ins().iconst(types::I64, variant_index as i64);
+                                return Ok(Some((val, TurboTy::Enum(enum_name.clone()))));
+                            }
+                        }
+                    }
+                }
+            }
+
             // Check if this is a method call (UFCS: parser rewrites obj.method(args) -> method(obj, args))
             if cx.user_fns.get(name.as_str()).is_none() && !args.is_empty() {
                 // Compile first arg to get its type, then check for method
@@ -1989,12 +2390,15 @@ fn compile_call<M: Module>(
             // Check if the callee is a variable with a function pointer type (closure)
             if let Some((var, _cl_ty, turbo_ty)) = cx.vars.get(name).cloned() {
                 if let TurboTy::Fn(ref param_tys, ref ret_ty) = turbo_ty {
-                    // Indirect call through function pointer
-                    let fn_ptr = cx.builder.use_var(var);
+                    // Closure is a pair struct: [fn_ptr, env_ptr]
+                    let closure_ptr = cx.builder.use_var(var);
+                    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+                    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
-                    // Build the Cranelift signature for the call
+                    // Build the Cranelift signature: env_ptr first, then user params
                     let mut sig = cx.module.make_signature();
                     sig.call_conv = CallConv::Fast;
+                    sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
                     for param_tty in param_tys {
                         let cl_ty = turbo_ty_to_cl_type(param_tty, cx.ptr_type);
                         sig.params.push(AbiParam::new(cl_ty));
@@ -2007,7 +2411,7 @@ fn compile_call<M: Module>(
 
                     let sig_ref = cx.builder.import_signature(sig);
 
-                    let mut arg_values = Vec::new();
+                    let mut arg_values = vec![env_ptr]; // env_ptr is first hidden arg
                     for arg in args {
                         if let Some((val, _)) = compile_expr(cx, arg)? {
                             arg_values.push(val);
@@ -2183,12 +2587,18 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
                 let ptr = cx.create_string("()")?;
                 cx.rt_call("rt_print_str", &[ptr]);
             }
-            TurboTy::Enum => {
-                // Print enum value as its integer tag
-                let v = if cx.builder.func.dfg.value_type(v).bits() < 64 {
-                    cx.builder.ins().sextend(types::I64, v)
-                } else { v };
-                cx.rt_call("rt_print_i64", &[v]);
+            TurboTy::Enum(ref enum_name) => {
+                // For data enums, extract the tag from the tagged union pointer; for unit enums, use the value directly
+                let tag_val = if cx.enum_max_slots.contains_key(enum_name.as_str()) {
+                    // Data enum: load tag from ptr[0]
+                    cx.builder.ins().load(types::I64, MemFlags::new(), v, 0)
+                } else {
+                    let v = if cx.builder.func.dfg.value_type(v).bits() < 64 {
+                        cx.builder.ins().sextend(types::I64, v)
+                    } else { v };
+                    v
+                };
+                cx.rt_call("rt_print_i64", &[tag_val]);
             }
             TurboTy::Array(_) => {
                 let ptr = cx.create_string("[array]")?;
@@ -2344,12 +2754,16 @@ fn compile_to_str_builtin<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
 /// calls fn_ptr on each element via call_indirect, and stores results.
 fn compile_builtin_map<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
     let (arr_ptr, _arr_tty) = compile_expr(cx, &args[0])?.unwrap();
-    let (fn_ptr, fn_tty) = compile_expr(cx, &args[1])?.unwrap();
+    let (closure_ptr, fn_tty) = compile_expr(cx, &args[1])?.unwrap();
 
     let (param_tty, ret_tty) = match &fn_tty {
         TurboTy::Fn(params, ret) => (params[0].clone(), *ret.clone()),
         _ => (TurboTy::Int, TurboTy::Int),
     };
+
+    // Extract fn_ptr and env_ptr from closure pair struct
+    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
     let len_fid = cx.rt_fns["rt_array_len"];
     let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
@@ -2363,6 +2777,7 @@ fn compile_builtin_map<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -
 
     let mut sig = cx.module.make_signature();
     sig.call_conv = CallConv::Fast;
+    sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
     let param_cl_ty = turbo_ty_to_cl_type(&param_tty, cx.ptr_type);
     sig.params.push(AbiParam::new(param_cl_ty));
     if ret_tty != TurboTy::Unit {
@@ -2401,7 +2816,7 @@ fn compile_builtin_map<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -
         _ => raw_elem,
     };
 
-    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[typed_elem]);
+    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[env_ptr, typed_elem]);
     let mapped_val = cx.builder.inst_results(indirect_call)[0];
 
     let store_val = match &ret_tty {
@@ -2434,7 +2849,7 @@ fn compile_builtin_map<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -
 /// Allocates same-size array, filters elements by predicate, patches length.
 fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
     let (arr_ptr, arr_tty) = compile_expr(cx, &args[0])?.unwrap();
-    let (fn_ptr, fn_tty) = compile_expr(cx, &args[1])?.unwrap();
+    let (closure_ptr, fn_tty) = compile_expr(cx, &args[1])?.unwrap();
 
     let elem_tty = match &arr_tty {
         TurboTy::Array(inner) => *inner.clone(),
@@ -2445,6 +2860,10 @@ fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
         TurboTy::Fn(params, _) => params[0].clone(),
         _ => TurboTy::Int,
     };
+
+    // Extract fn_ptr and env_ptr from closure pair struct
+    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
     let len_fid = cx.rt_fns["rt_array_len"];
     let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
@@ -2458,6 +2877,7 @@ fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
 
     let mut sig = cx.module.make_signature();
     sig.call_conv = CallConv::Fast;
+    sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
     let param_cl_ty = turbo_ty_to_cl_type(&param_tty, cx.ptr_type);
     sig.params.push(AbiParam::new(param_cl_ty));
     sig.returns.push(AbiParam::new(types::I8));
@@ -2499,7 +2919,7 @@ fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
         _ => raw_elem,
     };
 
-    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[typed_elem]);
+    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[env_ptr, typed_elem]);
     let pred_result = cx.builder.inst_results(indirect_call)[0];
 
     cx.builder.ins().brif(pred_result, store_block, &[], inc_block, &[]);
@@ -2543,12 +2963,16 @@ fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
 fn compile_builtin_reduce<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
     let (arr_ptr, _arr_tty) = compile_expr(cx, &args[0])?.unwrap();
     let (init_val, init_tty) = compile_expr(cx, &args[1])?.unwrap();
-    let (fn_ptr, fn_tty) = compile_expr(cx, &args[2])?.unwrap();
+    let (closure_ptr, fn_tty) = compile_expr(cx, &args[2])?.unwrap();
 
     let (acc_tty, elem_tty, ret_tty) = match &fn_tty {
         TurboTy::Fn(params, ret) => (params[0].clone(), params[1].clone(), *ret.clone()),
         _ => (TurboTy::Int, TurboTy::Int, TurboTy::Int),
     };
+
+    // Extract fn_ptr and env_ptr from closure pair struct
+    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
     let acc_cl_ty = turbo_ty_to_cl_type(&acc_tty, cx.ptr_type);
     let elem_cl_ty = turbo_ty_to_cl_type(&elem_tty, cx.ptr_type);
@@ -2561,6 +2985,7 @@ fn compile_builtin_reduce<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
 
     let mut sig = cx.module.make_signature();
     sig.call_conv = CallConv::Fast;
+    sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
     sig.params.push(AbiParam::new(acc_cl_ty));
     sig.params.push(AbiParam::new(elem_cl_ty));
     sig.returns.push(AbiParam::new(ret_cl_ty));
@@ -2600,7 +3025,7 @@ fn compile_builtin_reduce<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
     };
 
     let current_acc = cx.builder.use_var(acc_var);
-    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[current_acc, typed_elem]);
+    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[env_ptr, current_acc, typed_elem]);
     let new_acc = cx.builder.inst_results(indirect_call)[0];
     cx.builder.def_var(acc_var, new_acc);
 
@@ -2786,15 +3211,20 @@ fn convert_to_str<M: Module>(
         TurboTy::Unit => {
             cx.create_string("()")
         }
-        TurboTy::Enum => {
-            let val = if cx.builder.func.dfg.value_type(val).bits() < 64 {
-                cx.builder.ins().sextend(types::I64, val)
+        TurboTy::Enum(ref enum_name) => {
+            let tag_val = if cx.enum_max_slots.contains_key(enum_name.as_str()) {
+                cx.builder.ins().load(types::I64, MemFlags::new(), val, 0)
             } else {
+                let val = if cx.builder.func.dfg.value_type(val).bits() < 64 {
+                    cx.builder.ins().sextend(types::I64, val)
+                } else {
+                    val
+                };
                 val
             };
             let fid = cx.rt_fns["rt_i64_to_str"];
             let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-            let call = cx.builder.ins().call(fref, &[val]);
+            let call = cx.builder.ins().call(fref, &[tag_val]);
             Ok(cx.builder.inst_results(call)[0])
         }
         TurboTy::Array(_) => {
@@ -3087,7 +3517,17 @@ fn compile_match<M: Module>(
                 // Must be an enum variant (checked above: non-variant idents are catchall)
                 let tag_val = lookup_variant_tag_static(cx.enum_variants, name).unwrap();
                 let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
-                cx.builder.ins().icmp(IntCC::Equal, subj_val, pat_val)
+                // For data enums, extract tag from pointer; for unit enums, compare directly
+                let actual_tag = if let TurboTy::Enum(ref enum_name) = subj_tty {
+                    if cx.enum_max_slots.contains_key(enum_name.as_str()) {
+                        cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0)
+                    } else {
+                        subj_val
+                    }
+                } else {
+                    subj_val
+                };
+                cx.builder.ins().icmp(IntCC::Equal, actual_tag, pat_val)
             }
             Pattern::IntLit(n) => {
                 let pat_val = cx.builder.ins().iconst(types::I64, *n);
@@ -3148,6 +3588,13 @@ fn compile_match<M: Module>(
                 let zero = cx.builder.ins().iconst(types::I64, 0);
                 cx.builder.ins().icmp(IntCC::Equal, tag, zero)
             }
+            Pattern::VariantDestructure { variant, .. } => {
+                // Extract tag from data enum pointer and compare
+                let tag_val = lookup_variant_tag_static(cx.enum_variants, variant).unwrap();
+                let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
+                let actual_tag = cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0);
+                cx.builder.ins().icmp(IntCC::Equal, actual_tag, pat_val)
+            }
         };
 
         let match_block = cx.builder.create_block();
@@ -3203,6 +3650,48 @@ fn compile_match<M: Module>(
                     _ => TurboTy::Int, // fallback
                 };
                 cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
+            }
+            Pattern::VariantDestructure { variant, bindings } => {
+                // Extract fields from the data enum tagged union
+                // Layout: [tag: i64][field0: i64][field1: i64]...
+                let field_tys = if let TurboTy::Enum(ref enum_name) = subj_tty {
+                    cx.enum_variant_fields
+                        .get(&(enum_name.clone(), variant.clone()))
+                        .cloned()
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+
+                for (i, binding) in bindings.iter().enumerate() {
+                    let offset = ((i + 1) * 8) as i32; // +1 to skip tag
+                    let raw_val = cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, offset);
+
+                    let field_tty = if i < field_tys.len() {
+                        field_tys[i].clone()
+                    } else {
+                        TurboTy::Int
+                    };
+
+                    // Convert back from i64 storage to the appropriate type
+                    let (val, cl_ty) = match &field_tty {
+                        TurboTy::Float => {
+                            let f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val);
+                            (f, types::F64)
+                        }
+                        TurboTy::Bool => {
+                            let b = cx.builder.ins().ireduce(types::I8, raw_val);
+                            (b, types::I8)
+                        }
+                        _ => (raw_val, types::I64),
+                    };
+
+                    let var = Variable::new(cx.next_var);
+                    cx.next_var += 1;
+                    cx.builder.declare_var(var, cl_ty);
+                    cx.builder.def_var(var, val);
+                    cx.vars.insert(binding.clone(), (var, cl_ty, field_tty));
+                }
             }
             _ => {}
         }

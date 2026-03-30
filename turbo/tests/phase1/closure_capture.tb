@@ -1,0 +1,6 @@
+fn main() {
+    let multiplier = 3
+    let triple = |x: i64| -> i64 { x * multiplier }
+    print(triple(5))
+    print(triple(10))
+}

@@ -1,0 +1,13 @@
+struct Point { x: i64, y: i64 }
+impl Display for Point {
+    fn to_string(self) -> str { "({self.x},{self.y})" }
+}
+
+fn identity_display<T: Display>(val: T) -> T { val }
+
+fn main() {
+    let p = identity_display(Point { x: 1, y: 2 })
+    print(p)
+    let p2 = identity_display(Point { x: 10, y: 20 })
+    print(p2)
+}

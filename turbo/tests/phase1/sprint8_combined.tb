@@ -1,0 +1,57 @@
+// Sprint 8 combined feature test:
+// - Data-carrying enum variants
+// - Multi-parameter generics
+// - Trait bounds
+// - Closures with variable capture
+
+// 1. Data-carrying enums
+type Expr {
+    Lit(i64),
+    Add(i64, i64),
+    Neg(i64),
+    Zero,
+}
+
+fn eval(e: Expr) -> i64 {
+    match e {
+        Lit(v) => v
+        Add(a, b) => a + b
+        Neg(v) => 0 - v
+        Zero => 0
+    }
+}
+
+// 2. Multi-parameter generics
+fn pick_second<A, B>(a: A, b: B) -> B { b }
+
+// 3. Closure with capture
+fn make_scaler(factor: i64) -> fn(i64) -> i64 {
+    |x: i64| -> i64 { x * factor }
+}
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
+    f(x)
+}
+
+fn main() {
+    // Data-carrying enums
+    print(eval(Expr.Lit(7)))
+    print(eval(Expr.Add(3, 10)))
+    print(eval(Expr.Neg(5)))
+    print(eval(Expr.Zero))
+
+    // Multi-param generics
+    print(pick_second(1, "turbo"))
+    print(pick_second("x", 99))
+
+    // Closure with capture
+    let scale3 = make_scaler(3)
+    print(apply(scale3, 4))
+    let scale10 = make_scaler(10)
+    print(apply(scale10, 7))
+
+    // Inline closure with capture
+    let offset = 100
+    let add_offset = |v: i64| -> i64 { v + offset }
+    print(add_offset(5))
+}

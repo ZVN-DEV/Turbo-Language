@@ -59,11 +59,25 @@ pub struct TraitMethodSig {
     pub return_type: Option<Spanned<TypeExpr>>,
 }
 
+/// Enum variant definition (may carry data)
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariantDef {
+    pub name: String,
+    pub fields: Vec<Spanned<TypeExpr>>, // empty for unit variants
+}
+
 /// Enum (sum type) definition
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDef {
     pub name: String,
-    pub variants: Vec<String>,
+    pub variants: Vec<EnumVariantDef>,
+}
+
+impl EnumDef {
+    /// Get just the variant names (for backward compatibility)
+    pub fn variant_names(&self) -> Vec<String> {
+        self.variants.iter().map(|v| v.name.clone()).collect()
+    }
 }
 
 /// Struct definition
@@ -80,14 +94,38 @@ pub struct FieldDef {
     pub ty: Spanned<TypeExpr>,
 }
 
+/// A generic type parameter with optional trait bounds
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeParam {
+    pub name: String,
+    pub bounds: Vec<String>,
+}
+
+impl TypeParam {
+    pub fn new(name: String) -> Self {
+        Self { name, bounds: Vec::new() }
+    }
+
+    pub fn with_bounds(name: String, bounds: Vec<String>) -> Self {
+        Self { name, bounds }
+    }
+}
+
 /// Function definition
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnDef {
     pub name: String,
-    pub type_params: Vec<String>,
+    pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
     pub body: Spanned<Expr>,
+}
+
+impl FnDef {
+    /// Get just the type parameter names (for codegen compatibility)
+    pub fn type_param_names(&self) -> Vec<String> {
+        self.type_params.iter().map(|tp| tp.name.clone()).collect()
+    }
 }
 
 /// Function parameter
@@ -306,6 +344,11 @@ pub enum Pattern {
     Some(String),
     /// none pattern
     None,
+    /// Variant destructure pattern: VariantName(binding1, binding2, ...)
+    VariantDestructure {
+        variant: String,
+        bindings: Vec<String>,
+    },
 }
 
 /// Binary operators

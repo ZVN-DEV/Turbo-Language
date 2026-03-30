@@ -195,7 +195,27 @@ impl Parser {
         let mut variants = Vec::new();
         while !matches!(self.peek(), Some(Token::RBrace) | None) {
             let (variant_name, _) = self.expect_ident()?;
-            variants.push(variant_name);
+            // Check for data-carrying variant: VariantName(Type1, Type2, ...)
+            let fields = if matches!(self.peek(), Some(Token::LParen)) {
+                self.advance(); // consume (
+                let mut fields = Vec::new();
+                if !matches!(self.peek(), Some(Token::RParen)) {
+                    loop {
+                        let ty = self.parse_type()?;
+                        fields.push(ty);
+                        if matches!(self.peek(), Some(Token::Comma)) {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.expect(&Token::RParen)?;
+                fields
+            } else {
+                Vec::new()
+            };
+            variants.push(EnumVariantDef { name: variant_name, fields });
             if matches!(self.peek(), Some(Token::Comma)) {
                 self.advance();
             }
@@ -294,13 +314,29 @@ impl Parser {
         self.expect(&Token::Fn)?;
         let (name, _) = self.expect_ident()?;
 
-        // Parse optional type parameters: <T> or <T, U, ...>
+        // Parse optional type parameters: <T> or <T, U, ...> or <T: Trait, U: Trait>
         let type_params = if matches!(self.peek(), Some(Token::Less)) {
             self.advance(); // consume <
             let mut params = Vec::new();
             loop {
                 let (tp_name, _) = self.expect_ident()?;
-                params.push(tp_name);
+                // Check for trait bounds: T: Display
+                let bounds = if matches!(self.peek(), Some(Token::Colon)) {
+                    self.advance(); // consume :
+                    let mut bounds = Vec::new();
+                    let (bound_name, _) = self.expect_ident()?;
+                    bounds.push(bound_name);
+                    // Support multiple bounds with + (future extension)
+                    while matches!(self.peek(), Some(Token::Plus)) {
+                        self.advance();
+                        let (bound_name, _) = self.expect_ident()?;
+                        bounds.push(bound_name);
+                    }
+                    bounds
+                } else {
+                    vec![]
+                };
+                params.push(TypeParam::with_bounds(tp_name, bounds));
                 if matches!(self.peek(), Some(Token::Comma)) {
                     self.advance();
                 } else {
@@ -1275,7 +1311,27 @@ impl Parser {
             }
             Some(Token::Ident(_)) => {
                 let (name, span) = self.expect_ident()?;
-                Ok(Spanned::new(Pattern::Ident(name), span))
+                if matches!(self.peek(), Some(Token::LParen)) {
+                    // Variant destructure: Circle(r) or Rectangle(w, h)
+                    self.advance(); // consume (
+                    let mut bindings = Vec::new();
+                    if !matches!(self.peek(), Some(Token::RParen)) {
+                        loop {
+                            let (b, _) = self.expect_ident()?;
+                            bindings.push(b);
+                            if matches!(self.peek(), Some(Token::Comma)) {
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    let end = self.peek_span().end;
+                    self.expect(&Token::RParen)?;
+                    Ok(Spanned::new(Pattern::VariantDestructure { variant: name, bindings }, span.start..end))
+                } else {
+                    Ok(Spanned::new(Pattern::Ident(name), span))
+                }
             }
             Some(Token::Int(_)) => {
                 let tok = self.advance();
@@ -1842,7 +1898,7 @@ mod tests {
         assert_eq!(module.items.len(), 1);
         if let Item::Function(f) = &module.items[0].node {
             assert_eq!(f.name, "identity");
-            assert_eq!(f.type_params, vec!["T".to_string()]);
+            assert_eq!(f.type_params, vec![TypeParam::new("T".to_string())]);
             assert_eq!(f.params.len(), 1);
             assert_eq!(f.params[0].name, "x");
             assert!(matches!(&f.params[0].ty.node, TypeExpr::Named(n) if n == "T"));

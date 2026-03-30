@@ -187,6 +187,7 @@ struct VarInfo {
 #[derive(Debug, Clone)]
 struct FnSig {
     type_params: Vec<String>,
+    type_param_bounds: HashMap<String, Vec<String>>,
     params: Vec<(String, Ty)>,
     ret: Ty,
 }
@@ -202,10 +203,28 @@ struct StructInfo {
     fields: Vec<(String, Ty)>,
 }
 
-/// Enum info (variant names)
+/// Enum info (variant names + field types)
 #[derive(Debug, Clone)]
 struct EnumInfo {
-    variants: Vec<String>,
+    /// Variant name -> field types (empty vec for unit variants)
+    variants: Vec<(String, Vec<Ty>)>,
+}
+
+impl EnumInfo {
+    /// Get just the variant names
+    fn variant_names(&self) -> Vec<String> {
+        self.variants.iter().map(|(name, _)| name.clone()).collect()
+    }
+
+    /// Check if a variant name exists
+    fn has_variant(&self, name: &str) -> bool {
+        self.variants.iter().any(|(n, _)| n == name)
+    }
+
+    /// Get the field types for a variant
+    fn variant_fields(&self, name: &str) -> Option<&Vec<Ty>> {
+        self.variants.iter().find(|(n, _)| n == name).map(|(_, fields)| fields)
+    }
 }
 
 /// Trait definition info for the checker
@@ -350,9 +369,13 @@ impl Checker {
                 );
                 continue;
             }
-            self.enums.insert(e.name.clone(), EnumInfo {
-                variants: e.variants.clone(),
-            });
+            let variants: Vec<(String, Vec<Ty>)> = e.variants.iter().map(|v| {
+                let field_tys: Vec<Ty> = v.fields.iter().filter_map(|f| {
+                    resolve_type_expr(&f.node, Some(&self.structs), Some(&self.enums))
+                }).collect();
+                (v.name.clone(), field_tys)
+            }).collect();
+            self.enums.insert(e.name.clone(), EnumInfo { variants });
         }
 
         // Pass 0c: register all trait definitions
@@ -428,9 +451,17 @@ impl Checker {
                 continue;
             }
 
+            let tp_names: Vec<String> = f.type_params.iter().map(|tp| tp.name.clone()).collect();
+            let mut tp_bounds: HashMap<String, Vec<String>> = HashMap::new();
+            for tp in &f.type_params {
+                if !tp.bounds.is_empty() {
+                    tp_bounds.insert(tp.name.clone(), tp.bounds.clone());
+                }
+            }
+
             let mut params = Vec::new();
             for param in &f.params {
-                match resolve_type_expr_with_params(&param.ty.node, Some(&self.structs), Some(&self.enums), &f.type_params) {
+                match resolve_type_expr_with_params(&param.ty.node, Some(&self.structs), Some(&self.enums), &tp_names) {
                     Some(ty) => params.push((param.name.clone(), ty)),
                     None => {
                         if let TypeExpr::Named(name) = &param.ty.node {
@@ -445,7 +476,7 @@ impl Checker {
             }
 
             let ret = if let Some(ret_type) = &f.return_type {
-                match resolve_type_expr_with_params(&ret_type.node, Some(&self.structs), Some(&self.enums), &f.type_params) {
+                match resolve_type_expr_with_params(&ret_type.node, Some(&self.structs), Some(&self.enums), &tp_names) {
                     Some(ty) => ty,
                     None => {
                         if let TypeExpr::Named(name) = &ret_type.node {
@@ -461,7 +492,7 @@ impl Checker {
                 Ty::Unit
             };
 
-            self.functions.insert(f.name.clone(), FnSig { type_params: f.type_params.clone(), params, ret });
+            self.functions.insert(f.name.clone(), FnSig { type_params: tp_names, type_param_bounds: tp_bounds, params, ret });
         }
 
         // Pass 2: register impl block methods
@@ -526,7 +557,7 @@ impl Checker {
                 };
 
                 let mangled = format!("{}__{}", imp.type_name, method.name);
-                let sig = FnSig { type_params: Vec::new(), params, ret };
+                let sig = FnSig { type_params: Vec::new(), type_param_bounds: HashMap::new(), params, ret };
                 new_methods.push((method.name.clone(), sig, mangled));
             }
 
@@ -1196,8 +1227,69 @@ impl Checker {
                             }
                         }
 
+                        // Check trait bounds for each inferred type parameter
+                        for (tp_name, concrete_ty) in &substitutions {
+                            if let Some(bounds) = sig.type_param_bounds.get(tp_name) {
+                                for bound in bounds {
+                                    let type_name = match concrete_ty {
+                                        Ty::Struct(s) => Some(s.as_str()),
+                                        _ => None,
+                                    };
+                                    let has_impl = type_name.map_or(false, |tn| {
+                                        self.trait_impls.get(tn)
+                                            .map_or(false, |impls| impls.contains(bound))
+                                    });
+                                    if !has_impl && !concrete_ty.is_error() {
+                                        self.error(
+                                            format!(
+                                                "type `{concrete_ty}` does not implement trait `{bound}`"
+                                            ),
+                                            callee.span.clone(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
                         self.substitute_return_type(&sig, &substitutions)
                     } else {
+                        // Check if this is an enum variant construction via UFCS rewrite:
+                        // Parser transforms Shape.Circle(5.0) into Call { callee: Ident("Circle"), args: [Ident("Shape"), 5.0] }
+                        if !args.is_empty() {
+                            if let Expr::Ident(ref first_name) = args[0].node {
+                                if let Some(info) = self.enums.get(first_name).cloned() {
+                                    if let Some(field_tys) = info.variant_fields(name) {
+                                        // This is an enum variant construction
+                                        let expected_args = field_tys.len();
+                                        let actual_args = args.len() - 1; // subtract the enum type name
+                                        if actual_args != expected_args {
+                                            self.error(
+                                                format!(
+                                                    "variant `{name}` of enum `{first_name}` expects {} argument(s) but {} were given",
+                                                    expected_args, actual_args
+                                                ),
+                                                callee.span.clone(),
+                                            );
+                                        }
+                                        // Type-check arguments against variant field types
+                                        for (i, arg) in args.iter().skip(1).enumerate() {
+                                            let arg_ty = self.check_expr(arg);
+                                            if i < field_tys.len() && !arg_ty.is_error() && !field_tys[i].is_error() && arg_ty != field_tys[i] {
+                                                self.error(
+                                                    format!(
+                                                        "variant `{name}` field {} expects `{}`, found `{arg_ty}`",
+                                                        i + 1, field_tys[i]
+                                                    ),
+                                                    arg.span.clone(),
+                                                );
+                                            }
+                                        }
+                                        return Ty::Enum(first_name.clone());
+                                    }
+                                }
+                            }
+                        }
+
                         // Before reporting "undefined function", check if this is a UFCS method call.
                         // The parser transforms `obj.method(args)` into `method(obj, args)`,
                         // so the first arg is the receiver.
@@ -1663,11 +1755,18 @@ impl Checker {
                 // Check if this is actually an enum variant access: EnumName.VariantName
                 if let Expr::Ident(ref name) = object.node {
                     if let Some(info) = self.enums.get(name).cloned() {
-                        if !info.variants.contains(field) {
+                        if !info.has_variant(field) {
                             self.error(
                                 format!("enum `{name}` has no variant `{field}`"),
                                 expr.span.clone(),
                             );
+                        } else if let Some(fields) = info.variant_fields(field) {
+                            if !fields.is_empty() {
+                                self.error(
+                                    format!("variant `{field}` of enum `{name}` requires {} argument(s)", fields.len()),
+                                    expr.span.clone(),
+                                );
+                            }
                         }
                         return Ty::Enum(name.clone());
                     }
@@ -1707,7 +1806,7 @@ impl Checker {
 
             Expr::EnumVariant { enum_name, variant } => {
                 if let Some(info) = self.enums.get(enum_name) {
-                    if !info.variants.contains(variant) {
+                    if !info.has_variant(variant) {
                         self.error(
                             format!("enum `{enum_name}` has no variant `{variant}`"),
                             expr.span.clone(),
@@ -1771,6 +1870,9 @@ impl Checker {
                         Pattern::None => {
                             covered_variants.push("none".to_string());
                         }
+                        Pattern::VariantDestructure { variant, .. } => {
+                            covered_variants.push(variant.clone());
+                        }
                         _ => {} // IntLit and StringLit don't cover the full domain
                     }
 
@@ -1815,6 +1917,26 @@ impl Checker {
                         Pattern::None => {
                             self.check_expr(&arm.body)
                         }
+                        Pattern::VariantDestructure { variant, bindings } => {
+                            self.push_scope();
+                            if let Ty::Enum(ref enum_name) = subject_ty {
+                                if let Some(info) = self.enums.get(enum_name).cloned() {
+                                    if let Some(field_tys) = info.variant_fields(variant) {
+                                        for (i, binding) in bindings.iter().enumerate() {
+                                            let ty = if i < field_tys.len() {
+                                                field_tys[i].clone()
+                                            } else {
+                                                Ty::Error
+                                            };
+                                            self.define_var(binding, VarInfo { ty, mutable: false }, &arm.pattern.span);
+                                        }
+                                    }
+                                }
+                            }
+                            let ty = self.check_expr(&arm.body);
+                            self.pop_scope();
+                            ty
+                        }
                         _ => self.check_expr(&arm.body),
                     };
 
@@ -1837,7 +1959,8 @@ impl Checker {
                     match &subject_ty {
                         Ty::Enum(enum_name) => {
                             if let Some(info) = self.enums.get(enum_name).cloned() {
-                                let missing: Vec<&String> = info.variants.iter()
+                                let variant_names = info.variant_names();
+                                let missing: Vec<&String> = variant_names.iter()
                                     .filter(|v| !covered_variants.contains(v))
                                     .collect();
                                 if !missing.is_empty() {
@@ -2034,7 +2157,7 @@ impl Checker {
                 // If subject is an enum, check that name is a valid variant
                 if let Ty::Enum(enum_name) = subject_ty {
                     if let Some(info) = self.enums.get(enum_name) {
-                        if !info.variants.contains(name) {
+                        if !info.has_variant(name) {
                             self.error(
                                 format!("enum `{enum_name}` has no variant `{name}`"),
                                 pattern.span.clone(),
@@ -2096,6 +2219,33 @@ impl Checker {
                 if !subject_ty.is_error() && !matches!(subject_ty, Ty::Optional(_)) {
                     self.error(
                         format!("none pattern cannot match `{subject_ty}`"),
+                        pattern.span.clone(),
+                    );
+                }
+            }
+            Pattern::VariantDestructure { variant, bindings } => {
+                if let Ty::Enum(enum_name) = subject_ty {
+                    if let Some(info) = self.enums.get(enum_name) {
+                        if let Some(field_tys) = info.variant_fields(variant) {
+                            if bindings.len() != field_tys.len() {
+                                self.error(
+                                    format!(
+                                        "variant `{variant}` has {} field(s) but pattern has {} binding(s)",
+                                        field_tys.len(), bindings.len()
+                                    ),
+                                    pattern.span.clone(),
+                                );
+                            }
+                        } else {
+                            self.error(
+                                format!("enum `{enum_name}` has no variant `{variant}`"),
+                                pattern.span.clone(),
+                            );
+                        }
+                    }
+                } else if !subject_ty.is_error() {
+                    self.error(
+                        format!("variant destructure pattern cannot match `{subject_ty}`"),
                         pattern.span.clone(),
                     );
                 }
