@@ -1,0 +1,18 @@
+fn main() {
+    // Array methods
+    let nums = [1, 2, 3, 4, 5]
+    let result = nums.map(|x: i64| -> i64 { x * 2 })
+                     .filter(|x: i64| -> bool { x > 4 })
+    for n in result { print(n) }
+
+    print(nums.len())
+
+    // String methods
+    let s = "hello world"
+    print(s.upper())
+    print(s.trim())
+    print(s.split(" ").len())
+    print(s.contains("world"))
+    print(s.replace("world", "turbo"))
+    print("ha".repeat(3))
+}

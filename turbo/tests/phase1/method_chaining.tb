@@ -1,0 +1,28 @@
+fn main() {
+    let nums = [1, 2, 3, 4, 5]
+
+    // Basic method syntax
+    print(nums.len())
+
+    // Map as method
+    let doubled = nums.map(|x: i64| -> i64 { x * 2 })
+    for n in doubled { print(n) }
+
+    // Filter as method
+    let big = nums.filter(|x: i64| -> bool { x > 3 })
+    for n in big { print(n) }
+
+    // String methods
+    print("hello".upper())
+    print("  hi  ".trim())
+    print("hello world".replace("world", "turbo"))
+    print("hello".contains("ell"))
+
+    // Chaining: map then filter
+    let result = [10, 20, 30, 40, 50].map(|x: i64| -> i64 { x + 1 }).filter(|x: i64| -> bool { x > 25 })
+    for n in result { print(n) }
+    print(result.len())
+
+    // String method chaining
+    print("ha".repeat(3))
+}
