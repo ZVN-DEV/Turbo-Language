@@ -182,6 +182,7 @@ fn resolve_type_expr_with_params(te: &TypeExpr, structs: Option<&HashMap<String,
         TypeExpr::Future(inner) => {
             resolve_type_expr(&inner.node, structs, enums).map(|t| Ty::Future(Box::new(t)))
         }
+        #[allow(unreachable_patterns)] _ => None,
     }
 }
 
@@ -282,6 +283,8 @@ struct Checker {
     scopes: Vec<Scope>,
     /// Return type of the current function being checked
     current_return_type: Ty,
+    /// Hint for closure parameter types when checking closures passed to map/filter/reduce
+    closure_param_hint: Option<Vec<Ty>>,
 }
 
 impl Checker {
@@ -308,6 +311,7 @@ impl Checker {
             constants: HashMap::new(),
             scopes: Vec::new(),
             current_return_type: Ty::Unit,
+            closure_param_hint: None,
         }
     }
 
@@ -1517,6 +1521,9 @@ impl Checker {
                             return Ty::Error;
                         }
                         let arr_ty = self.check_expr(&args[0]);
+                        if let Ty::Array(ref inner) = arr_ty {
+                            self.closure_param_hint = Some(vec![*inner.clone()]);
+                        }
                         let fn_ty = self.check_expr(&args[1]);
                         let elem_ty = match &arr_ty {
                             Ty::Array(inner) => *inner.clone(),
@@ -1565,6 +1572,9 @@ impl Checker {
                             return Ty::Error;
                         }
                         let arr_ty = self.check_expr(&args[0]);
+                        if let Ty::Array(ref inner) = arr_ty {
+                            self.closure_param_hint = Some(vec![*inner.clone()]);
+                        }
                         let fn_ty = self.check_expr(&args[1]);
                         let elem_ty = match &arr_ty {
                             Ty::Array(inner) => *inner.clone(),
@@ -1620,6 +1630,13 @@ impl Checker {
                         }
                         let arr_ty = self.check_expr(&args[0]);
                         let init_ty = self.check_expr(&args[1]);
+                        {
+                            let elem = match &arr_ty {
+                                Ty::Array(inner) => *inner.clone(),
+                                _ => Ty::Error,
+                            };
+                            self.closure_param_hint = Some(vec![init_ty.clone(), elem]);
+                        }
                         let fn_ty = self.check_expr(&args[2]);
                         let elem_ty = match &arr_ty {
                             Ty::Array(inner) => *inner.clone(),
@@ -2681,16 +2698,37 @@ impl Checker {
 
             Expr::Closure { params, return_type, body } => {
                 let mut param_types = Vec::new();
+                let param_hint = self.closure_param_hint.take();
                 self.push_scope();
-                for param in params {
-                    let ty = match resolve_type_expr(&param.ty.node, Some(&self.structs), Some(&self.enums)) {
-                        Some(ty) => ty,
-                        None => {
+                for (i, param) in params.iter().enumerate() {
+                    let ty = if matches!(param.ty.node, TypeExpr::Inferred) {
+                        if let Some(ref hints) = param_hint {
+                            if i < hints.len() {
+                                hints[i].clone()
+                            } else {
+                                self.error(
+                                    format!("cannot infer type of closure parameter `{}`", param.name),
+                                    param.ty.span.clone(),
+                                );
+                                Ty::Error
+                            }
+                        } else {
                             self.error(
-                                format!("unknown type in closure parameter `{}`", param.name),
+                                format!("cannot infer type of closure parameter `{}` -- add a type annotation", param.name),
                                 param.ty.span.clone(),
                             );
                             Ty::Error
+                        }
+                    } else {
+                        match resolve_type_expr(&param.ty.node, Some(&self.structs), Some(&self.enums)) {
+                            Some(ty) => ty,
+                            None => {
+                                self.error(
+                                    format!("unknown type in closure parameter `{}`", param.name),
+                                    param.ty.span.clone(),
+                                );
+                                Ty::Error
+                            }
                         }
                     };
                     self.define_var(&param.name, VarInfo { ty: ty.clone(), mutable: false }, &param.span);

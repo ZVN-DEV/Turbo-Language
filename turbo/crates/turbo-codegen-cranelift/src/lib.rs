@@ -97,6 +97,7 @@ fn turbo_ty_from_type_expr_with_params(te: &TypeExpr, enum_variants: &HashMap<St
             let inner_tty = turbo_ty_from_type_expr_with_params(&inner.node, enum_variants, type_params);
             TurboTy::Future(Box::new(inner_tty))
         }
+        #[allow(unreachable_patterns)] _ => TurboTy::Int,
     }
 }
 
@@ -165,12 +166,15 @@ extern "C" fn rt_int_overflow() {
 }
 
 extern "C" fn rt_array_alloc(len: i64) -> *mut u8 {
-    let total_bytes = 8 + (len as usize) * 8; // 8 for length + 8 per element
+    let data_bytes = 8 + (len as usize) * 8; // 8 for length + 8 per element
+    let total_bytes = 8 + data_bytes; // +8 for refcount header
     let layout = std::alloc::Layout::from_size_align(total_bytes, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-    // Store length at the start
-    unsafe { *(ptr as *mut i64) = len; }
-    ptr
+    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) }; // pointer past refcount header
+    // Store length at the start of the data region
+    unsafe { *(data_ptr as *mut i64) = len; }
+    data_ptr
 }
 
 extern "C" fn rt_array_get(arr: *const u8, index: i64) -> i64 {
@@ -242,9 +246,12 @@ extern "C" fn rt_str_eq(a: *const u8, b: *const u8) -> i8 {
 }
 
 extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
-    let size = (num_fields as usize) * 8;
-    let layout = std::alloc::Layout::from_size_align(size.max(8), 8).unwrap();
-    unsafe { std::alloc::alloc_zeroed(layout) }
+    let data_size = (num_fields as usize) * 8;
+    let total_size = 8 + data_size.max(8); // +8 for refcount header
+    let layout = std::alloc::Layout::from_size_align(total_size, 8).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    unsafe { ptr.add(8) } // return pointer past refcount header
 }
 
 extern "C" fn rt_i64_to_str(n: i64) -> *const u8 {
@@ -268,23 +275,27 @@ extern "C" fn rt_bool_to_str(b: i8) -> *const u8 {
 // ── Result type runtime functions ────────────────────────────────────
 
 extern "C" fn rt_result_ok(value: i64) -> *mut u8 {
-    let layout = std::alloc::Layout::from_size_align(16, 8).unwrap();
+    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
     unsafe {
-        *(ptr as *mut i64) = 0; // tag = ok
-        *((ptr as *mut i64).add(1)) = value;
+        *(data_ptr as *mut i64) = 0; // tag = ok
+        *((data_ptr as *mut i64).add(1)) = value;
     }
-    ptr
+    data_ptr
 }
 
 extern "C" fn rt_result_err(value: i64) -> *mut u8 {
-    let layout = std::alloc::Layout::from_size_align(16, 8).unwrap();
+    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
     unsafe {
-        *(ptr as *mut i64) = 1; // tag = err
-        *((ptr as *mut i64).add(1)) = value;
+        *(data_ptr as *mut i64) = 1; // tag = err
+        *((data_ptr as *mut i64).add(1)) = value;
     }
-    ptr
+    data_ptr
 }
 
 extern "C" fn rt_result_tag(result: *const u8) -> i64 {
@@ -298,23 +309,27 @@ extern "C" fn rt_result_value(result: *const u8) -> i64 {
 // ── Optional type runtime functions ──────────────────────────────────
 
 extern "C" fn rt_option_some(value: i64) -> *mut u8 {
-    let layout = std::alloc::Layout::from_size_align(16, 8).unwrap();
+    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
     unsafe {
-        *(ptr as *mut i64) = 1; // tag = some
-        *((ptr as *mut i64).add(1)) = value;
+        *(data_ptr as *mut i64) = 1; // tag = some
+        *((data_ptr as *mut i64).add(1)) = value;
     }
-    ptr
+    data_ptr
 }
 
 extern "C" fn rt_option_none() -> *mut u8 {
-    let layout = std::alloc::Layout::from_size_align(16, 8).unwrap();
+    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
     unsafe {
-        *(ptr as *mut i64) = 0; // tag = none
-        *((ptr as *mut i64).add(1)) = 0;
+        *(data_ptr as *mut i64) = 0; // tag = none
+        *((data_ptr as *mut i64).add(1)) = 0;
     }
-    ptr
+    data_ptr
 }
 
 extern "C" fn rt_option_tag(opt: *const u8) -> i64 {
@@ -334,17 +349,20 @@ extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
         .to_str().unwrap_or("");
     let parts: Vec<&str> = s.split(sep).collect();
     let len = parts.len() as i64;
-    // Array format: [len: i64][ptr0: i64][ptr1: i64]...
-    let total = 8 + (len as usize) * 8;
+    // Array format: [refcount: i64][len: i64][ptr0: i64][ptr1: i64]...
+    let data_size = 8 + (len as usize) * 8;
+    let total = 8 + data_size; // +8 for refcount header
     let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-    unsafe { *(ptr as *mut i64) = len; }
+    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe { *(data_ptr as *mut i64) = len; }
     for (i, part) in parts.iter().enumerate() {
         let cs = std::ffi::CString::new(*part).unwrap();
         let p = cs.into_raw() as i64;
-        unsafe { *((ptr as *mut i64).add(1 + i)) = p; }
+        unsafe { *((data_ptr as *mut i64).add(1 + i)) = p; }
     }
-    ptr
+    data_ptr
 }
 
 extern "C" fn rt_str_trim(s: *const u8) -> *const u8 {
@@ -659,20 +677,22 @@ extern "C" fn rt_await_handle(handle_ptr: *mut u8) -> i64 {
 
 // ── Channel runtime functions ────────────────────────────────────────
 
-/// Create a new channel. Returns a heap-allocated struct: [sender_ptr: i64, receiver_ptr: i64].
+/// Create a new channel. Returns a heap-allocated struct: [refcount: i64][sender_ptr: i64, receiver_ptr: i64].
 extern "C" fn rt_channel_create() -> *mut u8 {
     let (tx, rx) = std::sync::mpsc::channel::<i64>();
     let tx_box = Box::into_raw(Box::new(tx)) as i64;
     let rx_box = Box::into_raw(Box::new(rx)) as i64;
 
     let ptr = unsafe {
-        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(16, 8).unwrap())
+        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(8 + 16, 8).unwrap())
     };
+    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
     unsafe {
-        *(ptr as *mut i64) = tx_box;
-        *((ptr as *mut i64).add(1)) = rx_box;
+        *(data_ptr as *mut i64) = tx_box;
+        *((data_ptr as *mut i64).add(1)) = rx_box;
     }
-    ptr
+    data_ptr
 }
 
 /// Send a value on a channel.
@@ -699,13 +719,15 @@ extern "C" fn rt_channel_clone_sender(ch: *const u8) -> *mut u8 {
 
     let rx_ptr = unsafe { *((ch as *const i64).add(1)) };
     let ptr = unsafe {
-        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(16, 8).unwrap())
+        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(8 + 16, 8).unwrap())
     };
+    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
     unsafe {
-        *(ptr as *mut i64) = new_tx;
-        *((ptr as *mut i64).add(1)) = rx_ptr;
+        *(data_ptr as *mut i64) = new_tx;
+        *((data_ptr as *mut i64).add(1)) = rx_ptr;
     }
-    ptr
+    data_ptr
 }
 
 // ── Mutex runtime functions ─────────────────────────────────────────
@@ -737,6 +759,32 @@ extern "C" fn rt_mutex_clone(m: *const u8) -> *mut u8 {
     let cloned = arc.clone();
     let _ = std::sync::Arc::into_raw(arc); // don't drop original
     std::sync::Arc::into_raw(cloned) as *mut u8
+}
+
+// ── ARC (Automatic Reference Counting) runtime functions ────────────
+
+/// Increment the reference count of a heap-allocated object.
+/// The refcount lives at data_ptr - 8 (the header before the data).
+extern "C" fn rt_retain(data_ptr: *mut u8) {
+    if data_ptr.is_null() { return; }
+    let header = unsafe { data_ptr.sub(8) as *mut std::sync::atomic::AtomicI64 };
+    unsafe { (*header).fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+}
+
+/// Decrement the reference count of a heap-allocated object.
+/// When the refcount reaches 0, the memory could be freed.
+/// For now (Sprint 17), we track but don't free — proper dealloc
+/// requires storing allocation size in the header.
+extern "C" fn rt_release(data_ptr: *mut u8) {
+    if data_ptr.is_null() { return; }
+    let header = unsafe { data_ptr.sub(8) as *mut std::sync::atomic::AtomicI64 };
+    let _prev = unsafe { (*header).fetch_sub(1, std::sync::atomic::Ordering::Release) };
+    if _prev == 1 {
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+        // Refcount reached 0 — memory could be freed here.
+        // TODO: store allocation size in header for proper dealloc.
+        // For now we just let it leak (same as before ARC).
+    }
 }
 
 // ── Runtime C source for AOT linking ────────────────────────────────
@@ -932,6 +980,9 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_mutex_get", rt_mutex_get as *const u8);
     jit_builder.symbol("rt_mutex_set", rt_mutex_set as *const u8);
     jit_builder.symbol("rt_mutex_clone", rt_mutex_clone as *const u8);
+    // ARC runtime
+    jit_builder.symbol("rt_retain", rt_retain as *const u8);
+    jit_builder.symbol("rt_release", rt_release as *const u8);
 
     let mut module = JITModule::new(jit_builder);
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
@@ -1600,6 +1651,9 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_mutex_get", &[ptr_type], Some(types::I64))?;
     declare_rt_fn(module, &mut rt_fns, "rt_mutex_set", &[ptr_type, types::I64], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_mutex_clone", &[ptr_type], Some(ptr_type))?;
+    // ARC runtime declarations
+    declare_rt_fn(module, &mut rt_fns, "rt_retain", &[ptr_type], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_release", &[ptr_type], None)?;
 
     // Build enum variants map
     let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();
@@ -1759,7 +1813,13 @@ fn compile_module<M: Module>(
             sig.returns.push(AbiParam::new(cl));
             turbo_ty_from_type_expr(&ret_ty.node, &enum_variants)
         } else {
-            TurboTy::Unit
+            let has_inferred_params = closure.params.iter().any(|p| matches!(p.ty.node, TypeExpr::Inferred));
+            if has_inferred_params {
+                sig.returns.push(AbiParam::new(types::I64));
+                TurboTy::Int
+            } else {
+                TurboTy::Unit
+            }
         };
         let id = module.declare_function(&closure.name, Linkage::Local, &sig)
             .map_err(|e| CodegenError { message: e.to_string() })?;
@@ -1998,6 +2058,12 @@ fn compile_module<M: Module>(
         }
         if let Some(ret_ty) = closure.return_type {
             cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?));
+        } else {
+            // For closures with inferred params, add i64 return to match the declaration
+            let has_inferred_params = closure.params.iter().any(|p| matches!(p.ty.node, TypeExpr::Inferred));
+            if has_inferred_params {
+                cl_ctx.func.signature.returns.push(AbiParam::new(types::I64));
+            }
         }
 
         let mut fn_ctx = FunctionBuilderContext::new();
@@ -2070,7 +2136,8 @@ fn compile_module<M: Module>(
             let result = compile_expr(&mut cx, closure.body)?;
 
             if !cx.builder.is_unreachable() {
-                if closure.return_type.is_some() {
+                let has_inferred = closure.params.iter().any(|p| matches!(p.ty.node, TypeExpr::Inferred));
+                if closure.return_type.is_some() || has_inferred {
                     if let Some((val, _)) = result {
                         cx.builder.ins().return_(&[val]);
                     } else {
@@ -2235,6 +2302,7 @@ fn resolve_cl_type_inner(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &H
         TypeExpr::Optional(_) => Ok(ptr_type), // Optional types are heap-allocated tagged unions
         // Sprint 9: Future<T> compiles identically to T
         TypeExpr::Future(inner) => resolve_cl_type_inner(&inner.node, ptr_type, enum_variants, type_params, enum_max_slots),
+        #[allow(unreachable_patterns)] _ => Ok(types::I64),
     }
 }
 
