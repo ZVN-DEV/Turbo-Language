@@ -896,6 +896,7 @@ fn format_type_expr(ty: &turbo_ast::TypeExpr) -> String {
         }
         turbo_ast::TypeExpr::Optional(inner) => format!("{}?", format_type_expr(&inner.node)),
         turbo_ast::TypeExpr::Future(inner) => format!("Future<{}>", format_type_expr(&inner.node)),
+        turbo_ast::TypeExpr::Inferred => "_".to_string(),
     }
 }
 

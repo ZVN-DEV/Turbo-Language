@@ -1380,9 +1380,18 @@ impl Parser {
         if !matches!(self.peek(), Some(Token::Bar)) {
             loop {
                 let param_start = self.peek_span().start;
-                let (name, _) = self.expect_ident()?;
-                self.expect(&Token::Colon)?;
-                let ty = self.parse_type()?;
+                let (name, name_span) = self.expect_ident()?;
+
+                // Type annotation is optional for closure parameters
+                let ty = if matches!(self.peek(), Some(Token::Colon)) {
+                    self.advance();
+                    self.parse_type()?
+                } else {
+                    // TypeExpr::Inferred -- will be resolved by sema from context
+                    let inferred_end = name_span.end;
+                    Spanned::new(TypeExpr::Inferred, param_start..inferred_end)
+                };
+
                 let param_end = ty.span.end;
                 params.push(Param {
                     name,
@@ -1406,8 +1415,18 @@ impl Parser {
             None
         };
 
-        // Body (must be a block)
-        let body = self.parse_block()?;
+        // Body: either a block { ... } or a single expression
+        let body = if matches!(self.peek(), Some(Token::LBrace)) {
+            self.parse_block()?
+        } else {
+            // Single expression body (no braces needed)
+            let expr = self.parse_expr()?;
+            let span = expr.span.clone();
+            Spanned::new(Expr::Block {
+                stmts: vec![],
+                tail_expr: Some(Box::new(expr)),
+            }, span)
+        };
         let end = body.span.end;
 
         Ok(Spanned::new(

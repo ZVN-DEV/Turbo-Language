@@ -195,6 +195,8 @@ pub enum TypeExpr {
     Optional(Box<Spanned<TypeExpr>>),
     /// Future<T> — the result type of an async function / spawn
     Future(Box<Spanned<TypeExpr>>),
+    /// Inferred type -- placeholder that sema resolves from calling context
+    Inferred,
 }
 
 /// Part of a string interpolation

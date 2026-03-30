@@ -1813,7 +1813,13 @@ fn compile_module<M: Module>(
             sig.returns.push(AbiParam::new(cl));
             turbo_ty_from_type_expr(&ret_ty.node, &enum_variants)
         } else {
-            TurboTy::Unit
+            let has_inferred_params = closure.params.iter().any(|p| matches!(p.ty.node, TypeExpr::Inferred));
+            if has_inferred_params {
+                sig.returns.push(AbiParam::new(types::I64));
+                TurboTy::Int
+            } else {
+                TurboTy::Unit
+            }
         };
         let id = module.declare_function(&closure.name, Linkage::Local, &sig)
             .map_err(|e| CodegenError { message: e.to_string() })?;
@@ -2052,6 +2058,12 @@ fn compile_module<M: Module>(
         }
         if let Some(ret_ty) = closure.return_type {
             cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?));
+        } else {
+            // For closures with inferred params, add i64 return to match the declaration
+            let has_inferred_params = closure.params.iter().any(|p| matches!(p.ty.node, TypeExpr::Inferred));
+            if has_inferred_params {
+                cl_ctx.func.signature.returns.push(AbiParam::new(types::I64));
+            }
         }
 
         let mut fn_ctx = FunctionBuilderContext::new();

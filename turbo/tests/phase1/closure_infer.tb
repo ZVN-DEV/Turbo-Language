@@ -1,0 +1,15 @@
+fn main() {
+    let nums = [1, 2, 3, 4, 5]
+
+    // Inferred parameter types with block body
+    let doubled = map(nums, |x| { x * 2 })
+    for n in doubled { print(n) }
+
+    // Single expression (no braces)
+    let tripled = map(nums, |x| x * 3)
+    for n in tripled { print(n) }
+
+    // Reduce with inferred types
+    let sum = reduce(nums, 0, |acc, x| acc + x)
+    print(sum)
+}
