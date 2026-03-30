@@ -74,10 +74,13 @@ char rt_str_eq(const char *a, const char *b) {
 }
 
 void* rt_array_alloc(long long len) {
-    size_t total = 8 + len * 8;
+    size_t data_size = 8 + len * 8;
+    size_t total = 8 + data_size; /* +8 for refcount header */
     void *ptr = calloc(1, total);
-    *(long long*)ptr = len;
-    return ptr;
+    *(long long*)ptr = 1; /* refcount = 1 */
+    void *data_ptr = (char*)ptr + 8;
+    *(long long*)data_ptr = len;
+    return data_ptr;
 }
 
 long long rt_array_get(const void *arr, long long index) {
@@ -107,9 +110,12 @@ long long rt_str_len(const char *s) {
 }
 
 void* rt_struct_alloc(long long num_fields) {
-    size_t size = num_fields * 8;
-    if (size < 8) size = 8;
-    return calloc(1, size);
+    size_t data_size = num_fields * 8;
+    if (data_size < 8) data_size = 8;
+    size_t total = 8 + data_size; /* +8 for refcount header */
+    void *ptr = calloc(1, total);
+    *(long long*)ptr = 1; /* refcount = 1 */
+    return (char*)ptr + 8; /* return pointer past refcount */
 }
 
 const char* rt_i64_to_str(long long n) {
@@ -139,17 +145,19 @@ const char* rt_bool_to_str(char b) {
 /* Result type runtime functions */
 
 void* rt_result_ok(long long value) {
-    long long *ptr = (long long*)calloc(2, sizeof(long long));
-    ptr[0] = 0; /* ok tag */
-    ptr[1] = value;
-    return ptr;
+    long long *ptr = (long long*)calloc(3, sizeof(long long)); /* refcount + tag + value */
+    ptr[0] = 1; /* refcount = 1 */
+    ptr[1] = 0; /* ok tag */
+    ptr[2] = value;
+    return &ptr[1]; /* return pointer past refcount */
 }
 
 void* rt_result_err(long long value) {
-    long long *ptr = (long long*)calloc(2, sizeof(long long));
-    ptr[0] = 1; /* err tag */
-    ptr[1] = value;
-    return ptr;
+    long long *ptr = (long long*)calloc(3, sizeof(long long)); /* refcount + tag + value */
+    ptr[0] = 1; /* refcount = 1 */
+    ptr[1] = 1; /* err tag */
+    ptr[2] = value;
+    return &ptr[1]; /* return pointer past refcount */
 }
 
 long long rt_result_tag(const void *result) {
@@ -163,17 +171,19 @@ long long rt_result_value(const void *result) {
 /* Optional type runtime functions */
 
 void* rt_option_some(long long value) {
-    long long *ptr = (long long*)calloc(2, sizeof(long long));
-    ptr[0] = 1; /* some tag */
-    ptr[1] = value;
-    return ptr;
+    long long *ptr = (long long*)calloc(3, sizeof(long long)); /* refcount + tag + value */
+    ptr[0] = 1; /* refcount = 1 */
+    ptr[1] = 1; /* some tag */
+    ptr[2] = value;
+    return &ptr[1]; /* return pointer past refcount */
 }
 
 void* rt_option_none(void) {
-    long long *ptr = (long long*)calloc(2, sizeof(long long));
-    ptr[0] = 0; /* none tag */
-    ptr[1] = 0;
-    return ptr;
+    long long *ptr = (long long*)calloc(3, sizeof(long long)); /* refcount + tag + value */
+    ptr[0] = 1; /* refcount = 1 */
+    ptr[1] = 0; /* none tag */
+    ptr[2] = 0;
+    return &ptr[1]; /* return pointer past refcount */
 }
 
 long long rt_option_tag(const void *opt) {
@@ -199,8 +209,11 @@ void* rt_str_split(const char *s, const char *sep) {
         if (count == 0) count = 1;
     }
 
-    size_t total = 8 + count * 8;
-    long long *arr = (long long*)calloc(1, total);
+    size_t data_size = 8 + count * 8;
+    size_t total = 8 + data_size; /* +8 for refcount header */
+    long long *raw = (long long*)calloc(1, total);
+    raw[0] = 1; /* refcount = 1 */
+    long long *arr = raw + 1; /* data pointer past refcount */
     arr[0] = (long long)count;
 
     if (sep_len == 0) {
@@ -583,7 +596,11 @@ void *rt_channel_create(void) {
     pthread_mutex_init(&q->lock, NULL);
     pthread_cond_init(&q->cond, NULL);
 
-    channel_handle *h = (channel_handle *)calloc(1, sizeof(channel_handle));
+    /* Allocate with refcount header: [refcount: i64][sender_ptr: i64][receiver_ptr: i64] */
+    size_t ch_total = 8 + sizeof(channel_handle); /* +8 for refcount */
+    void *raw = calloc(1, ch_total);
+    *(long long*)raw = 1; /* refcount = 1 */
+    channel_handle *h = (channel_handle *)((char*)raw + 8);
     /* Both sender and receiver point to the same queue */
     h->sender_ptr = (long long)(size_t)q;
     h->receiver_ptr = (long long)(size_t)q;
@@ -629,7 +646,11 @@ long long rt_channel_recv(const void *ch) {
 
 void *rt_channel_clone_sender(const void *ch) {
     const channel_handle *h = (const channel_handle *)ch;
-    channel_handle *nh = (channel_handle *)calloc(1, sizeof(channel_handle));
+    /* Allocate with refcount header */
+    size_t ch_total = 8 + sizeof(channel_handle);
+    void *raw = calloc(1, ch_total);
+    *(long long*)raw = 1; /* refcount = 1 */
+    channel_handle *nh = (channel_handle *)((char*)raw + 8);
     nh->sender_ptr = h->sender_ptr;
     nh->receiver_ptr = h->receiver_ptr;
     return nh;
@@ -668,6 +689,25 @@ void *rt_mutex_clone(const void *mptr) {
     /* Mutex is shared — just return the same pointer.
      * In the C implementation we don't use Arc, so cloning is a no-op. */
     return (void *)mptr;
+}
+
+/* ── ARC (Automatic Reference Counting) runtime ─────────────────────── */
+
+void rt_retain(void *data_ptr) {
+    if (!data_ptr) return;
+    long long *rc = (long long*)((char*)data_ptr - 8);
+    __sync_fetch_and_add(rc, 1);
+}
+
+void rt_release(void *data_ptr) {
+    if (!data_ptr) return;
+    long long *rc = (long long*)((char*)data_ptr - 8);
+    long long prev = __sync_fetch_and_sub(rc, 1);
+    if (prev == 1) {
+        /* Refcount reached 0 — memory could be freed here.
+         * TODO: store allocation size in header for proper dealloc.
+         * For now we just let it leak (same as before ARC). */
+    }
 }
 
 /* Entry point: calls Turbo's main and returns 0 */

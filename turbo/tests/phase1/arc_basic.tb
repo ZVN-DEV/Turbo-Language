@@ -1,0 +1,8 @@
+fn main() {
+    let a = [1, 2, 3]
+    let b = a
+    print(b[0])
+    print(b[1])
+    print(b[2])
+    print("ARC foundation works")
+}
