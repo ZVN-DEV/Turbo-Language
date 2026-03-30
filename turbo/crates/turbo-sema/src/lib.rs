@@ -347,7 +347,8 @@ impl Checker {
             | "replace" | "char_at"
             | "read_line" | "read_file" | "write_file"
             | "pow" | "sqrt"
-            | "sleep")
+            | "sleep"
+            | "http_get" | "http_post" | "json_get" | "json_stringify")
     }
 
     /// Walk a chain of FieldAccess / Index expressions to find the root variable name.
@@ -1238,6 +1239,70 @@ impl Checker {
                             self.error(format!("sleep() expects integer (milliseconds), found `{ms_ty}`"), args[0].span.clone());
                         }
                         return Ty::Unit;
+                    }
+
+                    // ── HTTP builtins ───────────────────────────────
+                    // http_get(url: str) -> str
+                    if name == "http_get" {
+                        if args.len() != 1 {
+                            self.error(format!("http_get() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let url_ty = self.check_expr(&args[0]);
+                        if !url_ty.is_error() && url_ty != Ty::Str {
+                            self.error(format!("http_get() expects str, found `{url_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+                    // http_post(url: str, body: str) -> str
+                    if name == "http_post" {
+                        if args.len() != 2 {
+                            self.error(format!("http_post() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let url_ty = self.check_expr(&args[0]);
+                        let body_ty = self.check_expr(&args[1]);
+                        if !url_ty.is_error() && url_ty != Ty::Str {
+                            self.error(format!("http_post() first argument must be str, found `{url_ty}`"), args[0].span.clone());
+                        }
+                        if !body_ty.is_error() && body_ty != Ty::Str {
+                            self.error(format!("http_post() second argument must be str, found `{body_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+
+                    // ── JSON builtins ───────────────────────────────
+                    // json_get(json: str, key: str) -> str
+                    if name == "json_get" {
+                        if args.len() != 2 {
+                            self.error(format!("json_get() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let json_ty = self.check_expr(&args[0]);
+                        let key_ty = self.check_expr(&args[1]);
+                        if !json_ty.is_error() && json_ty != Ty::Str {
+                            self.error(format!("json_get() first argument must be str, found `{json_ty}`"), args[0].span.clone());
+                        }
+                        if !key_ty.is_error() && key_ty != Ty::Str {
+                            self.error(format!("json_get() second argument must be str, found `{key_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+                    // json_stringify(key: str, value: str) -> str
+                    if name == "json_stringify" {
+                        if args.len() != 2 {
+                            self.error(format!("json_stringify() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let key_ty = self.check_expr(&args[0]);
+                        let value_ty = self.check_expr(&args[1]);
+                        if !key_ty.is_error() && key_ty != Ty::Str {
+                            self.error(format!("json_stringify() first argument must be str, found `{key_ty}`"), args[0].span.clone());
+                        }
+                        if !value_ty.is_error() && value_ty != Ty::Str {
+                            self.error(format!("json_stringify() second argument must be str, found `{value_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Str;
                     }
 
                     // map(arr, fn) -> [U]

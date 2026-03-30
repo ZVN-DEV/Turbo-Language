@@ -443,6 +443,117 @@ long long rt_await_handle(void *handle_ptr) {
     return result;
 }
 
+/* ── HTTP + JSON builtins ───────────────────────────────────────────── */
+
+/* http_get(url) -> str — HTTP GET via system curl */
+const char *rt_http_get(const char *url) {
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd), "curl -s -L '%s'", url);
+    FILE *fp = popen(cmd, "r");
+    if (!fp) {
+        char *err = strdup("error: cannot run curl");
+        return err;
+    }
+    size_t cap = 4096, len = 0;
+    char *buf = (char *)malloc(cap);
+    while (1) {
+        size_t n = fread(buf + len, 1, cap - len - 1, fp);
+        if (n == 0) break;
+        len += n;
+        if (len + 1 >= cap) {
+            cap *= 2;
+            buf = (char *)realloc(buf, cap);
+        }
+    }
+    buf[len] = '\0';
+    pclose(fp);
+    return buf;
+}
+
+/* http_post(url, body) -> str — HTTP POST via system curl */
+const char *rt_http_post(const char *url, const char *body) {
+    /* Build command — uses stdin to pass body safely */
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd),
+        "curl -s -L -X POST -H 'Content-Type: application/json' -d '%s' '%s'",
+        body, url);
+    FILE *fp = popen(cmd, "r");
+    if (!fp) {
+        char *err = strdup("error: cannot run curl");
+        return err;
+    }
+    size_t cap = 4096, len = 0;
+    char *buf = (char *)malloc(cap);
+    while (1) {
+        size_t n = fread(buf + len, 1, cap - len - 1, fp);
+        if (n == 0) break;
+        len += n;
+        if (len + 1 >= cap) {
+            cap *= 2;
+            buf = (char *)realloc(buf, cap);
+        }
+    }
+    buf[len] = '\0';
+    pclose(fp);
+    return buf;
+}
+
+/* json_get(json, key) -> str — extract top-level key value from JSON string */
+const char *rt_json_get(const char *json, const char *key) {
+    /* Build search pattern: "key" */
+    size_t klen = strlen(key);
+    char *search = (char *)malloc(klen + 3);
+    search[0] = '"';
+    memcpy(search + 1, key, klen);
+    search[klen + 1] = '"';
+    search[klen + 2] = '\0';
+
+    const char *pos = strstr(json, search);
+    free(search);
+    if (!pos) return strdup("");
+
+    /* Advance past key, skip whitespace and colon */
+    pos += klen + 2;
+    while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r') pos++;
+    if (*pos != ':') return strdup("");
+    pos++;
+    while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r') pos++;
+
+    if (*pos == '"') {
+        /* String value */
+        pos++;
+        const char *start = pos;
+        while (*pos && !(*pos == '"' && *(pos - 1) != '\\')) pos++;
+        size_t vlen = pos - start;
+        char *val = (char *)malloc(vlen + 1);
+        memcpy(val, start, vlen);
+        val[vlen] = '\0';
+        return val;
+    } else {
+        /* Number, bool, or null */
+        const char *start = pos;
+        while (*pos && *pos != ',' && *pos != '}' && *pos != ']' &&
+               *pos != ' ' && *pos != '\n' && *pos != '\r' && *pos != '\t') pos++;
+        size_t vlen = pos - start;
+        char *val = (char *)malloc(vlen + 1);
+        memcpy(val, start, vlen);
+        val[vlen] = '\0';
+        return val;
+    }
+}
+
+/* json_stringify(key, value) -> str — build {"key":"value"} */
+const char *rt_json_stringify(const char *key, const char *value) {
+    /* Simple: no escaping beyond what's needed */
+    size_t klen = strlen(key);
+    size_t vlen = strlen(value);
+    /* {"key":"value"}\0 — worst case 2x for escaping */
+    size_t cap = klen + vlen + 8;
+    char *buf = (char *)malloc(cap);
+    snprintf(buf, cap, "{\"%s\":\"%s\"}", key, value);
+    return buf;
+}
+
 /* Entry point: calls Turbo's main and returns 0 */
 extern void turbo_main(void);
 int main(void) {

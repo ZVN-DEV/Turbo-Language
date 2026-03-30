@@ -1,0 +1,6 @@
+fn main() {
+    let json = "\{\"name\": \"Turbo\", \"version\": \"1.0\", \"fast\": true\}"
+    print(json_get(json, "name"))
+    print(json_get(json, "version"))
+    print(json_stringify("lang", "Turbo"))
+}

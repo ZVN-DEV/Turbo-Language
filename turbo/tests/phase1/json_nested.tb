@@ -1,0 +1,10 @@
+fn main() {
+    let data = "\{\"count\": 42, \"active\": true, \"label\": \"test\"\}"
+    print(json_get(data, "count"))
+    print(json_get(data, "active"))
+    print(json_get(data, "label"))
+
+    let obj = json_stringify("language", "Turbo")
+    print(obj)
+    print(json_get(obj, "language"))
+}

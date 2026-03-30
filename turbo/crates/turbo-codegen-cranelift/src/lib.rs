@@ -458,6 +458,126 @@ extern "C" fn rt_sqrt(x: f64) -> f64 {
     x.sqrt()
 }
 
+// ── HTTP + JSON runtime functions ───────────────────────────────────
+
+/// HTTP GET via system curl. Returns response body as a C string.
+extern "C" fn rt_http_get(url: *const u8) -> *const u8 {
+    let url = unsafe { std::ffi::CStr::from_ptr(url as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let output = std::process::Command::new("curl")
+        .arg("-s")
+        .arg("-L")
+        .arg(url)
+        .output();
+    match output {
+        Ok(out) => {
+            let body = String::from_utf8_lossy(&out.stdout).to_string();
+            let cs = std::ffi::CString::new(body).unwrap_or_else(|_| {
+                std::ffi::CString::new("").unwrap()
+            });
+            cs.into_raw() as *const u8
+        }
+        Err(e) => {
+            let cs = std::ffi::CString::new(format!("error: {}", e)).unwrap();
+            cs.into_raw() as *const u8
+        }
+    }
+}
+
+/// HTTP POST via system curl. Takes URL and body, returns response body as a C string.
+extern "C" fn rt_http_post(url: *const u8, body: *const u8) -> *const u8 {
+    let url = unsafe { std::ffi::CStr::from_ptr(url as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let body_str = unsafe { std::ffi::CStr::from_ptr(body as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let output = std::process::Command::new("curl")
+        .arg("-s")
+        .arg("-L")
+        .arg("-X").arg("POST")
+        .arg("-H").arg("Content-Type: application/json")
+        .arg("-d").arg(body_str)
+        .arg(url)
+        .output();
+    match output {
+        Ok(out) => {
+            let resp = String::from_utf8_lossy(&out.stdout).to_string();
+            let cs = std::ffi::CString::new(resp).unwrap_or_else(|_| {
+                std::ffi::CString::new("").unwrap()
+            });
+            cs.into_raw() as *const u8
+        }
+        Err(e) => {
+            let cs = std::ffi::CString::new(format!("error: {}", e)).unwrap();
+            cs.into_raw() as *const u8
+        }
+    }
+}
+
+/// Extract a top-level key from a JSON string. Returns the value as a string.
+/// Handles string values, numbers, booleans, and null.
+extern "C" fn rt_json_get(json: *const u8, key: *const u8) -> *const u8 {
+    let json_str = unsafe { std::ffi::CStr::from_ptr(json as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let key_str = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+
+    // Search for "key" in the JSON
+    let search = format!("\"{}\"", key_str);
+    if let Some(pos) = json_str.find(&search) {
+        let after_key = &json_str[pos + search.len()..];
+        // Skip whitespace and colon
+        let trimmed = after_key.trim_start();
+        if let Some(after_colon) = trimmed.strip_prefix(':') {
+            let value_start = after_colon.trim_start();
+            if value_start.starts_with('"') {
+                // String value: find closing quote, handling escaped quotes
+                let inner = &value_start[1..];
+                let mut end = 0;
+                let bytes = inner.as_bytes();
+                while end < bytes.len() {
+                    if bytes[end] == b'\\' {
+                        end += 2; // skip escaped char
+                    } else if bytes[end] == b'"' {
+                        break;
+                    } else {
+                        end += 1;
+                    }
+                }
+                let value = &inner[..end];
+                let cs = std::ffi::CString::new(value).unwrap_or_else(|_| {
+                    std::ffi::CString::new("").unwrap()
+                });
+                return cs.into_raw() as *const u8;
+            } else {
+                // Number, bool, or null: read until , } ] or whitespace
+                let end = value_start.find(|c: char| c == ',' || c == '}' || c == ']' || c == ' ' || c == '\n' || c == '\r' || c == '\t')
+                    .unwrap_or(value_start.len());
+                let value = &value_start[..end];
+                let cs = std::ffi::CString::new(value).unwrap_or_else(|_| {
+                    std::ffi::CString::new("").unwrap()
+                });
+                return cs.into_raw() as *const u8;
+            }
+        }
+    }
+    // Key not found: return empty string
+    let cs = std::ffi::CString::new("").unwrap();
+    cs.into_raw() as *const u8
+}
+
+/// Build a JSON object string from a key and value: {"key": "value"}
+extern "C" fn rt_json_stringify(key: *const u8, value: *const u8) -> *const u8 {
+    let key_str = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let value_str = unsafe { std::ffi::CStr::from_ptr(value as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let result = format!("{{\"{}\":\"{}\"}}",
+        key_str.replace('\\', "\\\\").replace('"', "\\\""),
+        value_str.replace('\\', "\\\\").replace('"', "\\\""));
+    let cs = std::ffi::CString::new(result).unwrap();
+    cs.into_raw() as *const u8
+}
+
 // ── Async runtime functions ─────────────────────────────────────────
 
 /// Sleep the current thread for `ms` milliseconds.
@@ -661,6 +781,11 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_sleep_ms", rt_sleep_ms as *const u8);
     jit_builder.symbol("rt_spawn_with_args", rt_spawn_with_args as *const u8);
     jit_builder.symbol("rt_await_handle", rt_await_handle as *const u8);
+    // HTTP + JSON builtins
+    jit_builder.symbol("rt_http_get", rt_http_get as *const u8);
+    jit_builder.symbol("rt_http_post", rt_http_post as *const u8);
+    jit_builder.symbol("rt_json_get", rt_json_get as *const u8);
+    jit_builder.symbol("rt_json_stringify", rt_json_stringify as *const u8);
 
     let mut module = JITModule::new(jit_builder);
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
@@ -1306,6 +1431,11 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_sleep_ms", &[types::I64], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_spawn_with_args", &[ptr_type, ptr_type], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_await_handle", &[ptr_type], Some(types::I64))?;
+    // HTTP + JSON runtime declarations
+    declare_rt_fn(module, &mut rt_fns, "rt_http_get", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_http_post", &[ptr_type, ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_json_get", &[ptr_type, ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_json_stringify", &[ptr_type, ptr_type], Some(ptr_type))?;
 
     // Build enum variants map
     let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();
@@ -2949,6 +3079,11 @@ fn compile_call<M: Module>(
         "map" => compile_builtin_map(cx, args),
         "filter" => compile_builtin_filter(cx, args),
         "reduce" => compile_builtin_reduce(cx, args),
+        // HTTP + JSON builtins
+        "http_get" => compile_builtin_http_get(cx, args),
+        "http_post" => compile_builtin_http_post(cx, args),
+        "json_get" => compile_builtin_json_get(cx, args),
+        "json_stringify" => compile_builtin_json_stringify(cx, args),
         _ => {
             // Check if this is an enum variant construction via UFCS rewrite:
             // Parser transforms Shape.Circle(5.0) into Call { callee: Ident("Circle"), args: [Ident("Shape"), 5.0] }
@@ -3533,6 +3668,51 @@ fn compile_builtin_sleep<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>])
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     cx.builder.ins().call(fref, &[ms_val]);
     Ok(None)
+}
+
+// ── HTTP + JSON builtins ────────────────────────────────────────────
+
+/// http_get(url) -> str
+fn compile_builtin_http_get<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (url_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_http_get"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[url_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// http_post(url, body) -> str
+fn compile_builtin_http_post<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (url_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (body_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_http_post"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[url_val, body_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// json_get(json_str, key) -> str
+fn compile_builtin_json_get<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (json_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_json_get"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[json_val, key_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// json_stringify(key, value) -> str
+fn compile_builtin_json_stringify<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (key_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (value_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_json_stringify"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[key_val, value_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
 }
 
 // ── map/filter/reduce builtins ──────────────────────────────────────
