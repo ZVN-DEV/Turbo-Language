@@ -1,0 +1,18 @@
+type List<T> {
+    Cons(T, i64),
+    Nil,
+}
+
+fn main() {
+    let l = List.Cons(10, 0)
+    match l {
+        Cons(val, next) => print("head = {val}")
+        Nil => print("empty")
+    }
+
+    let m = List.Nil
+    match m {
+        Cons(val, next) => print("has value")
+        Nil => print("empty")
+    }
+}

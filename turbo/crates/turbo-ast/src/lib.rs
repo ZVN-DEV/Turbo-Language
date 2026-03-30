@@ -28,11 +28,21 @@ pub enum Item {
     Enum(EnumDef),
     Impl(ImplBlock),
     Trait(TraitDef),
+    Agent(AgentDef),
     /// Import declaration: `import { name1, name2 } from "path"`
     Import {
         names: Vec<String>,
         path: String,
     },
+}
+
+/// Agent definition: a struct-like declaration for AI agents
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentDef {
+    pub name: String,
+    pub model: String,
+    pub tools: Vec<String>,
+    pub system_prompt: Option<String>,
 }
 
 /// Impl block: methods attached to a struct type
@@ -70,6 +80,7 @@ pub struct EnumVariantDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDef {
     pub name: String,
+    pub type_params: Vec<TypeParam>,
     pub variants: Vec<EnumVariantDef>,
 }
 
@@ -78,12 +89,25 @@ impl EnumDef {
     pub fn variant_names(&self) -> Vec<String> {
         self.variants.iter().map(|v| v.name.clone()).collect()
     }
+
+    /// Get just the type parameter names
+    pub fn type_param_names(&self) -> Vec<String> {
+        self.type_params.iter().map(|tp| tp.name.clone()).collect()
+    }
+}
+
+impl StructDef {
+    /// Get just the type parameter names
+    pub fn type_param_names(&self) -> Vec<String> {
+        self.type_params.iter().map(|tp| tp.name.clone()).collect()
+    }
 }
 
 /// Struct definition
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
     pub name: String,
+    pub type_params: Vec<TypeParam>,
     pub fields: Vec<FieldDef>,
 }
 
@@ -116,6 +140,8 @@ impl TypeParam {
 pub struct FnDef {
     pub name: String,
     pub is_async: bool,
+    /// Whether this function is a `tool fn` (AI tool with auto-generated schema)
+    pub is_tool: bool,
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,

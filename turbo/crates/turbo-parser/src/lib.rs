@@ -106,9 +106,9 @@ impl Parser {
                 Ok(item) => items.push(item),
                 Err(e) => {
                     self.errors.push(e);
-                    // Skip to next `fn`, `async`, `struct`, or `type` to recover
+                    // Skip to next item start to recover
                     self.pos += 1;
-                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Async) | Some(Token::Struct) | Some(Token::TypeKw) | Some(Token::Import) | Some(Token::Trait) | Some(Token::Impl)) {
+                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Async) | Some(Token::Struct) | Some(Token::TypeKw) | Some(Token::Import) | Some(Token::Trait) | Some(Token::Impl) | Some(Token::Tool) | Some(Token::Agent)) {
                         self.pos += 1;
                     }
                 }
@@ -159,6 +159,83 @@ impl Parser {
                     .unwrap_or(start);
                 Ok(Spanned::new(Item::Trait(t), start..end))
             }
+            Some(Token::Tool) => {
+                self.advance(); // consume 'tool'
+                let mut f = self.parse_fn_def(false)?;
+                f.is_tool = true;
+                let end = f.body.span.end;
+                Ok(Spanned::new(Item::Function(f), start..end))
+            }
+            Some(Token::Agent) => {
+                self.advance(); // consume 'agent'
+                let (name, _) = self.expect_ident()?;
+                self.expect(&Token::LBrace)?;
+
+                let mut model = String::new();
+                let mut tools = Vec::new();
+                let mut system = None;
+
+                while !matches!(self.peek(), Some(Token::RBrace) | None) {
+                    let (key, key_span) = self.expect_ident()?;
+                    self.expect(&Token::Colon)?;
+                    match key.as_str() {
+                        "model" => {
+                            if let Some(Token::String(s)) = self.peek() {
+                                model = s.clone();
+                                self.advance();
+                            } else {
+                                let span = self.peek_span();
+                                return Err(ParseError {
+                                    message: "expected string literal for `model`".to_string(),
+                                    span,
+                                });
+                            }
+                        }
+                        "tools" => {
+                            self.expect(&Token::LBracket)?;
+                            while !matches!(self.peek(), Some(Token::RBracket) | None) {
+                                let (tool_name, _) = self.expect_ident()?;
+                                tools.push(tool_name);
+                                if matches!(self.peek(), Some(Token::Comma)) {
+                                    self.advance();
+                                }
+                            }
+                            self.expect(&Token::RBracket)?;
+                        }
+                        "system" => {
+                            if let Some(Token::String(s)) = self.peek() {
+                                system = Some(s.clone());
+                                self.advance();
+                            } else {
+                                let span = self.peek_span();
+                                return Err(ParseError {
+                                    message: "expected string literal for `system`".to_string(),
+                                    span,
+                                });
+                            }
+                        }
+                        _ => {
+                            return Err(ParseError {
+                                message: format!("unknown agent field `{key}`"),
+                                span: key_span,
+                            });
+                        }
+                    }
+                }
+
+                let end = self.peek_span().end;
+                self.expect(&Token::RBrace)?;
+
+                Ok(Spanned::new(
+                    Item::Agent(AgentDef {
+                        name,
+                        model,
+                        tools,
+                        system_prompt: system,
+                    }),
+                    start..end,
+                ))
+            }
             Some(Token::Import) => {
                 let (names, path) = self.parse_import()?;
                 let end = self.tokens.get(self.pos.saturating_sub(1))
@@ -170,7 +247,7 @@ impl Parser {
                 let span = self.peek_span();
                 let found = self.peek().map(|t| format!("`{t}`")).unwrap_or("end of file".to_string());
                 Err(ParseError {
-                    message: format!("expected `fn`, `async fn`, `struct`, `type`, `impl`, `trait`, or `import`, found {found}"),
+                    message: format!("expected `fn`, `tool`, `agent`, `async fn`, `struct`, `type`, `impl`, `trait`, or `import`, found {found}"),
                     span,
                 })
             }
@@ -180,6 +257,7 @@ impl Parser {
     fn parse_struct_def(&mut self) -> Result<StructDef, ParseError> {
         self.expect(&Token::Struct)?;
         let (name, _) = self.expect_ident()?;
+        let type_params = self.parse_optional_type_params()?;
         self.expect(&Token::LBrace)?;
         let mut fields = Vec::new();
         while !matches!(self.peek(), Some(Token::RBrace) | None) {
@@ -193,12 +271,13 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(StructDef { name, fields })
+        Ok(StructDef { name, type_params, fields })
     }
 
     fn parse_enum_def(&mut self) -> Result<EnumDef, ParseError> {
         self.expect(&Token::TypeKw)?;
         let (name, _) = self.expect_ident()?;
+        let type_params = self.parse_optional_type_params()?;
         self.expect(&Token::LBrace)?;
         let mut variants = Vec::new();
         while !matches!(self.peek(), Some(Token::RBrace) | None) {
@@ -229,7 +308,7 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(EnumDef { name, variants })
+        Ok(EnumDef { name, type_params, variants })
     }
 
     fn parse_impl_block(&mut self) -> Result<ImplBlock, ParseError> {
@@ -325,12 +404,9 @@ impl Parser {
         Ok(f)
     }
 
-    /// Parses the function definition after `fn` has already been consumed.
-    fn parse_fn_def_inner(&mut self) -> Result<FnDef, ParseError> {
-        let (name, _) = self.expect_ident()?;
-
-        // Parse optional type parameters: <T> or <T, U, ...> or <T: Trait, U: Trait>
-        let type_params = if matches!(self.peek(), Some(Token::Less)) {
+    /// Parse optional type parameters: `<T>` or `<T, U, ...>` or `<T: Trait, U: Trait>`
+    fn parse_optional_type_params(&mut self) -> Result<Vec<TypeParam>, ParseError> {
+        if matches!(self.peek(), Some(Token::Less)) {
             self.advance(); // consume <
             let mut params = Vec::new();
             loop {
@@ -359,10 +435,17 @@ impl Parser {
                 }
             }
             self.expect(&Token::Greater)?;
-            params
+            Ok(params)
         } else {
-            Vec::new()
-        };
+            Ok(Vec::new())
+        }
+    }
+
+    /// Parses the function definition after `fn` has already been consumed.
+    fn parse_fn_def_inner(&mut self) -> Result<FnDef, ParseError> {
+        let (name, _) = self.expect_ident()?;
+
+        let type_params = self.parse_optional_type_params()?;
 
         self.expect(&Token::LParen)?;
         let params = self.parse_params()?;
@@ -380,6 +463,7 @@ impl Parser {
         Ok(FnDef {
             name,
             is_async: false,
+            is_tool: false,
             type_params,
             params,
             return_type,
@@ -2023,6 +2107,89 @@ mod tests {
                     panic!("Expected let statement");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_tool_fn() {
+        let source = r#"tool fn search(query: str) -> str { "results" }
+fn main() { search("hello") }"#;
+        let module = parse_source(source);
+        assert_eq!(module.items.len(), 2);
+        if let Item::Function(f) = &module.items[0].node {
+            assert_eq!(f.name, "search");
+            assert!(f.is_tool);
+            assert_eq!(f.params.len(), 1);
+            assert_eq!(f.params[0].name, "query");
+        } else {
+            panic!("Expected Function");
+        }
+        // main should not be a tool fn
+        if let Item::Function(f) = &module.items[1].node {
+            assert_eq!(f.name, "main");
+            assert!(!f.is_tool);
+        }
+    }
+
+    #[test]
+    fn test_agent_declaration() {
+        let source = r#"
+tool fn search(q: str) -> str { "r" }
+agent Helper {
+    model: "claude-sonnet"
+    tools: [search]
+    system: "You help."
+}
+fn main() { }
+"#;
+        let module = parse_source(source);
+        assert_eq!(module.items.len(), 3);
+        if let Item::Agent(agent) = &module.items[1].node {
+            assert_eq!(agent.name, "Helper");
+            assert_eq!(agent.model, "claude-sonnet");
+            assert_eq!(agent.tools, vec!["search"]);
+            assert_eq!(agent.system_prompt, Some("You help.".to_string()));
+        } else {
+            panic!("Expected Agent, got {:?}", module.items[1].node);
+        }
+    }
+
+    #[test]
+    fn test_agent_multiple_tools() {
+        let source = r#"
+tool fn a(x: i64) -> i64 { x }
+tool fn b(x: i64) -> i64 { x }
+agent Bot {
+    model: "gpt-4"
+    tools: [a, b]
+}
+fn main() { }
+"#;
+        let module = parse_source(source);
+        if let Item::Agent(agent) = &module.items[2].node {
+            assert_eq!(agent.name, "Bot");
+            assert_eq!(agent.tools, vec!["a", "b"]);
+            assert_eq!(agent.system_prompt, None);
+        } else {
+            panic!("Expected Agent");
+        }
+    }
+
+    #[test]
+    fn test_agent_no_system_prompt() {
+        let source = r#"
+tool fn t(x: i64) -> i64 { x }
+agent A {
+    model: "test"
+    tools: [t]
+}
+fn main() { }
+"#;
+        let module = parse_source(source);
+        if let Item::Agent(agent) = &module.items[1].node {
+            assert_eq!(agent.system_prompt, None);
+        } else {
+            panic!("Expected Agent");
         }
     }
 }

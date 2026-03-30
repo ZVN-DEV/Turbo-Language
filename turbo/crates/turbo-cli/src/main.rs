@@ -5,6 +5,7 @@ use turbo_ast::{Item, Module};
 use ariadne::{Color, Label, Report, ReportKind, Source};
 
 mod playground;
+mod repl;
 
 #[derive(Parser)]
 #[command(name = "turbo", version, about = "The Turbo programming language compiler")]
@@ -17,8 +18,8 @@ struct Cli {
 enum Commands {
     /// Compile and run a Turbo source file
     Run {
-        /// Path to the .tb source file
-        file: PathBuf,
+        /// Path to the .tb source file (optional if turbo.toml exists)
+        file: Option<PathBuf>,
 
         /// Show verbose output (tokens, AST, timing)
         #[arg(long, short)]
@@ -26,8 +27,8 @@ enum Commands {
     },
     /// Compile a Turbo source file to a native binary
     Build {
-        /// Path to the .tb source file
-        file: PathBuf,
+        /// Path to the .tb source file (optional if turbo.toml exists)
+        file: Option<PathBuf>,
 
         /// Output binary path (default: filename without .tb extension)
         #[arg(long, short)]
@@ -37,6 +38,13 @@ enum Commands {
         #[arg(long, short)]
         verbose: bool,
     },
+    /// Initialize a new Turbo project
+    Init {
+        /// Project name
+        name: String,
+    },
+    /// Start an interactive REPL
+    Repl,
     /// Launch the Turbo Playground in your browser
     Playground {
         /// Port to serve on
@@ -49,10 +57,87 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { file, verbose } => run_file(&file, verbose),
-        Commands::Build { file, output, verbose } => build_file(&file, output.as_deref(), verbose),
+        Commands::Run { file, verbose } => {
+            let path = resolve_entry_file(file);
+            run_file(&path, verbose);
+        }
+        Commands::Build { file, output, verbose } => {
+            let path = resolve_entry_file(file);
+            build_file(&path, output.as_deref(), verbose);
+        }
+        Commands::Init { name } => init_project(&name),
+        Commands::Repl => repl::run_repl(),
         Commands::Playground { port } => playground::serve(port),
     }
+}
+
+/// Resolve the entry file for run/build commands.
+/// If a file is explicitly provided, use it.
+/// If no file is given and `turbo.toml` exists in the current directory, use `src/main.tb`.
+fn resolve_entry_file(file: Option<PathBuf>) -> PathBuf {
+    if let Some(f) = file {
+        return f;
+    }
+
+    let manifest = Path::new("turbo.toml");
+    if manifest.exists() {
+        let entry = PathBuf::from("src/main.tb");
+        if entry.exists() {
+            return entry;
+        }
+        eprintln!("\x1b[1;31merror\x1b[0m: found `turbo.toml` but `src/main.tb` does not exist");
+        std::process::exit(1);
+    }
+
+    eprintln!("\x1b[1;31merror\x1b[0m: no file specified and no `turbo.toml` found in current directory");
+    eprintln!("  Usage: turbo run <file.tb>");
+    eprintln!("  Or run `turbo init <name>` to create a new project");
+    std::process::exit(1);
+}
+
+/// Initialize a new Turbo project with the given name.
+fn init_project(name: &str) {
+    let dir = Path::new(name);
+
+    if dir.exists() {
+        eprintln!("\x1b[1;31merror\x1b[0m: directory `{name}` already exists");
+        std::process::exit(1);
+    }
+
+    std::fs::create_dir_all(dir.join("src")).unwrap_or_else(|e| {
+        eprintln!("\x1b[1;31merror\x1b[0m: could not create directory: {e}");
+        std::process::exit(1);
+    });
+    std::fs::create_dir_all(dir.join("tests")).unwrap_or_else(|e| {
+        eprintln!("\x1b[1;31merror\x1b[0m: could not create directory: {e}");
+        std::process::exit(1);
+    });
+
+    // turbo.toml
+    std::fs::write(
+        dir.join("turbo.toml"),
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n"
+        ),
+    )
+    .unwrap();
+
+    // src/main.tb
+    std::fs::write(
+        dir.join("src/main.tb"),
+        format!("fn main() {{\n    print(\"Hello from {name}!\")\n}}\n"),
+    )
+    .unwrap();
+
+    // tests/main_test.tb
+    std::fs::write(
+        dir.join("tests/main_test.tb"),
+        "fn main() {\n    assert(1 + 1 == 2, \"basic math works\")\n    print(\"All tests passed!\")\n}\n",
+    )
+    .unwrap();
+
+    eprintln!("\x1b[32m\u{2713}\x1b[0m Created project `{name}`");
+    eprintln!("  cd {name} && turbo run");
 }
 
 /// Print a rich error diagnostic using ariadne.
@@ -418,6 +503,9 @@ fn resolve_imports(
                     Item::Impl(imp) if names.contains(&imp.type_name) => {
                         import_items.push(imported_item);
                     }
+                    Item::Agent(a) if names.contains(&a.name) => {
+                        import_items.push(imported_item);
+                    }
                     _ => {}
                 }
             }
@@ -429,6 +517,7 @@ fn resolve_imports(
                     Item::Struct(s) => &s.name == name,
                     Item::Enum(e) => &e.name == name,
                     Item::Impl(imp) => &imp.type_name == name,
+                    Item::Agent(a) => &a.name == name,
                     _ => false,
                 });
                 if !found {
