@@ -1,0 +1,14 @@
+fn double(x: i64) -> i64 { x * 2 }
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn negate(x: i64) -> i64 { 0 - x }
+
+fn main() {
+    let x = 5 |> double
+    print(x)
+
+    let y = 5 |> double |> add(10)
+    print(y)
+
+    let z = 10 |> negate |> double
+    print(z)
+}
