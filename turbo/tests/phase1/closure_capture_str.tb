@@ -1,0 +1,6 @@
+fn main() {
+    let prefix = "Hello"
+    let greet = |name: str| -> str { "{prefix}, {name}!" }
+    print(greet("world"))
+    print(greet("Turbo"))
+}
