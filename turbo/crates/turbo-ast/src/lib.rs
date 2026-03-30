@@ -115,6 +115,7 @@ impl TypeParam {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FnDef {
     pub name: String,
+    pub is_async: bool,
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
@@ -157,6 +158,8 @@ pub enum TypeExpr {
     },
     /// Optional type: T?
     Optional(Box<Spanned<TypeExpr>>),
+    /// Future<T> — the result type of an async function / spawn
+    Future(Box<Spanned<TypeExpr>>),
 }
 
 /// Part of a string interpolation
@@ -298,6 +301,10 @@ pub enum Expr {
         value: Box<Spanned<Expr>>,
         default: Box<Spanned<Expr>>,
     },
+    /// Await expression: await expr
+    Await(Box<Spanned<Expr>>),
+    /// Spawn expression: spawn expr
+    Spawn(Box<Spanned<Expr>>),
 }
 
 /// Statements (things that don't produce values in statement position)

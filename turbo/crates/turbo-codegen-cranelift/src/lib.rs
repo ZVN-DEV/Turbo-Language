@@ -88,6 +88,8 @@ fn turbo_ty_from_type_expr_with_params(te: &TypeExpr, enum_variants: &HashMap<St
             let inner_tty = turbo_ty_from_type_expr(&inner.node, enum_variants);
             TurboTy::Optional(Box::new(inner_tty))
         }
+        // Sprint 9: Future<T> compiles identically to T
+        TypeExpr::Future(inner) => turbo_ty_from_type_expr_with_params(&inner.node, enum_variants, type_params),
     }
 }
 
@@ -582,6 +584,7 @@ fn has_return(expr: &Expr) -> bool {
             has_return(&callee.node) || args.iter().any(|a| has_return(&a.node))
         }
         Expr::Assign { value, .. } | Expr::CompoundAssign { value, .. } => has_return(&value.node),
+        Expr::Await(inner) | Expr::Spawn(inner) => has_return(&inner.node),
         Expr::FieldAssign { object, value, .. } => {
             has_return(&object.node) || has_return(&value.node)
         }
@@ -771,6 +774,9 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
             collect_free_vars(&value.node, bound, free);
             collect_free_vars(&default.node, bound, free);
         }
+        Expr::Await(inner) | Expr::Spawn(inner) => {
+            collect_free_vars(&inner.node, bound, free);
+        }
         Expr::EnumVariant { .. } | Expr::IntLit(_) | Expr::FloatLit(_)
         | Expr::StringLit(_) | Expr::BoolLit(_) | Expr::Unit | Expr::NoneExpr => {}
     }
@@ -892,6 +898,9 @@ fn extract_closures_from_expr<'a>(
         Expr::NullCoalesce { value, default } => {
             extract_closures_from_expr(value, out, counter);
             extract_closures_from_expr(default, out, counter);
+        }
+        Expr::Await(inner) | Expr::Spawn(inner) => {
+            extract_closures_from_expr(inner, out, counter);
         }
         _ => {} // Literals, Ident, Unit, NoneExpr, etc. -- no sub-expressions with closures
     }
@@ -1458,6 +1467,8 @@ fn resolve_cl_type_inner(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &H
         TypeExpr::FnType { .. } => Ok(ptr_type), // Function pointers are pointers
         TypeExpr::Result { .. } => Ok(ptr_type), // Result types are heap-allocated tagged unions
         TypeExpr::Optional(_) => Ok(ptr_type), // Optional types are heap-allocated tagged unions
+        // Sprint 9: Future<T> compiles identically to T
+        TypeExpr::Future(inner) => resolve_cl_type_inner(&inner.node, ptr_type, enum_variants, type_params, enum_max_slots),
     }
 }
 
@@ -1659,6 +1670,12 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
         }
 
         Expr::While { condition, body } => compile_while(cx, condition, body),
+
+        // Sprint 9: await is a no-op wrapper — just compile the inner expression
+        Expr::Await(inner) => compile_expr(cx, inner),
+
+        // Sprint 9: spawn is synchronous — just compile and execute immediately
+        Expr::Spawn(inner) => compile_expr(cx, inner),
 
         Expr::ForIn { var_name, iterable, body } => compile_for_in(cx, var_name, iterable, body),
 

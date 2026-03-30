@@ -106,9 +106,9 @@ impl Parser {
                 Ok(item) => items.push(item),
                 Err(e) => {
                     self.errors.push(e);
-                    // Skip to next `fn`, `struct`, or `type` to recover
+                    // Skip to next `fn`, `async`, `struct`, or `type` to recover
                     self.pos += 1;
-                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Struct) | Some(Token::TypeKw) | Some(Token::Import) | Some(Token::Trait) | Some(Token::Impl)) {
+                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Async) | Some(Token::Struct) | Some(Token::TypeKw) | Some(Token::Import) | Some(Token::Trait) | Some(Token::Impl)) {
                         self.pos += 1;
                     }
                 }
@@ -121,7 +121,15 @@ impl Parser {
         let start = self.peek_span().start;
         match self.peek() {
             Some(Token::Fn) => {
-                let f = self.parse_fn_def()?;
+                let f = self.parse_fn_def(false)?;
+                let end = f.body.span.end;
+                Ok(Spanned::new(Item::Function(f), start..end))
+            }
+            Some(Token::Async) => {
+                self.advance(); // consume `async`
+                self.expect(&Token::Fn)?;
+                let mut f = self.parse_fn_def_inner()?;
+                f.is_async = true;
                 let end = f.body.span.end;
                 Ok(Spanned::new(Item::Function(f), start..end))
             }
@@ -162,7 +170,7 @@ impl Parser {
                 let span = self.peek_span();
                 let found = self.peek().map(|t| format!("`{t}`")).unwrap_or("end of file".to_string());
                 Err(ParseError {
-                    message: format!("expected `fn`, `struct`, `type`, `impl`, `trait`, or `import`, found {found}"),
+                    message: format!("expected `fn`, `async fn`, `struct`, `type`, `impl`, `trait`, or `import`, found {found}"),
                     span,
                 })
             }
@@ -241,7 +249,7 @@ impl Parser {
         let mut methods = Vec::new();
         while !matches!(self.peek(), Some(Token::RBrace) | None) {
             let start = self.peek_span().start;
-            let f = self.parse_fn_def()?;
+            let f = self.parse_fn_def(false)?;
             let end = f.body.span.end;
             methods.push(Spanned::new(f, start..end));
         }
@@ -310,8 +318,15 @@ impl Parser {
         Ok((names, path))
     }
 
-    fn parse_fn_def(&mut self) -> Result<FnDef, ParseError> {
+    fn parse_fn_def(&mut self, is_async: bool) -> Result<FnDef, ParseError> {
         self.expect(&Token::Fn)?;
+        let mut f = self.parse_fn_def_inner()?;
+        f.is_async = is_async;
+        Ok(f)
+    }
+
+    /// Parses the function definition after `fn` has already been consumed.
+    fn parse_fn_def_inner(&mut self) -> Result<FnDef, ParseError> {
         let (name, _) = self.expect_ident()?;
 
         // Parse optional type parameters: <T> or <T, U, ...> or <T: Trait, U: Trait>
@@ -364,6 +379,7 @@ impl Parser {
 
         Ok(FnDef {
             name,
+            is_async: false,
             type_params,
             params,
             return_type,
@@ -815,6 +831,26 @@ impl Parser {
                     op: UnaryOp::Not,
                     expr: Box::new(expr),
                 },
+                start..end,
+            ));
+        }
+
+        if matches!(self.peek(), Some(Token::Await)) {
+            self.advance();
+            let expr = self.parse_unary()?;
+            let end = expr.span.end;
+            return Ok(Spanned::new(
+                Expr::Await(Box::new(expr)),
+                start..end,
+            ));
+        }
+
+        if matches!(self.peek(), Some(Token::Spawn)) {
+            self.advance();
+            let expr = self.parse_unary()?;
+            let end = expr.span.end;
+            return Ok(Spanned::new(
+                Expr::Spawn(Box::new(expr)),
                 start..end,
             ));
         }
@@ -1923,5 +1959,70 @@ mod tests {
         "#;
         let module = parse_source(source);
         assert_eq!(module.items.len(), 2);
+    }
+
+    #[test]
+    fn test_async_fn() {
+        let source = "async fn compute(x: i64) -> i64 { x * x }\nfn main() { }";
+        let module = parse_source(source);
+        assert_eq!(module.items.len(), 2);
+        if let Item::Function(f) = &module.items[0].node {
+            assert_eq!(f.name, "compute");
+            assert!(f.is_async);
+            assert_eq!(f.params.len(), 1);
+        } else {
+            panic!("Expected function");
+        }
+    }
+
+    #[test]
+    fn test_sync_fn_not_async() {
+        let source = "fn main() { }";
+        let module = parse_source(source);
+        if let Item::Function(f) = &module.items[0].node {
+            assert!(!f.is_async);
+        }
+    }
+
+    #[test]
+    fn test_await_expr() {
+        let source = "fn main() { await foo() }";
+        let module = parse_source(source);
+        if let Item::Function(f) = &module.items[0].node {
+            if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+                assert!(matches!(tail.node, Expr::Await(_)));
+            } else {
+                panic!("Expected tail expr");
+            }
+        }
+    }
+
+    #[test]
+    fn test_spawn_expr() {
+        let source = "fn main() { spawn foo() }";
+        let module = parse_source(source);
+        if let Item::Function(f) = &module.items[0].node {
+            if let Expr::Block { tail_expr: Some(tail), .. } = &f.body.node {
+                assert!(matches!(tail.node, Expr::Spawn(_)));
+            } else {
+                panic!("Expected tail expr");
+            }
+        }
+    }
+
+    #[test]
+    fn test_await_in_let() {
+        let source = "fn main() { let x = await compute(5) }";
+        let module = parse_source(source);
+        if let Item::Function(f) = &module.items[0].node {
+            if let Expr::Block { stmts, .. } = &f.body.node {
+                assert_eq!(stmts.len(), 1);
+                if let Stmt::Let { value, .. } = &stmts[0].node {
+                    assert!(matches!(value.node, Expr::Await(_)));
+                } else {
+                    panic!("Expected let statement");
+                }
+            }
+        }
     }
 }

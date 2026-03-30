@@ -37,6 +37,8 @@ pub enum Ty {
     Result(Box<Ty>, Box<Ty>),
     /// Optional type: Optional<inner>
     Optional(Box<Ty>),
+    /// Future<T> — result of spawn / async function call
+    Future(Box<Ty>),
     /// A generic type parameter (e.g., `T`)
     TypeParam(String),
     /// Type could not be determined (error recovery)
@@ -68,6 +70,7 @@ impl std::fmt::Display for Ty {
             }
             Ty::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
             Ty::Optional(inner) => write!(f, "{}?", inner),
+            Ty::Future(inner) => write!(f, "Future<{inner}>"),
             Ty::TypeParam(name) => write!(f, "{name}"),
             Ty::Error => write!(f, "<error>"),
         }
@@ -173,6 +176,9 @@ fn resolve_type_expr_with_params(te: &TypeExpr, structs: Option<&HashMap<String,
         TypeExpr::Optional(inner) => {
             resolve_type_expr(&inner.node, structs, enums).map(|t| Ty::Optional(Box::new(t)))
         }
+        TypeExpr::Future(inner) => {
+            resolve_type_expr(&inner.node, structs, enums).map(|t| Ty::Future(Box::new(t)))
+        }
     }
 }
 
@@ -190,6 +196,7 @@ struct FnSig {
     type_param_bounds: HashMap<String, Vec<String>>,
     params: Vec<(String, Ty)>,
     ret: Ty,
+    is_async: bool,
 }
 
 /// Scope for variable tracking
@@ -492,7 +499,7 @@ impl Checker {
                 Ty::Unit
             };
 
-            self.functions.insert(f.name.clone(), FnSig { type_params: tp_names, type_param_bounds: tp_bounds, params, ret });
+            self.functions.insert(f.name.clone(), FnSig { type_params: tp_names, type_param_bounds: tp_bounds, params, ret, is_async: f.is_async });
         }
 
         // Pass 2: register impl block methods
@@ -557,7 +564,7 @@ impl Checker {
                 };
 
                 let mangled = format!("{}__{}", imp.type_name, method.name);
-                let sig = FnSig { type_params: Vec::new(), type_param_bounds: HashMap::new(), params, ret };
+                let sig = FnSig { type_params: Vec::new(), type_param_bounds: HashMap::new(), params, ret, is_async: false };
                 new_methods.push((method.name.clone(), sig, mangled));
             }
 
@@ -1618,6 +1625,26 @@ impl Checker {
                 }
                 self.check_expr(body);
                 Ty::Unit
+            }
+
+            Expr::Await(inner) => {
+                let ty = self.check_expr(inner);
+                // In Sprint 9, await on a Future<T> yields T.
+                // Await on a non-future type just passes through (sync await).
+                match ty {
+                    Ty::Future(inner_ty) => *inner_ty,
+                    other => other,
+                }
+            }
+
+            Expr::Spawn(inner) => {
+                let ty = self.check_expr(inner);
+                // spawn wraps the result in Future<T>
+                if ty.is_error() {
+                    Ty::Error
+                } else {
+                    Ty::Future(Box::new(ty))
+                }
             }
 
             Expr::Range { start, end } => {
@@ -2708,6 +2735,38 @@ fn main() { first(1, "hello") }"#,
         assert_has_error(
             "fn identity<T>(x: T) -> T { x }\nfn main() { identity(1, 2) }",
             "expects 1 argument(s) but 2 were given",
+        );
+    }
+
+    #[test]
+    fn test_async_fn_valid() {
+        assert_no_errors(
+            "async fn compute(x: i64) -> i64 { x * x + 1 }\nasync fn main() { let r = await compute(5)\n print(r) }",
+        );
+    }
+
+    #[test]
+    fn test_async_fn_return_type_mismatch() {
+        assert_has_error(
+            r#"async fn bad() -> i64 { "hello" }
+fn main() { }"#,
+            "should return `i64` but body returns `str`",
+        );
+    }
+
+    #[test]
+    fn test_spawn_creates_future() {
+        // spawn wraps result in Future<T>, await unwraps it
+        assert_no_errors(
+            "async fn square(x: i64) -> i64 { x * x }\nasync fn main() { let f = spawn square(3)\n let r = await f\n print(r) }",
+        );
+    }
+
+    #[test]
+    fn test_await_passthrough_non_future() {
+        // await on a non-future type just passes through
+        assert_no_errors(
+            "fn compute(x: i64) -> i64 { x + 1 }\nfn main() { let r = await compute(5)\n print(r) }",
         );
     }
 }

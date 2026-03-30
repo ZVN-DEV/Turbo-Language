@@ -1,0 +1,7 @@
+async fn slow_square(x: i64) -> i64 { x * x }
+
+async fn main() {
+    let a = spawn slow_square(3)
+    let b = spawn slow_square(4)
+    print(await a + await b)
+}

@@ -1,0 +1,8 @@
+async fn compute(x: i64) -> i64 {
+    x * x + 1
+}
+
+async fn main() {
+    let result = await compute(5)
+    print(result)
+}
