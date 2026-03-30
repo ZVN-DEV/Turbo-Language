@@ -384,6 +384,7 @@ fn format_type(ty: &turbo_ast::TypeExpr) -> String {
         turbo_ast::TypeExpr::Future(inner) => {
             format!("Future<{}>", format_type(&inner.node))
         }
+        turbo_ast::TypeExpr::Inferred => "_".to_string(),
     }
 }
 
