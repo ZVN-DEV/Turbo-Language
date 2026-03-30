@@ -1,0 +1,7 @@
+fn main() {
+    let words = "hello,world,turbo"
+    let parts = words.split(",")
+    for p in parts { print(p.upper()) }
+
+    print(words.split(",").len())
+}
