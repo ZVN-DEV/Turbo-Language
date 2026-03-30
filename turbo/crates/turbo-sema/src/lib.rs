@@ -194,7 +194,6 @@ struct VarInfo {
 
 /// Function signature
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields stored for future use in type checking and diagnostics
 struct FnSig {
     type_params: Vec<String>,
     type_param_bounds: HashMap<String, Vec<String>>,
@@ -211,7 +210,6 @@ struct Scope {
 
 /// Registered agent info for semantic checking
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields stored for future agent validation and codegen
 struct AgentInfo {
     model: String,
     tools: Vec<String>,
@@ -220,7 +218,6 @@ struct AgentInfo {
 
 /// Struct field info for the checker
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields stored for future generic type validation
 struct StructInfo {
     fields: Vec<(String, Ty)>,
     /// Type parameter names for generic structs
@@ -229,7 +226,6 @@ struct StructInfo {
 
 /// Enum info (variant names + field types)
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields stored for future generic enum validation
 struct EnumInfo {
     /// Variant name -> field types (empty vec for unit variants)
     variants: Vec<(String, Vec<Ty>)>,
@@ -262,7 +258,6 @@ struct TraitInfo {
 
 /// Trait method signature info
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields stored for future trait method validation
 struct TraitMethodInfo {
     name: String,
     params: Vec<(String, Ty)>,
@@ -2024,13 +2019,7 @@ impl Checker {
                     BinOp::Mul => "*",
                     BinOp::Div => "/",
                     BinOp::Mod => "%",
-                    other => {
-                        self.error(
-                            format!("unsupported compound assignment operator `{other:?}`"),
-                            expr.span.clone(),
-                        );
-                        "?"
-                    }
+                    other => panic!("unexpected compound assign operator: {other:?}"),
                 };
 
                 if let Some(info) = self.lookup_var(target).cloned() {

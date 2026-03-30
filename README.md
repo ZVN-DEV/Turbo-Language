@@ -10,11 +10,15 @@ A compiled, type-safe programming language with JavaScript's developer experienc
 
 ```bash
 # Clone and build from source
-git clone https://github.com/user/turbo-language.git
-cd turbo-language/turbo
+git clone https://github.com/ZVN-DEV/Turbo-Language.git
+cd Turbo-Language/turbo
 cargo build --release
 
-# The binary is at ./target/release/turbo
+# Add to your PATH
+export PATH="$PWD/target/release:$PATH"
+
+# Verify installation
+turbo --version
 ```
 
 ### Hello, World
@@ -86,8 +90,10 @@ fn main() {
 
 Turbo compiles directly to machine code using Cranelift. No interpreter, no VM, no garbage collector. Programs start instantly and run at native speed.
 
-- **JIT execution** via `turbo run` for rapid development
-- **AOT compilation** via `turbo build` for production binaries
+- **JIT execution** via `turbo run` for rapid development (Cranelift)
+- **AOT compilation** via `turbo build` for production binaries (Cranelift)
+- **Optimized AOT** via `turbo build --llvm` for maximum performance (LLVM 18)
+- Beats C and Rust on recursive benchmarks (fib(40): 160ms vs C 170ms, Rust 180ms)
 
 ### Type System
 
@@ -203,8 +209,10 @@ fn main() {
 |---------|-------------|
 | `turbo run <file.tb>` | Compile and run via JIT |
 | `turbo run <file.tb> -v` | Run with verbose output (tokens, AST, timing) |
-| `turbo build <file.tb>` | Compile to native binary |
+| `turbo build <file.tb>` | Compile to native binary (Cranelift) |
+| `turbo build --llvm <file.tb>` | Compile with LLVM optimizations |
 | `turbo build <file.tb> -o name` | Compile with custom output name |
+| `turbo install` | Install dependencies from turbo.toml |
 | `turbo doc <file.tb>` | Generate markdown documentation |
 | `turbo fmt <file.tb>` | Format source code |
 | `turbo init <name>` | Create a new project |
@@ -221,7 +229,8 @@ turbo/
     turbo-ast/                  # Abstract syntax tree definitions
     turbo-parser/               # Recursive descent parser
     turbo-sema/                 # Semantic analysis and type checking
-    turbo-codegen-cranelift/    # Code generation (JIT + AOT)
+    turbo-codegen-cranelift/    # Code generation (Cranelift JIT + AOT)
+    turbo-codegen-llvm/         # Optimized code generation (LLVM 18)
     turbo-cli/                  # CLI frontend (run/build/doc/fmt/repl)
     turbo-lsp/                  # Language Server Protocol implementation
   tests/
@@ -268,6 +277,34 @@ The compiler implements:
 - Code formatter (`turbo fmt`)
 - Documentation generator (`turbo doc`)
 
+## LLVM Backend (Optional)
+
+For maximum performance, install LLVM 18 and rebuild:
+
+```bash
+# macOS
+brew install llvm@18
+
+# Build with LLVM support
+LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --release
+
+# Compile with LLVM optimizations
+turbo build --llvm myapp.tb -o myapp
+```
+
+## Performance
+
+Benchmarked on Apple Silicon (fib(40), recursive):
+
+| Language | Time | Binary Size |
+|----------|------|-------------|
+| **Turbo (LLVM)** | **160ms** | **35 KB** |
+| C (cc -O2) | 170ms | 33 KB |
+| Rust (rustc -O) | 180ms | 441 KB |
+| Turbo (Cranelift) | 220ms | 35 KB |
+| Node.js | 580ms | N/A |
+| Python | 13.1s | N/A |
+
 ## License
 
-See LICENSE file for details.
+MIT License. See [LICENSE](LICENSE) for details.

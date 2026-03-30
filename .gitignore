@@ -1,0 +1,28 @@
+# Build artifacts
+target/
+turbo/target/
+benchmarks/*/target/
+
+# Dependencies
+turbo_modules/
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude worktrees
+.claude/
+
+# Temp files
+*.o
+*.a
+*.dylib
+*.so
+/tmp/
