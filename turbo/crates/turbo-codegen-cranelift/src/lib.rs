@@ -42,6 +42,8 @@ enum TurboTy {
     Optional(Box<TurboTy>),
     /// Agent type: heap-allocated struct with model/system/tools fields
     Agent(String),
+    /// Future type: a spawned thread handle (pointer to JoinHandle)
+    Future(Box<TurboTy>),
 }
 
 fn turbo_ty_from_type_expr(te: &TypeExpr, enum_variants: &HashMap<String, Vec<String>>) -> TurboTy {
@@ -90,8 +92,11 @@ fn turbo_ty_from_type_expr_with_params(te: &TypeExpr, enum_variants: &HashMap<St
             let inner_tty = turbo_ty_from_type_expr(&inner.node, enum_variants);
             TurboTy::Optional(Box::new(inner_tty))
         }
-        // Sprint 9: Future<T> compiles identically to T
-        TypeExpr::Future(inner) => turbo_ty_from_type_expr_with_params(&inner.node, enum_variants, type_params),
+        // Future<T> is a thread handle pointer (underlying value is i64/ptr)
+        TypeExpr::Future(inner) => {
+            let inner_tty = turbo_ty_from_type_expr_with_params(&inner.node, enum_variants, type_params);
+            TurboTy::Future(Box::new(inner_tty))
+        }
     }
 }
 
@@ -460,10 +465,16 @@ extern "C" fn rt_sleep_ms(ms: i64) {
     std::thread::sleep(std::time::Duration::from_millis(ms as u64));
 }
 
-/// Spawn a thunk (zero-arg function returning i64) on a new OS thread.
+/// Spawn a thunk with an args pointer on a new OS thread.
+/// The thunk is `extern "C" fn(args_ptr: *mut u8) -> i64`.
 /// Returns a pointer to a heap-allocated JoinHandle.
-extern "C" fn rt_spawn_thunk(thunk: extern "C" fn() -> i64) -> *mut u8 {
-    let handle = std::thread::spawn(move || thunk());
+extern "C" fn rt_spawn_with_args(
+    thunk: extern "C" fn(*mut u8) -> i64,
+    args_ptr: *mut u8,
+) -> *mut u8 {
+    // Cast pointer to usize (which is Send) to pass across thread boundary
+    let args_addr = args_ptr as usize;
+    let handle = std::thread::spawn(move || thunk(args_addr as *mut u8));
     let boxed: Box<std::thread::JoinHandle<i64>> = Box::new(handle);
     Box::into_raw(boxed) as *mut u8
 }
@@ -648,7 +659,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_sqrt", rt_sqrt as *const u8);
     // Async runtime symbols
     jit_builder.symbol("rt_sleep_ms", rt_sleep_ms as *const u8);
-    jit_builder.symbol("rt_spawn_thunk", rt_spawn_thunk as *const u8);
+    jit_builder.symbol("rt_spawn_with_args", rt_spawn_with_args as *const u8);
     jit_builder.symbol("rt_await_handle", rt_await_handle as *const u8);
 
     let mut module = JITModule::new(jit_builder);
@@ -817,6 +828,7 @@ fn turbo_ty_to_cl_type(tty: &TurboTy, ptr_type: types::Type) -> types::Type {
         TurboTy::Result(_, _) => ptr_type,
         TurboTy::Optional(_) => ptr_type,
         TurboTy::Agent(_) => ptr_type, // heap-allocated struct pointer
+        TurboTy::Future(_) => ptr_type, // thread handle pointer
     }
 }
 
@@ -1292,7 +1304,7 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_sqrt", &[types::F64], Some(types::F64))?;
     // Async runtime declarations
     declare_rt_fn(module, &mut rt_fns, "rt_sleep_ms", &[types::I64], None)?;
-    declare_rt_fn(module, &mut rt_fns, "rt_spawn_thunk", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_spawn_with_args", &[ptr_type, ptr_type], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_await_handle", &[ptr_type], Some(types::I64))?;
 
     // Build enum variants map
@@ -1772,6 +1784,80 @@ fn compile_module<M: Module>(
         module.clear_context(&mut cl_ctx);
     }
 
+    // Compile spawn thunk function bodies
+    // Each thunk: loads fn_ptr + args from an args struct, calls the target, returns result
+    for site in &spawn_sites {
+        let func_id = user_fns[&site.thunk_name];
+
+        cl_ctx.func.signature = module.make_signature();
+        // Default (SystemV/C ABI) calling convention — callable from rt_spawn_thunk
+        cl_ctx.func.signature.params.push(AbiParam::new(ptr_type)); // args_struct_ptr
+        cl_ctx.func.signature.returns.push(AbiParam::new(types::I64));
+
+        let mut fn_ctx = FunctionBuilderContext::new();
+        {
+            let mut builder = FunctionBuilder::new(&mut cl_ctx.func, &mut fn_ctx);
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            builder.ensure_inserted_block();
+
+            let args_ptr = builder.block_params(entry)[0];
+
+            // Load fn_ptr from offset 0
+            let fn_ptr = builder.ins().load(ptr_type, MemFlags::new(), args_ptr, 0);
+
+            // Load each argument from the struct (offset 8, 16, 24, ...)
+            let mut arg_vals = Vec::new();
+            for i in 0..site.num_args {
+                let offset = ((i + 1) * 8) as i32;
+                let val = builder.ins().load(types::I64, MemFlags::new(), args_ptr, offset);
+                arg_vals.push(val);
+            }
+
+            // Build the call signature for the target function (Fast calling convention)
+            let target_func_id = user_fns.get(&site.callee_name);
+            if let Some(&target_fid) = target_func_id {
+                // Use direct call to the target function — but we can't because
+                // the fn_ptr is loaded dynamically. Use call_indirect instead.
+                let mut callee_sig = module.make_signature();
+                callee_sig.call_conv = CallConv::Fast;
+                for _ in 0..site.num_args {
+                    callee_sig.params.push(AbiParam::new(types::I64));
+                }
+                // Check if the target function has a return type
+                let has_return = fn_ret_types.get(&site.callee_name)
+                    .map(|t| *t != TurboTy::Unit)
+                    .unwrap_or(false);
+                if has_return {
+                    callee_sig.returns.push(AbiParam::new(types::I64));
+                }
+                let sig_ref = builder.import_signature(callee_sig);
+                let call = builder.ins().call_indirect(sig_ref, fn_ptr, &arg_vals);
+                let results = builder.inst_results(call);
+                if !results.is_empty() {
+                    let result = results[0];
+                    builder.ins().return_(&[result]);
+                } else {
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    builder.ins().return_(&[zero]);
+                }
+                let _ = target_fid; // used indirectly via fn_ptr
+            } else {
+                // Unknown function — return 0
+                let zero = builder.ins().iconst(types::I64, 0);
+                builder.ins().return_(&[zero]);
+            }
+
+            builder.finalize();
+        }
+
+        module.define_function(func_id, &mut cl_ctx)
+            .map_err(|e| CodegenError { message: e.to_string() })?;
+        module.clear_context(&mut cl_ctx);
+    }
+
     Ok(user_fns)
 }
 
@@ -2046,11 +2132,94 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
 
         Expr::While { condition, body } => compile_while(cx, condition, body),
 
-        // Sprint 9: await is a no-op wrapper — just compile the inner expression
-        Expr::Await(inner) => compile_expr(cx, inner),
+        // Await: if the inner value is a Future (thread handle), join it.
+        // Otherwise (direct function call), just pass through.
+        Expr::Await(inner) => {
+            let result = compile_expr(cx, inner)?;
+            if let Some((val, tty)) = result {
+                match tty {
+                    TurboTy::Future(inner_tty) => {
+                        // This is a spawned thread handle — join it
+                        let fid = cx.rt_fns["rt_await_handle"];
+                        let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                        let call = cx.builder.ins().call(fref, &[val]);
+                        let result_val = cx.builder.inst_results(call)[0];
+                        Ok(Some((result_val, *inner_tty)))
+                    }
+                    _ => {
+                        // Not a future — pass through (sync await)
+                        Ok(Some((val, tty)))
+                    }
+                }
+            } else {
+                Ok(None)
+            }
+        }
 
-        // Sprint 9: spawn is synchronous — just compile and execute immediately
-        Expr::Spawn(inner) => compile_expr(cx, inner),
+        // Spawn: create an args struct, get thunk fn_ptr, call rt_spawn_with_args
+        Expr::Spawn(inner) => {
+            let span_start = expr.span.start;
+            if let Some(thunk_name) = cx.spawn_thunks.get(&span_start).cloned() {
+                if let Expr::Call { callee, args } = &inner.node {
+                    if let Expr::Ident(callee_name) = &callee.node {
+                        // Determine the return type of the spawned function
+                        let inner_ret_tty = cx.fn_ret_types.get(callee_name.as_str())
+                            .cloned().unwrap_or(TurboTy::Unit);
+
+                        // Get the target function's address
+                        let target_fid = *cx.user_fns.get(callee_name.as_str())
+                            .ok_or_else(|| CodegenError { message: format!("spawn: unknown function `{}`", callee_name) })?;
+                        let target_fref = cx.module.declare_func_in_func(target_fid, cx.builder.func);
+                        let target_fn_ptr = cx.builder.ins().func_addr(cx.ptr_type, target_fref);
+
+                        // Compile all arguments
+                        let mut arg_vals = Vec::new();
+                        for arg in args {
+                            if let Some((val, tty)) = compile_expr(cx, arg)? {
+                                let val = match tty {
+                                    TurboTy::Bool => cx.builder.ins().sextend(types::I64, val),
+                                    TurboTy::Float => cx.builder.ins().bitcast(types::I64, MemFlags::new(), val),
+                                    _ => val,
+                                };
+                                arg_vals.push(val);
+                            }
+                        }
+
+                        // Allocate args struct: [fn_ptr, arg0, arg1, ...]
+                        let num_slots = (1 + arg_vals.len()) as i64;
+                        let num_slots_val = cx.builder.ins().iconst(types::I64, num_slots);
+                        let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+                        let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+                        let call = cx.builder.ins().call(alloc_fref, &[num_slots_val]);
+                        let args_ptr = cx.builder.inst_results(call)[0];
+
+                        // Store fn_ptr at offset 0
+                        cx.builder.ins().store(MemFlags::new(), target_fn_ptr, args_ptr, 0);
+                        // Store args at offsets 8, 16, 24, ...
+                        for (i, val) in arg_vals.iter().enumerate() {
+                            let offset = ((i + 1) * 8) as i32;
+                            cx.builder.ins().store(MemFlags::new(), *val, args_ptr, offset);
+                        }
+
+                        // Get the thunk function address
+                        let thunk_fid = *cx.user_fns.get(thunk_name.as_str())
+                            .ok_or_else(|| CodegenError { message: format!("spawn: thunk `{}` not found", thunk_name) })?;
+                        let thunk_fref = cx.module.declare_func_in_func(thunk_fid, cx.builder.func);
+                        let thunk_fn_ptr = cx.builder.ins().func_addr(cx.ptr_type, thunk_fref);
+
+                        // Call rt_spawn_with_args(thunk_ptr, args_ptr) -> handle
+                        let spawn_fid = cx.rt_fns["rt_spawn_with_args"];
+                        let spawn_fref = cx.module.declare_func_in_func(spawn_fid, cx.builder.func);
+                        let call = cx.builder.ins().call(spawn_fref, &[thunk_fn_ptr, args_ptr]);
+                        let handle = cx.builder.inst_results(call)[0];
+
+                        return Ok(Some((handle, TurboTy::Future(Box::new(inner_ret_tty)))));
+                    }
+                }
+            }
+            // Fallback: synchronous execution (backward compat)
+            compile_expr(cx, inner)
+        }
 
         Expr::ForIn { var_name, iterable, body } => compile_for_in(cx, var_name, iterable, body),
 
@@ -3121,6 +3290,10 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
                 let ptr = cx.create_string(&format!("[agent {}]", name))?;
                 cx.rt_call("rt_print_str", &[ptr]);
             }
+            TurboTy::Future(_) => {
+                let ptr = cx.create_string("[future]")?;
+                cx.rt_call("rt_print_str", &[ptr]);
+            }
         }
     } else {
         let ptr = cx.create_string("()")?;
@@ -3873,6 +4046,9 @@ fn convert_to_str<M: Module>(
         }
         TurboTy::Agent(ref name) => {
             cx.create_string(&format!("[agent {}]", name))
+        }
+        TurboTy::Future(_) => {
+            cx.create_string("[future]")
         }
     }
 }

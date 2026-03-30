@@ -1,0 +1,5 @@
+async fn main() {
+    print("start")
+    await sleep(10)
+    print("end")
+}

@@ -1,0 +1,10 @@
+async fn work(n: i64) -> i64 {
+    await sleep(50)
+    n * n
+}
+
+async fn main() {
+    let a = spawn work(3)
+    let b = spawn work(4)
+    print(await a + await b)
+}
