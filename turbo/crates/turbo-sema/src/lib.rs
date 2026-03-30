@@ -197,11 +197,20 @@ struct FnSig {
     params: Vec<(String, Ty)>,
     ret: Ty,
     is_async: bool,
+    is_tool: bool,
 }
 
 /// Scope for variable tracking
 struct Scope {
     vars: HashMap<String, VarInfo>,
+}
+
+/// Registered agent info for semantic checking
+#[derive(Debug, Clone)]
+struct AgentInfo {
+    model: String,
+    tools: Vec<String>,
+    system_prompt: Option<String>,
 }
 
 /// Struct field info for the checker
@@ -252,6 +261,7 @@ struct TraitMethodInfo {
 struct Checker {
     errors: Vec<SemaError>,
     functions: HashMap<String, FnSig>,
+    agents: HashMap<String, AgentInfo>,
     structs: HashMap<String, StructInfo>,
     enums: HashMap<String, EnumInfo>,
     /// Methods: type_name -> method_name -> FnSig
@@ -280,6 +290,7 @@ impl Checker {
         Self {
             errors: Vec::new(),
             functions: HashMap::new(),
+            agents: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
             methods: HashMap::new(),
@@ -499,7 +510,54 @@ impl Checker {
                 Ty::Unit
             };
 
-            self.functions.insert(f.name.clone(), FnSig { type_params: tp_names, type_param_bounds: tp_bounds, params, ret, is_async: f.is_async });
+            self.functions.insert(f.name.clone(), FnSig { type_params: tp_names, type_param_bounds: tp_bounds, params, ret, is_async: f.is_async, is_tool: f.is_tool });
+        }
+
+        // Pass 1b: register agent declarations
+        for item in &module.items {
+            let Item::Agent(agent) = &item.node else { continue };
+            if self.agents.contains_key(&agent.name) {
+                self.error(
+                    format!("agent `{}` is already defined", agent.name),
+                    item.span.clone(),
+                );
+                continue;
+            }
+            self.agents.insert(agent.name.clone(), AgentInfo {
+                model: agent.model.clone(),
+                tools: agent.tools.clone(),
+                system_prompt: agent.system_prompt.clone(),
+            });
+        }
+
+        // Validate agent tool references point to actual tool functions
+        for item in &module.items {
+            if let Item::Agent(agent) = &item.node {
+                for tool_name in &agent.tools {
+                    match self.functions.get(tool_name) {
+                        Some(sig) => {
+                            if !sig.is_tool {
+                                self.error(
+                                    format!(
+                                        "function `{tool_name}` in agent `{}` is not a `tool fn`",
+                                        agent.name
+                                    ),
+                                    item.span.clone(),
+                                );
+                            }
+                        }
+                        None => {
+                            self.error(
+                                format!(
+                                    "undefined tool function `{tool_name}` in agent `{}`",
+                                    agent.name
+                                ),
+                                item.span.clone(),
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         // Pass 2: register impl block methods
@@ -564,7 +622,7 @@ impl Checker {
                 };
 
                 let mangled = format!("{}__{}", imp.type_name, method.name);
-                let sig = FnSig { type_params: Vec::new(), type_param_bounds: HashMap::new(), params, ret, is_async: false };
+                let sig = FnSig { type_params: Vec::new(), type_param_bounds: HashMap::new(), params, ret, is_async: false, is_tool: false };
                 new_methods.push((method.name.clone(), sig, mangled));
             }
 
@@ -2767,6 +2825,79 @@ fn main() { }"#,
         // await on a non-future type just passes through
         assert_no_errors(
             "fn compute(x: i64) -> i64 { x + 1 }\nfn main() { let r = await compute(5)\n print(r) }",
+        );
+    }
+
+    #[test]
+    fn test_tool_fn_valid() {
+        assert_no_errors(
+            r#"tool fn search(q: str) -> str { "results" }
+fn main() { search("hello") }"#,
+        );
+    }
+
+    #[test]
+    fn test_tool_fn_type_checking() {
+        assert_has_error(
+            r#"tool fn search(q: str) -> str { "results" }
+fn main() { search(42) }"#,
+            "argument `q` expects `str`, found `i64`",
+        );
+    }
+
+    #[test]
+    fn test_agent_valid() {
+        assert_no_errors(
+            r#"tool fn search(q: str) -> str { "r" }
+tool fn calc(x: i64) -> i64 { x * 2 }
+agent Helper {
+    model: "claude-sonnet"
+    tools: [search, calc]
+    system: "You help."
+}
+fn main() { search("hi") }"#,
+        );
+    }
+
+    #[test]
+    fn test_agent_undefined_tool() {
+        assert_has_error(
+            r#"agent Helper {
+    model: "test"
+    tools: [nonexistent]
+}
+fn main() { }"#,
+            "undefined tool function `nonexistent`",
+        );
+    }
+
+    #[test]
+    fn test_agent_non_tool_function() {
+        assert_has_error(
+            r#"fn helper(x: i64) -> i64 { x }
+agent Bot {
+    model: "test"
+    tools: [helper]
+}
+fn main() { }"#,
+            "is not a `tool fn`",
+        );
+    }
+
+    #[test]
+    fn test_duplicate_agent() {
+        assert_has_error(
+            r#"tool fn t(x: i64) -> i64 { x }
+agent A {
+    model: "test"
+    tools: [t]
+}
+agent A {
+    model: "test"
+    tools: [t]
+}
+fn main() { }"#,
+            "agent `A` is already defined",
         );
     }
 }

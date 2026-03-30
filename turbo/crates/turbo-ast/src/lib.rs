@@ -28,11 +28,21 @@ pub enum Item {
     Enum(EnumDef),
     Impl(ImplBlock),
     Trait(TraitDef),
+    Agent(AgentDef),
     /// Import declaration: `import { name1, name2 } from "path"`
     Import {
         names: Vec<String>,
         path: String,
     },
+}
+
+/// Agent definition: a struct-like declaration for AI agents
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentDef {
+    pub name: String,
+    pub model: String,
+    pub tools: Vec<String>,
+    pub system_prompt: Option<String>,
 }
 
 /// Impl block: methods attached to a struct type
@@ -116,6 +126,8 @@ impl TypeParam {
 pub struct FnDef {
     pub name: String,
     pub is_async: bool,
+    /// Whether this function is a `tool fn` (AI tool with auto-generated schema)
+    pub is_tool: bool,
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
