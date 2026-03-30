@@ -1,0 +1,16 @@
+type Maybe {
+    Just(i64),
+    Nothing,
+}
+
+fn unwrap_or(m: Maybe, default: i64) -> i64 {
+    match m {
+        Just(v) => v
+        Nothing => default
+    }
+}
+
+fn main() {
+    print(unwrap_or(Maybe.Just(42), 0))
+    print(unwrap_or(Maybe.Nothing, -1))
+}

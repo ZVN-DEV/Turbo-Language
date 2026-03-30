@@ -195,7 +195,27 @@ impl Parser {
         let mut variants = Vec::new();
         while !matches!(self.peek(), Some(Token::RBrace) | None) {
             let (variant_name, _) = self.expect_ident()?;
-            variants.push(variant_name);
+            // Check for data-carrying variant: VariantName(Type1, Type2, ...)
+            let fields = if matches!(self.peek(), Some(Token::LParen)) {
+                self.advance(); // consume (
+                let mut fields = Vec::new();
+                if !matches!(self.peek(), Some(Token::RParen)) {
+                    loop {
+                        let ty = self.parse_type()?;
+                        fields.push(ty);
+                        if matches!(self.peek(), Some(Token::Comma)) {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                self.expect(&Token::RParen)?;
+                fields
+            } else {
+                Vec::new()
+            };
+            variants.push(EnumVariantDef { name: variant_name, fields });
             if matches!(self.peek(), Some(Token::Comma)) {
                 self.advance();
             }
@@ -1275,7 +1295,27 @@ impl Parser {
             }
             Some(Token::Ident(_)) => {
                 let (name, span) = self.expect_ident()?;
-                Ok(Spanned::new(Pattern::Ident(name), span))
+                if matches!(self.peek(), Some(Token::LParen)) {
+                    // Variant destructure: Circle(r) or Rectangle(w, h)
+                    self.advance(); // consume (
+                    let mut bindings = Vec::new();
+                    if !matches!(self.peek(), Some(Token::RParen)) {
+                        loop {
+                            let (b, _) = self.expect_ident()?;
+                            bindings.push(b);
+                            if matches!(self.peek(), Some(Token::Comma)) {
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    let end = self.peek_span().end;
+                    self.expect(&Token::RParen)?;
+                    Ok(Spanned::new(Pattern::VariantDestructure { variant: name, bindings }, span.start..end))
+                } else {
+                    Ok(Spanned::new(Pattern::Ident(name), span))
+                }
             }
             Some(Token::Int(_)) => {
                 let tok = self.advance();
