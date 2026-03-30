@@ -5,6 +5,7 @@ use turbo_ast::{Item, Module};
 use ariadne::{Color, Label, Report, ReportKind, Source};
 
 mod playground;
+mod repl;
 
 #[derive(Parser)]
 #[command(name = "turbo", version, about = "The Turbo programming language compiler")]
@@ -42,6 +43,8 @@ enum Commands {
         /// Project name
         name: String,
     },
+    /// Start an interactive REPL
+    Repl,
     /// Launch the Turbo Playground in your browser
     Playground {
         /// Port to serve on
@@ -63,6 +66,7 @@ fn main() {
             build_file(&path, output.as_deref(), verbose);
         }
         Commands::Init { name } => init_project(&name),
+        Commands::Repl => repl::run_repl(),
         Commands::Playground { port } => playground::serve(port),
     }
 }
