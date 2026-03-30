@@ -24,6 +24,7 @@ pub struct Module {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     Function(FnDef),
+    Agent(AgentDef),
 }
 
 /// Function definition
@@ -33,6 +34,17 @@ pub struct FnDef {
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
     pub body: Spanned<Expr>,
+    /// Whether this function is a `tool fn` (AI tool with auto-generated schema)
+    pub is_tool: bool,
+}
+
+/// Agent definition: a struct-like declaration for AI agents
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentDef {
+    pub name: String,
+    pub model: String,
+    pub tools: Vec<String>,
+    pub system_prompt: Option<String>,
 }
 
 /// Function parameter

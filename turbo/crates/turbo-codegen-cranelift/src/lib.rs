@@ -334,7 +334,7 @@ fn compile_module<M: Module>(
     let mut fn_ret_types: HashMap<String, TurboTy> = HashMap::new();
 
     for item in &ast_module.items {
-        let Item::Function(f) = &item.node;
+        let Item::Function(f) = &item.node else { continue };
         let mut sig = module.make_signature();
         // Use fast calling convention for internal functions (not main)
         // — reduces prologue/epilogue overhead on the hot recursive path
@@ -362,7 +362,7 @@ fn compile_module<M: Module>(
     // Build fn_asts map for inline expansion
     let mut fn_asts: HashMap<String, &FnDef> = HashMap::new();
     for item in &ast_module.items {
-        let Item::Function(f) = &item.node;
+        let Item::Function(f) = &item.node else { continue };
         fn_asts.insert(f.name.clone(), f);
     }
 
@@ -372,7 +372,7 @@ fn compile_module<M: Module>(
     let mut string_counter: usize = 0;
 
     for item in &ast_module.items {
-        let Item::Function(f) = &item.node;
+        let Item::Function(f) = &item.node else { continue };
         let func_id = user_fns[&f.name];
 
         cl_ctx.func.signature = module.make_signature();

@@ -69,6 +69,10 @@ pub enum Token {
     Spawn,
     #[token("defer")]
     Defer,
+    #[token("tool")]
+    Tool,
+    #[token("agent")]
+    Agent,
     #[token("none")]
     None,
     #[token("some")]
@@ -242,6 +246,8 @@ impl fmt::Display for Token {
             Token::Await => write!(f, "await"),
             Token::Spawn => write!(f, "spawn"),
             Token::Defer => write!(f, "defer"),
+            Token::Tool => write!(f, "tool"),
+            Token::Agent => write!(f, "agent"),
             Token::None => write!(f, "none"),
             Token::Some => write!(f, "some"),
             Token::Ok => write!(f, "ok"),
@@ -404,5 +410,28 @@ mod tests {
         let (tokens, errors) = tokenize(source);
         assert!(errors.is_empty());
         assert!(matches!(tokens[0].value, Token::Int(1_000_000)));
+    }
+
+    #[test]
+    fn test_tool_keyword() {
+        let source = "tool fn search(query: str) -> str { }";
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty());
+        let kinds: Vec<_> = tokens.iter().map(|t| &t.value).collect();
+        assert!(matches!(kinds[0], Token::Tool));
+        assert!(matches!(kinds[1], Token::Fn));
+        assert!(matches!(kinds[2], Token::Ident(s) if s == "search"));
+    }
+
+    #[test]
+    fn test_agent_keyword() {
+        let source = "agent Helper { }";
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty());
+        let kinds: Vec<_> = tokens.iter().map(|t| &t.value).collect();
+        assert!(matches!(kinds[0], Token::Agent));
+        assert!(matches!(kinds[1], Token::Ident(s) if s == "Helper"));
+        assert!(matches!(kinds[2], Token::LBrace));
+        assert!(matches!(kinds[3], Token::RBrace));
     }
 }

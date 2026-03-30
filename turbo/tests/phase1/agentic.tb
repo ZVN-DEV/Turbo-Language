@@ -1,0 +1,19 @@
+tool fn search(query: str) -> str {
+    "search results"
+}
+
+tool fn calculate(x: i64) -> i64 {
+    x * 2
+}
+
+agent Helper {
+    model: "claude-sonnet"
+    tools: [search, calculate]
+    system: "You help with tasks."
+}
+
+fn main() {
+    print(search("turbo lang"))
+    print(calculate(21))
+    print("Agent Helper defined")
+}
