@@ -108,7 +108,7 @@ impl Parser {
                     self.errors.push(e);
                     // Skip to next item start to recover
                     self.pos += 1;
-                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Async) | Some(Token::Struct) | Some(Token::TypeKw) | Some(Token::Import) | Some(Token::Trait) | Some(Token::Impl) | Some(Token::Tool) | Some(Token::Agent)) {
+                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Async) | Some(Token::Struct) | Some(Token::TypeKw) | Some(Token::Import) | Some(Token::Trait) | Some(Token::Impl) | Some(Token::Tool) | Some(Token::Agent) | Some(Token::Const)) {
                         self.pos += 1;
                     }
                 }
@@ -243,11 +243,19 @@ impl Parser {
                     .unwrap_or(start);
                 Ok(Spanned::new(Item::Import { names, path }, start..end))
             }
+            Some(Token::Const) => {
+                self.advance(); // consume `const`
+                let (name, _) = self.expect_ident()?;
+                self.expect(&Token::Eq)?;
+                let value = self.parse_expr()?;
+                let end = value.span.end;
+                Ok(Spanned::new(Item::Const(ConstDef { name, value }), start..end))
+            }
             _ => {
                 let span = self.peek_span();
                 let found = self.peek().map(|t| format!("`{t}`")).unwrap_or("end of file".to_string());
                 Err(ParseError {
-                    message: format!("expected `fn`, `tool`, `agent`, `async fn`, `struct`, `type`, `impl`, `trait`, or `import`, found {found}"),
+                    message: format!("expected `fn`, `tool`, `agent`, `async fn`, `struct`, `type`, `impl`, `trait`, `import`, or `const`, found {found}"),
                     span,
                 })
             }
@@ -606,12 +614,15 @@ impl Parser {
         let mut tail_expr = None;
 
         while !matches!(self.peek(), Some(Token::RBrace) | None) {
-            // Try to parse a statement (let, return)
+            // Try to parse a statement (let, return, defer)
             if matches!(self.peek(), Some(Token::Let)) {
                 let stmt = self.parse_let_stmt()?;
                 stmts.push(stmt);
             } else if matches!(self.peek(), Some(Token::Return)) {
                 let stmt = self.parse_return_stmt()?;
+                stmts.push(stmt);
+            } else if matches!(self.peek(), Some(Token::Defer)) {
+                let stmt = self.parse_defer_stmt()?;
                 stmts.push(stmt);
             } else {
                 // Parse an expression
@@ -684,6 +695,14 @@ impl Parser {
 
         let end = value.as_ref().map(|v| v.span.end).unwrap_or(start + 6);
         Ok(Spanned::new(Stmt::Return(value), start..end))
+    }
+
+    fn parse_defer_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+        let start = self.peek_span().start;
+        self.expect(&Token::Defer)?;
+        let expr = self.parse_expr()?;
+        let end = expr.span.end;
+        Ok(Spanned::new(Stmt::Defer(expr), start..end))
     }
 
     // === Expression parsing (Pratt precedence) ===

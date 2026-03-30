@@ -89,6 +89,7 @@ pub enum Token {
     #[regex(r"[0-9][0-9_]*", |lex| lex.slice().replace('_', "").parse::<i64>().ok(), priority = 2)]
     Int(i64),
 
+    #[token(r#"""""#, lex_triple_quote_string, priority = 10)]
     #[regex(r#""([^"\\]|\\.)*""#, parse_string)]
     String(std::string::String),
 
@@ -221,6 +222,54 @@ fn lex_block_comment(lex: &mut logos::Lexer<Token>) -> logos::FilterResult<(), (
     // Unclosed comment - bump to end
     lex.bump(remainder.len());
     logos::FilterResult::Skip
+}
+
+fn lex_triple_quote_string(lex: &mut logos::Lexer<Token>) -> Option<std::string::String> {
+    let remainder = lex.remainder();
+    // Find closing """
+    if let Some(end_idx) = remainder.find(r#"""""#) {
+        let content = &remainder[..end_idx];
+        lex.bump(end_idx + 3); // skip content + closing """
+
+        // Strip leading newline if present (the newline right after opening """)
+        let content = if content.starts_with('\n') {
+            &content[1..]
+        } else if content.starts_with("\r\n") {
+            &content[2..]
+        } else {
+            content
+        };
+
+        // Strip trailing whitespace-only line + newline before closing """
+        let content = content.trim_end();
+
+        // Find the minimum indentation (non-empty lines only)
+        let min_indent = content.lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.len() - line.trim_start().len())
+            .min()
+            .unwrap_or(0);
+
+        // Strip common leading whitespace
+        let dedented: std::string::String = content.lines()
+            .map(|line| {
+                if line.trim().is_empty() {
+                    ""
+                } else if line.len() >= min_indent {
+                    &line[min_indent..]
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        Some(dedented)
+    } else {
+        // Unclosed triple-quote string — consume to end
+        lex.bump(remainder.len());
+        Some(remainder.to_string())
+    }
 }
 
 fn parse_string(lex: &mut logos::Lexer<Token>) -> Option<std::string::String> {

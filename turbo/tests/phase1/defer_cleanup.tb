@@ -1,0 +1,18 @@
+fn cleanup(name: str) {
+    print(name)
+}
+
+fn do_work() {
+    print("work: start")
+    defer cleanup("work: cleanup A")
+    defer cleanup("work: cleanup B")
+    print("work: doing stuff")
+    print("work: done")
+}
+
+fn main() {
+    print("main: before")
+    defer print("main: deferred cleanup")
+    do_work()
+    print("main: after")
+}

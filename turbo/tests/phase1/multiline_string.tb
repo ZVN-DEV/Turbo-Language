@@ -1,0 +1,11 @@
+fn main() {
+    let sql = """
+        SELECT *
+        FROM users
+        WHERE active = true
+        """
+    print(sql)
+
+    let simple = """hello world"""
+    print(simple)
+}

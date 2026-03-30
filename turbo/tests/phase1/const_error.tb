@@ -1,0 +1,5 @@
+const BAD = 1 + 2
+
+fn main() {
+    print(BAD)
+}

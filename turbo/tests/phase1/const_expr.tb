@@ -1,0 +1,13 @@
+const X = 10
+const NEG = -42
+
+fn add_const(n: i64) -> i64 {
+    n + X
+}
+
+fn main() {
+    print(add_const(5))
+    print(NEG)
+    let y = X + 20
+    print(y)
+}

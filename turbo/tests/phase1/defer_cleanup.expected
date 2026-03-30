@@ -1,0 +1,8 @@
+main: before
+work: start
+work: doing stuff
+work: done
+work: cleanup B
+work: cleanup A
+main: after
+main: deferred cleanup

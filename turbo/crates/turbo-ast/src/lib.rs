@@ -34,6 +34,15 @@ pub enum Item {
         names: Vec<String>,
         path: String,
     },
+    /// Constant declaration: `const NAME = value`
+    Const(ConstDef),
+}
+
+/// Constant definition: `const NAME = expr`
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstDef {
+    pub name: String,
+    pub value: Spanned<Expr>,
 }
 
 /// Agent definition: a struct-like declaration for AI agents
@@ -349,6 +358,8 @@ pub enum Stmt {
     Expr(Spanned<Expr>),
     /// Return statement
     Return(Option<Spanned<Expr>>),
+    /// Defer statement: `defer expr` — runs expr at end of enclosing block (LIFO)
+    Defer(Spanned<Expr>),
 }
 
 /// A match arm: pattern => body

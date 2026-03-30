@@ -788,6 +788,8 @@ struct Ctx<'a, M: Module> {
     agent_defs: &'a HashMap<String, (String, Vec<String>, Option<String>)>,
     /// Spawn thunk map: spawn expr span start -> thunk function name
     spawn_thunks: &'a HashMap<usize, String>,
+    /// Module-level constants: name -> AST expression (inlined at usage sites)
+    constants: &'a HashMap<String, Spanned<Expr>>,
 }
 
 impl<'a, M: Module> Ctx<'a, M> {
@@ -1028,6 +1030,7 @@ fn has_return(expr: &Expr) -> bool {
                     Stmt::Return(_) => return true,
                     Stmt::Let { value, .. } => { if has_return(&value.node) { return true; } }
                     Stmt::Expr(e) => { if has_return(&e.node) { return true; } }
+                    Stmt::Defer(e) => { if has_return(&e.node) { return true; } }
                 }
             }
             tail_expr.as_ref().is_some_and(|t| has_return(&t.node))
@@ -1124,6 +1127,7 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
                     Stmt::Expr(e) => collect_free_vars(&e.node, bound, free),
                     Stmt::Return(Some(e)) => collect_free_vars(&e.node, bound, free),
                     Stmt::Return(None) => {}
+                    Stmt::Defer(e) => collect_free_vars(&e.node, bound, free),
                 }
             }
             if let Some(tail) = tail_expr {
@@ -1315,6 +1319,7 @@ fn extract_closures_from_expr<'a>(
                     Stmt::Expr(e) => extract_closures_from_expr(e, out, counter),
                     Stmt::Return(Some(e)) => extract_closures_from_expr(e, out, counter),
                     Stmt::Return(None) => {}
+                    Stmt::Defer(e) => extract_closures_from_expr(e, out, counter),
                 }
             }
             if let Some(tail) = tail_expr {
@@ -1434,6 +1439,7 @@ fn extract_spawn_sites_from_expr(
                     Stmt::Expr(e) => extract_spawn_sites_from_expr(e, out, counter),
                     Stmt::Return(Some(e)) => extract_spawn_sites_from_expr(e, out, counter),
                     Stmt::Return(None) => {}
+                    Stmt::Defer(e) => extract_spawn_sites_from_expr(e, out, counter),
                 }
             }
             if let Some(tail) = tail_expr { extract_spawn_sites_from_expr(tail, out, counter); }
@@ -1642,6 +1648,14 @@ fn compile_module<M: Module>(
         }
     }
 
+    // Build constants map from AST
+    let mut constants_map: HashMap<String, Spanned<Expr>> = HashMap::new();
+    for item in &ast_module.items {
+        if let Item::Const(c) = &item.node {
+            constants_map.insert(c.name.clone(), c.value.clone());
+        }
+    }
+
     // Build trait implementations map: type_name -> vec of trait names
     let mut trait_impls: HashMap<String, Vec<String>> = HashMap::new();
     for item in &ast_module.items {
@@ -1826,6 +1840,7 @@ fn compile_module<M: Module>(
                 last_struct_lit_concrete_fields: None,
                 agent_defs: &agent_defs,
                 spawn_thunks: &spawn_thunk_map,
+                constants: &constants_map,
             };
 
             let entry = cx.builder.create_block();
@@ -1923,6 +1938,7 @@ fn compile_module<M: Module>(
                     last_struct_lit_concrete_fields: None,
                     agent_defs: &agent_defs,
                     spawn_thunks: &spawn_thunk_map,
+                    constants: &constants_map,
                 };
 
                 let entry = cx.builder.create_block();
@@ -2012,6 +2028,7 @@ fn compile_module<M: Module>(
                 last_struct_lit_concrete_fields: None,
                 agent_defs: &agent_defs,
                 spawn_thunks: &spawn_thunk_map,
+                constants: &constants_map,
             };
 
             let entry = cx.builder.create_block();
@@ -2244,6 +2261,11 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
         Expr::Unit => Ok(None),
 
         Expr::Ident(name) => {
+            // Check if this is a module-level constant — inline the value
+            if let Some(const_expr) = cx.constants.get(name.as_str()) {
+                let const_expr = const_expr.clone();
+                return compile_expr(cx, &const_expr);
+            }
             let (var, _cl_ty, turbo_ty) = cx.vars.get(name)
                 .ok_or_else(|| CodegenError { message: format!("undefined variable: {name}") })?;
             let turbo_ty = turbo_ty.clone();
@@ -2316,7 +2338,12 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
         Expr::Block { stmts, tail_expr } => {
             let saved_vars = cx.vars.clone();
 
+            // Collect defer expressions while compiling statements
+            let mut deferred: Vec<&Spanned<Expr>> = Vec::new();
             for stmt in stmts {
+                if let Stmt::Defer(ref defer_expr) = stmt.node {
+                    deferred.push(defer_expr);
+                }
                 compile_stmt(cx, stmt)?;
             }
             let result = if let Some(tail) = tail_expr {
@@ -2324,6 +2351,13 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             } else {
                 Ok(None)
             };
+
+            // Emit deferred expressions in LIFO order (reverse)
+            for defer_expr in deferred.iter().rev() {
+                if !cx.builder.is_unreachable() {
+                    compile_expr(cx, defer_expr)?;
+                }
+            }
 
             // Restore variable scope: this ensures inner `let` bindings
             // that shadow outer names don't leak out of the block.
@@ -3046,6 +3080,11 @@ fn compile_stmt<M: Module>(cx: &mut Ctx<'_, M>, stmt: &Spanned<Stmt>) -> Result<
             let new_block = cx.builder.create_block();
             cx.builder.switch_to_block(new_block);
             cx.builder.seal_block(new_block);
+            Ok(())
+        }
+        Stmt::Defer(_) => {
+            // Defer statements are handled at the block level (compile_expr for Block)
+            // — they are collected and emitted in reverse order at the end of the block.
             Ok(())
         }
     }

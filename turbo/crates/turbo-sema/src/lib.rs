@@ -277,6 +277,8 @@ struct Checker {
     traits: HashMap<String, TraitInfo>,
     /// Trait implementations: type_name -> set of trait names
     trait_impls: HashMap<String, Vec<String>>,
+    /// Module-level constants: name -> type
+    constants: HashMap<String, Ty>,
     scopes: Vec<Scope>,
     /// Return type of the current function being checked
     current_return_type: Ty,
@@ -303,6 +305,7 @@ impl Checker {
             methods: HashMap::new(),
             traits,
             trait_impls: HashMap::new(),
+            constants: HashMap::new(),
             scopes: Vec::new(),
             current_return_type: Ty::Unit,
         }
@@ -695,6 +698,46 @@ impl Checker {
             }
         }
 
+        // Register constants
+        for item in &module.items {
+            let Item::Const(c) = &item.node else { continue };
+            if self.constants.contains_key(&c.name) {
+                self.error(
+                    format!("constant `{}` is already defined", c.name),
+                    item.span.clone(),
+                );
+                continue;
+            }
+            // Check that the value is a literal
+            let ty = match &c.value.node {
+                Expr::IntLit(_) => Ty::I64,
+                Expr::FloatLit(_) => Ty::F64,
+                Expr::BoolLit(_) => Ty::Bool,
+                Expr::StringLit(_) => Ty::Str,
+                Expr::UnaryOp { op: UnaryOp::Neg, expr } => {
+                    match &expr.node {
+                        Expr::IntLit(_) => Ty::I64,
+                        Expr::FloatLit(_) => Ty::F64,
+                        _ => {
+                            self.error(
+                                format!("constant `{}` must be a literal value", c.name),
+                                c.value.span.clone(),
+                            );
+                            Ty::Error
+                        }
+                    }
+                }
+                _ => {
+                    self.error(
+                        format!("constant `{}` must be a literal value", c.name),
+                        c.value.span.clone(),
+                    );
+                    Ty::Error
+                }
+            };
+            self.constants.insert(c.name.clone(), ty);
+        }
+
         // Check for main
         if !self.functions.contains_key("main") {
             let span = if module.items.is_empty() {
@@ -742,6 +785,16 @@ impl Checker {
         self.substitute_ty(&sig.ret, subs)
     }
 
+    /// Inject module-level constants into the current scope as immutable variables.
+    fn inject_constants(&mut self) {
+        let consts: Vec<(String, Ty)> = self.constants.iter()
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        for (name, ty) in consts {
+            self.define_var(&name, VarInfo { ty, mutable: false }, &(0..0));
+        }
+    }
+
     fn check_function(&mut self, f: &FnDef) {
         let sig = self.functions.get(&f.name).cloned().unwrap();
 
@@ -755,6 +808,9 @@ impl Checker {
         self.current_return_type = sig.ret.clone();
 
         self.push_scope();
+
+        // Inject module-level constants
+        self.inject_constants();
 
         // Define parameters
         for (name, ty) in &sig.params {
@@ -788,6 +844,9 @@ impl Checker {
         self.current_return_type = sig.ret.clone();
 
         self.push_scope();
+
+        // Inject module-level constants
+        self.inject_constants();
 
         for (name, ty) in &sig.params {
             self.define_var(name, VarInfo { ty: ty.clone(), mutable: false }, &(0..0));
@@ -2898,6 +2957,10 @@ impl Checker {
                         stmt.span.clone(),
                     );
                 }
+            }
+            Stmt::Defer(expr) => {
+                // Type-check the deferred expression (it should be a valid expression, typically a call)
+                self.check_expr(expr);
             }
         }
     }

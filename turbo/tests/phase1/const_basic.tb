@@ -1,0 +1,11 @@
+const MAX_SIZE = 100
+const PI = 3.14
+const NAME = "Turbo"
+const FLAG = true
+
+fn main() {
+    print(MAX_SIZE)
+    print(PI)
+    print(NAME)
+    print(FLAG)
+}
