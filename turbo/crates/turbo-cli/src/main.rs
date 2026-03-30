@@ -65,6 +65,8 @@ enum Commands {
         /// Path to the .tb source file
         file: PathBuf,
     },
+    /// Install dependencies from turbo.toml
+    Install,
     /// Start the Language Server Protocol server
     Lsp,
 }
@@ -86,6 +88,7 @@ fn main() {
         Commands::Playground { port } => playground::serve(port),
         Commands::Fmt { file, check } => formatter::format_file(&file, check),
         Commands::Doc { file } => doc_file(&file),
+        Commands::Install => install_deps(),
         Commands::Lsp => start_lsp(),
     }
 }
@@ -184,6 +187,127 @@ fn init_project(name: &str) {
 
     eprintln!("\x1b[32m\u{2713}\x1b[0m Created project `{name}`");
     eprintln!("  cd {name} && turbo run");
+}
+
+/// Extract a quoted value for a given key from a TOML inline table string.
+/// e.g. for `{ path = "../utils" }` and key `"path"`, returns `Some("../utils")`.
+fn extract_quoted_value(s: &str, key: &str) -> Option<String> {
+    let key_pos = s.find(key)?;
+    let after_key = &s[key_pos + key.len()..];
+    // Skip whitespace and '='
+    let after_eq = after_key.trim_start().strip_prefix('=')?.trim_start();
+    // Extract quoted string
+    let quote_char = after_eq.chars().next()?;
+    if quote_char != '"' && quote_char != '\'' {
+        return None;
+    }
+    let inner = &after_eq[1..];
+    let end = inner.find(quote_char)?;
+    Some(inner[..end].to_string())
+}
+
+/// Install dependencies listed in `turbo.toml` by symlinking path dependencies
+/// into a local `turbo_modules/` directory.
+fn install_deps() {
+    let toml = std::fs::read_to_string("turbo.toml").unwrap_or_else(|_| {
+        eprintln!("\x1b[1;31merror\x1b[0m: no turbo.toml found in current directory");
+        std::process::exit(1);
+    });
+
+    std::fs::create_dir_all("turbo_modules").ok();
+
+    let mut in_deps = false;
+    let mut count = 0u32;
+
+    for line in toml.lines() {
+        let line = line.trim();
+        if line == "[dependencies]" {
+            in_deps = true;
+            continue;
+        }
+        if line.starts_with('[') {
+            in_deps = false;
+            continue;
+        }
+        if !in_deps || line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        // Parse: name = { path = "../utils" }
+        if let Some((name, rest)) = line.split_once('=') {
+            let name = name.trim().trim_matches('"');
+            let rest = rest.trim();
+            if let Some(path) = extract_quoted_value(rest, "path") {
+                let source_path = std::path::Path::new(&path);
+                let canonical = match std::fs::canonicalize(source_path) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!(
+                            "\x1b[1;31merror\x1b[0m: could not resolve dependency path `{}`: {e}",
+                            path
+                        );
+                        std::process::exit(1);
+                    }
+                };
+
+                let target = std::path::Path::new("turbo_modules").join(name);
+                if target.exists() {
+                    // Remove existing symlink or directory
+                    if target.is_dir() {
+                        std::fs::remove_dir_all(&target).ok();
+                    } else {
+                        std::fs::remove_file(&target).ok();
+                    }
+                }
+
+                #[cfg(unix)]
+                {
+                    std::os::unix::fs::symlink(&canonical, &target).unwrap_or_else(|e| {
+                        eprintln!(
+                            "\x1b[1;31merror\x1b[0m: could not create symlink for `{}`: {e}",
+                            name
+                        );
+                        std::process::exit(1);
+                    });
+                }
+
+                #[cfg(not(unix))]
+                {
+                    // On non-Unix platforms, fall back to copying
+                    fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+                        std::fs::create_dir_all(dst)?;
+                        for entry in std::fs::read_dir(src)? {
+                            let entry = entry?;
+                            let ty = entry.file_type()?;
+                            let dest = dst.join(entry.file_name());
+                            if ty.is_dir() {
+                                copy_dir_recursive(&entry.path(), &dest)?;
+                            } else {
+                                std::fs::copy(entry.path(), dest)?;
+                            }
+                        }
+                        Ok(())
+                    }
+                    copy_dir_recursive(&canonical, &target).unwrap_or_else(|e| {
+                        eprintln!(
+                            "\x1b[1;31merror\x1b[0m: could not copy dependency `{}`: {e}",
+                            name
+                        );
+                        std::process::exit(1);
+                    });
+                }
+
+                eprintln!("  \x1b[32m\u{2713}\x1b[0m Installed {} -> {}", name, path);
+                count += 1;
+            }
+        }
+    }
+
+    if count == 0 {
+        eprintln!("No dependencies found in turbo.toml");
+    } else {
+        eprintln!("Installed {} dependenc{}.", count, if count == 1 { "y" } else { "ies" });
+    }
 }
 
 /// Print a rich error diagnostic using ariadne.
@@ -470,14 +594,59 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
 }
 
 /// Resolve the file path for an import.
-/// The `.tb` extension is appended if not already present.
-/// The path is resolved relative to `base_dir`.
+/// Resolution order:
+/// 1. Relative path from `base_dir` (existing behavior for `./foo` paths)
+/// 2. `turbo_modules/{module_name}/src/lib.tb` (package entry point)
+/// 3. `turbo_modules/{module_name}/src/{module_name}.tb` (named entry point)
 fn resolve_import_path(base_dir: &Path, import_path: &str) -> PathBuf {
-    let mut path = base_dir.join(import_path);
-    if path.extension().is_none() {
-        path.set_extension("tb");
+    // If the path starts with "./" or "../", resolve relative to base_dir
+    if import_path.starts_with("./") || import_path.starts_with("../") {
+        let mut path = base_dir.join(import_path);
+        if path.extension().is_none() {
+            path.set_extension("tb");
+        }
+        return path;
     }
-    path
+
+    // First try the old relative behavior (for backwards compatibility)
+    let mut relative_path = base_dir.join(import_path);
+    if relative_path.extension().is_none() {
+        relative_path.set_extension("tb");
+    }
+    if relative_path.exists() {
+        return relative_path;
+    }
+
+    // Try turbo_modules/{module_name}/src/lib.tb
+    // Walk up from base_dir to find the project root (where turbo_modules lives)
+    let mut search_dir = base_dir.to_path_buf();
+    loop {
+        let modules_dir = search_dir.join("turbo_modules");
+        if modules_dir.is_dir() {
+            let lib_path = modules_dir.join(import_path).join("src/lib.tb");
+            if lib_path.exists() {
+                return lib_path;
+            }
+            let named_path = modules_dir
+                .join(import_path)
+                .join("src")
+                .join(format!("{}.tb", import_path));
+            if named_path.exists() {
+                return named_path;
+            }
+            // Module dir exists but no source found -- fall through to return the lib.tb
+            // path so we get a clear error message
+            if modules_dir.join(import_path).is_dir() {
+                return lib_path;
+            }
+        }
+        if !search_dir.pop() {
+            break;
+        }
+    }
+
+    // Fallback: return the relative path (will produce an error downstream)
+    relative_path
 }
 
 /// Resolve all `import` items in the module by reading, lexing, and parsing

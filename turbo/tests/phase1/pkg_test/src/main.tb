@@ -1,0 +1,6 @@
+import { double, triple } from "mathlib"
+
+fn main() {
+    print(double(5))
+    print(triple(5))
+}
