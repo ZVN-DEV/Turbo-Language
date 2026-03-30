@@ -217,6 +217,8 @@ struct AgentInfo {
 #[derive(Debug, Clone)]
 struct StructInfo {
     fields: Vec<(String, Ty)>,
+    /// Type parameter names for generic structs
+    type_params: Vec<String>,
 }
 
 /// Enum info (variant names + field types)
@@ -224,6 +226,8 @@ struct StructInfo {
 struct EnumInfo {
     /// Variant name -> field types (empty vec for unit variants)
     variants: Vec<(String, Vec<Ty>)>,
+    /// Type parameter names for generic enums
+    type_params: Vec<String>,
 }
 
 impl EnumInfo {
@@ -335,7 +339,11 @@ impl Checker {
 
     fn is_builtin_function(name: &str) -> bool {
         matches!(name, "print" | "panic" | "assert" | "len" | "abs" | "min" | "max" | "to_str"
-            | "map" | "filter" | "reduce")
+            | "map" | "filter" | "reduce"
+            | "split" | "trim" | "upper" | "lower" | "starts_with" | "ends_with"
+            | "replace" | "char_at"
+            | "read_line" | "read_file" | "write_file"
+            | "pow" | "sqrt")
     }
 
     /// Walk a chain of FieldAccess / Index expressions to find the root variable name.
@@ -359,9 +367,10 @@ impl Checker {
                 );
                 continue;
             }
+            let tp_names: Vec<String> = s.type_param_names();
             let mut fields = Vec::new();
             for field in &s.fields {
-                match resolve_type_expr(&field.ty.node, Some(&self.structs), Some(&self.enums)) {
+                match resolve_type_expr_with_params(&field.ty.node, Some(&self.structs), Some(&self.enums), &tp_names) {
                     Some(ty) => fields.push((field.name.clone(), ty)),
                     None => {
                         if let TypeExpr::Named(name) = &field.ty.node {
@@ -374,7 +383,7 @@ impl Checker {
                     }
                 }
             }
-            self.structs.insert(s.name.clone(), StructInfo { fields });
+            self.structs.insert(s.name.clone(), StructInfo { fields, type_params: tp_names });
         }
 
         // Pass 0b: register all enum definitions
@@ -387,13 +396,14 @@ impl Checker {
                 );
                 continue;
             }
+            let tp_names: Vec<String> = e.type_param_names();
             let variants: Vec<(String, Vec<Ty>)> = e.variants.iter().map(|v| {
                 let field_tys: Vec<Ty> = v.fields.iter().filter_map(|f| {
-                    resolve_type_expr(&f.node, Some(&self.structs), Some(&self.enums))
+                    resolve_type_expr_with_params(&f.node, Some(&self.structs), Some(&self.enums), &tp_names)
                 }).collect();
                 (v.name.clone(), field_tys)
             }).collect();
-            self.enums.insert(e.name.clone(), EnumInfo { variants });
+            self.enums.insert(e.name.clone(), EnumInfo { variants, type_params: tp_names });
         }
 
         // Pass 0c: register all trait definitions
@@ -1033,6 +1043,186 @@ impl Checker {
                         return Ty::Str;
                     }
 
+                    // ── Stdlib string functions ──────────────────────
+                    if name == "split" {
+                        if args.len() != 2 {
+                            self.error(
+                                format!("split() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        let sep_ty = self.check_expr(&args[1]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(format!("split() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                        }
+                        if !sep_ty.is_error() && sep_ty != Ty::Str {
+                            self.error(format!("split() second argument must be str, found `{sep_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Array(Box::new(Ty::Str));
+                    }
+                    if name == "trim" {
+                        if args.len() != 1 {
+                            self.error(format!("trim() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(format!("trim() expects str, found `{s_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+                    if name == "upper" {
+                        if args.len() != 1 {
+                            self.error(format!("upper() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(format!("upper() expects str, found `{s_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+                    if name == "lower" {
+                        if args.len() != 1 {
+                            self.error(format!("lower() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(format!("lower() expects str, found `{s_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+                    if name == "starts_with" {
+                        if args.len() != 2 {
+                            self.error(format!("starts_with() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        let prefix_ty = self.check_expr(&args[1]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(format!("starts_with() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                        }
+                        if !prefix_ty.is_error() && prefix_ty != Ty::Str {
+                            self.error(format!("starts_with() second argument must be str, found `{prefix_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Bool;
+                    }
+                    if name == "ends_with" {
+                        if args.len() != 2 {
+                            self.error(format!("ends_with() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        let suffix_ty = self.check_expr(&args[1]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(format!("ends_with() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                        }
+                        if !suffix_ty.is_error() && suffix_ty != Ty::Str {
+                            self.error(format!("ends_with() second argument must be str, found `{suffix_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Bool;
+                    }
+                    if name == "replace" {
+                        if args.len() != 3 {
+                            self.error(format!("replace() takes exactly 3 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        let from_ty = self.check_expr(&args[1]);
+                        let to_ty = self.check_expr(&args[2]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(format!("replace() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                        }
+                        if !from_ty.is_error() && from_ty != Ty::Str {
+                            self.error(format!("replace() second argument must be str, found `{from_ty}`"), args[1].span.clone());
+                        }
+                        if !to_ty.is_error() && to_ty != Ty::Str {
+                            self.error(format!("replace() third argument must be str, found `{to_ty}`"), args[2].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+                    if name == "char_at" {
+                        if args.len() != 2 {
+                            self.error(format!("char_at() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        let idx_ty = self.check_expr(&args[1]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(format!("char_at() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                        }
+                        if !idx_ty.is_error() && !idx_ty.is_integer() {
+                            self.error(format!("char_at() second argument must be integer, found `{idx_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+
+                    // ── Stdlib I/O functions ─────────────────────────
+                    if name == "read_line" {
+                        if !args.is_empty() {
+                            self.error(format!("read_line() takes 0 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        return Ty::Str;
+                    }
+                    if name == "read_file" {
+                        if args.len() != 1 {
+                            self.error(format!("read_file() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let path_ty = self.check_expr(&args[0]);
+                        if !path_ty.is_error() && path_ty != Ty::Str {
+                            self.error(format!("read_file() expects str, found `{path_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+                    if name == "write_file" {
+                        if args.len() != 2 {
+                            self.error(format!("write_file() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let path_ty = self.check_expr(&args[0]);
+                        let content_ty = self.check_expr(&args[1]);
+                        if !path_ty.is_error() && path_ty != Ty::Str {
+                            self.error(format!("write_file() first argument must be str, found `{path_ty}`"), args[0].span.clone());
+                        }
+                        if !content_ty.is_error() && content_ty != Ty::Str {
+                            self.error(format!("write_file() second argument must be str, found `{content_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Unit;
+                    }
+
+                    // ── Stdlib math functions ────────────────────────
+                    if name == "pow" {
+                        if args.len() != 2 {
+                            self.error(format!("pow() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let base_ty = self.check_expr(&args[0]);
+                        let exp_ty = self.check_expr(&args[1]);
+                        if !base_ty.is_error() && !base_ty.is_integer() {
+                            self.error(format!("pow() first argument must be integer, found `{base_ty}`"), args[0].span.clone());
+                        }
+                        if !exp_ty.is_error() && !exp_ty.is_integer() {
+                            self.error(format!("pow() second argument must be integer, found `{exp_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::I64;
+                    }
+                    if name == "sqrt" {
+                        if args.len() != 1 {
+                            self.error(format!("sqrt() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let x_ty = self.check_expr(&args[0]);
+                        if !x_ty.is_error() && x_ty != Ty::F64 && x_ty != Ty::F32 {
+                            self.error(format!("sqrt() expects float, found `{x_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::F64;
+                    }
+
                     // map(arr, fn) -> [U]
                     if name == "map" {
                         if args.len() != 2 {
@@ -1339,7 +1529,8 @@ impl Checker {
                                         // Type-check arguments against variant field types
                                         for (i, arg) in args.iter().skip(1).enumerate() {
                                             let arg_ty = self.check_expr(arg);
-                                            if i < field_tys.len() && !arg_ty.is_error() && !field_tys[i].is_error() && arg_ty != field_tys[i] {
+                                            // Skip type check for generic (TypeParam) fields
+                                            if i < field_tys.len() && !matches!(&field_tys[i], Ty::TypeParam(_)) && !arg_ty.is_error() && !field_tys[i].is_error() && arg_ty != field_tys[i] {
                                                 self.error(
                                                     format!(
                                                         "variant `{name}` field {} expects `{}`, found `{arg_ty}`",
@@ -1599,7 +1790,8 @@ impl Checker {
                 if let Ty::Struct(struct_name) = &obj_ty {
                     if let Some(struct_info) = self.structs.get(struct_name).cloned() {
                         if let Some((_, field_ty)) = struct_info.fields.iter().find(|(n, _)| n == field) {
-                            if !val_ty.is_error() && !field_ty.is_error() && val_ty != *field_ty {
+                            // Skip type check for generic (TypeParam) fields — they accept any type
+                            if !matches!(field_ty, Ty::TypeParam(_)) && !val_ty.is_error() && !field_ty.is_error() && val_ty != *field_ty {
                                 self.error(
                                     format!(
                                         "cannot assign `{val_ty}` to field `{field}` of type `{field_ty}`"
@@ -1801,11 +1993,30 @@ impl Checker {
                 let expected_fields: HashMap<&str, &Ty> = struct_info.fields.iter()
                     .map(|(n, t)| (n.as_str(), t)).collect();
 
+                // Track type parameter inference for generic structs
+                let mut tp_inferred: HashMap<String, Ty> = HashMap::new();
+
                 let mut provided = std::collections::HashSet::new();
                 for (field_name, value) in fields {
                     let val_ty = self.check_expr(value);
                     if let Some(expected_ty) = expected_fields.get(field_name.as_str()) {
-                        if !val_ty.is_error() && !expected_ty.is_error() && &val_ty != *expected_ty {
+                        if let Ty::TypeParam(ref tp_name) = expected_ty {
+                            // Generic field: infer or check consistency
+                            if !val_ty.is_error() {
+                                if let Some(prev) = tp_inferred.get(tp_name) {
+                                    if prev != &val_ty {
+                                        self.error(
+                                            format!(
+                                                "type parameter `{tp_name}` in struct `{name}` inferred as `{prev}` but field `{field_name}` has type `{val_ty}`"
+                                            ),
+                                            value.span.clone(),
+                                        );
+                                    }
+                                } else {
+                                    tp_inferred.insert(tp_name.clone(), val_ty.clone());
+                                }
+                            }
+                        } else if !val_ty.is_error() && !expected_ty.is_error() && &val_ty != *expected_ty {
                             self.error(
                                 format!(
                                     "field `{field_name}` of struct `{name}` expects `{}`, found `{val_ty}`",

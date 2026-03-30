@@ -1,0 +1,5 @@
+fn main() {
+    write_file("/tmp/turbo_test.txt", "Hello from Turbo!")
+    let content = read_file("/tmp/turbo_test.txt")
+    print(content)
+}

@@ -318,6 +318,139 @@ extern "C" fn rt_option_value(opt: *const u8) -> i64 {
     unsafe { *((opt as *const i64).add(1)) }
 }
 
+// ── Standard library runtime functions ──────────────────────────────
+
+extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let sep = unsafe { std::ffi::CStr::from_ptr(sep as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let parts: Vec<&str> = s.split(sep).collect();
+    let len = parts.len() as i64;
+    // Array format: [len: i64][ptr0: i64][ptr1: i64]...
+    let total = 8 + (len as usize) * 8;
+    let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    unsafe { *(ptr as *mut i64) = len; }
+    for (i, part) in parts.iter().enumerate() {
+        let cs = std::ffi::CString::new(*part).unwrap();
+        let p = cs.into_raw() as i64;
+        unsafe { *((ptr as *mut i64).add(1 + i)) = p; }
+    }
+    ptr
+}
+
+extern "C" fn rt_str_trim(s: *const u8) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let trimmed = s.trim();
+    let cs = std::ffi::CString::new(trimmed).unwrap();
+    cs.into_raw() as *const u8
+}
+
+extern "C" fn rt_str_upper(s: *const u8) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let upper = s.to_uppercase();
+    let cs = std::ffi::CString::new(upper).unwrap();
+    cs.into_raw() as *const u8
+}
+
+extern "C" fn rt_str_lower(s: *const u8) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let lower = s.to_lowercase();
+    let cs = std::ffi::CString::new(lower).unwrap();
+    cs.into_raw() as *const u8
+}
+
+extern "C" fn rt_str_starts_with(s: *const u8, prefix: *const u8) -> i8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let prefix = unsafe { std::ffi::CStr::from_ptr(prefix as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    if s.starts_with(prefix) { 1 } else { 0 }
+}
+
+extern "C" fn rt_str_ends_with(s: *const u8, suffix: *const u8) -> i8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let suffix = unsafe { std::ffi::CStr::from_ptr(suffix as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    if s.ends_with(suffix) { 1 } else { 0 }
+}
+
+extern "C" fn rt_str_replace(s: *const u8, from: *const u8, to: *const u8) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let from = unsafe { std::ffi::CStr::from_ptr(from as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let to_s = unsafe { std::ffi::CStr::from_ptr(to as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let result = s.replace(from, to_s);
+    let cs = std::ffi::CString::new(result).unwrap();
+    cs.into_raw() as *const u8
+}
+
+extern "C" fn rt_str_char_at(s: *const u8, index: i64) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    if let Some(c) = s.chars().nth(index as usize) {
+        let cs = std::ffi::CString::new(c.to_string()).unwrap();
+        cs.into_raw() as *const u8
+    } else {
+        eprintln!("runtime error: string index {} out of bounds (length {})", index, s.chars().count());
+        std::process::exit(1);
+    }
+}
+
+extern "C" fn rt_read_line() -> *const u8 {
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).unwrap_or(0);
+    let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+    let cs = std::ffi::CString::new(trimmed).unwrap();
+    cs.into_raw() as *const u8
+}
+
+extern "C" fn rt_read_file(path: *const u8) -> *const u8 {
+    let path = unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let cs = std::ffi::CString::new(content).unwrap();
+            cs.into_raw() as *const u8
+        }
+        Err(e) => {
+            eprintln!("runtime error: cannot read file '{}': {}", path, e);
+            std::process::exit(1);
+        }
+    }
+}
+
+extern "C" fn rt_write_file(path: *const u8, content: *const u8) {
+    let path = unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    let content = unsafe { std::ffi::CStr::from_ptr(content as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    if let Err(e) = std::fs::write(path, content) {
+        eprintln!("runtime error: cannot write file '{}': {}", path, e);
+        std::process::exit(1);
+    }
+}
+
+extern "C" fn rt_pow(base: i64, exp: i64) -> i64 {
+    if exp < 0 { return 0; }
+    let mut result: i64 = 1;
+    for _ in 0..exp {
+        result = result.wrapping_mul(base);
+    }
+    result
+}
+
+extern "C" fn rt_sqrt(x: f64) -> f64 {
+    x.sqrt()
+}
+
 // ── Runtime C source for AOT linking ────────────────────────────────
 
 const RUNTIME_C: &str = include_str!("../runtime/turbo_rt.c");
@@ -464,6 +597,20 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_option_none", rt_option_none as *const u8);
     jit_builder.symbol("rt_option_tag", rt_option_tag as *const u8);
     jit_builder.symbol("rt_option_value", rt_option_value as *const u8);
+    // Stdlib runtime symbols
+    jit_builder.symbol("rt_str_split", rt_str_split as *const u8);
+    jit_builder.symbol("rt_str_trim", rt_str_trim as *const u8);
+    jit_builder.symbol("rt_str_upper", rt_str_upper as *const u8);
+    jit_builder.symbol("rt_str_lower", rt_str_lower as *const u8);
+    jit_builder.symbol("rt_str_starts_with", rt_str_starts_with as *const u8);
+    jit_builder.symbol("rt_str_ends_with", rt_str_ends_with as *const u8);
+    jit_builder.symbol("rt_str_replace", rt_str_replace as *const u8);
+    jit_builder.symbol("rt_str_char_at", rt_str_char_at as *const u8);
+    jit_builder.symbol("rt_read_line", rt_read_line as *const u8);
+    jit_builder.symbol("rt_read_file", rt_read_file as *const u8);
+    jit_builder.symbol("rt_write_file", rt_write_file as *const u8);
+    jit_builder.symbol("rt_pow", rt_pow as *const u8);
+    jit_builder.symbol("rt_sqrt", rt_sqrt as *const u8);
 
     let mut module = JITModule::new(jit_builder);
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
@@ -531,6 +678,7 @@ pub fn aot_compile(
     let output = std::process::Command::new("cc")
         .arg(&rt_path)
         .arg(&obj_path)
+        .arg("-lm")
         .arg("-o")
         .arg(output_path)
         .output()
@@ -962,6 +1110,20 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_option_none", &[], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_option_tag", &[ptr_type], Some(types::I64))?;
     declare_rt_fn(module, &mut rt_fns, "rt_option_value", &[ptr_type], Some(types::I64))?;
+    // Stdlib runtime declarations
+    declare_rt_fn(module, &mut rt_fns, "rt_str_split", &[ptr_type, ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_trim", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_upper", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_lower", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_starts_with", &[ptr_type, ptr_type], Some(types::I8))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_ends_with", &[ptr_type, ptr_type], Some(types::I8))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_replace", &[ptr_type, ptr_type, ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_char_at", &[ptr_type, types::I64], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_read_line", &[], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_read_file", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_write_file", &[ptr_type, ptr_type], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_pow", &[types::I64, types::I64], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_sqrt", &[types::F64], Some(types::F64))?;
 
     // Build enum variants map
     let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();
@@ -970,10 +1132,11 @@ fn compile_module<M: Module>(
     for item in &ast_module.items {
         if let Item::Enum(e) = &item.node {
             let variant_names: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
+            let tp_names: Vec<String> = e.type_param_names();
             let mut max_fields: usize = 0;
             for v in &e.variants {
                 let field_tys: Vec<TurboTy> = v.fields.iter()
-                    .map(|f| turbo_ty_from_type_expr(&f.node, &enum_variants))
+                    .map(|f| turbo_ty_from_type_expr_with_params(&f.node, &enum_variants, &tp_names))
                     .collect();
                 if !field_tys.is_empty() {
                     max_fields = max_fields.max(field_tys.len());
@@ -991,8 +1154,9 @@ fn compile_module<M: Module>(
     let mut struct_fields: HashMap<String, Vec<(String, TurboTy)>> = HashMap::new();
     for item in &ast_module.items {
         let Item::Struct(s) = &item.node else { continue };
+        let tp_names: Vec<String> = s.type_param_names();
         let fields: Vec<(String, TurboTy)> = s.fields.iter()
-            .map(|f| (f.name.clone(), turbo_ty_from_type_expr(&f.ty.node, &enum_variants)))
+            .map(|f| (f.name.clone(), turbo_ty_from_type_expr_with_params(&f.ty.node, &enum_variants, &tp_names)))
             .collect();
         struct_fields.insert(s.name.clone(), fields);
     }
@@ -2313,6 +2477,22 @@ fn compile_call<M: Module>(
         "min" => compile_min(cx, args),
         "max" => compile_max(cx, args),
         "to_str" => compile_to_str_builtin(cx, args),
+        // Stdlib string builtins
+        "split" => compile_stdlib_split(cx, args),
+        "trim" => compile_stdlib_str1(cx, args, "rt_str_trim"),
+        "upper" => compile_stdlib_str1(cx, args, "rt_str_upper"),
+        "lower" => compile_stdlib_str1(cx, args, "rt_str_lower"),
+        "starts_with" => compile_stdlib_str_bool2(cx, args, "rt_str_starts_with"),
+        "ends_with" => compile_stdlib_str_bool2(cx, args, "rt_str_ends_with"),
+        "replace" => compile_stdlib_replace(cx, args),
+        "char_at" => compile_stdlib_char_at(cx, args),
+        // Stdlib I/O builtins
+        "read_line" => compile_stdlib_read_line(cx),
+        "read_file" => compile_stdlib_read_file(cx, args),
+        "write_file" => compile_stdlib_write_file(cx, args),
+        // Stdlib math builtins
+        "pow" => compile_stdlib_pow(cx, args),
+        "sqrt" => compile_stdlib_sqrt(cx, args),
         "map" => compile_builtin_map(cx, args),
         "filter" => compile_builtin_filter(cx, args),
         "reduce" => compile_builtin_reduce(cx, args),
@@ -2763,6 +2943,124 @@ fn compile_to_str_builtin<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
     Ok(Some((str_val, TurboTy::Str)))
 }
 
+// ── Stdlib builtins ─────────────────────────────────────────────────
+
+/// split(s, sep) -> [str] — calls rt_str_split, returns Array(Str)
+fn compile_stdlib_split<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (sep_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_str_split"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[s_val, sep_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Array(Box::new(TurboTy::Str)))))
+}
+
+/// Generic helper for str->str builtins (trim, upper, lower)
+fn compile_stdlib_str1<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>], rt_name: &str) -> Result<MaybeTyped, CodegenError> {
+    let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns[rt_name];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[s_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// Generic helper for (str, str)->bool builtins (starts_with, ends_with)
+fn compile_stdlib_str_bool2<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>], rt_name: &str) -> Result<MaybeTyped, CodegenError> {
+    let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (other_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns[rt_name];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[s_val, other_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Bool)))
+}
+
+/// replace(s, from, to) -> str
+fn compile_stdlib_replace<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (from_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let (to_val, _) = compile_expr(cx, &args[2])?.unwrap();
+    let fid = cx.rt_fns["rt_str_replace"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[s_val, from_val, to_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// char_at(s, index) -> str
+fn compile_stdlib_char_at<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (idx_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    // Ensure index is i64
+    let idx_ty = cx.builder.func.dfg.value_type(idx_val);
+    let idx_val = if idx_ty.bits() < 64 {
+        cx.builder.ins().sextend(types::I64, idx_val)
+    } else {
+        idx_val
+    };
+    let fid = cx.rt_fns["rt_str_char_at"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[s_val, idx_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// read_line() -> str
+fn compile_stdlib_read_line<M: Module>(cx: &mut Ctx<'_, M>) -> Result<MaybeTyped, CodegenError> {
+    let fid = cx.rt_fns["rt_read_line"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// read_file(path) -> str
+fn compile_stdlib_read_file<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (path_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_read_file"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[path_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// write_file(path, content) -> ()
+fn compile_stdlib_write_file<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (path_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (content_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_write_file"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    cx.builder.ins().call(fref, &[path_val, content_val]);
+    Ok(None)
+}
+
+/// pow(base, exp) -> i64
+fn compile_stdlib_pow<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (base_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (exp_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    // Ensure both are i64
+    let base_ty = cx.builder.func.dfg.value_type(base_val);
+    let base_val = if base_ty.bits() < 64 { cx.builder.ins().sextend(types::I64, base_val) } else { base_val };
+    let exp_ty = cx.builder.func.dfg.value_type(exp_val);
+    let exp_val = if exp_ty.bits() < 64 { cx.builder.ins().sextend(types::I64, exp_val) } else { exp_val };
+    let fid = cx.rt_fns["rt_pow"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[base_val, exp_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// sqrt(x) -> f64
+fn compile_stdlib_sqrt<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (x_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_sqrt"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[x_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Float)))
+}
 
 // ── map/filter/reduce builtins ──────────────────────────────────────
 

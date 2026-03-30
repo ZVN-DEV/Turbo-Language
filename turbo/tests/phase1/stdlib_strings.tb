@@ -1,0 +1,13 @@
+fn main() {
+    print(upper("hello"))
+    print(lower("WORLD"))
+    print(trim("  hi  "))
+    print(replace("hello world", "world", "turbo"))
+
+    let parts = split("a,b,c", ",")
+    for p in parts { print(p) }
+
+    print(starts_with("hello", "hel"))
+    print(ends_with("hello", "llo"))
+    print(char_at("abcde", 2))
+}
