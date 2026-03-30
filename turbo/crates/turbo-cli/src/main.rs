@@ -51,6 +51,13 @@ enum Commands {
         #[arg(long, short, default_value = "3000")]
         port: u16,
     },
+    /// Format a Turbo source file
+    Fmt {
+        /// Path to the .tb source file to format
+        file: PathBuf,
+    },
+    /// Start the Language Server Protocol server
+    Lsp,
 }
 
 fn main() {
@@ -68,6 +75,45 @@ fn main() {
         Commands::Init { name } => init_project(&name),
         Commands::Repl => repl::run_repl(),
         Commands::Playground { port } => playground::serve(port),
+        Commands::Fmt { file } => fmt_file(&file),
+        Commands::Lsp => start_lsp(),
+    }
+}
+
+fn fmt_file(path: &std::path::Path) {
+    if !path.exists() {
+        eprintln!("\x1b[1;31merror\x1b[0m: file `{}` does not exist", path.display());
+        std::process::exit(1);
+    }
+    eprintln!("\x1b[1;33mwarning\x1b[0m: `turbo fmt` is not yet implemented");
+    eprintln!("  This command will format Turbo source files in a future release.");
+    eprintln!("  File: {}", path.display());
+}
+
+fn start_lsp() {
+    // The LSP server is a separate binary (turbo-lsp).
+    // This command provides a convenience wrapper that exec's it.
+    let exe = std::env::current_exe().unwrap_or_default();
+    let lsp_bin = exe.parent().unwrap_or_else(|| Path::new(".")).join("turbo-lsp");
+
+    if lsp_bin.exists() {
+        use std::process::Command;
+        let status = Command::new(&lsp_bin)
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .status();
+        match status {
+            Ok(s) => std::process::exit(s.code().unwrap_or(1)),
+            Err(e) => {
+                eprintln!("\x1b[1;31merror\x1b[0m: failed to start LSP server: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        eprintln!("\x1b[1;31merror\x1b[0m: turbo-lsp binary not found at `{}`", lsp_bin.display());
+        eprintln!("  Build it with: cargo build -p turbo-lsp");
+        std::process::exit(1);
     }
 }
 
