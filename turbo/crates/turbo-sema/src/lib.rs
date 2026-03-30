@@ -187,6 +187,7 @@ struct VarInfo {
 #[derive(Debug, Clone)]
 struct FnSig {
     type_params: Vec<String>,
+    type_param_bounds: HashMap<String, Vec<String>>,
     params: Vec<(String, Ty)>,
     ret: Ty,
 }
@@ -450,9 +451,17 @@ impl Checker {
                 continue;
             }
 
+            let tp_names: Vec<String> = f.type_params.iter().map(|tp| tp.name.clone()).collect();
+            let mut tp_bounds: HashMap<String, Vec<String>> = HashMap::new();
+            for tp in &f.type_params {
+                if !tp.bounds.is_empty() {
+                    tp_bounds.insert(tp.name.clone(), tp.bounds.clone());
+                }
+            }
+
             let mut params = Vec::new();
             for param in &f.params {
-                match resolve_type_expr_with_params(&param.ty.node, Some(&self.structs), Some(&self.enums), &f.type_params) {
+                match resolve_type_expr_with_params(&param.ty.node, Some(&self.structs), Some(&self.enums), &tp_names) {
                     Some(ty) => params.push((param.name.clone(), ty)),
                     None => {
                         if let TypeExpr::Named(name) = &param.ty.node {
@@ -467,7 +476,7 @@ impl Checker {
             }
 
             let ret = if let Some(ret_type) = &f.return_type {
-                match resolve_type_expr_with_params(&ret_type.node, Some(&self.structs), Some(&self.enums), &f.type_params) {
+                match resolve_type_expr_with_params(&ret_type.node, Some(&self.structs), Some(&self.enums), &tp_names) {
                     Some(ty) => ty,
                     None => {
                         if let TypeExpr::Named(name) = &ret_type.node {
@@ -483,7 +492,7 @@ impl Checker {
                 Ty::Unit
             };
 
-            self.functions.insert(f.name.clone(), FnSig { type_params: f.type_params.clone(), params, ret });
+            self.functions.insert(f.name.clone(), FnSig { type_params: tp_names, type_param_bounds: tp_bounds, params, ret });
         }
 
         // Pass 2: register impl block methods
@@ -548,7 +557,7 @@ impl Checker {
                 };
 
                 let mangled = format!("{}__{}", imp.type_name, method.name);
-                let sig = FnSig { type_params: Vec::new(), params, ret };
+                let sig = FnSig { type_params: Vec::new(), type_param_bounds: HashMap::new(), params, ret };
                 new_methods.push((method.name.clone(), sig, mangled));
             }
 
@@ -1214,6 +1223,30 @@ impl Checker {
                                         ),
                                         arg.span.clone(),
                                     );
+                                }
+                            }
+                        }
+
+                        // Check trait bounds for each inferred type parameter
+                        for (tp_name, concrete_ty) in &substitutions {
+                            if let Some(bounds) = sig.type_param_bounds.get(tp_name) {
+                                for bound in bounds {
+                                    let type_name = match concrete_ty {
+                                        Ty::Struct(s) => Some(s.as_str()),
+                                        _ => None,
+                                    };
+                                    let has_impl = type_name.map_or(false, |tn| {
+                                        self.trait_impls.get(tn)
+                                            .map_or(false, |impls| impls.contains(bound))
+                                    });
+                                    if !has_impl && !concrete_ty.is_error() {
+                                        self.error(
+                                            format!(
+                                                "type `{concrete_ty}` does not implement trait `{bound}`"
+                                            ),
+                                            callee.span.clone(),
+                                        );
+                                    }
                                 }
                             }
                         }

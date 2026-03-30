@@ -1,0 +1,7 @@
+fn show<T: Display>(val: T) {
+    print(val)
+}
+
+fn main() {
+    show(42)
+}

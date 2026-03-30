@@ -1,0 +1,10 @@
+fn second<A, B>(a: A, b: B) -> B { b }
+
+fn swap<A, B>(a: A, b: B) -> B { b }
+
+fn main() {
+    print(second(1, "hello"))
+    print(second("x", 42))
+    print(swap(1, "world"))
+    print(swap("a", 99))
+}
