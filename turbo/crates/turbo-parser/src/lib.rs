@@ -257,6 +257,7 @@ impl Parser {
     fn parse_struct_def(&mut self) -> Result<StructDef, ParseError> {
         self.expect(&Token::Struct)?;
         let (name, _) = self.expect_ident()?;
+        let type_params = self.parse_optional_type_params()?;
         self.expect(&Token::LBrace)?;
         let mut fields = Vec::new();
         while !matches!(self.peek(), Some(Token::RBrace) | None) {
@@ -270,12 +271,13 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(StructDef { name, fields })
+        Ok(StructDef { name, type_params, fields })
     }
 
     fn parse_enum_def(&mut self) -> Result<EnumDef, ParseError> {
         self.expect(&Token::TypeKw)?;
         let (name, _) = self.expect_ident()?;
+        let type_params = self.parse_optional_type_params()?;
         self.expect(&Token::LBrace)?;
         let mut variants = Vec::new();
         while !matches!(self.peek(), Some(Token::RBrace) | None) {
@@ -306,7 +308,7 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(EnumDef { name, variants })
+        Ok(EnumDef { name, type_params, variants })
     }
 
     fn parse_impl_block(&mut self) -> Result<ImplBlock, ParseError> {
@@ -402,12 +404,9 @@ impl Parser {
         Ok(f)
     }
 
-    /// Parses the function definition after `fn` has already been consumed.
-    fn parse_fn_def_inner(&mut self) -> Result<FnDef, ParseError> {
-        let (name, _) = self.expect_ident()?;
-
-        // Parse optional type parameters: <T> or <T, U, ...> or <T: Trait, U: Trait>
-        let type_params = if matches!(self.peek(), Some(Token::Less)) {
+    /// Parse optional type parameters: `<T>` or `<T, U, ...>` or `<T: Trait, U: Trait>`
+    fn parse_optional_type_params(&mut self) -> Result<Vec<TypeParam>, ParseError> {
+        if matches!(self.peek(), Some(Token::Less)) {
             self.advance(); // consume <
             let mut params = Vec::new();
             loop {
@@ -436,10 +435,17 @@ impl Parser {
                 }
             }
             self.expect(&Token::Greater)?;
-            params
+            Ok(params)
         } else {
-            Vec::new()
-        };
+            Ok(Vec::new())
+        }
+    }
+
+    /// Parses the function definition after `fn` has already been consumed.
+    fn parse_fn_def_inner(&mut self) -> Result<FnDef, ParseError> {
+        let (name, _) = self.expect_ident()?;
+
+        let type_params = self.parse_optional_type_params()?;
 
         self.expect(&Token::LParen)?;
         let params = self.parse_params()?;

@@ -1,0 +1,14 @@
+struct Pair<A, B> {
+    first: A,
+    second: B,
+}
+
+fn main() {
+    let p = Pair { first: 42, second: "hello" }
+    print(p.first)
+    print(p.second)
+
+    let q = Pair { first: true, second: 99 }
+    print(q.first)
+    print(q.second)
+}

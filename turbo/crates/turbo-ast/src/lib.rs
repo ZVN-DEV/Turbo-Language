@@ -80,6 +80,7 @@ pub struct EnumVariantDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnumDef {
     pub name: String,
+    pub type_params: Vec<TypeParam>,
     pub variants: Vec<EnumVariantDef>,
 }
 
@@ -88,12 +89,25 @@ impl EnumDef {
     pub fn variant_names(&self) -> Vec<String> {
         self.variants.iter().map(|v| v.name.clone()).collect()
     }
+
+    /// Get just the type parameter names
+    pub fn type_param_names(&self) -> Vec<String> {
+        self.type_params.iter().map(|tp| tp.name.clone()).collect()
+    }
+}
+
+impl StructDef {
+    /// Get just the type parameter names
+    pub fn type_param_names(&self) -> Vec<String> {
+        self.type_params.iter().map(|tp| tp.name.clone()).collect()
+    }
 }
 
 /// Struct definition
 #[derive(Debug, Clone, PartialEq)]
 pub struct StructDef {
     pub name: String,
+    pub type_params: Vec<TypeParam>,
     pub fields: Vec<FieldDef>,
 }
 

@@ -492,6 +492,10 @@ struct Ctx<'a, M: Module> {
     inline_depth: usize,
     /// Capture info populated during Expr::Closure compilation
     closure_captures: &'a mut HashMap<usize, CaptureInfo>,
+    /// Concrete field types for generic struct instances: var_name -> vec of (field_name, TurboTy)
+    generic_struct_field_overrides: HashMap<String, Vec<(String, TurboTy)>>,
+    /// Temporary: last struct literal's concrete field types (set during StructLit compilation, consumed by Let)
+    last_struct_lit_concrete_fields: Option<Vec<(String, TurboTy)>>,
 }
 
 impl<'a, M: Module> Ctx<'a, M> {
@@ -1323,6 +1327,8 @@ fn compile_module<M: Module>(
                 trait_impls: &trait_impls,
                 inline_depth: 0,
                 closure_captures: &mut closure_captures_map,
+                generic_struct_field_overrides: HashMap::new(),
+                last_struct_lit_concrete_fields: None,
             };
 
             let entry = cx.builder.create_block();
@@ -1416,6 +1422,8 @@ fn compile_module<M: Module>(
                     trait_impls: &trait_impls,
                     inline_depth: 0,
                     closure_captures: &mut closure_captures_map,
+                    generic_struct_field_overrides: HashMap::new(),
+                    last_struct_lit_concrete_fields: None,
                 };
 
                 let entry = cx.builder.create_block();
@@ -1501,6 +1509,8 @@ fn compile_module<M: Module>(
                 trait_impls: &trait_impls,
                 inline_depth: 0,
                 closure_captures: &mut closure_captures_map,
+                generic_struct_field_overrides: HashMap::new(),
+                last_struct_lit_concrete_fields: None,
             };
 
             let entry = cx.builder.create_block();
@@ -1914,13 +1924,17 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
             let ptr = cx.builder.inst_results(call)[0];
 
+            // Track concrete field types for generic structs
+            let mut concrete_fields: Vec<(String, TurboTy)> = Vec::new();
+
             // Store each field at its offset
             for (field_name, field_value) in fields {
                 let field_index = struct_layout.iter()
                     .position(|(n, _)| n == field_name)
                     .ok_or_else(|| CodegenError { message: format!("struct `{name}` has no field `{field_name}`") })?;
 
-                let (val, _tty) = compile_expr(cx, field_value)?.unwrap();
+                let (val, tty) = compile_expr(cx, field_value)?.unwrap();
+                concrete_fields.push((field_name.clone(), tty));
                 let offset = (field_index * 8) as i32;
 
                 // Widen smaller types to 64-bit for uniform storage
@@ -1938,6 +1952,9 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
 
                 cx.builder.ins().store(MemFlags::new(), val, ptr, offset);
             }
+
+            // Store concrete field types for generic struct instances
+            cx.last_struct_lit_concrete_fields = Some(concrete_fields);
 
             Ok(Some((ptr, TurboTy::Struct(name.clone()))))
         }
@@ -1984,7 +2001,17 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                 .position(|(n, _)| n == field)
                 .ok_or_else(|| CodegenError { message: format!("struct `{struct_name}` has no field `{field}`") })?;
 
-            let field_tty = struct_layout[field_index].1.clone();
+            let mut field_tty = struct_layout[field_index].1.clone();
+
+            // For generic structs, check if we have concrete field type overrides
+            if let Expr::Ident(ref var_name) = object.node {
+                if let Some(concrete_fields) = cx.generic_struct_field_overrides.get(var_name) {
+                    if let Some((_, concrete_tty)) = concrete_fields.iter().find(|(n, _)| n == field) {
+                        field_tty = concrete_tty.clone();
+                    }
+                }
+            }
+
             let offset = (field_index * 8) as i32;
 
             // Load from the struct pointer
@@ -2237,7 +2264,13 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
 fn compile_stmt<M: Module>(cx: &mut Ctx<'_, M>, stmt: &Spanned<Stmt>) -> Result<(), CodegenError> {
     match &stmt.node {
         Stmt::Let { name, value, .. } => {
+            // Clear any stale concrete fields from a previous struct lit
+            cx.last_struct_lit_concrete_fields = None;
             let result = compile_expr(cx, value)?;
+            // If the value was a struct literal, capture concrete field types for generic structs
+            if let Some(concrete_fields) = cx.last_struct_lit_concrete_fields.take() {
+                cx.generic_struct_field_overrides.insert(name.clone(), concrete_fields);
+            }
             let (cl_ty, turbo_ty, val) = if let Some((v, tty)) = result {
                 (cx.builder.func.dfg.value_type(v), tty, Some(v))
             } else {
