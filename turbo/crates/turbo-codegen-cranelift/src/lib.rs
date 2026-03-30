@@ -32,7 +32,8 @@ enum TurboTy {
     Unit,
     Array(Box<TurboTy>),
     Struct(String),
-    Enum,
+    /// Enum type: name of the enum. Unit-only enums are i64 tags; data enums are heap pointers.
+    Enum(String),
     /// Function pointer: param types and return type
     Fn(Vec<TurboTy>, Box<TurboTy>),
     /// Result type (heap-allocated tagged union): ok_type, err_type
@@ -59,7 +60,7 @@ fn turbo_ty_from_type_expr_with_params(te: &TypeExpr, enum_variants: &HashMap<St
             "str" => TurboTy::Str,
             _ => {
                 if enum_variants.contains_key(name.as_str()) {
-                    TurboTy::Enum
+                    TurboTy::Enum(name.clone())
                 } else {
                     TurboTy::Struct(name.clone())
                 }
@@ -344,6 +345,10 @@ struct Ctx<'a, M: Module> {
     struct_fields: &'a HashMap<String, Vec<(String, TurboTy)>>,
     /// Enum variant lists: enum_name -> vec of variant names
     enum_variants: &'a HashMap<String, Vec<String>>,
+    /// Data-carrying enum variant fields: (enum_name, variant_name) -> field TurboTys
+    enum_variant_fields: &'a HashMap<(String, String), Vec<TurboTy>>,
+    /// Max slots per data enum: enum_name -> max field count across all variants
+    enum_max_slots: &'a HashMap<String, usize>,
     /// Map from closure span start offset to (synthetic function name, TurboTy::Fn)
     closure_fns: &'a HashMap<usize, (String, TurboTy)>,
     /// Trait implementations: type_name -> set of trait names
@@ -616,7 +621,7 @@ fn turbo_ty_to_cl_type(tty: &TurboTy, ptr_type: types::Type) -> types::Type {
         TurboTy::Fn(_, _) => ptr_type, // function pointers are pointers
         TurboTy::Array(_) => ptr_type,
         TurboTy::Struct(_) => ptr_type,
-        TurboTy::Enum => types::I64,
+        TurboTy::Enum(_) => types::I64, // both unit (tag) and data (ptr) enums fit in I64
         TurboTy::Result(_, _) => ptr_type,
         TurboTy::Optional(_) => ptr_type,
     }
@@ -781,9 +786,25 @@ fn compile_module<M: Module>(
 
     // Build enum variants map
     let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();
+    let mut enum_variant_fields: HashMap<(String, String), Vec<TurboTy>> = HashMap::new();
+    let mut enum_max_slots: HashMap<String, usize> = HashMap::new();
     for item in &ast_module.items {
         if let Item::Enum(e) = &item.node {
-            enum_variants.insert(e.name.clone(), e.variants.clone());
+            let variant_names: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
+            let mut max_fields: usize = 0;
+            for v in &e.variants {
+                let field_tys: Vec<TurboTy> = v.fields.iter()
+                    .map(|f| turbo_ty_from_type_expr(&f.node, &enum_variants))
+                    .collect();
+                if !field_tys.is_empty() {
+                    max_fields = max_fields.max(field_tys.len());
+                    enum_variant_fields.insert((e.name.clone(), v.name.clone()), field_tys);
+                }
+            }
+            if max_fields > 0 {
+                enum_max_slots.insert(e.name.clone(), max_fields);
+            }
+            enum_variants.insert(e.name.clone(), variant_names);
         }
     }
 
@@ -945,6 +966,8 @@ fn compile_module<M: Module>(
                 ptr_type,
                 struct_fields: &struct_fields,
                 enum_variants: &enum_variants,
+                enum_variant_fields: &enum_variant_fields,
+                enum_max_slots: &enum_max_slots,
                 closure_fns: &closure_fns_map,
                 trait_impls: &trait_impls,
                 inline_depth: 0,
@@ -1020,6 +1043,8 @@ fn compile_module<M: Module>(
                 ptr_type,
                 struct_fields: &struct_fields,
                 enum_variants: &enum_variants,
+                enum_variant_fields: &enum_variant_fields,
+                enum_max_slots: &enum_max_slots,
                 closure_fns: &closure_fns_map,
                 trait_impls: &trait_impls,
                 inline_depth: 0,
@@ -1110,6 +1135,8 @@ fn compile_module<M: Module>(
                     ptr_type,
                     struct_fields: &struct_fields,
                     enum_variants: &enum_variants,
+                enum_variant_fields: &enum_variant_fields,
+                enum_max_slots: &enum_max_slots,
                     closure_fns: &closure_fns_map,
                     trait_impls: &trait_impls,
                     inline_depth: 0,
@@ -1185,6 +1212,16 @@ fn declare_rt_fn<M: Module>(
 }
 
 fn resolve_cl_type(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &HashMap<String, Vec<String>>, type_params: &[String]) -> Result<types::Type, CodegenError> {
+    resolve_cl_type_inner(ty, ptr_type, enum_variants, type_params, &HashMap::new())
+}
+
+/// Resolve Cranelift type, accounting for data-carrying enums that need pointer types.
+#[allow(dead_code)]
+fn resolve_cl_type_with_data(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &HashMap<String, Vec<String>>, type_params: &[String], enum_max_slots: &HashMap<String, usize>) -> Result<types::Type, CodegenError> {
+    resolve_cl_type_inner(ty, ptr_type, enum_variants, type_params, enum_max_slots)
+}
+
+fn resolve_cl_type_inner(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &HashMap<String, Vec<String>>, type_params: &[String], enum_max_slots: &HashMap<String, usize>) -> Result<types::Type, CodegenError> {
     match ty {
         TypeExpr::Named(name) => {
             // Type parameters are represented as I64 (same size as ptr on 64-bit)
@@ -1202,7 +1239,12 @@ fn resolve_cl_type(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &HashMap
             "str" => Ok(ptr_type),
             _ => {
                 if enum_variants.contains_key(name.as_str()) {
-                    Ok(types::I64) // enums are represented as i64 tags
+                    // Data-carrying enums are heap-allocated pointers
+                    if enum_max_slots.contains_key(name.as_str()) {
+                        Ok(ptr_type)
+                    } else {
+                        Ok(types::I64) // unit-only enums are i64 tags
+                    }
                 } else {
                     Ok(ptr_type) // Struct types are represented as pointers at runtime
                 }
@@ -1523,8 +1565,24 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                 if let Some(variants) = cx.enum_variants.get(name.as_str()) {
                     let index = variants.iter().position(|v| v == field)
                         .ok_or_else(|| CodegenError { message: format!("enum `{name}` has no variant `{field}`") })?;
-                    let val = cx.builder.ins().iconst(types::I64, index as i64);
-                    return Ok(Some((val, TurboTy::Enum)));
+
+                    // Check if this is a data-carrying enum
+                    if let Some(&max_slots) = cx.enum_max_slots.get(name.as_str()) {
+                        // Allocate tagged union: [tag][slot0][slot1]...[slotN]
+                        let total_slots = 1 + max_slots; // tag + payload
+                        let num_fields_val = cx.builder.ins().iconst(types::I64, total_slots as i64);
+                        let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+                        let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+                        let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
+                        let ptr = cx.builder.inst_results(call)[0];
+                        // Store tag
+                        let tag_val = cx.builder.ins().iconst(types::I64, index as i64);
+                        cx.builder.ins().store(MemFlags::new(), tag_val, ptr, 0);
+                        return Ok(Some((ptr, TurboTy::Enum(name.clone()))));
+                    } else {
+                        let val = cx.builder.ins().iconst(types::I64, index as i64);
+                        return Ok(Some((val, TurboTy::Enum(name.clone()))));
+                    }
                 }
             }
 
@@ -1573,8 +1631,23 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                 .ok_or_else(|| CodegenError { message: format!("undefined enum: {enum_name}") })?;
             let index = variants.iter().position(|v| v == variant)
                 .ok_or_else(|| CodegenError { message: format!("enum `{enum_name}` has no variant `{variant}`") })?;
-            let val = cx.builder.ins().iconst(types::I64, index as i64);
-            Ok(Some((val, TurboTy::Enum)))
+
+            // Check if this is a data-carrying enum
+            if let Some(&max_slots) = cx.enum_max_slots.get(enum_name.as_str()) {
+                // Allocate tagged union: [tag][slot0][slot1]...[slotN]
+                let total_slots = 1 + max_slots;
+                let num_fields_val = cx.builder.ins().iconst(types::I64, total_slots as i64);
+                let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+                let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+                let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
+                let ptr = cx.builder.inst_results(call)[0];
+                let tag_val = cx.builder.ins().iconst(types::I64, index as i64);
+                cx.builder.ins().store(MemFlags::new(), tag_val, ptr, 0);
+                Ok(Some((ptr, TurboTy::Enum(enum_name.clone()))))
+            } else {
+                let val = cx.builder.ins().iconst(types::I64, index as i64);
+                Ok(Some((val, TurboTy::Enum(enum_name.clone()))))
+            }
         }
 
         Expr::Match { subject, arms } => compile_match(cx, subject, arms),
@@ -1960,6 +2033,67 @@ fn compile_call<M: Module>(
         "filter" => compile_builtin_filter(cx, args),
         "reduce" => compile_builtin_reduce(cx, args),
         _ => {
+            // Check if this is an enum variant construction via UFCS rewrite:
+            // Parser transforms Shape.Circle(5.0) into Call { callee: Ident("Circle"), args: [Ident("Shape"), 5.0] }
+            if !args.is_empty() {
+                if let Expr::Ident(ref first_name) = args[0].node {
+                    if let Some(variants) = cx.enum_variants.get(first_name.as_str()) {
+                        if let Some(variant_index) = variants.iter().position(|v| v == name) {
+                            // This is an enum variant construction with data
+                            let data_args = &args[1..]; // skip the enum type name
+                            let enum_name = first_name;
+
+                            if let Some(&max_slots) = cx.enum_max_slots.get(enum_name.as_str()) {
+                                // Data-carrying enum: allocate tagged union
+                                let total_slots = 1 + max_slots; // tag + payload
+                                let num_fields_val = cx.builder.ins().iconst(types::I64, total_slots as i64);
+                                let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+                                let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+                                let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
+                                let ptr = cx.builder.inst_results(call)[0];
+
+                                // Store tag at offset 0
+                                let tag_val = cx.builder.ins().iconst(types::I64, variant_index as i64);
+                                cx.builder.ins().store(MemFlags::new(), tag_val, ptr, 0);
+
+                                // Get the field types for this variant
+                                let _field_tys = cx.enum_variant_fields
+                                    .get(&(enum_name.clone(), name.to_string()))
+                                    .cloned()
+                                    .unwrap_or_default();
+
+                                // Store each field at offset (i+1)*8
+                                for (i, arg) in data_args.iter().enumerate() {
+                                    let (val, _tty) = compile_expr(cx, arg)?.unwrap();
+                                    let offset = ((i + 1) * 8) as i32;
+
+                                    // Widen/convert to i64 for uniform storage
+                                    let val_ty = cx.builder.func.dfg.value_type(val);
+                                    let store_val = if val_ty.is_float() && val_ty.bits() == 64 {
+                                        cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
+                                    } else if val_ty.is_float() && val_ty.bits() == 32 {
+                                        let extended = cx.builder.ins().fpromote(types::F64, val);
+                                        cx.builder.ins().bitcast(types::I64, MemFlags::new(), extended)
+                                    } else if val_ty.bits() < 64 && val_ty.is_int() {
+                                        cx.builder.ins().sextend(types::I64, val)
+                                    } else {
+                                        val
+                                    };
+
+                                    cx.builder.ins().store(MemFlags::new(), store_val, ptr, offset);
+                                }
+
+                                return Ok(Some((ptr, TurboTy::Enum(enum_name.clone()))));
+                            } else {
+                                // Unit-only enum, but called with args (shouldn't happen after sema check)
+                                let val = cx.builder.ins().iconst(types::I64, variant_index as i64);
+                                return Ok(Some((val, TurboTy::Enum(enum_name.clone()))));
+                            }
+                        }
+                    }
+                }
+            }
+
             // Check if this is a method call (UFCS: parser rewrites obj.method(args) -> method(obj, args))
             if cx.user_fns.get(name.as_str()).is_none() && !args.is_empty() {
                 // Compile first arg to get its type, then check for method
@@ -2183,12 +2317,18 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
                 let ptr = cx.create_string("()")?;
                 cx.rt_call("rt_print_str", &[ptr]);
             }
-            TurboTy::Enum => {
-                // Print enum value as its integer tag
-                let v = if cx.builder.func.dfg.value_type(v).bits() < 64 {
-                    cx.builder.ins().sextend(types::I64, v)
-                } else { v };
-                cx.rt_call("rt_print_i64", &[v]);
+            TurboTy::Enum(ref enum_name) => {
+                // For data enums, extract the tag from the tagged union pointer; for unit enums, use the value directly
+                let tag_val = if cx.enum_max_slots.contains_key(enum_name.as_str()) {
+                    // Data enum: load tag from ptr[0]
+                    cx.builder.ins().load(types::I64, MemFlags::new(), v, 0)
+                } else {
+                    let v = if cx.builder.func.dfg.value_type(v).bits() < 64 {
+                        cx.builder.ins().sextend(types::I64, v)
+                    } else { v };
+                    v
+                };
+                cx.rt_call("rt_print_i64", &[tag_val]);
             }
             TurboTy::Array(_) => {
                 let ptr = cx.create_string("[array]")?;
@@ -2786,15 +2926,20 @@ fn convert_to_str<M: Module>(
         TurboTy::Unit => {
             cx.create_string("()")
         }
-        TurboTy::Enum => {
-            let val = if cx.builder.func.dfg.value_type(val).bits() < 64 {
-                cx.builder.ins().sextend(types::I64, val)
+        TurboTy::Enum(ref enum_name) => {
+            let tag_val = if cx.enum_max_slots.contains_key(enum_name.as_str()) {
+                cx.builder.ins().load(types::I64, MemFlags::new(), val, 0)
             } else {
+                let val = if cx.builder.func.dfg.value_type(val).bits() < 64 {
+                    cx.builder.ins().sextend(types::I64, val)
+                } else {
+                    val
+                };
                 val
             };
             let fid = cx.rt_fns["rt_i64_to_str"];
             let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-            let call = cx.builder.ins().call(fref, &[val]);
+            let call = cx.builder.ins().call(fref, &[tag_val]);
             Ok(cx.builder.inst_results(call)[0])
         }
         TurboTy::Array(_) => {
@@ -3087,7 +3232,17 @@ fn compile_match<M: Module>(
                 // Must be an enum variant (checked above: non-variant idents are catchall)
                 let tag_val = lookup_variant_tag_static(cx.enum_variants, name).unwrap();
                 let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
-                cx.builder.ins().icmp(IntCC::Equal, subj_val, pat_val)
+                // For data enums, extract tag from pointer; for unit enums, compare directly
+                let actual_tag = if let TurboTy::Enum(ref enum_name) = subj_tty {
+                    if cx.enum_max_slots.contains_key(enum_name.as_str()) {
+                        cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0)
+                    } else {
+                        subj_val
+                    }
+                } else {
+                    subj_val
+                };
+                cx.builder.ins().icmp(IntCC::Equal, actual_tag, pat_val)
             }
             Pattern::IntLit(n) => {
                 let pat_val = cx.builder.ins().iconst(types::I64, *n);
@@ -3148,6 +3303,13 @@ fn compile_match<M: Module>(
                 let zero = cx.builder.ins().iconst(types::I64, 0);
                 cx.builder.ins().icmp(IntCC::Equal, tag, zero)
             }
+            Pattern::VariantDestructure { variant, .. } => {
+                // Extract tag from data enum pointer and compare
+                let tag_val = lookup_variant_tag_static(cx.enum_variants, variant).unwrap();
+                let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
+                let actual_tag = cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0);
+                cx.builder.ins().icmp(IntCC::Equal, actual_tag, pat_val)
+            }
         };
 
         let match_block = cx.builder.create_block();
@@ -3203,6 +3365,48 @@ fn compile_match<M: Module>(
                     _ => TurboTy::Int, // fallback
                 };
                 cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
+            }
+            Pattern::VariantDestructure { variant, bindings } => {
+                // Extract fields from the data enum tagged union
+                // Layout: [tag: i64][field0: i64][field1: i64]...
+                let field_tys = if let TurboTy::Enum(ref enum_name) = subj_tty {
+                    cx.enum_variant_fields
+                        .get(&(enum_name.clone(), variant.clone()))
+                        .cloned()
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+
+                for (i, binding) in bindings.iter().enumerate() {
+                    let offset = ((i + 1) * 8) as i32; // +1 to skip tag
+                    let raw_val = cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, offset);
+
+                    let field_tty = if i < field_tys.len() {
+                        field_tys[i].clone()
+                    } else {
+                        TurboTy::Int
+                    };
+
+                    // Convert back from i64 storage to the appropriate type
+                    let (val, cl_ty) = match &field_tty {
+                        TurboTy::Float => {
+                            let f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val);
+                            (f, types::F64)
+                        }
+                        TurboTy::Bool => {
+                            let b = cx.builder.ins().ireduce(types::I8, raw_val);
+                            (b, types::I8)
+                        }
+                        _ => (raw_val, types::I64),
+                    };
+
+                    let var = Variable::new(cx.next_var);
+                    cx.next_var += 1;
+                    cx.builder.declare_var(var, cl_ty);
+                    cx.builder.def_var(var, val);
+                    cx.vars.insert(binding.clone(), (var, cl_ty, field_tty));
+                }
             }
             _ => {}
         }
