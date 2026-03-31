@@ -3903,10 +3903,6 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             Ok(Some((result, def_tty)))
         }
 
-        Expr::Break | Expr::Continue => {
-            // TODO: break/continue codegen (requires loop context tracking)
-            Ok(None)
-        }
     }
 }
 

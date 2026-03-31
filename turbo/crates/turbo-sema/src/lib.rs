@@ -3355,8 +3355,6 @@ impl Checker {
                 }
             }
 
-            Expr::Break => Ty::Unit,
-            Expr::Continue => Ty::Unit,
         }
     }
 
