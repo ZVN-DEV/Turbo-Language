@@ -285,6 +285,8 @@ struct Checker {
     current_return_type: Ty,
     /// Hint for closure parameter types when checking closures passed to map/filter/reduce
     closure_param_hint: Option<Vec<Ty>>,
+    /// When true, `main` is not required (used for `turbo test` mode)
+    test_mode: bool,
 }
 
 impl Checker {
@@ -312,6 +314,7 @@ impl Checker {
             scopes: Vec::new(),
             current_return_type: Ty::Unit,
             closure_param_hint: None,
+            test_mode: false,
         }
     }
 
@@ -348,7 +351,7 @@ impl Checker {
     // === Check module ===
 
     fn is_builtin_function(name: &str) -> bool {
-        matches!(name, "print" | "panic" | "assert" | "len" | "abs" | "min" | "max" | "to_str"
+        matches!(name, "print" | "panic" | "assert" | "assert_eq" | "assert_ne" | "len" | "abs" | "min" | "max" | "to_str"
             | "map" | "filter" | "reduce"
             | "split" | "trim" | "upper" | "lower" | "starts_with" | "ends_with"
             | "replace" | "char_at" | "contains" | "index_of" | "join" | "repeat"
@@ -535,6 +538,22 @@ impl Checker {
             };
 
             self.functions.insert(f.name.clone(), FnSig { type_params: tp_names, type_param_bounds: tp_bounds, params, ret, is_async: f.is_async, is_tool: f.is_tool });
+
+            // Validate @test functions: must have no parameters and no return type
+            if f.is_test {
+                if !f.params.is_empty() {
+                    self.error(
+                        format!("@test function `{}` must have no parameters", f.name),
+                        item.span.clone(),
+                    );
+                }
+                if f.return_type.is_some() {
+                    self.error(
+                        format!("@test function `{}` must have no return type", f.name),
+                        item.span.clone(),
+                    );
+                }
+            }
         }
 
         // Pass 1b: register agent declarations
@@ -742,8 +761,8 @@ impl Checker {
             self.constants.insert(c.name.clone(), ty);
         }
 
-        // Check for main
-        if !self.functions.contains_key("main") {
+        // Check for main (not required in test mode)
+        if !self.test_mode && !self.functions.contains_key("main") {
             let span = if module.items.is_empty() {
                 0..0
             } else {
@@ -1034,6 +1053,28 @@ impl Checker {
                             for arg in args.iter().skip(2) {
                                 self.check_expr(arg);
                             }
+                        }
+                        return Ty::Unit;
+                    }
+                    if name == "assert_eq" || name == "assert_ne" {
+                        if args.len() != 2 {
+                            self.error(
+                                format!("{name}() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                        }
+                        if args.len() >= 2 {
+                            let left_ty = self.check_expr(&args[0]);
+                            let right_ty = self.check_expr(&args[1]);
+                            if !left_ty.is_error() && !right_ty.is_error() && !types_compatible(&left_ty, &right_ty) && left_ty != right_ty {
+                                self.error(
+                                    format!("{name}() arguments must be the same type: left is `{left_ty}`, right is `{right_ty}`"),
+                                    callee.span.clone(),
+                                );
+                            }
+                        }
+                        for arg in args {
+                            self.check_expr(arg);
                         }
                         return Ty::Unit;
                     }
@@ -3007,6 +3048,14 @@ impl Checker {
 /// Run semantic analysis on a module. Returns errors found.
 pub fn check(module: &Module) -> Vec<SemaError> {
     let mut checker = Checker::new();
+    checker.check_module(module);
+    checker.errors
+}
+
+/// Run semantic analysis in test mode (no `main` required). Returns errors found.
+pub fn check_test(module: &Module) -> Vec<SemaError> {
+    let mut checker = Checker::new();
+    checker.test_mode = true;
     checker.check_module(module);
     checker.errors
 }
