@@ -1,0 +1,6 @@
+struct User { name: str, active: bool }
+
+fn main() {
+    let u = User { name: "Alice", active: true }
+    print(to_json(u))
+}
