@@ -265,6 +265,8 @@ struct TraitMethodInfo {
     name: String,
     params: Vec<(String, Ty)>,
     ret: Ty,
+    /// Whether this method has a default implementation in the trait
+    has_default: bool,
 }
 
 /// Type checker
@@ -300,6 +302,7 @@ impl Checker {
                 name: "to_string".to_string(),
                 params: vec![("self".to_string(), Ty::Error)], // self type filled at impl
                 ret: Ty::Str,
+                has_default: false,
             }],
         });
 
@@ -487,6 +490,7 @@ impl Checker {
                     name: method.name.clone(),
                     params,
                     ret,
+                    has_default: method.default_body.is_some(),
                 });
             }
             self.traits.insert(t.name.clone(), TraitInfo { methods: trait_methods });
@@ -699,13 +703,36 @@ impl Checker {
                 if let Some(trait_info) = self.traits.get(trait_name).cloned() {
                     for trait_method in &trait_info.methods {
                         if !method_names.contains(&trait_method.name) {
-                            self.error(
-                                format!(
-                                    "trait `{trait_name}` requires method `{}` but it is not implemented for `{}`",
-                                    trait_method.name, imp.type_name
-                                ),
-                                item.span.clone(),
-                            );
+                            if trait_method.has_default {
+                                // Auto-provide the default method: register its signature
+                                let mangled = format!("{}__{}", imp.type_name, trait_method.name);
+                                let mut params = trait_method.params.clone();
+                                // Replace self's Ty::Error with the actual struct type
+                                for p in &mut params {
+                                    if p.0 == "self" {
+                                        p.1 = Ty::Struct(imp.type_name.clone());
+                                    }
+                                }
+                                let sig = FnSig {
+                                    type_params: Vec::new(),
+                                    type_param_bounds: HashMap::new(),
+                                    params,
+                                    ret: trait_method.ret.clone(),
+                                    is_async: false,
+                                    is_tool: false,
+                                };
+                                let type_methods = self.methods.entry(imp.type_name.clone()).or_default();
+                                type_methods.insert(trait_method.name.clone(), sig.clone());
+                                self.functions.insert(mangled, sig);
+                            } else {
+                                self.error(
+                                    format!(
+                                        "trait `{trait_name}` requires method `{}` but it is not implemented for `{}`",
+                                        trait_method.name, imp.type_name
+                                    ),
+                                    item.span.clone(),
+                                );
+                            }
                         } else {
                             // Check return type matches
                             let mangled = format!("{}__{}", imp.type_name, trait_method.name);
@@ -734,6 +761,35 @@ impl Checker {
                         format!("undefined trait `{trait_name}`"),
                         item.span.clone(),
                     );
+                }
+            }
+        }
+
+        // Auto-register Display trait impl for structs with @derive(Display)
+        for item in &module.items {
+            let Item::Struct(s) = &item.node else { continue };
+            if s.derives.contains(&"Display".to_string()) {
+                // Only add if not already explicitly implemented
+                let already_impl = self.trait_impls.get(&s.name)
+                    .map_or(false, |impls| impls.contains(&"Display".to_string()));
+                if !already_impl {
+                    // Register the to_string method signature
+                    let mangled = format!("{}__{}", s.name, "to_string");
+                    let sig = FnSig {
+                        type_params: Vec::new(),
+                        type_param_bounds: HashMap::new(),
+                        params: vec![("self".to_string(), Ty::Struct(s.name.clone()))],
+                        ret: Ty::Str,
+                        is_async: false,
+                        is_tool: false,
+                    };
+                    let type_methods = self.methods.entry(s.name.clone()).or_default();
+                    type_methods.insert("to_string".to_string(), sig.clone());
+                    self.functions.insert(mangled, sig);
+                    self.trait_impls
+                        .entry(s.name.clone())
+                        .or_default()
+                        .push("Display".to_string());
                 }
             }
         }

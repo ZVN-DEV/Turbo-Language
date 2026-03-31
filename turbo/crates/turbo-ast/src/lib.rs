@@ -70,12 +70,14 @@ pub struct TraitDef {
     pub methods: Vec<TraitMethodSig>,
 }
 
-/// Trait method signature (no body)
+/// Trait method signature (optionally with a default body)
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitMethodSig {
     pub name: String,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
+    /// Optional default implementation body
+    pub default_body: Option<Spanned<Expr>>,
 }
 
 /// Enum variant definition (may carry data)

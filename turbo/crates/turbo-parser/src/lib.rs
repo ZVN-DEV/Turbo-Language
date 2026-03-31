@@ -406,7 +406,13 @@ impl Parser {
         } else {
             None
         };
-        Ok(TraitMethodSig { name, params, return_type })
+        // Check for optional default body
+        let default_body = if matches!(self.peek(), Some(Token::LBrace)) {
+            Some(self.parse_block()?)
+        } else {
+            None
+        };
+        Ok(TraitMethodSig { name, params, return_type, default_body })
     }
 
     fn parse_import(&mut self) -> Result<(Vec<String>, String), ParseError> {
