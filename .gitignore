@@ -26,3 +26,15 @@ Thumbs.db
 *.dylib
 *.so
 /tmp/
+
+# Dependencies (nested)
+node_modules/
+
+# Compiled artifacts
+*.class
+benchmarks/cpp/benchmark
+benchmarks/swift/benchmark
+benchmark-section*.png
+
+# Playwright MCP
+.playwright-mcp/

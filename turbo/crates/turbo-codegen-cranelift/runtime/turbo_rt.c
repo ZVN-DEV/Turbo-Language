@@ -11,6 +11,28 @@
 #include <string.h>
 #include <pthread.h>
 #include <math.h>
+#include <time.h>
+#include <sys/wait.h>
+
+/* ── Checked allocation helpers (C-3) ──────────────────────────────── */
+
+static void *turbo_alloc(size_t size) {
+    void *p = malloc(size);
+    if (!p) { fprintf(stderr, "runtime error: out of memory\n"); exit(1); }
+    return p;
+}
+
+static void *turbo_calloc(size_t count, size_t size) {
+    void *p = calloc(count, size);
+    if (!p) { fprintf(stderr, "runtime error: out of memory\n"); exit(1); }
+    return p;
+}
+
+static void *turbo_realloc(void *ptr, size_t size) {
+    void *p = realloc(ptr, size);
+    if (!p) { fprintf(stderr, "runtime error: out of memory\n"); exit(1); }
+    return p;
+}
 
 void rt_print_str(const char *s) {
     if (s)
@@ -60,7 +82,7 @@ void rt_int_overflow(void) {
 const char* rt_str_concat(const char *a, const char *b) {
     size_t a_len = a ? strlen(a) : 0;
     size_t b_len = b ? strlen(b) : 0;
-    char *result = malloc(a_len + b_len + 1);
+    char *result = turbo_alloc(a_len + b_len + 1);
     if (a) memcpy(result, a, a_len);
     if (b) memcpy(result + a_len, b, b_len);
     result[a_len + b_len] = '\0';
@@ -76,7 +98,7 @@ char rt_str_eq(const char *a, const char *b) {
 void* rt_array_alloc(long long len) {
     size_t data_size = 8 + len * 8;
     size_t total = 8 + data_size; /* +8 for refcount header */
-    void *ptr = calloc(1, total);
+    void *ptr = turbo_calloc(1, total);
     *(long long*)ptr = 1; /* refcount = 1 */
     void *data_ptr = (char*)ptr + 8;
     *(long long*)data_ptr = len;
@@ -102,7 +124,7 @@ void* rt_array_set(void *arr, long long index, long long value) {
         long long len = *(const long long*)arr;
         size_t data_size = (1 + (size_t)len) * 8;
         size_t total = 8 + data_size;
-        void *new_alloc = calloc(1, total);
+        void *new_alloc = turbo_calloc(1, total);
         *(long long*)new_alloc = 1;
         void *new_data = (char*)new_alloc + 8;
         memcpy(new_data, arr, data_size);
@@ -132,30 +154,30 @@ void* rt_struct_alloc(long long num_fields) {
     size_t data_size = num_fields * 8;
     if (data_size < 8) data_size = 8;
     size_t total = 8 + data_size; /* +8 for refcount header */
-    void *ptr = calloc(1, total);
+    void *ptr = turbo_calloc(1, total);
     *(long long*)ptr = 1; /* refcount = 1 */
     return (char*)ptr + 8; /* return pointer past refcount */
 }
 
 const char* rt_i64_to_str(long long n) {
-    char *buf = malloc(32);
+    char *buf = turbo_alloc(32);
     snprintf(buf, 32, "%lld", n);
     return buf;
 }
 
 const char* rt_f64_to_str(double n) {
-    char *buf = malloc(32);
+    char *buf = turbo_alloc(32);
     snprintf(buf, 32, "%g", n);
     return buf;
 }
 
 const char* rt_bool_to_str(char b) {
     if (b) {
-        char *buf = malloc(5);
+        char *buf = turbo_alloc(5);
         memcpy(buf, "true", 5);
         return buf;
     } else {
-        char *buf = malloc(6);
+        char *buf = turbo_alloc(6);
         memcpy(buf, "false", 6);
         return buf;
     }
@@ -164,7 +186,7 @@ const char* rt_bool_to_str(char b) {
 /* Result type runtime functions */
 
 void* rt_result_ok(long long value) {
-    long long *ptr = (long long*)calloc(3, sizeof(long long)); /* refcount + tag + value */
+    long long *ptr = (long long*)turbo_calloc(3, sizeof(long long)); /* refcount + tag + value */
     ptr[0] = 1; /* refcount = 1 */
     ptr[1] = 0; /* ok tag */
     ptr[2] = value;
@@ -172,7 +194,7 @@ void* rt_result_ok(long long value) {
 }
 
 void* rt_result_err(long long value) {
-    long long *ptr = (long long*)calloc(3, sizeof(long long)); /* refcount + tag + value */
+    long long *ptr = (long long*)turbo_calloc(3, sizeof(long long)); /* refcount + tag + value */
     ptr[0] = 1; /* refcount = 1 */
     ptr[1] = 1; /* err tag */
     ptr[2] = value;
@@ -190,7 +212,7 @@ long long rt_result_value(const void *result) {
 /* Optional type runtime functions */
 
 void* rt_option_some(long long value) {
-    long long *ptr = (long long*)calloc(3, sizeof(long long)); /* refcount + tag + value */
+    long long *ptr = (long long*)turbo_calloc(3, sizeof(long long)); /* refcount + tag + value */
     ptr[0] = 1; /* refcount = 1 */
     ptr[1] = 1; /* some tag */
     ptr[2] = value;
@@ -198,7 +220,7 @@ void* rt_option_some(long long value) {
 }
 
 void* rt_option_none(void) {
-    long long *ptr = (long long*)calloc(3, sizeof(long long)); /* refcount + tag + value */
+    long long *ptr = (long long*)turbo_calloc(3, sizeof(long long)); /* refcount + tag + value */
     ptr[0] = 1; /* refcount = 1 */
     ptr[1] = 0; /* none tag */
     ptr[2] = 0;
@@ -230,7 +252,7 @@ void* rt_str_split(const char *s, const char *sep) {
 
     size_t data_size = 8 + count * 8;
     size_t total = 8 + data_size; /* +8 for refcount header */
-    long long *raw = (long long*)calloc(1, total);
+    long long *raw = (long long*)turbo_calloc(1, total);
     raw[0] = 1; /* refcount = 1 */
     long long *arr = raw + 1; /* data pointer past refcount */
     arr[0] = (long long)count;
@@ -239,12 +261,12 @@ void* rt_str_split(const char *s, const char *sep) {
         /* split each character */
         size_t slen = strlen(s);
         if (slen == 0) {
-            char *empty = malloc(1);
+            char *empty = turbo_alloc(1);
             empty[0] = '\0';
             arr[1] = (long long)(size_t)empty;
         } else {
             for (size_t i = 0; i < slen; i++) {
-                char *ch = malloc(2);
+                char *ch = turbo_alloc(2);
                 ch[0] = s[i];
                 ch[1] = '\0';
                 arr[1 + i] = (long long)(size_t)ch;
@@ -256,7 +278,7 @@ void* rt_str_split(const char *s, const char *sep) {
         const char *next;
         while ((next = strstr(p, sep)) != NULL) {
             size_t len = (size_t)(next - p);
-            char *part = malloc(len + 1);
+            char *part = turbo_alloc(len + 1);
             memcpy(part, p, len);
             part[len] = '\0';
             arr[1 + idx] = (long long)(size_t)part;
@@ -265,7 +287,7 @@ void* rt_str_split(const char *s, const char *sep) {
         }
         /* last part */
         size_t len = strlen(p);
-        char *part = malloc(len + 1);
+        char *part = turbo_alloc(len + 1);
         memcpy(part, p, len);
         part[len] = '\0';
         arr[1 + idx] = (long long)(size_t)part;
@@ -274,22 +296,22 @@ void* rt_str_split(const char *s, const char *sep) {
 }
 
 const char* rt_str_trim(const char *s) {
-    if (!s) { char *e = malloc(1); e[0] = '\0'; return e; }
+    if (!s) { char *e = turbo_alloc(1); e[0] = '\0'; return e; }
     const char *start = s;
     while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r') start++;
     const char *end = s + strlen(s);
     while (end > start && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\n' || end[-1] == '\r')) end--;
     size_t len = (size_t)(end - start);
-    char *result = malloc(len + 1);
+    char *result = turbo_alloc(len + 1);
     memcpy(result, start, len);
     result[len] = '\0';
     return result;
 }
 
 const char* rt_str_upper(const char *s) {
-    if (!s) { char *e = malloc(1); e[0] = '\0'; return e; }
+    if (!s) { char *e = turbo_alloc(1); e[0] = '\0'; return e; }
     size_t len = strlen(s);
-    char *result = malloc(len + 1);
+    char *result = turbo_alloc(len + 1);
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)s[i];
         result[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : (char)c;
@@ -299,9 +321,9 @@ const char* rt_str_upper(const char *s) {
 }
 
 const char* rt_str_lower(const char *s) {
-    if (!s) { char *e = malloc(1); e[0] = '\0'; return e; }
+    if (!s) { char *e = turbo_alloc(1); e[0] = '\0'; return e; }
     size_t len = strlen(s);
-    char *result = malloc(len + 1);
+    char *result = turbo_alloc(len + 1);
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)s[i];
         result[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : (char)c;
@@ -326,14 +348,14 @@ char rt_str_ends_with(const char *s, const char *suffix) {
 
 const char* rt_str_replace(const char *s, const char *from, const char *to) {
     if (!s || !from || !to) {
-        char *e = malloc(1); e[0] = '\0'; return e;
+        char *e = turbo_alloc(1); e[0] = '\0'; return e;
     }
     size_t from_len = strlen(from);
     size_t to_len = strlen(to);
     if (from_len == 0) {
         /* No replacement for empty pattern; return copy */
         size_t len = strlen(s);
-        char *r = malloc(len + 1);
+        char *r = turbo_alloc(len + 1);
         memcpy(r, s, len + 1);
         return r;
     }
@@ -341,8 +363,10 @@ const char* rt_str_replace(const char *s, const char *from, const char *to) {
     size_t count = 0;
     const char *p = s;
     while ((p = strstr(p, from)) != NULL) { count++; p += from_len; }
-    size_t new_len = strlen(s) + count * (to_len - from_len);
-    char *result = malloc(new_len + 1);
+    /* C-2: Use signed arithmetic to avoid underflow when to_len < from_len */
+    long long delta = (long long)to_len - (long long)from_len;
+    size_t new_len = (size_t)((long long)strlen(s) + (long long)count * delta);
+    char *result = turbo_alloc(new_len + 1);
     char *w = result;
     p = s;
     const char *next;
@@ -367,7 +391,7 @@ const char* rt_str_char_at(const char *s, long long index) {
         fprintf(stderr, "runtime error: string index %lld out of bounds (length %zu)\n", index, len);
         exit(1);
     }
-    char *result = malloc(2);
+    char *result = turbo_alloc(2);
     result[0] = s[(size_t)index];
     result[1] = '\0';
     return result;
@@ -378,11 +402,11 @@ const char* rt_str_char_at(const char *s, long long index) {
 const char* rt_read_line(void) {
     char buf[4096];
     if (fgets(buf, sizeof(buf), stdin) == NULL) {
-        char *e = malloc(1); e[0] = '\0'; return e;
+        char *e = turbo_alloc(1); e[0] = '\0'; return e;
     }
     size_t len = strlen(buf);
     while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) { buf[--len] = '\0'; }
-    char *result = malloc(len + 1);
+    char *result = turbo_alloc(len + 1);
     memcpy(result, buf, len + 1);
     return result;
 }
@@ -395,8 +419,9 @@ const char* rt_read_file(const char *path) {
     }
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
+    if (size < 0) { fclose(f); fprintf(stderr, "runtime error: cannot read file size\n"); exit(1); }
     fseek(f, 0, SEEK_SET);
-    char *buf = malloc((size_t)size + 1);
+    char *buf = turbo_alloc((size_t)size + 1);
     fread(buf, 1, (size_t)size, f);
     buf[size] = '\0';
     fclose(f);
@@ -436,7 +461,8 @@ void rt_sleep_ms(long long ms) { Sleep((DWORD)ms); }
 #else
 #include <unistd.h>
 void rt_sleep_ms(long long ms) {
-    usleep((unsigned int)(ms * 1000));
+    struct timespec ts = { ms / 1000, (ms % 1000) * 1000000 };
+    nanosleep(&ts, NULL);
 }
 #endif
 
@@ -453,11 +479,11 @@ static void *spawn_thread_fn(void *arg) {
 }
 
 void *rt_spawn_with_args(long long (*thunk)(void *), void *args_ptr) {
-    spawn_ctx *ctx = (spawn_ctx *)malloc(sizeof(spawn_ctx));
+    spawn_ctx *ctx = (spawn_ctx *)turbo_alloc(sizeof(spawn_ctx));
     ctx->thunk = thunk;
     ctx->args_ptr = args_ptr;
     ctx->result = 0;
-    pthread_t *handle = (pthread_t *)malloc(sizeof(pthread_t) + sizeof(spawn_ctx *));
+    pthread_t *handle = (pthread_t *)turbo_alloc(sizeof(pthread_t) + sizeof(spawn_ctx *));
     /* Store ctx pointer right after the pthread_t */
     *((spawn_ctx **)(handle + 1)) = ctx;
     pthread_create(handle, NULL, spawn_thread_fn, ctx);
@@ -477,56 +503,80 @@ long long rt_await_handle(void *handle_ptr) {
 
 /* ── HTTP + JSON builtins ───────────────────────────────────────────── */
 
-/* http_get(url) -> str — HTTP GET via system curl */
-const char *rt_http_get(const char *url) {
-    char cmd[4096];
-    snprintf(cmd, sizeof(cmd), "curl -s -L '%s'", url);
-    FILE *fp = popen(cmd, "r");
-    if (!fp) {
-        char *err = strdup("error: cannot run curl");
-        return err;
-    }
+/* Helper: read all data from a file descriptor into a heap-allocated string */
+static char *read_fd_to_string(int fd) {
     size_t cap = 4096, len = 0;
-    char *buf = (char *)malloc(cap);
+    char *buf = (char *)turbo_alloc(cap);
     while (1) {
-        size_t n = fread(buf + len, 1, cap - len - 1, fp);
-        if (n == 0) break;
-        len += n;
+        ssize_t n = read(fd, buf + len, cap - len - 1);
+        if (n <= 0) break;
+        len += (size_t)n;
         if (len + 1 >= cap) {
             cap *= 2;
-            buf = (char *)realloc(buf, cap);
+            buf = (char *)turbo_realloc(buf, cap);
         }
     }
     buf[len] = '\0';
-    pclose(fp);
     return buf;
 }
 
-/* http_post(url, body) -> str — HTTP POST via system curl */
+/* http_get(url) -> str — HTTP GET via fork+exec (no shell interpolation) */
+const char *rt_http_get(const char *url) {
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        return strdup("error: cannot create pipe");
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return strdup("error: cannot fork");
+    }
+    if (pid == 0) {
+        /* Child: redirect stdout to pipe, exec curl */
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        execlp("curl", "curl", "-s", "-L", url, (char *)NULL);
+        _exit(1);
+    }
+    /* Parent: read from pipe */
+    close(pipefd[1]);
+    char *buf = read_fd_to_string(pipefd[0]);
+    close(pipefd[0]);
+    int status;
+    waitpid(pid, &status, 0);
+    return buf;
+}
+
+/* http_post(url, body) -> str — HTTP POST via fork+exec (no shell interpolation) */
 const char *rt_http_post(const char *url, const char *body) {
-    /* Build command — uses stdin to pass body safely */
-    char cmd[4096];
-    snprintf(cmd, sizeof(cmd),
-        "curl -s -L -X POST -H 'Content-Type: application/json' -d '%s' '%s'",
-        body, url);
-    FILE *fp = popen(cmd, "r");
-    if (!fp) {
-        char *err = strdup("error: cannot run curl");
-        return err;
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        return strdup("error: cannot create pipe");
     }
-    size_t cap = 4096, len = 0;
-    char *buf = (char *)malloc(cap);
-    while (1) {
-        size_t n = fread(buf + len, 1, cap - len - 1, fp);
-        if (n == 0) break;
-        len += n;
-        if (len + 1 >= cap) {
-            cap *= 2;
-            buf = (char *)realloc(buf, cap);
-        }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return strdup("error: cannot fork");
     }
-    buf[len] = '\0';
-    pclose(fp);
+    if (pid == 0) {
+        /* Child: redirect stdout to pipe, exec curl with POST */
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        execlp("curl", "curl", "-s", "-L", "-X", "POST",
+               "-H", "Content-Type: application/json",
+               "-d", body, url, (char *)NULL);
+        _exit(1);
+    }
+    /* Parent: read from pipe */
+    close(pipefd[1]);
+    char *buf = read_fd_to_string(pipefd[0]);
+    close(pipefd[0]);
+    int status;
+    waitpid(pid, &status, 0);
     return buf;
 }
 
@@ -534,7 +584,7 @@ const char *rt_http_post(const char *url, const char *body) {
 const char *rt_json_get(const char *json, const char *key) {
     /* Build search pattern: "key" */
     size_t klen = strlen(key);
-    char *search = (char *)malloc(klen + 3);
+    char *search = (char *)turbo_alloc(klen + 3);
     search[0] = '"';
     memcpy(search + 1, key, klen);
     search[klen + 1] = '"';
@@ -557,7 +607,7 @@ const char *rt_json_get(const char *json, const char *key) {
         const char *start = pos;
         while (*pos && !(*pos == '"' && *(pos - 1) != '\\')) pos++;
         size_t vlen = pos - start;
-        char *val = (char *)malloc(vlen + 1);
+        char *val = (char *)turbo_alloc(vlen + 1);
         memcpy(val, start, vlen);
         val[vlen] = '\0';
         return val;
@@ -567,7 +617,7 @@ const char *rt_json_get(const char *json, const char *key) {
         while (*pos && *pos != ',' && *pos != '}' && *pos != ']' &&
                *pos != ' ' && *pos != '\n' && *pos != '\r' && *pos != '\t') pos++;
         size_t vlen = pos - start;
-        char *val = (char *)malloc(vlen + 1);
+        char *val = (char *)turbo_alloc(vlen + 1);
         memcpy(val, start, vlen);
         val[vlen] = '\0';
         return val;
@@ -581,7 +631,7 @@ const char *rt_json_stringify(const char *key, const char *value) {
     size_t vlen = strlen(value);
     /* {"key":"value"}\0 — worst case 2x for escaping */
     size_t cap = klen + vlen + 8;
-    char *buf = (char *)malloc(cap);
+    char *buf = (char *)turbo_alloc(cap);
     snprintf(buf, cap, "{\"%s\":\"%s\"}", key, value);
     return buf;
 }
@@ -611,13 +661,13 @@ typedef struct {
 } channel_handle;
 
 void *rt_channel_create(void) {
-    channel_queue *q = (channel_queue *)calloc(1, sizeof(channel_queue));
+    channel_queue *q = (channel_queue *)turbo_calloc(1, sizeof(channel_queue));
     pthread_mutex_init(&q->lock, NULL);
     pthread_cond_init(&q->cond, NULL);
 
     /* Allocate with refcount header: [refcount: i64][sender_ptr: i64][receiver_ptr: i64] */
     size_t ch_total = 8 + sizeof(channel_handle); /* +8 for refcount */
-    void *raw = calloc(1, ch_total);
+    void *raw = turbo_calloc(1, ch_total);
     *(long long*)raw = 1; /* refcount = 1 */
     channel_handle *h = (channel_handle *)((char*)raw + 8);
     /* Both sender and receiver point to the same queue */
@@ -630,7 +680,7 @@ void rt_channel_send(const void *ch, long long value) {
     const channel_handle *h = (const channel_handle *)ch;
     channel_queue *q = (channel_queue *)(size_t)h->sender_ptr;
 
-    channel_node *node = (channel_node *)malloc(sizeof(channel_node));
+    channel_node *node = (channel_node *)turbo_alloc(sizeof(channel_node));
     node->value = value;
     node->next = NULL;
 
@@ -667,7 +717,7 @@ void *rt_channel_clone_sender(const void *ch) {
     const channel_handle *h = (const channel_handle *)ch;
     /* Allocate with refcount header */
     size_t ch_total = 8 + sizeof(channel_handle);
-    void *raw = calloc(1, ch_total);
+    void *raw = turbo_calloc(1, ch_total);
     *(long long*)raw = 1; /* refcount = 1 */
     channel_handle *nh = (channel_handle *)((char*)raw + 8);
     nh->sender_ptr = h->sender_ptr;
@@ -683,7 +733,7 @@ typedef struct {
 } turbo_mutex;
 
 void *rt_mutex_create(long long value) {
-    turbo_mutex *m = (turbo_mutex *)malloc(sizeof(turbo_mutex));
+    turbo_mutex *m = (turbo_mutex *)turbo_alloc(sizeof(turbo_mutex));
     m->value = value;
     pthread_mutex_init(&m->lock, NULL);
     return m;
@@ -742,7 +792,7 @@ static unsigned long hashmap_hash(const char *key) {
 static void hashmap_resize(turbo_hashmap *map, long long new_cap) {
     hashmap_entry *old = map->entries;
     long long old_cap = map->capacity;
-    map->entries = (hashmap_entry *)calloc((size_t)new_cap, sizeof(hashmap_entry));
+    map->entries = (hashmap_entry *)turbo_calloc((size_t)new_cap, sizeof(hashmap_entry));
     map->capacity = new_cap;
     map->count = 0;
     for (long long i = 0; i < old_cap; i++) {
@@ -762,8 +812,8 @@ static void hashmap_resize(turbo_hashmap *map, long long new_cap) {
 }
 
 void *rt_hashmap_new(void) {
-    turbo_hashmap *map = (turbo_hashmap *)malloc(sizeof(turbo_hashmap));
-    map->entries = (hashmap_entry *)calloc(HASHMAP_INIT_CAP, sizeof(hashmap_entry));
+    turbo_hashmap *map = (turbo_hashmap *)turbo_alloc(sizeof(turbo_hashmap));
+    map->entries = (hashmap_entry *)turbo_calloc(HASHMAP_INIT_CAP, sizeof(hashmap_entry));
     map->capacity = HASHMAP_INIT_CAP;
     map->count = 0;
     return map;
@@ -827,7 +877,7 @@ long long rt_hashmap_len(const void *map_ptr) {
 void *rt_hashmap_keys(const void *map_ptr) {
     const turbo_hashmap *map = (const turbo_hashmap *)map_ptr;
     /* Collect keys, then sort for deterministic order */
-    char **key_ptrs = (char **)malloc((size_t)map->count * sizeof(char *));
+    char **key_ptrs = (char **)turbo_alloc((size_t)map->count * sizeof(char *));
     long long idx = 0;
     for (long long i = 0; i < map->capacity; i++) {
         if (map->entries[i].occupied) {
@@ -847,7 +897,7 @@ void *rt_hashmap_keys(const void *map_ptr) {
     /* Build array in same format as rt_str_split: [refcount][len][ptr0][ptr1]... */
     size_t data_size = 8 + (size_t)idx * 8;
     size_t total = 8 + data_size; /* +8 for refcount header */
-    long long *raw = (long long *)calloc(1, total);
+    long long *raw = (long long *)turbo_calloc(1, total);
     raw[0] = 1; /* refcount = 1 */
     long long *arr = raw + 1; /* data pointer past refcount */
     arr[0] = idx;
@@ -922,6 +972,7 @@ static HttpServerC http_servers[16];
 static int http_server_count = 0;
 
 long long rt_http_server(long long port) {
+    if (http_server_count >= 16) { fprintf(stderr, "error: max 16 HTTP servers\n"); exit(1); }
     int id = http_server_count++;
     http_servers[id].port = (unsigned short)port;
     http_servers[id].route_count = 0;
@@ -930,6 +981,7 @@ long long rt_http_server(long long port) {
 
 void rt_http_route(long long server_id, const char *method, const char *path, const void *handler, const void *env_ptr) {
     HttpServerC *srv = &http_servers[server_id];
+    if (srv->route_count >= 64) { fprintf(stderr, "error: max 64 routes per server\n"); exit(1); }
     int idx = srv->route_count++;
     strncpy(srv->routes[idx].method, method, 15);
     srv->routes[idx].method[15] = '\0';
@@ -1036,7 +1088,7 @@ const char* rt_respond(long long status, const char *body) {
     /* "STATUS:BODY\0" */
     char digits[20];
     int dlen = snprintf(digits, sizeof(digits), "%lld", status);
-    char *result = malloc(dlen + 1 + blen + 1);
+    char *result = turbo_alloc(dlen + 1 + blen + 1);
     memcpy(result, digits, dlen);
     result[dlen] = ':';
     memcpy(result + dlen + 1, body, blen);
