@@ -374,11 +374,13 @@ impl Checker {
             | "pow" | "sqrt"
             | "sleep"
             | "http_get" | "http_post" | "json_get" | "json_stringify"
+            | "http_server" | "route" | "http_listen" | "respond" | "request_body"
             | "channel" | "send" | "recv"
             | "mutex" | "mutex_get" | "mutex_set"
             | "clone"
             | "hashmap" | "hashmap_set" | "hashmap_get" | "hashmap_has"
             | "hashmap_len" | "hashmap_keys" | "hashmap_remove"
+            | "to_json" | "to_json_array"
             | "deref" | "store")
     }
 
@@ -1547,6 +1549,99 @@ impl Checker {
                         return Ty::Str;
                     }
 
+                    // ── HTTP server builtins ──────────────────────────
+                    // http_server(port: i64) -> i64
+                    if name == "http_server" {
+                        if args.len() != 1 {
+                            self.error(format!("http_server() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let port_ty = self.check_expr(&args[0]);
+                        if !port_ty.is_error() && !port_ty.is_integer() {
+                            self.error(format!("http_server() expects integer port, found `{port_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::I64;
+                    }
+                    // route(server: i64, method: str, path: str, handler: fn(str) -> str)
+                    if name == "route" {
+                        if args.len() != 4 {
+                            self.error(format!("route() takes exactly 4 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let server_ty = self.check_expr(&args[0]);
+                        let method_ty = self.check_expr(&args[1]);
+                        let path_ty = self.check_expr(&args[2]);
+                        // Set hint so closure param types can be inferred
+                        self.closure_param_hint = Some(vec![Ty::Str]);
+                        let handler_ty = self.check_expr(&args[3]);
+                        if !server_ty.is_error() && !server_ty.is_integer() {
+                            self.error(format!("route() first argument must be server id (i64), found `{server_ty}`"), args[0].span.clone());
+                        }
+                        if !method_ty.is_error() && method_ty != Ty::Str {
+                            self.error(format!("route() second argument must be str (HTTP method), found `{method_ty}`"), args[1].span.clone());
+                        }
+                        if !path_ty.is_error() && path_ty != Ty::Str {
+                            self.error(format!("route() third argument must be str (path), found `{path_ty}`"), args[2].span.clone());
+                        }
+                        match &handler_ty {
+                            Ty::Fn(params, ret) => {
+                                if params.len() != 1 {
+                                    self.error(format!("route() handler must take 1 parameter (request), takes {}", params.len()), args[3].span.clone());
+                                } else if !params[0].is_error() && params[0] != Ty::Str {
+                                    self.error(format!("route() handler parameter must be str, found `{}`", params[0]), args[3].span.clone());
+                                }
+                                if !ret.is_error() && **ret != Ty::Str {
+                                    self.error(format!("route() handler must return str, returns `{}`", ret), args[3].span.clone());
+                                }
+                            }
+                            _ if handler_ty.is_error() => {}
+                            _ => {
+                                self.error(format!("route() fourth argument must be a function, found `{handler_ty}`"), args[3].span.clone());
+                            }
+                        }
+                        return Ty::Unit;
+                    }
+                    // http_listen(server: i64) -> ()
+                    if name == "http_listen" {
+                        if args.len() != 1 {
+                            self.error(format!("http_listen() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let server_ty = self.check_expr(&args[0]);
+                        if !server_ty.is_error() && !server_ty.is_integer() {
+                            self.error(format!("http_listen() expects server id (i64), found `{server_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::Unit;
+                    }
+                    // respond(status: i64, body: str) -> str
+                    if name == "respond" {
+                        if args.len() != 2 {
+                            self.error(format!("respond() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let status_ty = self.check_expr(&args[0]);
+                        let body_ty = self.check_expr(&args[1]);
+                        if !status_ty.is_error() && !status_ty.is_integer() {
+                            self.error(format!("respond() first argument must be integer status code, found `{status_ty}`"), args[0].span.clone());
+                        }
+                        if !body_ty.is_error() && body_ty != Ty::Str {
+                            self.error(format!("respond() second argument must be str, found `{body_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+                    // request_body(req: str) -> str
+                    if name == "request_body" {
+                        if args.len() != 1 {
+                            self.error(format!("request_body() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let req_ty = self.check_expr(&args[0]);
+                        if !req_ty.is_error() && req_ty != Ty::Str {
+                            self.error(format!("request_body() expects str, found `{req_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+
                     // ── JSON builtins ───────────────────────────────
                     // json_get(json: str, key: str) -> str
                     if name == "json_get" {
@@ -1577,6 +1672,27 @@ impl Checker {
                         }
                         if !value_ty.is_error() && value_ty != Ty::Str {
                             self.error(format!("json_stringify() second argument must be str, found `{value_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+                    // to_json(val: any) -> str
+                    if name == "to_json" {
+                        if args.len() != 1 {
+                            self.error(format!("to_json() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let _val_ty = self.check_expr(&args[0]);
+                        return Ty::Str;
+                    }
+                    // to_json_array(arr: [any]) -> str
+                    if name == "to_json_array" {
+                        if args.len() != 1 {
+                            self.error(format!("to_json_array() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let val_ty = self.check_expr(&args[0]);
+                        if !val_ty.is_error() && !matches!(val_ty, Ty::Array(_)) {
+                            self.error(format!("to_json_array() argument must be an array, found `{val_ty}`"), args[0].span.clone());
                         }
                         return Ty::Str;
                     }
@@ -3202,6 +3318,9 @@ impl Checker {
                     }
                 }
             }
+
+            Expr::Break => Ty::Unit,
+            Expr::Continue => Ty::Unit,
         }
     }
 
