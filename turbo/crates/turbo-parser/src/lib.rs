@@ -1279,6 +1279,14 @@ impl Parser {
             Some(Token::For) => self.parse_for_in(),
             Some(Token::Match) => self.parse_match_expr(),
             Some(Token::LBrace) => self.parse_block(),
+            Some(Token::Break) => {
+                let span = self.advance().span.clone();
+                Ok(Spanned::new(Expr::Break, span))
+            }
+            Some(Token::Continue) => {
+                let span = self.advance().span.clone();
+                Ok(Spanned::new(Expr::Continue, span))
+            }
             Some(Token::Bar) => {
                 // Closure: |params| -> ret { body }
                 self.parse_closure()

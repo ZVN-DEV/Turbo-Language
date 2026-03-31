@@ -966,6 +966,8 @@ struct Ctx<'a, M: Module> {
     constants: &'a HashMap<String, Spanned<Expr>>,
     /// Struct derives: struct_name -> vec of derived trait names
     struct_derives: &'a HashMap<String, Vec<String>>,
+    /// Stack of loop contexts for break/continue: (header_block, exit_block)
+    loop_stack: Vec<(cranelift::prelude::Block, cranelift::prelude::Block)>,
 }
 
 impl<'a, M: Module> Ctx<'a, M> {
@@ -1542,7 +1544,8 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
             collect_free_vars(&inner.node, bound, free);
         }
         Expr::EnumVariant { .. } | Expr::IntLit(_) | Expr::FloatLit(_)
-        | Expr::StringLit(_) | Expr::BoolLit(_) | Expr::Unit | Expr::NoneExpr => {}
+        | Expr::StringLit(_) | Expr::BoolLit(_) | Expr::Unit | Expr::NoneExpr
+        | Expr::Break | Expr::Continue => {}
     }
 }
 
@@ -2243,6 +2246,7 @@ fn compile_module<M: Module>(
                 spawn_thunks: &spawn_thunk_map,
                 constants: &constants_map,
                 struct_derives: &struct_derives,
+                loop_stack: Vec::new(),
             };
 
             let entry = cx.builder.create_block();
@@ -2342,6 +2346,7 @@ fn compile_module<M: Module>(
                     spawn_thunks: &spawn_thunk_map,
                     constants: &constants_map,
                     struct_derives: &struct_derives,
+                    loop_stack: Vec::new(),
                 };
 
                 let entry = cx.builder.create_block();
@@ -2438,6 +2443,7 @@ fn compile_module<M: Module>(
                 spawn_thunks: &spawn_thunk_map,
                 constants: &constants_map,
                 struct_derives: &struct_derives,
+                loop_stack: Vec::new(),
             };
 
             let entry = cx.builder.create_block();
@@ -2523,6 +2529,7 @@ fn compile_module<M: Module>(
                 spawn_thunks: &spawn_thunk_map,
                 constants: &constants_map,
                 struct_derives: &struct_derives,
+                loop_stack: Vec::new(),
             };
 
             let entry = cx.builder.create_block();
@@ -2663,6 +2670,7 @@ fn compile_module<M: Module>(
                 spawn_thunks: &spawn_thunk_map,
                 constants: &constants_map,
                 struct_derives: &struct_derives,
+                loop_stack: Vec::new(),
             };
 
             let entry = cx.builder.create_block();
@@ -2928,6 +2936,18 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                         return compile_str_compare(cx, lhs, rhs, *op);
                     }
                     _ => {}
+                }
+            }
+
+            // String coercion: str + non-str or non-str + str
+            if *op == BinOp::Add {
+                if lhs_tty == TurboTy::Str && rhs_tty != TurboTy::Str {
+                    let rhs_str = convert_to_str(cx, rhs, &rhs_tty)?;
+                    return compile_str_concat(cx, lhs, rhs_str);
+                }
+                if rhs_tty == TurboTy::Str && lhs_tty != TurboTy::Str {
+                    let lhs_str = convert_to_str(cx, lhs, &lhs_tty)?;
+                    return compile_str_concat(cx, lhs_str, rhs);
                 }
             }
 
@@ -3238,6 +3258,28 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
 
         Expr::Range { .. } => {
             Err(CodegenError { message: "range expressions can only be used in for-in loops".to_string() })
+        }
+
+        Expr::Break => {
+            if let Some(&(_header, exit)) = cx.loop_stack.last() {
+                cx.builder.ins().jump(exit, &[]);
+                // Create an unreachable block so subsequent code has somewhere to go
+                let dead_block = cx.builder.create_block();
+                cx.builder.switch_to_block(dead_block);
+                cx.builder.seal_block(dead_block);
+            }
+            Ok(None)
+        }
+
+        Expr::Continue => {
+            if let Some(&(header, _exit)) = cx.loop_stack.last() {
+                cx.builder.ins().jump(header, &[]);
+                // Create an unreachable block so subsequent code has somewhere to go
+                let dead_block = cx.builder.create_block();
+                cx.builder.switch_to_block(dead_block);
+                cx.builder.seal_block(dead_block);
+            }
+            Ok(None)
         }
 
         Expr::ArrayLit(elements) => {
@@ -5424,7 +5466,9 @@ fn compile_while<M: Module>(
     // Body
     cx.builder.switch_to_block(body_block);
     cx.builder.seal_block(body_block);
+    cx.loop_stack.push((header_block, exit_block));
     compile_expr(cx, body)?;
+    cx.loop_stack.pop();
 
     if !cx.builder.is_unreachable() {
         cx.builder.ins().jump(header_block, &[]);
@@ -5469,15 +5513,16 @@ fn compile_for_in_range<M: Module>(
     cx.builder.def_var(var, range_start);
     cx.vars.insert(var_name.to_string(), (var, types::I64, TurboTy::Int));
 
-    // Create blocks: header, body, exit
+    // Create blocks: header, body, continue (increment), exit
     let header_block = cx.builder.create_block();
     let body_block = cx.builder.create_block();
+    let continue_block = cx.builder.create_block();
     let exit_block = cx.builder.create_block();
 
     cx.builder.ins().jump(header_block, &[]);
 
     // Header: check i < end
-    // Do NOT seal header yet -- it has two predecessors (entry + back edge)
+    // Do NOT seal header yet -- it has predecessors (entry + continue back edge + possible continue jumps)
     cx.builder.switch_to_block(header_block);
 
     let current_i = cx.builder.use_var(var);
@@ -5488,20 +5533,26 @@ fn compile_for_in_range<M: Module>(
     cx.builder.switch_to_block(body_block);
     cx.builder.seal_block(body_block);
 
+    cx.loop_stack.push((continue_block, exit_block));
     compile_expr(cx, body)?;
+    cx.loop_stack.pop();
 
-    // Increment: i = i + 1
+    // Fall through to continue block
     if !cx.builder.is_unreachable() {
-        let current_i = cx.builder.use_var(var);
-        let one = cx.builder.ins().iconst(types::I64, 1);
-        let next_i = cx.builder.ins().iadd(current_i, one);
-        cx.builder.def_var(var, next_i);
-
-        // Back edge
-        cx.builder.ins().jump(header_block, &[]);
+        cx.builder.ins().jump(continue_block, &[]);
     }
 
-    // NOW seal the header (both predecessors are known)
+    // Continue block: increment i = i + 1, then jump to header
+    cx.builder.switch_to_block(continue_block);
+    // Don't seal continue_block yet -- it can have predecessors from body fallthrough + continue jumps
+    let current_i = cx.builder.use_var(var);
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let next_i = cx.builder.ins().iadd(current_i, one);
+    cx.builder.def_var(var, next_i);
+    cx.builder.ins().jump(header_block, &[]);
+
+    // NOW seal the header and continue block (all predecessors are known)
+    cx.builder.seal_block(continue_block);
     cx.builder.seal_block(header_block);
 
     // Exit
@@ -5560,12 +5611,13 @@ fn compile_for_in_array<M: Module>(
     // Loop blocks
     let header_block = cx.builder.create_block();
     let body_block = cx.builder.create_block();
+    let continue_block = cx.builder.create_block();
     let exit_block = cx.builder.create_block();
 
     cx.builder.ins().jump(header_block, &[]);
 
     // Header: check idx < len
-    // Do NOT seal header yet -- it has two predecessors (entry + back edge)
+    // Do NOT seal header yet -- it has predecessors (entry + continue back edge)
     cx.builder.switch_to_block(header_block);
     let idx = cx.builder.use_var(idx_var);
     let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, arr_len);
@@ -5591,20 +5643,25 @@ fn compile_for_in_array<M: Module>(
     cx.builder.def_var(elem_var, typed_elem);
 
     // Compile loop body
+    cx.loop_stack.push((continue_block, exit_block));
     compile_expr(cx, body)?;
+    cx.loop_stack.pop();
 
-    // Increment index
+    // Fall through to continue block
     if !cx.builder.is_unreachable() {
-        let current_idx = cx.builder.use_var(idx_var);
-        let one = cx.builder.ins().iconst(types::I64, 1);
-        let next_idx = cx.builder.ins().iadd(current_idx, one);
-        cx.builder.def_var(idx_var, next_idx);
-
-        // Back edge
-        cx.builder.ins().jump(header_block, &[]);
+        cx.builder.ins().jump(continue_block, &[]);
     }
 
-    // NOW seal the header (both predecessors are known)
+    // Continue block: increment index, then jump to header
+    cx.builder.switch_to_block(continue_block);
+    let current_idx = cx.builder.use_var(idx_var);
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let next_idx = cx.builder.ins().iadd(current_idx, one);
+    cx.builder.def_var(idx_var, next_idx);
+    cx.builder.ins().jump(header_block, &[]);
+
+    // NOW seal header and continue block (all predecessors are known)
+    cx.builder.seal_block(continue_block);
     cx.builder.seal_block(header_block);
 
     // Exit

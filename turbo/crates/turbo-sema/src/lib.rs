@@ -300,6 +300,8 @@ struct Checker {
     test_mode: bool,
     /// Whether we are currently checking inside an `@unsafe` function
     in_unsafe_context: bool,
+    /// Nesting depth of loops (for break/continue validation)
+    loop_depth: usize,
 }
 
 impl Checker {
@@ -330,6 +332,7 @@ impl Checker {
             closure_param_hint: None,
             in_unsafe_context: false,
             test_mode: false,
+            loop_depth: 0,
         }
     }
 
@@ -1011,6 +1014,15 @@ impl Checker {
                         // String concatenation: str + str
                         if *op == BinOp::Add && lhs == Ty::Str && rhs == Ty::Str {
                             return Ty::Str;
+                        }
+                        // String coercion: str + non-str or non-str + str auto-converts to str
+                        if *op == BinOp::Add {
+                            if lhs == Ty::Str && (rhs.is_numeric() || rhs == Ty::Bool) {
+                                return Ty::Str;
+                            }
+                            if rhs == Ty::Str && (lhs.is_numeric() || lhs == Ty::Bool) {
+                                return Ty::Str;
+                            }
                         }
                         if !lhs.is_numeric() {
                             self.error(
@@ -2505,7 +2517,9 @@ impl Checker {
                         );
                     }
                 }
+                self.loop_depth += 1;
                 self.check_expr(body);
+                self.loop_depth -= 1;
                 Ty::Unit
             }
 
@@ -2592,7 +2606,9 @@ impl Checker {
 
                 self.push_scope();
                 self.define_var(var_name, VarInfo { ty: elem_ty, mutable: false }, &expr.span);
+                self.loop_depth += 1;
                 self.check_expr(body);
+                self.loop_depth -= 1;
                 self.pop_scope();
                 Ty::Unit
             }
@@ -3170,6 +3186,26 @@ impl Checker {
             Expr::NoneExpr => {
                 // Return a partial optional type -- the inner type is unknown without context
                 Ty::Optional(Box::new(Ty::Error))
+            }
+
+            Expr::Break => {
+                if self.loop_depth == 0 {
+                    self.error(
+                        "`break` can only be used inside a loop".to_string(),
+                        expr.span.clone(),
+                    );
+                }
+                Ty::Unit
+            }
+
+            Expr::Continue => {
+                if self.loop_depth == 0 {
+                    self.error(
+                        "`continue` can only be used inside a loop".to_string(),
+                        expr.span.clone(),
+                    );
+                }
+                Ty::Unit
             }
 
             Expr::NullCoalesce { value, default } => {

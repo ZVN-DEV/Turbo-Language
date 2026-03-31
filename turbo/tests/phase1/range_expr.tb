@@ -1,0 +1,7 @@
+fn main() {
+    // Range with function call as end
+    let arr = [10, 20, 30]
+    for i in 0..len(arr) {
+        print(arr[i])
+    }
+}
