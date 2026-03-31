@@ -897,6 +897,157 @@ void rt_hashmap_remove(void *map_ptr, const char *key) {
     }
 }
 
+/* ── HTTP server runtime ─────────────────────────────────────────────── */
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+
+typedef const char* (*route_handler_fn)(const void*, const char*);
+
+typedef struct {
+    char method[16];
+    char path[1024];
+    route_handler_fn handler;
+    const void *env_ptr;
+} Route;
+
+typedef struct {
+    unsigned short port;
+    Route routes[64];
+    int route_count;
+} HttpServerC;
+
+static HttpServerC http_servers[16];
+static int http_server_count = 0;
+
+long long rt_http_server(long long port) {
+    int id = http_server_count++;
+    http_servers[id].port = (unsigned short)port;
+    http_servers[id].route_count = 0;
+    return id;
+}
+
+void rt_http_route(long long server_id, const char *method, const char *path, const void *handler, const void *env_ptr) {
+    HttpServerC *srv = &http_servers[server_id];
+    int idx = srv->route_count++;
+    strncpy(srv->routes[idx].method, method, 15);
+    srv->routes[idx].method[15] = '\0';
+    strncpy(srv->routes[idx].path, path, 1023);
+    srv->routes[idx].path[1023] = '\0';
+    srv->routes[idx].handler = (route_handler_fn)handler;
+    srv->routes[idx].env_ptr = env_ptr;
+}
+
+void rt_http_listen(long long server_id) {
+    HttpServerC *srv = &http_servers[server_id];
+
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) { perror("socket"); return; }
+
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(srv->port);
+
+    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("bind"); close(server_fd); return;
+    }
+    if (listen(server_fd, 128) < 0) {
+        perror("listen"); close(server_fd); return;
+    }
+
+    while (1) {
+        int client_fd = accept(server_fd, NULL, NULL);
+        if (client_fd < 0) continue;
+
+        char buf[8192];
+        int n = read(client_fd, buf, sizeof(buf) - 1);
+        if (n <= 0) { close(client_fd); continue; }
+        buf[n] = '\0';
+
+        /* Parse request line */
+        char method[16] = {0}, path_buf[1024] = {0};
+        sscanf(buf, "%15s %1023s", method, path_buf);
+
+        /* Find Content-Length */
+        int content_length = 0;
+        char *cl = strstr(buf, "Content-Length:");
+        if (!cl) cl = strstr(buf, "content-length:");
+        if (cl) content_length = atoi(cl + 15);
+
+        /* Find body (after \r\n\r\n) */
+        char *body_start = strstr(buf, "\r\n\r\n");
+        const char *body = body_start ? body_start + 4 : "";
+        (void)content_length; /* body is already in the buffer */
+
+        /* Match route */
+        int matched = 0;
+        for (int i = 0; i < srv->route_count; i++) {
+            if (strcmp(srv->routes[i].method, method) == 0 &&
+                strcmp(srv->routes[i].path, path_buf) == 0) {
+                const char *resp = srv->routes[i].handler(srv->routes[i].env_ptr, body);
+                if (resp) {
+                    /* Parse STATUS:BODY format */
+                    const char *colon = strchr(resp, ':');
+                    if (colon) {
+                        int status = atoi(resp);
+                        const char *resp_body = colon + 1;
+                        int resp_len = strlen(resp_body);
+                        char hdr[512];
+                        snprintf(hdr, sizeof(hdr),
+                            "HTTP/1.1 %d OK\r\nContent-Type: application/json\r\n"
+                            "Access-Control-Allow-Origin: *\r\nContent-Length: %d\r\n\r\n",
+                            status, resp_len);
+                        write(client_fd, hdr, strlen(hdr));
+                        write(client_fd, resp_body, resp_len);
+                    } else {
+                        int resp_len = strlen(resp);
+                        char hdr[512];
+                        snprintf(hdr, sizeof(hdr),
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n",
+                            resp_len);
+                        write(client_fd, hdr, strlen(hdr));
+                        write(client_fd, resp, resp_len);
+                    }
+                } else {
+                    const char *empty = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+                    write(client_fd, empty, strlen(empty));
+                }
+                matched = 1;
+                break;
+            }
+        }
+        if (!matched) {
+            const char *nf = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
+            write(client_fd, nf, strlen(nf));
+        }
+        close(client_fd);
+    }
+}
+
+const char* rt_respond(long long status, const char *body) {
+    if (!body) body = "";
+    size_t blen = strlen(body);
+    /* "STATUS:BODY\0" */
+    char digits[20];
+    int dlen = snprintf(digits, sizeof(digits), "%lld", status);
+    char *result = malloc(dlen + 1 + blen + 1);
+    memcpy(result, digits, dlen);
+    result[dlen] = ':';
+    memcpy(result + dlen + 1, body, blen);
+    result[dlen + 1 + blen] = '\0';
+    return result;
+}
+
+const char* rt_request_body(const char *req) {
+    return req;
+}
+
 /* ── ARC (Automatic Reference Counting) runtime ─────────────────────── */
 
 void rt_retain(void *data_ptr) {

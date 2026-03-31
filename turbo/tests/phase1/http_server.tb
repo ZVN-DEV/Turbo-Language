@@ -1,0 +1,10 @@
+fn main() {
+    let app = http_server(0)
+    route(app, "GET", "/", |req: str| -> str { respond(200, "hello") })
+    route(app, "GET", "/api/status", |req: str| -> str { respond(200, json_stringify("status", "ok")) })
+    route(app, "POST", "/api/echo", |req: str| -> str {
+        let body = request_body(req)
+        respond(200, body)
+    })
+    print("server configured")
+}
