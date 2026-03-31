@@ -1,0 +1,9 @@
+fn main() {
+    let mut a = [1, 2, 3]
+    let mut b = a
+    b[0] = 99
+    print(a[0])
+    print(b[0])
+    print(a[1])
+    print(b[1])
+}
