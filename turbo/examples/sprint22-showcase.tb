@@ -1,0 +1,137 @@
+// Sprint 22 Showcase: HTTP Server + JSON + String Coercion + Break/Continue
+// Demonstrates all Sprint 22 features working together
+
+struct User {
+    name: str,
+    age: i64,
+    active: bool,
+}
+
+struct ApiResponse {
+    status: i64,
+    message: str,
+}
+
+fn classify_age(age: i64) -> str {
+    // else-if chains
+    if age < 13 {
+        "child"
+    } else if age < 20 {
+        "teen"
+    } else if age < 65 {
+        "adult"
+    } else {
+        "senior"
+    }
+}
+
+fn main() {
+    print("=== Sprint 22 Showcase ===")
+    print("")
+
+    // -- String coercion: int/bool/float auto-converted in string concat --
+    let count = 3
+    let pi = 3.14
+    let ready = true
+    print("Users: " + count)
+    print("Pi: " + pi)
+    print("Ready: " + ready)
+    print("")
+
+    // -- Struct creation --
+    let alice = User { name: "Alice", age: 30, active: true }
+    let bob = User { name: "Bob", age: 17, active: true }
+    let carol = User { name: "Carol", age: 72, active: false }
+
+    // -- to_json: serialize structs --
+    print("Alice JSON: " + to_json(alice))
+    print("Bob JSON: " + to_json(bob))
+    print("")
+
+    // -- to_json_array: serialize arrays of structs --
+    let users = [alice, bob, carol]
+    print("All users: " + to_json_array(users))
+    print("")
+
+    // -- else-if chains --
+    print("Alice is: " + classify_age(30))
+    print("Bob is: " + classify_age(17))
+    print("Carol is: " + classify_age(72))
+    print("")
+
+    // -- break: find first adult in range --
+    let mut first_adult = "none"
+    let ages = [12, 8, 30, 17, 25]
+    for a in ages {
+        if a >= 18 {
+            first_adult = "age " + a
+            break
+        }
+    }
+    print("First adult found: " + first_adult)
+
+    // -- continue: sum only odd numbers --
+    let mut odd_sum = 0
+    for i in 0..10 {
+        if i % 2 == 0 { continue }
+        odd_sum = odd_sum + i
+    }
+    print("Sum of odds 1..9: " + odd_sum)
+    print("")
+
+    // -- Range expressions in for-in --
+    print("Countdown:")
+    for i in 0..5 {
+        let n = 5 - i
+        print("  " + n)
+    }
+    print("  Go!")
+    print("")
+
+    // -- break in a while loop --
+    let mut x = 0
+    let mut found = -1
+    while x < 100 {
+        if x * x > 50 {
+            found = x
+            break
+        }
+        x = x + 1
+    }
+    print("First x where x*x > 50: " + found)
+    print("")
+
+    // -- break with continue in while loop --
+    let mut j = 0
+    while true {
+        if j == 8 { break }
+        j = j + 1
+        if j % 2 == 0 { continue }
+        print("odd: " + j)
+    }
+    print("")
+
+    // -- HTTP server setup (configures but we don't listen in showcase) --
+    let app = http_server(0)
+
+    route(app, "GET", "/api/users", |req: str| -> str {
+        respond(200, "user list")
+    })
+
+    route(app, "GET", "/api/status", |req: str| -> str {
+        respond(200, json_stringify("status", "ok"))
+    })
+
+    route(app, "POST", "/api/echo", |req: str| -> str {
+        let body = request_body(req)
+        respond(200, body)
+    })
+
+    print("HTTP server configured with 3 routes")
+
+    // -- Combined: JSON response payload --
+    let resp = ApiResponse { status: 200, message: "all systems go" }
+    print("Response payload: " + to_json(resp))
+    print("")
+    print("=== All Sprint 22 features verified ===")
+}
