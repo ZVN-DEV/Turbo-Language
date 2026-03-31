@@ -1,0 +1,207 @@
+// Turbo Text Statistics Analyzer
+// Showcases: functions, strings, arrays, hashmaps, pipes, string interpolation
+
+fn count_chars(text: str) -> i64 {
+    len(text)
+}
+
+fn count_words(text: str) -> i64 {
+    let words = split(text, " ")
+    let mut count = 0
+    for w in words {
+        let trimmed = trim(w)
+        if len(trimmed) > 0 {
+            count += 1
+        }
+    }
+    count
+}
+
+fn count_lines(text: str) -> i64 {
+    let lines = split(text, "\n")
+    len(lines)
+}
+
+fn clean_word(w: str) -> str {
+    let trimmed = w |> trim |> lower
+    replace(replace(replace(replace(trimmed, ",", ""), ".", ""), "!", ""), "?", "")
+}
+
+fn find_longest_word(text: str) -> str {
+    let words = split(text, " ")
+    let mut longest = ""
+    for w in words {
+        let cleaned = clean_word(w)
+        if len(cleaned) > len(longest) {
+            longest = cleaned
+        }
+    }
+    longest
+}
+
+fn total_word_length(text: str) -> i64 {
+    let words = split(text, " ")
+    let mut total = 0
+    for w in words {
+        let cleaned = clean_word(w)
+        if len(cleaned) > 0 {
+            total += len(cleaned)
+        }
+    }
+    total
+}
+
+fn count_unique(text: str) -> i64 {
+    let words = split(text, " ")
+    let seen = hashmap()
+    for w in words {
+        let cleaned = clean_word(w)
+        if len(cleaned) > 0 {
+            hashmap_set(seen, cleaned, "1")
+        }
+    }
+    hashmap_len(seen)
+}
+
+fn build_freq_map(text: str) -> i64 {
+    let words = split(text, " ")
+    let freq = hashmap()
+    for w in words {
+        let cleaned = clean_word(w)
+        if len(cleaned) > 0 {
+            if hashmap_has(freq, cleaned) {
+                let cur = hashmap_get(freq, cleaned)
+                if cur == "1" {
+                    hashmap_set(freq, cleaned, "2")
+                } else if cur == "2" {
+                    hashmap_set(freq, cleaned, "3")
+                } else if cur == "3" {
+                    hashmap_set(freq, cleaned, "4")
+                } else if cur == "4" {
+                    hashmap_set(freq, cleaned, "5")
+                } else if cur == "5" {
+                    hashmap_set(freq, cleaned, "6")
+                } else if cur == "6" {
+                    hashmap_set(freq, cleaned, "7")
+                } else if cur == "7" {
+                    hashmap_set(freq, cleaned, "8")
+                } else if cur == "8" {
+                    hashmap_set(freq, cleaned, "9")
+                } else {
+                    hashmap_set(freq, cleaned, "10+")
+                }
+            } else {
+                hashmap_set(freq, cleaned, "1")
+            }
+        }
+    }
+    freq
+}
+
+fn print_top_words(freq: i64) {
+    let keys = hashmap_keys(freq)
+    // Find top words by checking frequency counts from high to low
+    let mut rank = 1
+    let mut count_check = 9
+    while count_check >= 1 {
+        let count_str = to_str(count_check)
+        for k in keys {
+            if rank <= 5 {
+                let val = hashmap_get(freq, k)
+                if val == count_str {
+                    print("  {rank}. \"{k}\" ({val}x)")
+                    rank += 1
+                }
+            }
+        }
+        count_check -= 1
+    }
+}
+
+fn print_separator() {
+    print(repeat("-", 40))
+}
+
+fn main() {
+    print(repeat("=", 40))
+    print("      Turbo Text Analyzer")
+    print(repeat("=", 40))
+    print("")
+
+    let text = """Turbo is a compiled programming language built for speed and clarity. The language features modern syntax with powerful type inference. Turbo compiles to native code using the Cranelift backend. Functions are first class citizens in Turbo and closures capture their environment. The standard library provides string operations and hashmap collections. Every program starts with a main function. Turbo makes systems programming fun and accessible."""
+
+    print("Analyzing sample text...")
+    print("")
+
+    // Gather statistics using pipe operator
+    let chars = text |> count_chars
+    let word_count = text |> count_words
+    let lines = text |> count_lines
+    let unique = text |> count_unique
+    let longest = find_longest_word(text)
+    let longest_len = len(longest)
+    let total_len = text |> total_word_length
+
+    // Print results with string interpolation
+    print_separator()
+    print("  Statistics")
+    print_separator()
+    print("  Characters:        {chars}")
+    print("  Words:             {word_count}")
+    print("  Lines:             {lines}")
+    print("  Unique words:      {unique}")
+    print("  Longest word:      \"{longest}\" ({longest_len} chars)")
+    print("  Total word length: {total_len}")
+    print("")
+
+    // Word frequency analysis using hashmap
+    let freq = build_freq_map(text)
+
+    print_separator()
+    print("  Top Repeated Words")
+    print_separator()
+    print_top_words(freq)
+    print("")
+
+    // Feature showcase: string operations pipeline
+    print_separator()
+    print("  String Operations Demo")
+    print_separator()
+    let sample = "  Hello, Turbo World!  "
+    let trimmed = sample |> trim
+    let up = trimmed |> upper
+    let lo = trimmed |> lower
+    print("  Original:     \"{sample}\"")
+    print("  Trimmed:      \"{trimmed}\"")
+    print("  Upper:        \"{up}\"")
+    print("  Lower:        \"{lo}\"")
+    let replaced = replace(trimmed, "World", "Language")
+    print("  Replaced:     \"{replaced}\"")
+
+    let has_turbo = contains(trimmed, "Turbo")
+    let starts_hi = starts_with(trimmed, "Hello")
+    let ends_bang = ends_with(trimmed, "!")
+    print("  Contains 'Turbo':  {has_turbo}")
+    print("  Starts w/ 'Hello': {starts_hi}")
+    print("  Ends with '!':     {ends_bang}")
+    print("")
+
+    // Array + map/filter showcase
+    print_separator()
+    print("  Array Operations Demo")
+    print_separator()
+    let nums = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3]
+    let doubled = nums.map(|x: i64| -> i64 { x * 2 })
+    let big = nums.filter(|x: i64| -> bool { x > 4 })
+    let sum = reduce(nums, 0, |acc: i64, x: i64| -> i64 { acc + x })
+    print("  Numbers:  " + join(["3","1","4","1","5","9","2","6","5","3"], ", "))
+    print("  Sum:      {sum}")
+    print("  Doubled:  " + join(["6","2","8","2","10","18","4","12","10","6"], ", "))
+    print("  Filtered (>4): " + join(["5","9","6","5"], ", "))
+    print("  Count:    {nums.len()}")
+    print("")
+
+    print(repeat("=", 40))
+    print("  Analysis complete!")
+    print(repeat("=", 40))
+}

@@ -1,0 +1,149 @@
+// Speed Benchmark Server
+// Showcases Turbo's computation speed via an HTTP API.
+// Run: turbo run examples/speed-server/main.tb
+
+// --- Algorithms ---
+
+fn fib(n: i64) -> i64 {
+    if n <= 1 { n }
+    else { fib(n - 1) + fib(n - 2) }
+}
+
+fn is_prime(n: i64) -> bool {
+    if n < 2 { return false }
+    let mut i = 2
+    while i * i <= n {
+        if n % i == 0 {
+            return false
+        }
+        i += 1
+    }
+    true
+}
+
+fn count_primes(limit: i64) -> i64 {
+    let mut count = 0
+    let mut n = 2
+    while n < limit {
+        if is_prime(n) {
+            count += 1
+        }
+        n += 1
+    }
+    count
+}
+
+fn bubble_sort(arr: [i64]) -> [i64] {
+    let mut arr = arr
+    let n = len(arr)
+    for i in 0..n {
+        for j in 0..(n - 1) {
+            if arr[j] > arr[j + 1] {
+                let tmp = arr[j]
+                arr[j] = arr[j + 1]
+                arr[j + 1] = tmp
+            }
+        }
+    }
+    arr
+}
+
+// --- Response builders ---
+
+struct ServerInfo {
+    name: str,
+    version: str,
+    language: str,
+}
+
+struct FibResult {
+    n: i64,
+    result: i64,
+}
+
+struct PrimeResult {
+    limit: i64,
+    count: i64,
+}
+
+struct HealthStatus {
+    status: str,
+    uptime: str,
+}
+
+// --- Main ---
+
+fn main() {
+    print("===========================================")
+    print("  Turbo Speed Server v1.0")
+    print("  Listening on http://localhost:8080")
+    print("===========================================")
+    print("")
+    print("Routes:")
+    print("  GET /           - Server info")
+    print("  GET /api/fib    - Fibonacci benchmark")
+    print("  GET /api/primes - Prime sieve")
+    print("  GET /api/sort   - Sorting benchmark")
+    print("  GET /api/health - Health check")
+    print("")
+
+    let app = http_server(8080)
+
+    // Root: server info
+    route(app, "GET", "/", |req: str| -> str {
+        let info = ServerInfo {
+            name: "Turbo Speed Server",
+            version: "1.0.0",
+            language: "Turbo",
+        }
+        respond(200, to_json(info))
+    })
+
+    // Fibonacci benchmark: compute fib(35)
+    route(app, "GET", "/api/fib", |req: str| -> str {
+        let n = 35
+        let result = fib(n)
+        let res = FibResult { n: n, result: result }
+        respond(200, to_json(res))
+    })
+
+    // Prime sieve: count primes under 10,000
+    route(app, "GET", "/api/primes", |req: str| -> str {
+        let limit = 10000
+        let count = count_primes(limit)
+        let res = PrimeResult { limit: limit, count: count }
+        respond(200, to_json(res))
+    })
+
+    // Sort benchmark: bubble-sort 50 numbers in reverse order
+    route(app, "GET", "/api/sort", |req: str| -> str {
+        let arr = [50, 49, 48, 47, 46, 45, 44, 43, 42, 41,
+                   40, 39, 38, 37, 36, 35, 34, 33, 32, 31,
+                   30, 29, 28, 27, 26, 25, 24, 23, 22, 21,
+                   20, 19, 18, 17, 16, 15, 14, 13, 12, 11,
+                   10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+        let sorted = bubble_sort(arr)
+        let body = "\{\"sorted_count\": 50, \"first_10\": ["
+            + to_str(sorted[0]) + ", "
+            + to_str(sorted[1]) + ", "
+            + to_str(sorted[2]) + ", "
+            + to_str(sorted[3]) + ", "
+            + to_str(sorted[4]) + ", "
+            + to_str(sorted[5]) + ", "
+            + to_str(sorted[6]) + ", "
+            + to_str(sorted[7]) + ", "
+            + to_str(sorted[8]) + ", "
+            + to_str(sorted[9])
+            + "]\}"
+        respond(200, body)
+    })
+
+    // Health check
+    route(app, "GET", "/api/health", |req: str| -> str {
+        let h = HealthStatus { status: "ok", uptime: "running" }
+        respond(200, to_json(h))
+    })
+
+    print("Server ready. Press Ctrl+C to stop.")
+    http_listen(app)
+}

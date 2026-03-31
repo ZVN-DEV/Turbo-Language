@@ -1,0 +1,427 @@
+// Interactive Benchmark Dashboard
+// A full-featured web dashboard served entirely from Turbo.
+// Run: turbo run examples/web-dashboard/main.tb
+// Then visit: http://localhost:3000
+
+// --- Algorithms ---
+
+fn fib(n: i64) -> i64 {
+    if n <= 1 { n }
+    else { fib(n - 1) + fib(n - 2) }
+}
+
+fn is_prime(n: i64) -> bool {
+    if n < 2 { return false }
+    let mut i = 2
+    while i * i <= n {
+        if n % i == 0 {
+            return false
+        }
+        i += 1
+    }
+    true
+}
+
+fn count_primes(limit: i64) -> i64 {
+    let mut count = 0
+    let mut n = 2
+    while n < limit {
+        if is_prime(n) {
+            count += 1
+        }
+        n += 1
+    }
+    count
+}
+
+fn sieve_count(limit: i64) -> i64 {
+    // Sieve of Eratosthenes — count primes under limit
+    // Since Turbo doesn't have boolean arrays, we use a hashmap to mark composites
+    let composites = hashmap()
+    let mut i = 2
+    while i * i < limit {
+        if !hashmap_has(composites, to_str(i)) {
+            let mut j = i * i
+            while j < limit {
+                hashmap_set(composites, to_str(j), "1")
+                j += i
+            }
+        }
+        i += 1
+    }
+    // Count primes
+    let mut count = 0
+    let mut n = 2
+    while n < limit {
+        if !hashmap_has(composites, to_str(n)) {
+            count += 1
+        }
+        n += 1
+    }
+    count
+}
+
+fn bubble_sort(arr: [i64]) -> [i64] {
+    let mut arr = arr
+    let n = len(arr)
+    for i in 0..n {
+        for j in 0..(n - 1) {
+            if arr[j] > arr[j + 1] {
+                let tmp = arr[j]
+                arr[j] = arr[j + 1]
+                arr[j + 1] = tmp
+            }
+        }
+    }
+    arr
+}
+
+// --- HTML Builder ---
+
+fn build_css() -> str {
+    "<style>"
+        + "*, *::before, *::after \{ box-sizing: border-box; margin: 0; padding: 0; \}"
+        + "body \{"
+        + "  background: #0a0a0a; color: #e0e0e0;"
+        + "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;"
+        + "  min-height: 100vh; padding: 2rem;"
+        + "\}"
+        + "a \{ color: #00ff88; text-decoration: none; \}"
+        + ".header \{"
+        + "  text-align: center; margin-bottom: 3rem; padding: 2rem 0;"
+        + "  border-bottom: 1px solid #1a1a2e;"
+        + "\}"
+        + ".logo \{"
+        + "  font-size: 3rem; font-weight: 800; letter-spacing: -0.02em;"
+        + "  background: linear-gradient(135deg, #00ff88, #00d4ff);"
+        + "  -webkit-background-clip: text; -webkit-text-fill-color: transparent;"
+        + "  background-clip: text;"
+        + "\}"
+        + ".subtitle \{"
+        + "  color: #666; font-size: 1.1rem; margin-top: 0.5rem;"
+        + "\}"
+        + ".grid \{"
+        + "  display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));"
+        + "  gap: 1.5rem; max-width: 1200px; margin: 0 auto;"
+        + "\}"
+        + ".card \{"
+        + "  background: #111118; border: 1px solid #1a1a2e;"
+        + "  border-radius: 12px; padding: 1.5rem;"
+        + "  transition: border-color 0.3s, box-shadow 0.3s;"
+        + "\}"
+        + ".card:hover \{"
+        + "  border-color: #00ff88; box-shadow: 0 0 20px rgba(0,255,136,0.08);"
+        + "\}"
+        + ".card-header \{"
+        + "  display: flex; justify-content: space-between; align-items: center;"
+        + "  margin-bottom: 1rem;"
+        + "\}"
+        + ".card-title \{"
+        + "  font-size: 1.15rem; font-weight: 600; color: #fff;"
+        + "\}"
+        + ".card-desc \{"
+        + "  color: #555; font-size: 0.85rem; margin-bottom: 1.25rem;"
+        + "  line-height: 1.4;"
+        + "\}"
+        + ".btn \{"
+        + "  background: #00ff88; color: #0a0a0a; border: none;"
+        + "  padding: 0.5rem 1.25rem; border-radius: 6px;"
+        + "  font-weight: 600; font-size: 0.85rem; cursor: pointer;"
+        + "  transition: background 0.2s, transform 0.1s;"
+        + "\}"
+        + ".btn:hover \{ background: #00e67a; transform: translateY(-1px); \}"
+        + ".btn:active \{ transform: translateY(0); \}"
+        + ".btn:disabled \{ background: #333; color: #666; cursor: not-allowed; transform: none; \}"
+        + ".result-area \{"
+        + "  background: #0d0d14; border: 1px solid #1a1a2e; border-radius: 8px;"
+        + "  padding: 1rem; margin-top: 1rem; min-height: 60px;"
+        + "  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;"
+        + "  font-size: 0.85rem; line-height: 1.5;"
+        + "\}"
+        + ".result \{ color: #00ff88; white-space: pre-wrap; word-break: break-all; \}"
+        + ".time \{"
+        + "  color: #00d4ff; font-size: 0.8rem; margin-top: 0.5rem;"
+        + "  font-family: 'SF Mono', 'Fira Code', monospace;"
+        + "\}"
+        + ".status-dot \{"
+        + "  width: 8px; height: 8px; border-radius: 50%;"
+        + "  background: #333; display: inline-block; margin-right: 0.5rem;"
+        + "  transition: background 0.3s;"
+        + "\}"
+        + ".status-dot.running \{ background: #ffaa00; animation: pulse 1s infinite; \}"
+        + ".status-dot.done \{ background: #00ff88; \}"
+        + "@keyframes pulse \{"
+        + "  0%, 100% \{ opacity: 1; \}"
+        + "  50% \{ opacity: 0.4; \}"
+        + "\}"
+        + ".run-all \{"
+        + "  display: block; margin: 0 auto 2rem; padding: 0.75rem 2.5rem;"
+        + "  font-size: 1rem; background: linear-gradient(135deg, #00ff88, #00d4ff);"
+        + "  color: #0a0a0a; border: none; border-radius: 8px;"
+        + "  font-weight: 700; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s;"
+        + "\}"
+        + ".run-all:hover \{"
+        + "  transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0,255,136,0.3);"
+        + "\}"
+        + ".footer \{"
+        + "  text-align: center; margin-top: 3rem; padding-top: 2rem;"
+        + "  border-top: 1px solid #1a1a2e; color: #444; font-size: 0.85rem;"
+        + "\}"
+        + ".badge \{"
+        + "  display: inline-block; background: #1a1a2e; color: #00ff88;"
+        + "  padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem;"
+        + "  font-weight: 600; margin-left: 0.5rem;"
+        + "\}"
+        + "</style>"
+}
+
+fn build_js() -> str {
+    "<script>"
+        + "async function runBenchmark(endpoint, cardId) \{"
+        + "  const card = document.getElementById(cardId);"
+        + "  const btn = card.querySelector('.btn');"
+        + "  const dot = card.querySelector('.status-dot');"
+        + "  const result = card.querySelector('.result');"
+        + "  const time = card.querySelector('.time');"
+        + "  btn.disabled = true;"
+        + "  dot.className = 'status-dot running';"
+        + "  result.textContent = 'Computing...';"
+        + "  time.textContent = '';"
+        + "  try \{"
+        + "    const start = performance.now();"
+        + "    const res = await fetch(endpoint);"
+        + "    const data = await res.text();"
+        + "    const elapsed = (performance.now() - start).toFixed(1);"
+        + "    dot.className = 'status-dot done';"
+        + "    try \{"
+        + "      const json = JSON.parse(data);"
+        + "      result.textContent = JSON.stringify(json, null, 2);"
+        + "    \} catch(e) \{"
+        + "      result.textContent = data;"
+        + "    \}"
+        + "    time.textContent = elapsed + 'ms';"
+        + "  \} catch(err) \{"
+        + "    dot.className = 'status-dot';"
+        + "    result.textContent = 'Error: ' + err.message;"
+        + "  \}"
+        + "  btn.disabled = false;"
+        + "\}"
+        + "async function runAll() \{"
+        + "  const benchmarks = ["
+        + "    ['/api/fib', 'card-fib'],"
+        + "    ['/api/primes', 'card-primes'],"
+        + "    ['/api/sort', 'card-sort'],"
+        + "    ['/api/sieve', 'card-sieve'],"
+        + "    ['/api/info', 'card-info']"
+        + "  ];"
+        + "  for (const [endpoint, id] of benchmarks) \{"
+        + "    await runBenchmark(endpoint, id);"
+        + "  \}"
+        + "\}"
+        + "</script>"
+}
+
+fn build_card(id: str, title: str, desc: str, endpoint: str) -> str {
+    "<div class=\"card\" id=\"" + id + "\">"
+        + "<div class=\"card-header\">"
+        + "  <span class=\"card-title\"><span class=\"status-dot\"></span>" + title + "</span>"
+        + "  <button class=\"btn\" onclick=\"runBenchmark('" + endpoint + "', '" + id + "')\">Run</button>"
+        + "</div>"
+        + "<div class=\"card-desc\">" + desc + "</div>"
+        + "<div class=\"result-area\">"
+        + "  <div class=\"result\">Ready</div>"
+        + "  <div class=\"time\"></div>"
+        + "</div>"
+        + "</div>"
+}
+
+fn build_html() -> str {
+    let css = build_css()
+    let js = build_js()
+
+    let card_fib = build_card(
+        "card-fib",
+        "Fibonacci(35)",
+        "Recursive fibonacci — classic CPU benchmark. Tests function call overhead and recursion depth.",
+        "/api/fib"
+    )
+
+    let card_primes = build_card(
+        "card-primes",
+        "Prime Counter",
+        "Count all primes under 10,000 using trial division. Tests loops and modular arithmetic.",
+        "/api/primes"
+    )
+
+    let card_sort = build_card(
+        "card-sort",
+        "Bubble Sort",
+        "Sort 500 integers with bubble sort. Tests array access, swaps, and nested loops.",
+        "/api/sort"
+    )
+
+    let card_sieve = build_card(
+        "card-sieve",
+        "Sieve of Eratosthenes",
+        "Find all primes under 100,000 using a hashmap-based sieve. Tests hashmap throughput.",
+        "/api/sieve"
+    )
+
+    let card_info = build_card(
+        "card-info",
+        "Language Info",
+        "Retrieve metadata about the Turbo language runtime. Zero computation — tests raw HTTP latency.",
+        "/api/info"
+    )
+
+    "<!DOCTYPE html><html lang=\"en\"><head>"
+        + "<meta charset=\"UTF-8\">"
+        + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
+        + "<title>Turbo Language Dashboard</title>"
+        + css
+        + "</head><body>"
+        + "<div class=\"header\">"
+        + "  <div class=\"logo\">Turbo</div>"
+        + "  <div class=\"subtitle\">Interactive Benchmark Dashboard"
+        + "    <span class=\"badge\">v1.0</span>"
+        + "  </div>"
+        + "</div>"
+        + "<button class=\"run-all\" onclick=\"runAll()\">Run All Benchmarks</button>"
+        + "<div class=\"grid\">"
+        + card_fib
+        + card_primes
+        + card_sort
+        + card_sieve
+        + card_info
+        + "</div>"
+        + "<div class=\"footer\">"
+        + "  Powered by <span style=\"color:#00ff88;font-weight:600;\">Turbo</span>"
+        + "  &mdash; compiled with Cranelift &mdash; served from a single .tb file"
+        + "</div>"
+        + js
+        + "</body></html>"
+}
+
+// --- Main ---
+
+fn main() {
+    print("==============================================")
+    print("  Turbo Interactive Benchmark Dashboard")
+    print("  http://localhost:3000")
+    print("==============================================")
+    print("")
+    print("Routes:")
+    print("  GET /            - Dashboard UI")
+    print("  GET /api/fib     - Fibonacci(35)")
+    print("  GET /api/primes  - Count primes < 10,000")
+    print("  GET /api/sort    - Bubble sort 500 integers")
+    print("  GET /api/sieve   - Sieve of Eratosthenes < 100,000")
+    print("  GET /api/info    - Language info")
+    print("")
+
+    let app = http_server(3000)
+    let html = build_html()
+
+    // Serve the dashboard HTML
+    route(app, "GET", "/", |req: str| -> str {
+        respond(200, html)
+    })
+
+    // Fibonacci benchmark
+    route(app, "GET", "/api/fib", |req: str| -> str {
+        let n = 35
+        let result = fib(n)
+        respond(200, "\{\"benchmark\": \"fibonacci\", \"n\": " + to_str(n) + ", \"result\": " + to_str(result) + "\}")
+    })
+
+    // Prime counter benchmark
+    route(app, "GET", "/api/primes", |req: str| -> str {
+        let limit = 10000
+        let count = count_primes(limit)
+        respond(200, "\{\"benchmark\": \"prime_count\", \"limit\": " + to_str(limit) + ", \"count\": " + to_str(count) + "\}")
+    })
+
+    // Sorting benchmark
+    route(app, "GET", "/api/sort", |req: str| -> str {
+        let arr = [
+            500, 499, 498, 497, 496, 495, 494, 493, 492, 491,
+            490, 489, 488, 487, 486, 485, 484, 483, 482, 481,
+            480, 479, 478, 477, 476, 475, 474, 473, 472, 471,
+            470, 469, 468, 467, 466, 465, 464, 463, 462, 461,
+            460, 459, 458, 457, 456, 455, 454, 453, 452, 451,
+            450, 449, 448, 447, 446, 445, 444, 443, 442, 441,
+            440, 439, 438, 437, 436, 435, 434, 433, 432, 431,
+            430, 429, 428, 427, 426, 425, 424, 423, 422, 421,
+            420, 419, 418, 417, 416, 415, 414, 413, 412, 411,
+            410, 409, 408, 407, 406, 405, 404, 403, 402, 401,
+            400, 399, 398, 397, 396, 395, 394, 393, 392, 391,
+            390, 389, 388, 387, 386, 385, 384, 383, 382, 381,
+            380, 379, 378, 377, 376, 375, 374, 373, 372, 371,
+            370, 369, 368, 367, 366, 365, 364, 363, 362, 361,
+            360, 359, 358, 357, 356, 355, 354, 353, 352, 351,
+            350, 349, 348, 347, 346, 345, 344, 343, 342, 341,
+            340, 339, 338, 337, 336, 335, 334, 333, 332, 331,
+            330, 329, 328, 327, 326, 325, 324, 323, 322, 321,
+            320, 319, 318, 317, 316, 315, 314, 313, 312, 311,
+            310, 309, 308, 307, 306, 305, 304, 303, 302, 301,
+            300, 299, 298, 297, 296, 295, 294, 293, 292, 291,
+            290, 289, 288, 287, 286, 285, 284, 283, 282, 281,
+            280, 279, 278, 277, 276, 275, 274, 273, 272, 271,
+            270, 269, 268, 267, 266, 265, 264, 263, 262, 261,
+            260, 259, 258, 257, 256, 255, 254, 253, 252, 251,
+            250, 249, 248, 247, 246, 245, 244, 243, 242, 241,
+            240, 239, 238, 237, 236, 235, 234, 233, 232, 231,
+            230, 229, 228, 227, 226, 225, 224, 223, 222, 221,
+            220, 219, 218, 217, 216, 215, 214, 213, 212, 211,
+            210, 209, 208, 207, 206, 205, 204, 203, 202, 201,
+            200, 199, 198, 197, 196, 195, 194, 193, 192, 191,
+            190, 189, 188, 187, 186, 185, 184, 183, 182, 181,
+            180, 179, 178, 177, 176, 175, 174, 173, 172, 171,
+            170, 169, 168, 167, 166, 165, 164, 163, 162, 161,
+            160, 159, 158, 157, 156, 155, 154, 153, 152, 151,
+            150, 149, 148, 147, 146, 145, 144, 143, 142, 141,
+            140, 139, 138, 137, 136, 135, 134, 133, 132, 131,
+            130, 129, 128, 127, 126, 125, 124, 123, 122, 121,
+            120, 119, 118, 117, 116, 115, 114, 113, 112, 111,
+            110, 109, 108, 107, 106, 105, 104, 103, 102, 101,
+            100, 99, 98, 97, 96, 95, 94, 93, 92, 91,
+            90, 89, 88, 87, 86, 85, 84, 83, 82, 81,
+            80, 79, 78, 77, 76, 75, 74, 73, 72, 71,
+            70, 69, 68, 67, 66, 65, 64, 63, 62, 61,
+            60, 59, 58, 57, 56, 55, 54, 53, 52, 51,
+            50, 49, 48, 47, 46, 45, 44, 43, 42, 41,
+            40, 39, 38, 37, 36, 35, 34, 33, 32, 31,
+            30, 29, 28, 27, 26, 25, 24, 23, 22, 21,
+            20, 19, 18, 17, 16, 15, 14, 13, 12, 11,
+            10, 9, 8, 7, 6, 5, 4, 3, 2, 1
+        ]
+        let sorted = bubble_sort(arr)
+        respond(200, "\{\"benchmark\": \"bubble_sort\", \"count\": 500, \"first_10\": ["
+            + to_str(sorted[0]) + ", "
+            + to_str(sorted[1]) + ", "
+            + to_str(sorted[2]) + ", "
+            + to_str(sorted[3]) + ", "
+            + to_str(sorted[4]) + ", "
+            + to_str(sorted[5]) + ", "
+            + to_str(sorted[6]) + ", "
+            + to_str(sorted[7]) + ", "
+            + to_str(sorted[8]) + ", "
+            + to_str(sorted[9])
+            + "]\}")
+    })
+
+    // Sieve of Eratosthenes benchmark
+    route(app, "GET", "/api/sieve", |req: str| -> str {
+        let limit = 100000
+        let count = sieve_count(limit)
+        respond(200, "\{\"benchmark\": \"sieve_eratosthenes\", \"limit\": " + to_str(limit) + ", \"prime_count\": " + to_str(count) + "\}")
+    })
+
+    // Language info endpoint
+    route(app, "GET", "/api/info", |req: str| -> str {
+        respond(200, "\{\"language\": \"Turbo\", \"version\": \"1.0.0\", \"backend\": \"Cranelift\", \"features\": [\"JIT compilation\", \"AOT compilation\", \"async/await\", \"closures\", \"generics\", \"pattern matching\", \"HTTP server\", \"channels\", \"hashmaps\"]\}")
+    })
+
+    print("Dashboard ready. Press Ctrl+C to stop.")
+    http_listen(app)
+}
