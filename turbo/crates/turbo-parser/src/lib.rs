@@ -275,6 +275,12 @@ impl Parser {
                             .unwrap_or(start);
                         Ok(Spanned::new(Item::Struct(s), start..end))
                     }
+                    "test" => {
+                        let mut f = self.parse_fn_def(false)?;
+                        f.is_test = true;
+                        let end = f.body.span.end;
+                        Ok(Spanned::new(Item::Function(f), start..end))
+                    }
                     _ => {
                         Err(ParseError {
                             message: format!("unknown attribute `@{attr_name}`"),
@@ -287,7 +293,7 @@ impl Parser {
                 let span = self.peek_span();
                 let found = self.peek().map(|t| format!("`{t}`")).unwrap_or("end of file".to_string());
                 Err(ParseError {
-                    message: format!("expected `fn`, `tool`, `agent`, `async fn`, `struct`, `type`, `impl`, `trait`, `import`, `const`, or `@derive`, found {found}"),
+                    message: format!("expected `fn`, `tool`, `agent`, `async fn`, `struct`, `type`, `impl`, `trait`, `import`, `const`, `@derive`, or `@test`, found {found}"),
                     span,
                 })
             }
@@ -504,6 +510,7 @@ impl Parser {
             name,
             is_async: false,
             is_tool: false,
+            is_test: false,
             type_params,
             params,
             return_type,

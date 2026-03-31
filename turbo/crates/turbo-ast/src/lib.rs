@@ -153,6 +153,8 @@ pub struct FnDef {
     pub is_async: bool,
     /// Whether this function is a `tool fn` (AI tool with auto-generated schema)
     pub is_tool: bool,
+    /// Whether this function is a `@test fn` (test function)
+    pub is_test: bool,
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,

@@ -1,0 +1,33 @@
+fn add(a: i64, b: i64) -> i64 { a + b }
+fn double(x: i64) -> i64 { x * 2 }
+
+@test fn test_add() {
+    assert_eq(add(1, 2), 3)
+    assert_eq(add(0, 0), 0)
+    assert_eq(add(-1, 1), 0)
+}
+
+@test fn test_double() {
+    assert_eq(double(5), 10)
+    assert_eq(double(-3), -6)
+}
+
+@test fn test_assert_ne() {
+    assert_ne(1, 2)
+    assert_ne("hello", "world")
+}
+
+@test fn test_booleans() {
+    assert_eq(true, true)
+    assert_eq(false, false)
+    assert_ne(true, false)
+}
+
+@test fn test_strings() {
+    assert_eq("hello", "hello")
+    assert_ne("a", "b")
+}
+
+fn main() {
+    print("main runs too")
+}
