@@ -203,22 +203,95 @@ fn main() {
 }
 ```
 
+### Testing
+
+Built-in test framework with `@test` and `assert_eq`:
+
+```turbo
+fn add(a: i64, b: i64) -> i64 { a + b }
+
+@test fn test_add() {
+    assert_eq(add(2, 3), 5)
+    assert_eq(add(-1, 1), 0)
+}
+```
+
+```bash
+turbo test myfile.tb
+#   PASS  test_add
+# 1 passed, 0 failed
+```
+
+### Derive Attributes
+
+Auto-generate trait implementations:
+
+```turbo
+@derive(Eq, Clone, Display)
+struct Point { x: i64, y: i64 }
+
+fn main() {
+    let a = Point { x: 1, y: 2 }
+    let b = Point { x: 1, y: 2 }
+    if a == b { print("equal!") }     // @derive(Eq)
+    let c = clone(a)                   // @derive(Clone)
+    print(a)                           // @derive(Display) -> "Point { x: 1, y: 2 }"
+}
+```
+
+### Copy-on-Write Memory
+
+Safe value semantics without a garbage collector:
+
+```turbo
+fn main() {
+    let a = [1, 2, 3]
+    let b = a           // shared (cheap)
+    b[0] = 99           // copy-on-write (safe)
+    print(a[0])          // 1 — original unchanged
+    print(b[0])          // 99 — independent copy
+}
+```
+
+### Match Guards
+
+```turbo
+fn classify(n: i64) -> str {
+    match n {
+        0 => "zero"
+        n if n > 0 => "positive"
+        _ => "negative"
+    }
+}
+```
+
+### Collections
+
+```turbo
+fn main() {
+    let m = hashmap()
+    hashmap_set(m, "name", "Turbo")
+    print(hashmap_get(m, "name"))
+    print(hashmap_keys(m).len())
+}
+```
+
 ## CLI Commands
 
 | Command | Description |
 |---------|-------------|
 | `turbo run <file.tb>` | Compile and run via JIT |
-| `turbo run <file.tb> -v` | Run with verbose output (tokens, AST, timing) |
 | `turbo build <file.tb>` | Compile to native binary (Cranelift) |
 | `turbo build --llvm <file.tb>` | Compile with LLVM optimizations |
-| `turbo build <file.tb> -o name` | Compile with custom output name |
-| `turbo install` | Install dependencies from turbo.toml |
-| `turbo doc <file.tb>` | Generate markdown documentation |
-| `turbo fmt <file.tb>` | Format source code |
+| `turbo test <file.tb>` | Run `@test` functions |
+| `turbo bench <file.tb>` | Benchmark with timing |
 | `turbo init <name>` | Create a new project |
+| `turbo install` | Install dependencies from turbo.toml |
+| `turbo update` | Update GitHub dependencies |
+| `turbo fmt <file.tb>` | Format source code |
+| `turbo doc <file.tb>` | Generate documentation |
 | `turbo repl` | Interactive REPL |
-| `turbo lsp` | Start the Language Server |
-| `turbo playground` | Launch interactive playground in browser |
+| `turbo lsp` | Start Language Server |
 
 ## Project Structure
 
@@ -251,31 +324,19 @@ The complete language specification spans design documents in `design/`:
 - **COMPILATION.md** -- Cranelift backend, WASM pipeline
 - **TOOLCHAIN.md** -- Testing framework, package manager, formatter, profiler
 
-## Current Status
+## What You Can Build
 
-The compiler implements:
+Turbo is designed for:
 
-- Full lexer with keyword and operator support
-- Recursive descent parser for all language constructs
-- Type checker with inference, generics, traits, and mutability tracking
-- Cranelift-based code generation (JIT execution and AOT native binaries)
-- Structs with fields and impl blocks (methods)
-- Enums with data-carrying variants and pattern matching
-- Generics with trait bounds
-- Closures with variable capture
-- For-in loops with ranges and arrays
-- Async/await with thread-based spawn and sleep
-- Agent definitions with field access and instantiation
-- Import/module system
-- Result and Optional types
-- String interpolation
-- Higher-order functions (map, filter, reduce)
-- Standard library builtins (math, strings, I/O)
-- Interactive REPL
-- LSP server with diagnostics, hover, and go-to-definition
-- VS Code extension for syntax highlighting
-- Code formatter (`turbo fmt`)
-- Documentation generator (`turbo doc`)
+- **CLI tools** — fast startup, tiny binaries, cross-platform
+- **AI agents** — `tool fn` and `agent` keywords for LLM-powered apps
+- **Web APIs** — HTTP server framework (coming soon)
+- **Data processing** — `map`/`filter`/`reduce` with native speed
+- **Systems programming** — `@unsafe` for FFI and low-level code
+
+## Status
+
+**~90% feature complete.** 17,490 lines of compiler, 259 tests, dual backends (Cranelift + LLVM). The language is usable for real programs. See the [showcase](turbo/showcase/full_demo.tb) for a 400-line program exercising all features.
 
 ## LLVM Backend (Optional)
 
