@@ -108,7 +108,7 @@ impl Parser {
                     self.errors.push(e);
                     // Skip to next item start to recover
                     self.pos += 1;
-                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Async) | Some(Token::Struct) | Some(Token::TypeKw) | Some(Token::Import) | Some(Token::Trait) | Some(Token::Impl) | Some(Token::Tool) | Some(Token::Agent) | Some(Token::Const)) {
+                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Async) | Some(Token::Struct) | Some(Token::TypeKw) | Some(Token::Import) | Some(Token::Trait) | Some(Token::Impl) | Some(Token::Tool) | Some(Token::Agent) | Some(Token::Const) | Some(Token::At)) {
                         self.pos += 1;
                     }
                 }
@@ -251,11 +251,29 @@ impl Parser {
                 let end = value.span.end;
                 Ok(Spanned::new(Item::Const(ConstDef { name, value }), start..end))
             }
+            Some(Token::At) => {
+                self.advance(); // consume `@`
+                let (attr_name, attr_span) = self.expect_ident()?;
+                match attr_name.as_str() {
+                    "test" => {
+                        let mut f = self.parse_fn_def(false)?;
+                        f.is_test = true;
+                        let end = f.body.span.end;
+                        Ok(Spanned::new(Item::Function(f), start..end))
+                    }
+                    _ => {
+                        Err(ParseError {
+                            message: format!("unknown attribute `@{attr_name}`"),
+                            span: attr_span,
+                        })
+                    }
+                }
+            }
             _ => {
                 let span = self.peek_span();
                 let found = self.peek().map(|t| format!("`{t}`")).unwrap_or("end of file".to_string());
                 Err(ParseError {
-                    message: format!("expected `fn`, `tool`, `agent`, `async fn`, `struct`, `type`, `impl`, `trait`, `import`, or `const`, found {found}"),
+                    message: format!("expected `fn`, `tool`, `agent`, `async fn`, `struct`, `type`, `impl`, `trait`, `import`, `const`, or `@test`, found {found}"),
                     span,
                 })
             }
@@ -472,6 +490,7 @@ impl Parser {
             name,
             is_async: false,
             is_tool: false,
+            is_test: false,
             type_params,
             params,
             return_type,
