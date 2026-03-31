@@ -215,13 +215,34 @@ extern "C" fn rt_array_get(arr: *const u8, index: i64) -> i64 {
     unsafe { *((arr as *const i64).add(1 + index as usize)) }
 }
 
-extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) {
-    let len = unsafe { *(arr as *const i64) };
+extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) -> *mut u8 {
+    // COW: check refcount before mutating
+    let rc_ptr = unsafe { arr.sub(8) as *mut std::sync::atomic::AtomicI64 };
+    let rc = unsafe { (*rc_ptr).load(std::sync::atomic::Ordering::Relaxed) };
+    let target = if rc > 1 {
+        // Copy-on-write: make a private copy
+        let len = unsafe { *(arr as *const i64) };
+        let data_size = (1 + len as usize) * 8;
+        let total = 8 + data_size;
+        let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
+        let new_alloc = unsafe { std::alloc::alloc_zeroed(layout) };
+        unsafe { *(new_alloc as *mut i64) = 1; } // new refcount = 1
+        let new_data = unsafe { new_alloc.add(8) };
+        unsafe { std::ptr::copy_nonoverlapping(arr, new_data, data_size); }
+        // Decrement old refcount
+        unsafe { (*rc_ptr).fetch_sub(1, std::sync::atomic::Ordering::Release); }
+        new_data
+    } else {
+        arr
+    };
+    // Bounds check + set on the target (possibly new) array
+    let len = unsafe { *(target as *const i64) };
     if index < 0 || index >= len {
         eprintln!("runtime error: array index {} out of bounds (length {})", index, len);
         std::process::exit(1);
     }
-    unsafe { *((arr as *mut i64).add(1 + index as usize)) = value; }
+    unsafe { *((target as *mut i64).add(1 + index as usize)) = value; }
+    target
 }
 
 extern "C" fn rt_array_len(arr: *const u8) -> i64 {
@@ -1824,7 +1845,7 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_str_eq", &[ptr_type, ptr_type], Some(types::I8))?;
     declare_rt_fn(module, &mut rt_fns, "rt_array_alloc", &[types::I64], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_array_get", &[ptr_type, types::I64], Some(types::I64))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_array_set", &[ptr_type, types::I64, types::I64], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_array_set", &[ptr_type, types::I64, types::I64], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_array_len", &[ptr_type], Some(types::I64))?;
     declare_rt_fn(module, &mut rt_fns, "rt_str_len", &[ptr_type], Some(types::I64))?;
     declare_rt_fn(module, &mut rt_fns, "rt_struct_alloc", &[types::I64], Some(ptr_type))?;
@@ -2766,9 +2787,20 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                 val
             };
 
+            // COW-aware set: returns potentially new pointer
             let set_fid = cx.rt_fns["rt_array_set"];
             let set_ref = cx.module.declare_func_in_func(set_fid, cx.builder.func);
-            cx.builder.ins().call(set_ref, &[arr, idx, val]);
+            let call = cx.builder.ins().call(set_ref, &[arr, idx, val]);
+            let new_arr = cx.builder.inst_results(call)[0];
+
+            // Update the variable to point to the (possibly new) array
+            if let Expr::Ident(name) = &object.node {
+                if let Some((var, _cl_ty, _tty)) = cx.vars.get(name) {
+                    let var = *var;
+                    cx.builder.def_var(var, new_arr);
+                }
+            }
+
             Ok(None)
         }
 
@@ -3363,6 +3395,8 @@ fn compile_stmt<M: Module>(cx: &mut Ctx<'_, M>, stmt: &Spanned<Stmt>) -> Result<
         Stmt::Let { name, value, .. } => {
             // Clear any stale concrete fields from a previous struct lit
             cx.last_struct_lit_concrete_fields = None;
+            // Check if the RHS is a variable reference (for COW retain)
+            let rhs_is_ident = matches!(&value.node, Expr::Ident(_));
             let result = compile_expr(cx, value)?;
             // If the value was a struct literal, capture concrete field types for generic structs
             if let Some(concrete_fields) = cx.last_struct_lit_concrete_fields.take() {
@@ -3373,6 +3407,21 @@ fn compile_stmt<M: Module>(cx: &mut Ctx<'_, M>, stmt: &Spanned<Stmt>) -> Result<
             } else {
                 (types::I64, TurboTy::Unit, None)
             };
+            // COW: if the RHS is another variable with a heap type, retain it
+            // so the shared object has correct refcount for both references
+            if rhs_is_ident {
+                if let Some(v) = val {
+                    let needs_retain = matches!(
+                        &turbo_ty,
+                        TurboTy::Array(_) | TurboTy::Struct(_) | TurboTy::Result(_, _) | TurboTy::Optional(_)
+                    );
+                    if needs_retain {
+                        let retain_fid = cx.rt_fns["rt_retain"];
+                        let retain_ref = cx.module.declare_func_in_func(retain_fid, cx.builder.func);
+                        cx.builder.ins().call(retain_ref, &[v]);
+                    }
+                }
+            }
             let var = Variable::new(cx.next_var);
             cx.next_var += 1;
             cx.builder.declare_var(var, cl_ty);

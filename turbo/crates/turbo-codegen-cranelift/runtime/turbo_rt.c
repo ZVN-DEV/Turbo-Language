@@ -92,13 +92,32 @@ long long rt_array_get(const void *arr, long long index) {
     return ((const long long*)arr)[1 + index];
 }
 
-void rt_array_set(void *arr, long long index, long long value) {
-    long long len = *(const long long*)arr;
+void* rt_array_set(void *arr, long long index, long long value) {
+    /* COW: check refcount before mutating */
+    long long *rc_ptr = (long long*)((char*)arr - 8);
+    long long rc = *rc_ptr;
+    void *target;
+    if (rc > 1) {
+        /* Copy-on-write: make a private copy */
+        long long len = *(const long long*)arr;
+        size_t data_size = (1 + (size_t)len) * 8;
+        size_t total = 8 + data_size;
+        void *new_alloc = calloc(1, total);
+        *(long long*)new_alloc = 1;
+        void *new_data = (char*)new_alloc + 8;
+        memcpy(new_data, arr, data_size);
+        __sync_fetch_and_sub(rc_ptr, 1);
+        target = new_data;
+    } else {
+        target = arr;
+    }
+    long long len = *(const long long*)target;
     if (index < 0 || index >= len) {
         fprintf(stderr, "runtime error: array index %lld out of bounds (length %lld)\n", index, len);
         exit(1);
     }
-    ((long long*)arr)[1 + index] = value;
+    ((long long*)target)[1 + index] = value;
+    return target;
 }
 
 long long rt_array_len(const void *arr) {
