@@ -223,6 +223,8 @@ struct StructInfo {
     fields: Vec<(String, Ty)>,
     /// Type parameter names for generic structs
     type_params: Vec<String>,
+    /// Derived trait names from `@derive(...)` attribute
+    derives: Vec<String>,
 }
 
 /// Enum info (variant names + field types)
@@ -357,7 +359,8 @@ impl Checker {
             | "sleep"
             | "http_get" | "http_post" | "json_get" | "json_stringify"
             | "channel" | "send" | "recv"
-            | "mutex" | "mutex_get" | "mutex_set")
+            | "mutex" | "mutex_get" | "mutex_set"
+            | "clone")
     }
 
     /// Walk a chain of FieldAccess / Index expressions to find the root variable name.
@@ -397,7 +400,19 @@ impl Checker {
                     }
                 }
             }
-            self.structs.insert(s.name.clone(), StructInfo { fields, type_params: tp_names });
+            // Validate derive attributes
+            for derive_name in &s.derives {
+                match derive_name.as_str() {
+                    "Eq" | "Clone" | "Display" => {}
+                    _ => {
+                        self.error(
+                            format!("unknown derive trait `{derive_name}`"),
+                            item.span.clone(),
+                        );
+                    }
+                }
+            }
+            self.structs.insert(s.name.clone(), StructInfo { fields, type_params: tp_names, derives: s.derives.clone() });
         }
 
         // Pass 0b: register all enum definitions
@@ -927,6 +942,26 @@ impl Checker {
                                 expr.span.clone(),
                             );
                             return Ty::Error;
+                        }
+                        // Struct equality requires @derive(Eq)
+                        if let Ty::Struct(ref struct_name) = lhs {
+                            if matches!(op, BinOp::Eq | BinOp::NotEq) {
+                                if let Some(info) = self.structs.get(struct_name) {
+                                    if !info.derives.contains(&"Eq".to_string()) {
+                                        self.error(
+                                            format!("cannot compare struct `{struct_name}` with `==`/`!=` without `@derive(Eq)`"),
+                                            expr.span.clone(),
+                                        );
+                                        return Ty::Error;
+                                    }
+                                }
+                            } else {
+                                self.error(
+                                    format!("cannot use ordering comparison on struct `{struct_name}`"),
+                                    expr.span.clone(),
+                                );
+                                return Ty::Error;
+                            }
                         }
                         Ty::Bool
                     }
@@ -1509,6 +1544,36 @@ impl Checker {
                             self.error(format!("mutex_set() second argument must be integer, found `{val_ty}`"), args[1].span.clone());
                         }
                         return Ty::Unit;
+                    }
+
+                    // clone(val) -> T (requires @derive(Clone))
+                    if name == "clone" {
+                        if args.len() != 1 {
+                            self.error(
+                                format!("clone() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arg_ty = self.check_expr(&args[0]);
+                        if let Ty::Struct(ref struct_name) = arg_ty {
+                            if let Some(info) = self.structs.get(struct_name) {
+                                if !info.derives.contains(&"Clone".to_string()) {
+                                    self.error(
+                                        format!("cannot clone struct `{struct_name}` without `@derive(Clone)`"),
+                                        callee.span.clone(),
+                                    );
+                                    return Ty::Error;
+                                }
+                            }
+                        } else if !arg_ty.is_error() {
+                            self.error(
+                                format!("clone() expects a struct argument, found `{arg_ty}`"),
+                                args[0].span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        return arg_ty;
                     }
 
                     // map(arr, fn) -> [U]

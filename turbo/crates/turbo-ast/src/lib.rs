@@ -117,6 +117,8 @@ impl StructDef {
 pub struct StructDef {
     pub name: String,
     pub type_params: Vec<TypeParam>,
+    /// Derived trait names from `@derive(Eq, Clone, ...)` attribute
+    pub derives: Vec<String>,
     pub fields: Vec<FieldDef>,
 }
 

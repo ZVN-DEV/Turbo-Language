@@ -108,7 +108,7 @@ impl Parser {
                     self.errors.push(e);
                     // Skip to next item start to recover
                     self.pos += 1;
-                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Async) | Some(Token::Struct) | Some(Token::TypeKw) | Some(Token::Import) | Some(Token::Trait) | Some(Token::Impl) | Some(Token::Tool) | Some(Token::Agent) | Some(Token::Const)) {
+                    while !self.at_end() && !matches!(self.peek(), Some(Token::Fn) | Some(Token::Async) | Some(Token::Struct) | Some(Token::TypeKw) | Some(Token::Import) | Some(Token::Trait) | Some(Token::Impl) | Some(Token::Tool) | Some(Token::Agent) | Some(Token::Const) | Some(Token::At)) {
                         self.pos += 1;
                     }
                 }
@@ -251,11 +251,43 @@ impl Parser {
                 let end = value.span.end;
                 Ok(Spanned::new(Item::Const(ConstDef { name, value }), start..end))
             }
+            Some(Token::At) => {
+                self.advance(); // consume `@`
+                let (attr_name, attr_span) = self.expect_ident()?;
+                match attr_name.as_str() {
+                    "derive" => {
+                        self.expect(&Token::LParen)?;
+                        let mut traits = Vec::new();
+                        loop {
+                            let (name, _) = self.expect_ident()?;
+                            traits.push(name);
+                            if matches!(self.peek(), Some(Token::Comma)) {
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                        self.expect(&Token::RParen)?;
+                        let mut s = self.parse_struct_def()?;
+                        s.derives = traits;
+                        let end = self.tokens.get(self.pos.saturating_sub(1))
+                            .map(|t| t.span.end)
+                            .unwrap_or(start);
+                        Ok(Spanned::new(Item::Struct(s), start..end))
+                    }
+                    _ => {
+                        Err(ParseError {
+                            message: format!("unknown attribute `@{attr_name}`"),
+                            span: attr_span,
+                        })
+                    }
+                }
+            }
             _ => {
                 let span = self.peek_span();
                 let found = self.peek().map(|t| format!("`{t}`")).unwrap_or("end of file".to_string());
                 Err(ParseError {
-                    message: format!("expected `fn`, `tool`, `agent`, `async fn`, `struct`, `type`, `impl`, `trait`, `import`, or `const`, found {found}"),
+                    message: format!("expected `fn`, `tool`, `agent`, `async fn`, `struct`, `type`, `impl`, `trait`, `import`, `const`, or `@derive`, found {found}"),
                     span,
                 })
             }
@@ -279,7 +311,7 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(StructDef { name, type_params, fields })
+        Ok(StructDef { name, type_params, derives: Vec::new(), fields })
     }
 
     fn parse_enum_def(&mut self) -> Result<EnumDef, ParseError> {
