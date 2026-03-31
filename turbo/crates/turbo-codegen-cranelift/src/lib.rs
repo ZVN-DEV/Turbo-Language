@@ -838,6 +838,8 @@ struct Ctx<'a, M: Module> {
     spawn_thunks: &'a HashMap<usize, String>,
     /// Module-level constants: name -> AST expression (inlined at usage sites)
     constants: &'a HashMap<String, Spanned<Expr>>,
+    /// Struct derives: struct_name -> vec of derived trait names
+    struct_derives: &'a HashMap<String, Vec<String>>,
 }
 
 impl<'a, M: Module> Ctx<'a, M> {
@@ -1699,6 +1701,15 @@ fn compile_module<M: Module>(
         struct_fields.insert(s.name.clone(), fields);
     }
 
+    // Build struct derives map from AST
+    let mut struct_derives: HashMap<String, Vec<String>> = HashMap::new();
+    for item in &ast_module.items {
+        let Item::Struct(s) = &item.node else { continue };
+        if !s.derives.is_empty() {
+            struct_derives.insert(s.name.clone(), s.derives.clone());
+        }
+    }
+
     // Build agent definitions map from AST
     let mut agent_defs: HashMap<String, (String, Vec<String>, Option<String>)> = HashMap::new();
     for item in &ast_module.items {
@@ -1909,6 +1920,7 @@ fn compile_module<M: Module>(
                 agent_defs: &agent_defs,
                 spawn_thunks: &spawn_thunk_map,
                 constants: &constants_map,
+                struct_derives: &struct_derives,
             };
 
             let entry = cx.builder.create_block();
@@ -2007,6 +2019,7 @@ fn compile_module<M: Module>(
                     agent_defs: &agent_defs,
                     spawn_thunks: &spawn_thunk_map,
                     constants: &constants_map,
+                    struct_derives: &struct_derives,
                 };
 
                 let entry = cx.builder.create_block();
@@ -2103,6 +2116,7 @@ fn compile_module<M: Module>(
                 agent_defs: &agent_defs,
                 spawn_thunks: &spawn_thunk_map,
                 constants: &constants_map,
+                struct_derives: &struct_derives,
             };
 
             let entry = cx.builder.create_block();
@@ -2368,6 +2382,13 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                         return compile_str_compare(cx, lhs, rhs, *op);
                     }
                     _ => {}
+                }
+            }
+
+            // Struct field-by-field equality comparison (@derive(Eq))
+            if let TurboTy::Struct(ref struct_name) = lhs_tty {
+                if matches!(op, BinOp::Eq | BinOp::NotEq) {
+                    return compile_struct_eq(cx, lhs, rhs, struct_name, *op);
                 }
             }
 
@@ -3406,6 +3427,8 @@ fn compile_call<M: Module>(
         "mutex" => compile_builtin_mutex(cx, args),
         "mutex_get" => compile_builtin_mutex_get(cx, args),
         "mutex_set" => compile_builtin_mutex_set(cx, args),
+        // Derive builtins
+        "clone" => compile_clone(cx, args),
         _ => {
             // Check if this is an enum variant construction via UFCS rewrite:
             // Parser transforms Shape.Circle(5.0) into Call { callee: Ident("Circle"), args: [Ident("Shape"), 5.0] }
@@ -4466,6 +4489,126 @@ fn compile_str_compare<M: Module>(
         result
     };
     Ok(Some((result, TurboTy::Bool)))
+}
+
+// ── Struct field-by-field equality (@derive(Eq)) ────────────────────
+
+fn compile_struct_eq<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    lhs_ptr: Value,
+    rhs_ptr: Value,
+    struct_name: &str,
+    op: BinOp,
+) -> Result<MaybeTyped, CodegenError> {
+    let struct_layout = cx.struct_fields.get(struct_name)
+        .ok_or_else(|| CodegenError { message: format!("undefined struct: {struct_name}") })?
+        .clone();
+
+    if struct_layout.is_empty() {
+        // No fields: always equal
+        let result = if op == BinOp::Eq {
+            cx.builder.ins().iconst(types::I8, 1)
+        } else {
+            cx.builder.ins().iconst(types::I8, 0)
+        };
+        return Ok(Some((result, TurboTy::Bool)));
+    }
+
+    // Compare field by field, short-circuiting on first mismatch
+    // We use a chain of basic blocks: for each field, if mismatch -> result false, else -> check next
+    let merge_block = cx.builder.create_block();
+    cx.builder.append_block_param(merge_block, types::I8);
+
+    for (i, (_, field_tty)) in struct_layout.iter().enumerate() {
+        let offset = (i * 8) as i32;
+
+        let lhs_raw = cx.builder.ins().load(types::I64, MemFlags::new(), lhs_ptr, offset);
+        let rhs_raw = cx.builder.ins().load(types::I64, MemFlags::new(), rhs_ptr, offset);
+
+        let fields_eq = match field_tty {
+            TurboTy::Str => {
+                // Use rt_str_eq for string fields
+                let fid = cx.rt_fns["rt_str_eq"];
+                let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                let call = cx.builder.ins().call(fref, &[lhs_raw, rhs_raw]);
+                cx.builder.inst_results(call)[0]
+            }
+            TurboTy::Float => {
+                // Bitcast back to f64 and compare
+                let lhs_f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), lhs_raw);
+                let rhs_f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), rhs_raw);
+                cx.builder.ins().fcmp(FloatCC::Equal, lhs_f, rhs_f)
+            }
+            TurboTy::Bool => {
+                // Compare the raw i64 values (booleans are stored widened to i64)
+                cx.builder.ins().icmp(IntCC::Equal, lhs_raw, rhs_raw)
+            }
+            _ => {
+                // Int, Enum, Struct (pointer equality for nested structs without derive)
+                cx.builder.ins().icmp(IntCC::Equal, lhs_raw, rhs_raw)
+            }
+        };
+
+        if i < struct_layout.len() - 1 {
+            // Not the last field: if mismatch, jump to merge with false; else continue
+            let next_block = cx.builder.create_block();
+            let false_val = cx.builder.ins().iconst(types::I8, 0);
+            cx.builder.ins().brif(fields_eq, next_block, &[], merge_block, &[false_val]);
+            cx.builder.switch_to_block(next_block);
+            cx.builder.seal_block(next_block);
+        } else {
+            // Last field: jump to merge with the comparison result
+            cx.builder.ins().jump(merge_block, &[fields_eq]);
+        }
+    }
+
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
+
+    let result = cx.builder.block_params(merge_block)[0];
+    let result = if op == BinOp::NotEq {
+        let one = cx.builder.ins().iconst(types::I8, 1);
+        cx.builder.ins().bxor(result, one)
+    } else {
+        result
+    };
+    Ok(Some((result, TurboTy::Bool)))
+}
+
+// ── Struct clone (@derive(Clone)) ───────────────────────────────────
+
+fn compile_clone<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (src_ptr, src_tty) = compile_expr(cx, &args[0])?.unwrap();
+
+    let struct_name = match &src_tty {
+        TurboTy::Struct(name) => name.clone(),
+        _ => return Err(CodegenError { message: "clone() expects a struct argument".to_string() }),
+    };
+
+    let struct_layout = cx.struct_fields.get(&struct_name)
+        .ok_or_else(|| CodegenError { message: format!("undefined struct: {struct_name}") })?
+        .clone();
+
+    let num_fields = struct_layout.len() as i64;
+    let num_fields_val = cx.builder.ins().iconst(types::I64, num_fields);
+
+    // Allocate a new struct
+    let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+    let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+    let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
+    let new_ptr = cx.builder.inst_results(call)[0];
+
+    // Copy each field from source to destination
+    for (i, (_field_name, _field_tty)) in struct_layout.iter().enumerate() {
+        let offset = (i * 8) as i32;
+        let val = cx.builder.ins().load(types::I64, MemFlags::new(), src_ptr, offset);
+        cx.builder.ins().store(MemFlags::new(), val, new_ptr, offset);
+    }
+
+    Ok(Some((new_ptr, TurboTy::Struct(struct_name))))
 }
 
 // ── String interpolation ────────────────────────────────────────────

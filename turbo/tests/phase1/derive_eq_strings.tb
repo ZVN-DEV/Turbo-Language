@@ -1,0 +1,11 @@
+@derive(Eq)
+struct Person { name: str, age: i64 }
+
+fn main() {
+    let a = Person { name: "Alice", age: 30 }
+    let b = Person { name: "Alice", age: 30 }
+    let c = Person { name: "Bob", age: 30 }
+
+    if a == b { print("same person") }
+    if a != c { print("different name") }
+}

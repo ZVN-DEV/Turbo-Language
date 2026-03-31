@@ -1,0 +1,8 @@
+@derive(Clone)
+struct Data { value: i64 }
+
+fn main() {
+    let a = Data { value: 42 }
+    let b = clone(a)
+    print(b.value)
+}

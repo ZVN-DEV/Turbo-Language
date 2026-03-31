@@ -1,0 +1,11 @@
+@derive(Eq)
+struct Point { x: i64, y: i64 }
+
+fn main() {
+    let a = Point { x: 1, y: 2 }
+    let b = Point { x: 1, y: 2 }
+    let c = Point { x: 3, y: 4 }
+
+    if a == b { print("equal") }
+    if a != c { print("not equal") }
+}
