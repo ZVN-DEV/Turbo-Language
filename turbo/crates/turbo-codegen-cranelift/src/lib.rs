@@ -155,6 +155,35 @@ extern "C" fn rt_assert_fail(msg: *const u8) {
     std::process::exit(1);
 }
 
+/// Runtime function for assert_eq/assert_ne failure.
+/// kind: 0 = assert_eq, 1 = assert_ne
+/// actual and expected are C-string pointers (stringified values).
+extern "C" fn rt_assert_eq_fail(kind: i64, actual: *const u8, expected: *const u8) {
+    let actual_str = if actual.is_null() {
+        "<null>"
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(actual as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("<invalid>")
+    };
+    let expected_str = if expected.is_null() {
+        "<null>"
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(expected as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("<invalid>")
+    };
+    if kind == 0 {
+        eprintln!("assertion failed: assert_eq({}, {})", actual_str, expected_str);
+        eprintln!("  left:  {}", actual_str);
+        eprintln!("  right: {}", expected_str);
+    } else {
+        eprintln!("assertion failed: assert_ne({}, {})", actual_str, expected_str);
+        eprintln!("  both values are: {}", actual_str);
+    }
+    std::process::exit(1);
+}
+
 extern "C" fn rt_div_by_zero() {
     eprintln!("runtime error: division by zero");
     std::process::exit(1);
@@ -922,6 +951,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_print_bool", rt_print_bool as *const u8);
     jit_builder.symbol("rt_panic", rt_panic as *const u8);
     jit_builder.symbol("rt_assert_fail", rt_assert_fail as *const u8);
+    jit_builder.symbol("rt_assert_eq_fail", rt_assert_eq_fail as *const u8);
     jit_builder.symbol("rt_div_by_zero", rt_div_by_zero as *const u8);
     jit_builder.symbol("rt_int_overflow", rt_int_overflow as *const u8);
     jit_builder.symbol("rt_str_concat", rt_str_concat as *const u8);
@@ -995,6 +1025,106 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     let main_ptr = module.get_finalized_function(*main_id);
     let main_fn: fn() = unsafe { std::mem::transmute(main_ptr) };
     main_fn();
+
+    Ok(())
+}
+
+/// Compile a module and run a single named function (used for `turbo test --run-fn`).
+/// The function is called via JIT and the process exits with the function's outcome
+/// (0 on success, 1 on assertion failure).
+pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result<(), CodegenError> {
+    let mut flag_builder = settings::builder();
+    flag_builder.set("use_colocated_libcalls", "false").unwrap();
+    flag_builder.set("is_pic", "false").unwrap();
+    flag_builder.set("opt_level", "speed_and_size").unwrap();
+    flag_builder.set("enable_verifier", "false").unwrap();
+    flag_builder.set("enable_alias_analysis", "true").unwrap();
+
+    let isa_builder = cranelift_native::builder()
+        .map_err(|e| CodegenError { message: e.to_string() })?;
+    let isa = isa_builder
+        .finish(settings::Flags::new(flag_builder))
+        .map_err(|e| CodegenError { message: e.to_string() })?;
+
+    let ptr_type = isa.pointer_type();
+
+    let mut jit_builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+
+    // Link all runtime functions (same as jit_run)
+    jit_builder.symbol("rt_print_str", rt_print_str as *const u8);
+    jit_builder.symbol("rt_print_i64", rt_print_i64 as *const u8);
+    jit_builder.symbol("rt_print_f64", rt_print_f64 as *const u8);
+    jit_builder.symbol("rt_print_bool", rt_print_bool as *const u8);
+    jit_builder.symbol("rt_panic", rt_panic as *const u8);
+    jit_builder.symbol("rt_assert_fail", rt_assert_fail as *const u8);
+    jit_builder.symbol("rt_assert_eq_fail", rt_assert_eq_fail as *const u8);
+    jit_builder.symbol("rt_div_by_zero", rt_div_by_zero as *const u8);
+    jit_builder.symbol("rt_int_overflow", rt_int_overflow as *const u8);
+    jit_builder.symbol("rt_str_concat", rt_str_concat as *const u8);
+    jit_builder.symbol("rt_str_eq", rt_str_eq as *const u8);
+    jit_builder.symbol("rt_array_alloc", rt_array_alloc as *const u8);
+    jit_builder.symbol("rt_array_get", rt_array_get as *const u8);
+    jit_builder.symbol("rt_array_set", rt_array_set as *const u8);
+    jit_builder.symbol("rt_array_len", rt_array_len as *const u8);
+    jit_builder.symbol("rt_str_len", rt_str_len as *const u8);
+    jit_builder.symbol("rt_struct_alloc", rt_struct_alloc as *const u8);
+    jit_builder.symbol("rt_i64_to_str", rt_i64_to_str as *const u8);
+    jit_builder.symbol("rt_f64_to_str", rt_f64_to_str as *const u8);
+    jit_builder.symbol("rt_bool_to_str", rt_bool_to_str as *const u8);
+    jit_builder.symbol("rt_result_ok", rt_result_ok as *const u8);
+    jit_builder.symbol("rt_result_err", rt_result_err as *const u8);
+    jit_builder.symbol("rt_result_tag", rt_result_tag as *const u8);
+    jit_builder.symbol("rt_result_value", rt_result_value as *const u8);
+    jit_builder.symbol("rt_option_some", rt_option_some as *const u8);
+    jit_builder.symbol("rt_option_none", rt_option_none as *const u8);
+    jit_builder.symbol("rt_option_tag", rt_option_tag as *const u8);
+    jit_builder.symbol("rt_option_value", rt_option_value as *const u8);
+    jit_builder.symbol("rt_str_split", rt_str_split as *const u8);
+    jit_builder.symbol("rt_str_trim", rt_str_trim as *const u8);
+    jit_builder.symbol("rt_str_upper", rt_str_upper as *const u8);
+    jit_builder.symbol("rt_str_lower", rt_str_lower as *const u8);
+    jit_builder.symbol("rt_str_starts_with", rt_str_starts_with as *const u8);
+    jit_builder.symbol("rt_str_ends_with", rt_str_ends_with as *const u8);
+    jit_builder.symbol("rt_str_replace", rt_str_replace as *const u8);
+    jit_builder.symbol("rt_str_char_at", rt_str_char_at as *const u8);
+    jit_builder.symbol("rt_str_contains", rt_str_contains as *const u8);
+    jit_builder.symbol("rt_str_index_of", rt_str_index_of as *const u8);
+    jit_builder.symbol("rt_str_join", rt_str_join as *const u8);
+    jit_builder.symbol("rt_str_repeat", rt_str_repeat as *const u8);
+    jit_builder.symbol("rt_read_line", rt_read_line as *const u8);
+    jit_builder.symbol("rt_read_file", rt_read_file as *const u8);
+    jit_builder.symbol("rt_write_file", rt_write_file as *const u8);
+    jit_builder.symbol("rt_pow", rt_pow as *const u8);
+    jit_builder.symbol("rt_sqrt", rt_sqrt as *const u8);
+    jit_builder.symbol("rt_sleep_ms", rt_sleep_ms as *const u8);
+    jit_builder.symbol("rt_spawn_with_args", rt_spawn_with_args as *const u8);
+    jit_builder.symbol("rt_await_handle", rt_await_handle as *const u8);
+    jit_builder.symbol("rt_http_get", rt_http_get as *const u8);
+    jit_builder.symbol("rt_http_post", rt_http_post as *const u8);
+    jit_builder.symbol("rt_json_get", rt_json_get as *const u8);
+    jit_builder.symbol("rt_json_stringify", rt_json_stringify as *const u8);
+    jit_builder.symbol("rt_channel_create", rt_channel_create as *const u8);
+    jit_builder.symbol("rt_channel_send", rt_channel_send as *const u8);
+    jit_builder.symbol("rt_channel_recv", rt_channel_recv as *const u8);
+    jit_builder.symbol("rt_channel_clone_sender", rt_channel_clone_sender as *const u8);
+    jit_builder.symbol("rt_mutex_create", rt_mutex_create as *const u8);
+    jit_builder.symbol("rt_mutex_get", rt_mutex_get as *const u8);
+    jit_builder.symbol("rt_mutex_set", rt_mutex_set as *const u8);
+    jit_builder.symbol("rt_mutex_clone", rt_mutex_clone as *const u8);
+    jit_builder.symbol("rt_retain", rt_retain as *const u8);
+    jit_builder.symbol("rt_release", rt_release as *const u8);
+
+    let mut module = JITModule::new(jit_builder);
+    let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
+
+    module.finalize_definitions()
+        .map_err(|e| CodegenError { message: e.to_string() })?;
+
+    let func_id = user_fns.get(fn_name)
+        .ok_or_else(|| CodegenError { message: format!("no function `{fn_name}` found") })?;
+    let func_ptr = module.get_finalized_function(*func_id);
+    let func: fn() = unsafe { std::mem::transmute(func_ptr) };
+    func();
 
     Ok(())
 }
@@ -1593,6 +1723,7 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_print_bool", &[types::I8], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_panic", &[ptr_type], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_assert_fail", &[ptr_type], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_assert_eq_fail", &[types::I64, ptr_type, ptr_type], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_div_by_zero", &[], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_int_overflow", &[], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_str_concat", &[ptr_type, ptr_type], Some(ptr_type))?;
@@ -3355,6 +3486,8 @@ fn compile_call<M: Module>(
         "print" => compile_print(cx, args),
         "panic" => compile_panic(cx, args),
         "assert" => compile_assert(cx, args),
+        "assert_eq" => compile_assert_eq(cx, args, false),
+        "assert_ne" => compile_assert_eq(cx, args, true),
         "len" => compile_len(cx, args),
         "abs" => compile_abs(cx, args),
         "min" => compile_min(cx, args),
@@ -3792,6 +3925,82 @@ fn compile_assert<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Res
     };
 
     cx.rt_call("rt_assert_fail", &[msg]);
+    cx.builder.ins().trap(TrapCode::unwrap_user(1));
+
+    cx.builder.switch_to_block(ok_block);
+    cx.builder.seal_block(ok_block);
+
+    Ok(None)
+}
+
+fn compile_assert_eq<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>], is_ne: bool) -> Result<MaybeTyped, CodegenError> {
+    if args.len() != 2 {
+        let name = if is_ne { "assert_ne" } else { "assert_eq" };
+        return Err(CodegenError { message: format!("{name}() requires exactly 2 arguments") });
+    }
+
+    let (left_val, left_tty) = compile_expr(cx, &args[0])?.unwrap();
+    let (right_val, right_tty) = compile_expr(cx, &args[1])?.unwrap();
+
+    // Compare based on type
+    let cond = match &left_tty {
+        TurboTy::Str => {
+            let fid = cx.rt_fns["rt_str_eq"];
+            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+            let call = cx.builder.ins().call(fref, &[left_val, right_val]);
+            cx.builder.inst_results(call)[0]
+        }
+        TurboTy::Float => {
+            cx.builder.ins().fcmp(FloatCC::Equal, left_val, right_val)
+        }
+        TurboTy::Bool => {
+            cx.builder.ins().icmp(IntCC::Equal, left_val, right_val)
+        }
+        _ => {
+            // For Int, Enum (unit), etc: i64 comparison
+            let lv = {
+                let ty = cx.builder.func.dfg.value_type(left_val);
+                if ty.bits() < 64 {
+                    cx.builder.ins().sextend(types::I64, left_val)
+                } else {
+                    left_val
+                }
+            };
+            let rv = {
+                let ty = cx.builder.func.dfg.value_type(right_val);
+                if ty.bits() < 64 {
+                    cx.builder.ins().sextend(types::I64, right_val)
+                } else {
+                    right_val
+                }
+            };
+            cx.builder.ins().icmp(IntCC::Equal, lv, rv)
+        }
+    };
+
+    let fail_block = cx.builder.create_block();
+    let ok_block = cx.builder.create_block();
+
+    if is_ne {
+        // assert_ne: fail if equal (cond == true)
+        cx.builder.ins().brif(cond, fail_block, &[], ok_block, &[]);
+    } else {
+        // assert_eq: fail if not equal (cond == false)
+        cx.builder.ins().brif(cond, ok_block, &[], fail_block, &[]);
+    }
+
+    cx.builder.switch_to_block(fail_block);
+    cx.builder.seal_block(fail_block);
+
+    // Convert both values to string for error message
+    let left_str = convert_to_str(cx, left_val, &left_tty)?;
+    let right_str = convert_to_str(cx, right_val, &right_tty)?;
+
+    let kind_val = cx.builder.ins().iconst(types::I64, if is_ne { 1 } else { 0 });
+
+    let fid = cx.rt_fns["rt_assert_eq_fail"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    cx.builder.ins().call(fref, &[kind_val, left_str, right_str]);
     cx.builder.ins().trap(TrapCode::unwrap_user(1));
 
     cx.builder.switch_to_block(ok_block);
