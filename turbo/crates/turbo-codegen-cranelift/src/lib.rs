@@ -761,6 +761,82 @@ extern "C" fn rt_mutex_clone(m: *const u8) -> *mut u8 {
     std::sync::Arc::into_raw(cloned) as *mut u8
 }
 
+// ── HashMap runtime functions ───────────────────────────────────────
+
+/// Create a new empty HashMap<String, String>. Returns an opaque pointer.
+extern "C" fn rt_hashmap_new() -> *mut u8 {
+    let map: HashMap<String, String> = HashMap::new();
+    let boxed = Box::new(map);
+    Box::into_raw(boxed) as *mut u8
+}
+
+/// Set a key-value pair in the hashmap.
+extern "C" fn rt_hashmap_set(map_ptr: *mut u8, key: *const u8, value: *const u8) {
+    let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str().unwrap_or("").to_string();
+    let value = unsafe { std::ffi::CStr::from_ptr(value as *const std::ffi::c_char) }
+        .to_str().unwrap_or("").to_string();
+    map.insert(key, value);
+}
+
+/// Get a value by key. Returns a C string pointer, or null if not found.
+extern "C" fn rt_hashmap_get(map_ptr: *const u8, key: *const u8) -> *const u8 {
+    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    match map.get(key) {
+        Some(v) => {
+            let cs = std::ffi::CString::new(v.as_str()).unwrap();
+            cs.into_raw() as *const u8
+        }
+        None => std::ptr::null()
+    }
+}
+
+/// Check if a key exists. Returns 1 (true) or 0 (false).
+extern "C" fn rt_hashmap_has(map_ptr: *const u8, key: *const u8) -> i8 {
+    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    if map.contains_key(key) { 1 } else { 0 }
+}
+
+/// Return the number of entries in the hashmap.
+extern "C" fn rt_hashmap_len(map_ptr: *const u8) -> i64 {
+    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
+    map.len() as i64
+}
+
+/// Return all keys as a [str] array (same format as rt_str_split).
+extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
+    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
+    let mut keys: Vec<&str> = map.keys().map(|k| k.as_str()).collect();
+    keys.sort(); // deterministic order for testing
+    let len = keys.len() as i64;
+    // Array format: [refcount: i64][len: i64][ptr0: i64][ptr1: i64]...
+    let data_size = 8 + (len as usize) * 8;
+    let total = 8 + data_size; // +8 for refcount header
+    let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe { *(data_ptr as *mut i64) = len; }
+    for (i, key) in keys.iter().enumerate() {
+        let cs = std::ffi::CString::new(*key).unwrap();
+        unsafe { *((data_ptr as *mut i64).add(1 + i)) = cs.into_raw() as i64; }
+    }
+    data_ptr
+}
+
+/// Remove a key from the hashmap.
+extern "C" fn rt_hashmap_remove(map_ptr: *mut u8, key: *const u8) {
+    let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    map.remove(key);
+}
+
 // ── ARC (Automatic Reference Counting) runtime functions ────────────
 
 /// Increment the reference count of a heap-allocated object.
@@ -838,6 +914,8 @@ struct Ctx<'a, M: Module> {
     spawn_thunks: &'a HashMap<usize, String>,
     /// Module-level constants: name -> AST expression (inlined at usage sites)
     constants: &'a HashMap<String, Spanned<Expr>>,
+    /// Struct derives: struct_name -> vec of derived trait names
+    struct_derives: &'a HashMap<String, Vec<String>>,
 }
 
 impl<'a, M: Module> Ctx<'a, M> {
@@ -980,6 +1058,14 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_mutex_get", rt_mutex_get as *const u8);
     jit_builder.symbol("rt_mutex_set", rt_mutex_set as *const u8);
     jit_builder.symbol("rt_mutex_clone", rt_mutex_clone as *const u8);
+    // HashMap builtins
+    jit_builder.symbol("rt_hashmap_new", rt_hashmap_new as *const u8);
+    jit_builder.symbol("rt_hashmap_set", rt_hashmap_set as *const u8);
+    jit_builder.symbol("rt_hashmap_get", rt_hashmap_get as *const u8);
+    jit_builder.symbol("rt_hashmap_has", rt_hashmap_has as *const u8);
+    jit_builder.symbol("rt_hashmap_len", rt_hashmap_len as *const u8);
+    jit_builder.symbol("rt_hashmap_keys", rt_hashmap_keys as *const u8);
+    jit_builder.symbol("rt_hashmap_remove", rt_hashmap_remove as *const u8);
     // ARC runtime
     jit_builder.symbol("rt_retain", rt_retain as *const u8);
     jit_builder.symbol("rt_release", rt_release as *const u8);
@@ -1268,6 +1354,9 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
                     }
                     _ => {}
                 }
+                if let Some(ref guard) = arm.guard {
+                    collect_free_vars(&guard.node, bound, free);
+                }
                 collect_free_vars(&arm.body.node, bound, free);
                 bound.truncate(orig_len);
             }
@@ -1542,7 +1631,12 @@ fn extract_spawn_sites_from_expr(
         Expr::StructLit { fields, .. } => { for (_, e) in fields { extract_spawn_sites_from_expr(e, out, counter); } }
         Expr::Match { subject, arms } => {
             extract_spawn_sites_from_expr(subject, out, counter);
-            for arm in arms { extract_spawn_sites_from_expr(&arm.body, out, counter); }
+            for arm in arms {
+                if let Some(ref guard) = arm.guard {
+                    extract_spawn_sites_from_expr(guard, out, counter);
+                }
+                extract_spawn_sites_from_expr(&arm.body, out, counter);
+            }
         }
         Expr::Closure { body, .. } => { extract_spawn_sites_from_expr(body, out, counter); }
         Expr::OkExpr(e) | Expr::ErrExpr(e) | Expr::SomeExpr(e) | Expr::Await(e) | Expr::Try(e) => {
@@ -1651,6 +1745,14 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_mutex_get", &[ptr_type], Some(types::I64))?;
     declare_rt_fn(module, &mut rt_fns, "rt_mutex_set", &[ptr_type, types::I64], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_mutex_clone", &[ptr_type], Some(ptr_type))?;
+    // HashMap runtime declarations
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_new", &[], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_set", &[ptr_type, ptr_type, ptr_type], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_get", &[ptr_type, ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_has", &[ptr_type, ptr_type], Some(types::I8))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_len", &[ptr_type], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_keys", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_remove", &[ptr_type, ptr_type], None)?;
     // ARC runtime declarations
     declare_rt_fn(module, &mut rt_fns, "rt_retain", &[ptr_type], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_release", &[ptr_type], None)?;
@@ -1689,6 +1791,15 @@ fn compile_module<M: Module>(
             .map(|f| (f.name.clone(), turbo_ty_from_type_expr_with_params(&f.ty.node, &enum_variants, &tp_names)))
             .collect();
         struct_fields.insert(s.name.clone(), fields);
+    }
+
+    // Build struct derives map from AST
+    let mut struct_derives: HashMap<String, Vec<String>> = HashMap::new();
+    for item in &ast_module.items {
+        let Item::Struct(s) = &item.node else { continue };
+        if !s.derives.is_empty() {
+            struct_derives.insert(s.name.clone(), s.derives.clone());
+        }
     }
 
     // Build agent definitions map from AST
@@ -1901,6 +2012,7 @@ fn compile_module<M: Module>(
                 agent_defs: &agent_defs,
                 spawn_thunks: &spawn_thunk_map,
                 constants: &constants_map,
+                struct_derives: &struct_derives,
             };
 
             let entry = cx.builder.create_block();
@@ -1999,6 +2111,7 @@ fn compile_module<M: Module>(
                     agent_defs: &agent_defs,
                     spawn_thunks: &spawn_thunk_map,
                     constants: &constants_map,
+                    struct_derives: &struct_derives,
                 };
 
                 let entry = cx.builder.create_block();
@@ -2095,6 +2208,7 @@ fn compile_module<M: Module>(
                 agent_defs: &agent_defs,
                 spawn_thunks: &spawn_thunk_map,
                 constants: &constants_map,
+                struct_derives: &struct_derives,
             };
 
             let entry = cx.builder.create_block();
@@ -2360,6 +2474,13 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                         return compile_str_compare(cx, lhs, rhs, *op);
                     }
                     _ => {}
+                }
+            }
+
+            // Struct field-by-field equality comparison (@derive(Eq))
+            if let TurboTy::Struct(ref struct_name) = lhs_tty {
+                if matches!(op, BinOp::Eq | BinOp::NotEq) {
+                    return compile_struct_eq(cx, lhs, rhs, struct_name, *op);
                 }
             }
 
@@ -3398,6 +3519,16 @@ fn compile_call<M: Module>(
         "mutex" => compile_builtin_mutex(cx, args),
         "mutex_get" => compile_builtin_mutex_get(cx, args),
         "mutex_set" => compile_builtin_mutex_set(cx, args),
+        // Derive builtins
+        "clone" => compile_clone(cx, args),
+        // HashMap builtins
+        "hashmap" => compile_builtin_hashmap(cx),
+        "hashmap_set" => compile_builtin_hashmap_set(cx, args),
+        "hashmap_get" => compile_builtin_hashmap_get(cx, args),
+        "hashmap_has" => compile_builtin_hashmap_has(cx, args),
+        "hashmap_len" => compile_builtin_hashmap_len(cx, args),
+        "hashmap_keys" => compile_builtin_hashmap_keys(cx, args),
+        "hashmap_remove" => compile_builtin_hashmap_remove(cx, args),
         _ => {
             // Check if this is an enum variant construction via UFCS rewrite:
             // Parser transforms Shape.Circle(5.0) into Call { callee: Ident("Circle"), args: [Ident("Shape"), 5.0] }
@@ -4460,6 +4591,126 @@ fn compile_str_compare<M: Module>(
     Ok(Some((result, TurboTy::Bool)))
 }
 
+// ── Struct field-by-field equality (@derive(Eq)) ────────────────────
+
+fn compile_struct_eq<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    lhs_ptr: Value,
+    rhs_ptr: Value,
+    struct_name: &str,
+    op: BinOp,
+) -> Result<MaybeTyped, CodegenError> {
+    let struct_layout = cx.struct_fields.get(struct_name)
+        .ok_or_else(|| CodegenError { message: format!("undefined struct: {struct_name}") })?
+        .clone();
+
+    if struct_layout.is_empty() {
+        // No fields: always equal
+        let result = if op == BinOp::Eq {
+            cx.builder.ins().iconst(types::I8, 1)
+        } else {
+            cx.builder.ins().iconst(types::I8, 0)
+        };
+        return Ok(Some((result, TurboTy::Bool)));
+    }
+
+    // Compare field by field, short-circuiting on first mismatch
+    // We use a chain of basic blocks: for each field, if mismatch -> result false, else -> check next
+    let merge_block = cx.builder.create_block();
+    cx.builder.append_block_param(merge_block, types::I8);
+
+    for (i, (_, field_tty)) in struct_layout.iter().enumerate() {
+        let offset = (i * 8) as i32;
+
+        let lhs_raw = cx.builder.ins().load(types::I64, MemFlags::new(), lhs_ptr, offset);
+        let rhs_raw = cx.builder.ins().load(types::I64, MemFlags::new(), rhs_ptr, offset);
+
+        let fields_eq = match field_tty {
+            TurboTy::Str => {
+                // Use rt_str_eq for string fields
+                let fid = cx.rt_fns["rt_str_eq"];
+                let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                let call = cx.builder.ins().call(fref, &[lhs_raw, rhs_raw]);
+                cx.builder.inst_results(call)[0]
+            }
+            TurboTy::Float => {
+                // Bitcast back to f64 and compare
+                let lhs_f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), lhs_raw);
+                let rhs_f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), rhs_raw);
+                cx.builder.ins().fcmp(FloatCC::Equal, lhs_f, rhs_f)
+            }
+            TurboTy::Bool => {
+                // Compare the raw i64 values (booleans are stored widened to i64)
+                cx.builder.ins().icmp(IntCC::Equal, lhs_raw, rhs_raw)
+            }
+            _ => {
+                // Int, Enum, Struct (pointer equality for nested structs without derive)
+                cx.builder.ins().icmp(IntCC::Equal, lhs_raw, rhs_raw)
+            }
+        };
+
+        if i < struct_layout.len() - 1 {
+            // Not the last field: if mismatch, jump to merge with false; else continue
+            let next_block = cx.builder.create_block();
+            let false_val = cx.builder.ins().iconst(types::I8, 0);
+            cx.builder.ins().brif(fields_eq, next_block, &[], merge_block, &[false_val]);
+            cx.builder.switch_to_block(next_block);
+            cx.builder.seal_block(next_block);
+        } else {
+            // Last field: jump to merge with the comparison result
+            cx.builder.ins().jump(merge_block, &[fields_eq]);
+        }
+    }
+
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
+
+    let result = cx.builder.block_params(merge_block)[0];
+    let result = if op == BinOp::NotEq {
+        let one = cx.builder.ins().iconst(types::I8, 1);
+        cx.builder.ins().bxor(result, one)
+    } else {
+        result
+    };
+    Ok(Some((result, TurboTy::Bool)))
+}
+
+// ── Struct clone (@derive(Clone)) ───────────────────────────────────
+
+fn compile_clone<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (src_ptr, src_tty) = compile_expr(cx, &args[0])?.unwrap();
+
+    let struct_name = match &src_tty {
+        TurboTy::Struct(name) => name.clone(),
+        _ => return Err(CodegenError { message: "clone() expects a struct argument".to_string() }),
+    };
+
+    let struct_layout = cx.struct_fields.get(&struct_name)
+        .ok_or_else(|| CodegenError { message: format!("undefined struct: {struct_name}") })?
+        .clone();
+
+    let num_fields = struct_layout.len() as i64;
+    let num_fields_val = cx.builder.ins().iconst(types::I64, num_fields);
+
+    // Allocate a new struct
+    let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+    let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+    let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
+    let new_ptr = cx.builder.inst_results(call)[0];
+
+    // Copy each field from source to destination
+    for (i, (_field_name, _field_tty)) in struct_layout.iter().enumerate() {
+        let offset = (i * 8) as i32;
+        let val = cx.builder.ins().load(types::I64, MemFlags::new(), src_ptr, offset);
+        cx.builder.ins().store(MemFlags::new(), val, new_ptr, offset);
+    }
+
+    Ok(Some((new_ptr, TurboTy::Struct(struct_name))))
+}
+
 // ── String interpolation ────────────────────────────────────────────
 
 fn compile_interpolation<M: Module>(
@@ -4820,17 +5071,29 @@ fn compile_match<M: Module>(
 
     for (i, arm) in arms.iter().enumerate() {
         let is_last = i == arms.len() - 1;
-        let is_catchall = matches!(&arm.pattern.node, Pattern::Wildcard)
+        let has_guard = arm.guard.is_some();
+        // A catch-all pattern is only truly unconditional when it has no guard.
+        let is_catchall_pattern = matches!(&arm.pattern.node, Pattern::Wildcard)
             || matches!(&arm.pattern.node, Pattern::Ident(name)
                 if lookup_variant_tag_static(cx.enum_variants, name).is_none());
+        let is_catchall = is_catchall_pattern && !has_guard;
 
         if is_catchall {
-            // Unconditional arm -- compile body and jump to merge
+            // Unconditional arm -- bind variable if ident pattern, compile body
+            let saved_vars = cx.vars.clone();
+            if let Pattern::Ident(name) = &arm.pattern.node {
+                let cl_ty = cx.builder.func.dfg.value_type(subj_val);
+                let var = Variable::new(cx.next_var);
+                cx.next_var += 1;
+                cx.builder.declare_var(var, cl_ty);
+                cx.builder.def_var(var, subj_val);
+                cx.vars.insert(name.clone(), (var, cl_ty, subj_tty.clone()));
+            }
             let body_result = compile_expr(cx, &arm.body)?;
+            cx.vars = saved_vars;
             emit_match_arm_jump(cx, merge_block, body_result, &mut has_result, &mut result_turbo_ty);
             hit_catchall = true;
 
-            // Create a dead block if there are more arms after this
             if !is_last {
                 let dead_block = cx.builder.create_block();
                 cx.builder.switch_to_block(dead_block);
@@ -4839,102 +5102,101 @@ fn compile_match<M: Module>(
             break;
         }
 
-        // Conditional arm: compute whether the pattern matches
-        let matches_cond = match &arm.pattern.node {
-            Pattern::Ident(name) => {
-                // Must be an enum variant (checked above: non-variant idents are catchall)
-                let tag_val = lookup_variant_tag_static(cx.enum_variants, name).unwrap();
-                let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
-                // For data enums, extract tag from pointer; for unit enums, compare directly
-                let actual_tag = if let TurboTy::Enum(ref enum_name) = subj_tty {
-                    if cx.enum_max_slots.contains_key(enum_name.as_str()) {
-                        cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0)
-                    } else {
-                        subj_val
-                    }
-                } else {
-                    subj_val
-                };
-                cx.builder.ins().icmp(IntCC::Equal, actual_tag, pat_val)
-            }
-            Pattern::IntLit(n) => {
-                let pat_val = cx.builder.ins().iconst(types::I64, *n);
-                cx.builder.ins().icmp(IntCC::Equal, subj_val, pat_val)
-            }
-            Pattern::BoolLit(b) => {
-                let pat_val = cx.builder.ins().iconst(types::I8, *b as i64);
-                let subj_narrowed = if cx.builder.func.dfg.value_type(subj_val) != types::I8 {
-                    cx.builder.ins().ireduce(types::I8, subj_val)
-                } else {
-                    subj_val
-                };
-                cx.builder.ins().icmp(IntCC::Equal, subj_narrowed, pat_val)
-            }
-            Pattern::StringLit(s) => {
-                let pat_ptr = cx.create_string(s)?;
-                let fid = cx.rt_fns["rt_str_eq"];
-                let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-                let call = cx.builder.ins().call(fref, &[subj_val, pat_ptr]);
-                let eq_result = cx.builder.inst_results(call)[0];
-                let zero = cx.builder.ins().iconst(types::I8, 0);
-                cx.builder.ins().icmp(IntCC::NotEqual, eq_result, zero)
-            }
-            Pattern::Wildcard => unreachable!(), // handled above
-            Pattern::Ok(_binding) => {
-                // Extract tag from result pointer; ok = tag 0
-                let tag_fid = cx.rt_fns["rt_result_tag"];
-                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
-                let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
-                let tag = cx.builder.inst_results(tag_call)[0];
-                let zero = cx.builder.ins().iconst(types::I64, 0);
-                cx.builder.ins().icmp(IntCC::Equal, tag, zero)
-            }
-            Pattern::Err(_binding) => {
-                // Extract tag from result pointer; err = tag 1
-                let tag_fid = cx.rt_fns["rt_result_tag"];
-                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
-                let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
-                let tag = cx.builder.inst_results(tag_call)[0];
-                let one = cx.builder.ins().iconst(types::I64, 1);
-                cx.builder.ins().icmp(IntCC::Equal, tag, one)
-            }
-            Pattern::Some(_binding) => {
-                // Extract tag from optional pointer; some = tag 1
-                let tag_fid = cx.rt_fns["rt_option_tag"];
-                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
-                let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
-                let tag = cx.builder.inst_results(tag_call)[0];
-                let one = cx.builder.ins().iconst(types::I64, 1);
-                cx.builder.ins().icmp(IntCC::Equal, tag, one)
-            }
-            Pattern::None => {
-                // Extract tag from optional pointer; none = tag 0
-                let tag_fid = cx.rt_fns["rt_option_tag"];
-                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
-                let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
-                let tag = cx.builder.inst_results(tag_call)[0];
-                let zero = cx.builder.ins().iconst(types::I64, 0);
-                cx.builder.ins().icmp(IntCC::Equal, tag, zero)
-            }
-            Pattern::VariantDestructure { variant, .. } => {
-                // Extract tag from data enum pointer and compare
-                let tag_val = lookup_variant_tag_static(cx.enum_variants, variant).unwrap();
-                let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
-                let actual_tag = cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0);
-                cx.builder.ins().icmp(IntCC::Equal, actual_tag, pat_val)
-            }
-        };
-
-        let match_block = cx.builder.create_block();
+        // For catch-all patterns with a guard, skip pattern condition check.
         let next_block = cx.builder.create_block();
 
-        cx.builder.ins().brif(matches_cond, match_block, &[], next_block, &[]);
+        if is_catchall_pattern && has_guard {
+            let match_block = cx.builder.create_block();
+            cx.builder.ins().jump(match_block, &[]);
+            cx.builder.switch_to_block(match_block);
+            cx.builder.seal_block(match_block);
+        } else {
+            // Conditional arm: compute whether the pattern matches
+            let matches_cond = match &arm.pattern.node {
+                Pattern::Ident(name) => {
+                    let tag_val = lookup_variant_tag_static(cx.enum_variants, name).unwrap();
+                    let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
+                    let actual_tag = if let TurboTy::Enum(ref enum_name) = subj_tty {
+                        if cx.enum_max_slots.contains_key(enum_name.as_str()) {
+                            cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0)
+                        } else {
+                            subj_val
+                        }
+                    } else {
+                        subj_val
+                    };
+                    cx.builder.ins().icmp(IntCC::Equal, actual_tag, pat_val)
+                }
+                Pattern::IntLit(n) => {
+                    let pat_val = cx.builder.ins().iconst(types::I64, *n);
+                    cx.builder.ins().icmp(IntCC::Equal, subj_val, pat_val)
+                }
+                Pattern::BoolLit(b) => {
+                    let pat_val = cx.builder.ins().iconst(types::I8, *b as i64);
+                    let subj_narrowed = if cx.builder.func.dfg.value_type(subj_val) != types::I8 {
+                        cx.builder.ins().ireduce(types::I8, subj_val)
+                    } else {
+                        subj_val
+                    };
+                    cx.builder.ins().icmp(IntCC::Equal, subj_narrowed, pat_val)
+                }
+                Pattern::StringLit(s) => {
+                    let pat_ptr = cx.create_string(s)?;
+                    let fid = cx.rt_fns["rt_str_eq"];
+                    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                    let call = cx.builder.ins().call(fref, &[subj_val, pat_ptr]);
+                    let eq_result = cx.builder.inst_results(call)[0];
+                    let zero = cx.builder.ins().iconst(types::I8, 0);
+                    cx.builder.ins().icmp(IntCC::NotEqual, eq_result, zero)
+                }
+                Pattern::Wildcard => unreachable!(),
+                Pattern::Ok(_binding) => {
+                    let tag_fid = cx.rt_fns["rt_result_tag"];
+                    let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+                    let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
+                    let tag = cx.builder.inst_results(tag_call)[0];
+                    let zero = cx.builder.ins().iconst(types::I64, 0);
+                    cx.builder.ins().icmp(IntCC::Equal, tag, zero)
+                }
+                Pattern::Err(_binding) => {
+                    let tag_fid = cx.rt_fns["rt_result_tag"];
+                    let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+                    let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
+                    let tag = cx.builder.inst_results(tag_call)[0];
+                    let one = cx.builder.ins().iconst(types::I64, 1);
+                    cx.builder.ins().icmp(IntCC::Equal, tag, one)
+                }
+                Pattern::Some(_binding) => {
+                    let tag_fid = cx.rt_fns["rt_option_tag"];
+                    let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+                    let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
+                    let tag = cx.builder.inst_results(tag_call)[0];
+                    let one = cx.builder.ins().iconst(types::I64, 1);
+                    cx.builder.ins().icmp(IntCC::Equal, tag, one)
+                }
+                Pattern::None => {
+                    let tag_fid = cx.rt_fns["rt_option_tag"];
+                    let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+                    let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
+                    let tag = cx.builder.inst_results(tag_call)[0];
+                    let zero = cx.builder.ins().iconst(types::I64, 0);
+                    cx.builder.ins().icmp(IntCC::Equal, tag, zero)
+                }
+                Pattern::VariantDestructure { variant, .. } => {
+                    let tag_val = lookup_variant_tag_static(cx.enum_variants, variant).unwrap();
+                    let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
+                    let actual_tag = cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0);
+                    cx.builder.ins().icmp(IntCC::Equal, actual_tag, pat_val)
+                }
+            };
 
-        // Compile the arm body
-        cx.builder.switch_to_block(match_block);
-        cx.builder.seal_block(match_block);
+            let match_block = cx.builder.create_block();
+            cx.builder.ins().brif(matches_cond, match_block, &[], next_block, &[]);
+            cx.builder.switch_to_block(match_block);
+            cx.builder.seal_block(match_block);
+        }
 
-        // For ok/err/some patterns, extract the value and bind as a variable
+        // Bind pattern variables in the match block
         let saved_vars = cx.vars.clone();
         match &arm.pattern.node {
             Pattern::Ok(binding) | Pattern::Err(binding) => {
@@ -4948,7 +5210,6 @@ fn compile_match<M: Module>(
                 cx.builder.declare_var(var, types::I64);
                 cx.builder.def_var(var, raw_val);
 
-                // Get the inner type from the subject's Result(ok_tty, err_tty)
                 let turbo_ty = match &subj_tty {
                     TurboTy::Result(ok_tty, err_tty) => {
                         if matches!(&arm.pattern.node, Pattern::Ok(_)) {
@@ -4957,7 +5218,7 @@ fn compile_match<M: Module>(
                             *err_tty.clone()
                         }
                     }
-                    _ => TurboTy::Int, // fallback
+                    _ => TurboTy::Int,
                 };
                 cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
             }
@@ -4972,16 +5233,13 @@ fn compile_match<M: Module>(
                 cx.builder.declare_var(var, types::I64);
                 cx.builder.def_var(var, raw_val);
 
-                // Get the inner type from the subject's Optional(inner_tty)
                 let turbo_ty = match &subj_tty {
                     TurboTy::Optional(inner_tty) => *inner_tty.clone(),
-                    _ => TurboTy::Int, // fallback
+                    _ => TurboTy::Int,
                 };
                 cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
             }
             Pattern::VariantDestructure { variant, bindings } => {
-                // Extract fields from the data enum tagged union
-                // Layout: [tag: i64][field0: i64][field1: i64]...
                 let field_tys = if let TurboTy::Enum(ref enum_name) = subj_tty {
                     cx.enum_variant_fields
                         .get(&(enum_name.clone(), variant.clone()))
@@ -4992,7 +5250,7 @@ fn compile_match<M: Module>(
                 };
 
                 for (i, binding) in bindings.iter().enumerate() {
-                    let offset = ((i + 1) * 8) as i32; // +1 to skip tag
+                    let offset = ((i + 1) * 8) as i32;
                     let raw_val = cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, offset);
 
                     let field_tty = if i < field_tys.len() {
@@ -5001,7 +5259,6 @@ fn compile_match<M: Module>(
                         TurboTy::Int
                     };
 
-                    // Convert back from i64 storage to the appropriate type
                     let (val, cl_ty) = match &field_tty {
                         TurboTy::Float => {
                             let f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val);
@@ -5021,7 +5278,27 @@ fn compile_match<M: Module>(
                     cx.vars.insert(binding.clone(), (var, cl_ty, field_tty));
                 }
             }
+            Pattern::Ident(name) if is_catchall_pattern => {
+                // Catch-all ident with guard: bind subject value as variable
+                let cl_ty = cx.builder.func.dfg.value_type(subj_val);
+                let var = Variable::new(cx.next_var);
+                cx.next_var += 1;
+                cx.builder.declare_var(var, cl_ty);
+                cx.builder.def_var(var, subj_val);
+                cx.vars.insert(name.clone(), (var, cl_ty, subj_tty.clone()));
+            }
             _ => {}
+        }
+
+        // If there is a guard, evaluate it: true -> body, false -> next arm
+        if let Some(ref guard) = arm.guard {
+            let guard_result = compile_expr(cx, guard)?;
+            if let Some((guard_val, _)) = guard_result {
+                let body_block = cx.builder.create_block();
+                cx.builder.ins().brif(guard_val, body_block, &[], next_block, &[]);
+                cx.builder.switch_to_block(body_block);
+                cx.builder.seal_block(body_block);
+            }
         }
 
         let body_result = compile_expr(cx, &arm.body)?;
@@ -5170,5 +5447,79 @@ fn compile_builtin_mutex_set<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Exp
     let fid = cx.rt_fns["rt_mutex_set"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     cx.builder.ins().call(fref, &[m_val, value_val]);
+    Ok(None)
+}
+
+// ── HashMap builtins ────────────────────────────────────────────────
+
+/// hashmap() -> HashMap (opaque pointer)
+fn compile_builtin_hashmap<M: Module>(cx: &mut Ctx<'_, M>) -> Result<MaybeTyped, CodegenError> {
+    let fid = cx.rt_fns["rt_hashmap_new"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// hashmap_set(map, key, value) -> ()
+fn compile_builtin_hashmap_set<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let (value_val, _) = compile_expr(cx, &args[2])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_set"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    cx.builder.ins().call(fref, &[map_val, key_val, value_val]);
+    Ok(None)
+}
+
+/// hashmap_get(map, key) -> str
+fn compile_builtin_hashmap_get<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_get"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[map_val, key_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// hashmap_has(map, key) -> bool
+fn compile_builtin_hashmap_has<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_has"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[map_val, key_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Bool)))
+}
+
+/// hashmap_len(map) -> i64
+fn compile_builtin_hashmap_len<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_len"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[map_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// hashmap_keys(map) -> [str]
+fn compile_builtin_hashmap_keys<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_keys"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[map_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Array(Box::new(TurboTy::Str)))))
+}
+
+/// hashmap_remove(map, key) -> ()
+fn compile_builtin_hashmap_remove<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_remove"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    cx.builder.ins().call(fref, &[map_val, key_val]);
     Ok(None)
 }

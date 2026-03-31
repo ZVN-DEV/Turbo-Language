@@ -223,6 +223,8 @@ struct StructInfo {
     fields: Vec<(String, Ty)>,
     /// Type parameter names for generic structs
     type_params: Vec<String>,
+    /// Derived trait names from `@derive(...)` attribute
+    derives: Vec<String>,
 }
 
 /// Enum info (variant names + field types)
@@ -357,7 +359,10 @@ impl Checker {
             | "sleep"
             | "http_get" | "http_post" | "json_get" | "json_stringify"
             | "channel" | "send" | "recv"
-            | "mutex" | "mutex_get" | "mutex_set")
+            | "mutex" | "mutex_get" | "mutex_set"
+            | "clone"
+            | "hashmap" | "hashmap_set" | "hashmap_get" | "hashmap_has"
+            | "hashmap_len" | "hashmap_keys" | "hashmap_remove")
     }
 
     /// Walk a chain of FieldAccess / Index expressions to find the root variable name.
@@ -397,7 +402,19 @@ impl Checker {
                     }
                 }
             }
-            self.structs.insert(s.name.clone(), StructInfo { fields, type_params: tp_names });
+            // Validate derive attributes
+            for derive_name in &s.derives {
+                match derive_name.as_str() {
+                    "Eq" | "Clone" | "Display" => {}
+                    _ => {
+                        self.error(
+                            format!("unknown derive trait `{derive_name}`"),
+                            item.span.clone(),
+                        );
+                    }
+                }
+            }
+            self.structs.insert(s.name.clone(), StructInfo { fields, type_params: tp_names, derives: s.derives.clone() });
         }
 
         // Pass 0b: register all enum definitions
@@ -927,6 +944,26 @@ impl Checker {
                                 expr.span.clone(),
                             );
                             return Ty::Error;
+                        }
+                        // Struct equality requires @derive(Eq)
+                        if let Ty::Struct(ref struct_name) = lhs {
+                            if matches!(op, BinOp::Eq | BinOp::NotEq) {
+                                if let Some(info) = self.structs.get(struct_name) {
+                                    if !info.derives.contains(&"Eq".to_string()) {
+                                        self.error(
+                                            format!("cannot compare struct `{struct_name}` with `==`/`!=` without `@derive(Eq)`"),
+                                            expr.span.clone(),
+                                        );
+                                        return Ty::Error;
+                                    }
+                                }
+                            } else {
+                                self.error(
+                                    format!("cannot use ordering comparison on struct `{struct_name}`"),
+                                    expr.span.clone(),
+                                );
+                                return Ty::Error;
+                            }
                         }
                         Ty::Bool
                     }
@@ -1507,6 +1544,138 @@ impl Checker {
                         }
                         if !val_ty.is_error() && !val_ty.is_integer() {
                             self.error(format!("mutex_set() second argument must be integer, found `{val_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Unit;
+                    }
+
+                    // clone(val) -> T (requires @derive(Clone))
+                    if name == "clone" {
+                        if args.len() != 1 {
+                            self.error(
+                                format!("clone() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arg_ty = self.check_expr(&args[0]);
+                        if let Ty::Struct(ref struct_name) = arg_ty {
+                            if let Some(info) = self.structs.get(struct_name) {
+                                if !info.derives.contains(&"Clone".to_string()) {
+                                    self.error(
+                                        format!("cannot clone struct `{struct_name}` without `@derive(Clone)`"),
+                                        callee.span.clone(),
+                                    );
+                                    return Ty::Error;
+                                }
+                            }
+                        } else if !arg_ty.is_error() {
+                            self.error(
+                                format!("clone() expects a struct argument, found `{arg_ty}`"),
+                                args[0].span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        return arg_ty;
+                    }
+
+                    // ── HashMap builtins ────────────────────────────────
+                    // hashmap() -> i64 (opaque pointer)
+                    if name == "hashmap" {
+                        if !args.is_empty() {
+                            self.error(format!("hashmap() takes no arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        return Ty::I64;
+                    }
+                    // hashmap_set(map: i64, key: str, value: str) -> ()
+                    if name == "hashmap_set" {
+                        if args.len() != 3 {
+                            self.error(format!("hashmap_set() takes exactly 3 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        let key_ty = self.check_expr(&args[1]);
+                        let val_ty = self.check_expr(&args[2]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(format!("hashmap_set() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        if !key_ty.is_error() && key_ty != Ty::Str {
+                            self.error(format!("hashmap_set() second argument must be str, found `{key_ty}`"), args[1].span.clone());
+                        }
+                        if !val_ty.is_error() && val_ty != Ty::Str {
+                            self.error(format!("hashmap_set() third argument must be str, found `{val_ty}`"), args[2].span.clone());
+                        }
+                        return Ty::Unit;
+                    }
+                    // hashmap_get(map: i64, key: str) -> str
+                    if name == "hashmap_get" {
+                        if args.len() != 2 {
+                            self.error(format!("hashmap_get() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        let key_ty = self.check_expr(&args[1]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(format!("hashmap_get() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        if !key_ty.is_error() && key_ty != Ty::Str {
+                            self.error(format!("hashmap_get() second argument must be str, found `{key_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+                    // hashmap_has(map: i64, key: str) -> bool
+                    if name == "hashmap_has" {
+                        if args.len() != 2 {
+                            self.error(format!("hashmap_has() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        let key_ty = self.check_expr(&args[1]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(format!("hashmap_has() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        if !key_ty.is_error() && key_ty != Ty::Str {
+                            self.error(format!("hashmap_has() second argument must be str, found `{key_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Bool;
+                    }
+                    // hashmap_len(map: i64) -> i64
+                    if name == "hashmap_len" {
+                        if args.len() != 1 {
+                            self.error(format!("hashmap_len() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(format!("hashmap_len() argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::I64;
+                    }
+                    // hashmap_keys(map: i64) -> [str]
+                    if name == "hashmap_keys" {
+                        if args.len() != 1 {
+                            self.error(format!("hashmap_keys() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(format!("hashmap_keys() argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::Array(Box::new(Ty::Str));
+                    }
+                    // hashmap_remove(map: i64, key: str) -> ()
+                    if name == "hashmap_remove" {
+                        if args.len() != 2 {
+                            self.error(format!("hashmap_remove() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        let key_ty = self.check_expr(&args[1]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(format!("hashmap_remove() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        if !key_ty.is_error() && key_ty != Ty::Str {
+                            self.error(format!("hashmap_remove() second argument must be str, found `{key_ty}`"), args[1].span.clone());
                         }
                         return Ty::Unit;
                     }
@@ -2527,7 +2696,8 @@ impl Checker {
                         _ => {} // IntLit and StringLit don't cover the full domain
                     }
 
-                    // For ok/err patterns, bind the variable in a scope
+                    // For patterns with bindings, push a scope so both guards and bodies
+                    // can reference destructured variables.
                     let body_ty = match &arm.pattern.node {
                         Pattern::Ok(binding) => {
                             self.push_scope();
@@ -2537,6 +2707,12 @@ impl Checker {
                                 Ty::Error
                             };
                             self.define_var(binding, VarInfo { ty: ok_ty, mutable: false }, &arm.pattern.span);
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
                             let ty = self.check_expr(&arm.body);
                             self.pop_scope();
                             ty
@@ -2549,6 +2725,12 @@ impl Checker {
                                 Ty::Error
                             };
                             self.define_var(binding, VarInfo { ty: err_ty, mutable: false }, &arm.pattern.span);
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
                             let ty = self.check_expr(&arm.body);
                             self.pop_scope();
                             ty
@@ -2561,11 +2743,23 @@ impl Checker {
                                 Ty::Error
                             };
                             self.define_var(binding, VarInfo { ty: inner_ty, mutable: false }, &arm.pattern.span);
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
                             let ty = self.check_expr(&arm.body);
                             self.pop_scope();
                             ty
                         }
                         Pattern::None => {
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
                             self.check_expr(&arm.body)
                         }
                         Pattern::VariantDestructure { variant, bindings } => {
@@ -2584,11 +2778,40 @@ impl Checker {
                                     }
                                 }
                             }
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
                             let ty = self.check_expr(&arm.body);
                             self.pop_scope();
                             ty
                         }
-                        _ => self.check_expr(&arm.body),
+                        Pattern::Ident(name) if !matches!(subject_ty, Ty::Enum(_)) => {
+                            // Non-enum ident pattern acts as a variable binding
+                            self.push_scope();
+                            self.define_var(name, VarInfo { ty: subject_ty.clone(), mutable: false }, &arm.pattern.span);
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
+                            let ty = self.check_expr(&arm.body);
+                            self.pop_scope();
+                            ty
+                        }
+                        _ => {
+                            // Enum ident patterns, wildcard, literal patterns
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
+                            self.check_expr(&arm.body)
+                        }
                     };
 
                     if let Some(ref expected) = result_ty {
