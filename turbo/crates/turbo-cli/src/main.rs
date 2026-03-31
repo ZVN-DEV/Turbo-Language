@@ -67,12 +67,23 @@ enum Commands {
     },
     /// Install dependencies from turbo.toml
     Install,
+    /// Update GitHub dependencies to latest
+    Update,
     /// Start the Language Server Protocol server
     Lsp,
     /// Run @test functions in a Turbo source file
     Test {
         /// Path to the .tb source file (or directory)
         file: Option<PathBuf>,
+    },
+    /// Run benchmarks and report timing
+    Bench {
+        /// Path to a .tb benchmark file (or directory of bench_*.tb files)
+        file: Option<PathBuf>,
+
+        /// Number of iterations to run (default: 3)
+        #[arg(long, short = 'n', default_value = "3")]
+        iterations: u32,
     },
     /// [internal] Run a single test function by name (used by test runner)
     #[command(hide = true)]
@@ -103,8 +114,10 @@ fn main() {
         Commands::Fmt { file, check } => formatter::format_file(&file, check),
         Commands::Doc { file } => doc_file(&file),
         Commands::Install => install_deps(),
+        Commands::Update => update_deps(),
         Commands::Lsp => start_lsp(),
         Commands::Test { file } => test_file(file),
+        Commands::Bench { file, iterations } => bench_file(file, iterations),
         Commands::TestRunFn { file, func } => test_run_fn(&file, &func),
     }
 }
@@ -315,6 +328,35 @@ fn install_deps() {
 
                 eprintln!("  \x1b[32m\u{2713}\x1b[0m Installed {} -> {}", name, path);
                 count += 1;
+            } else if let Some(github_repo) = extract_quoted_value(rest, "github") {
+                // Clone from GitHub
+                let target = Path::new("turbo_modules").join(name);
+                if target.exists() {
+                    eprintln!("  \x1b[32m\u{2713}\x1b[0m {} (already installed)", name);
+                    count += 1;
+                    continue;
+                }
+                let url = format!("https://github.com/{}.git", github_repo);
+                eprintln!("  \x1b[36m\u{2193}\x1b[0m Cloning {} from github:{}...", name, github_repo);
+                let output = std::process::Command::new("git")
+                    .arg("clone")
+                    .arg("--depth=1")
+                    .arg(&url)
+                    .arg(&target)
+                    .output();
+                match output {
+                    Ok(o) if o.status.success() => {
+                        eprintln!("  \x1b[32m\u{2713}\x1b[0m Installed {} from github:{}", name, github_repo);
+                        count += 1;
+                    }
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        eprintln!("  \x1b[31m\u{2717}\x1b[0m Failed to install {}: {}", name, stderr.trim());
+                    }
+                    Err(e) => {
+                        eprintln!("  \x1b[31m\u{2717}\x1b[0m Failed to clone {}: {}", name, e);
+                    }
+                }
             }
         }
     }
@@ -323,6 +365,75 @@ fn install_deps() {
         eprintln!("No dependencies found in turbo.toml");
     } else {
         eprintln!("Installed {} dependenc{}.", count, if count == 1 { "y" } else { "ies" });
+    }
+}
+
+/// Update all GitHub dependencies to their latest versions by pulling in each cloned repo.
+fn update_deps() {
+    let toml = std::fs::read_to_string("turbo.toml").unwrap_or_else(|_| {
+        eprintln!("\x1b[1;31merror\x1b[0m: no turbo.toml found in current directory");
+        std::process::exit(1);
+    });
+
+    let mut in_deps = false;
+    let mut count = 0u32;
+
+    for line in toml.lines() {
+        let line = line.trim();
+        if line == "[dependencies]" {
+            in_deps = true;
+            continue;
+        }
+        if line.starts_with('[') {
+            in_deps = false;
+            continue;
+        }
+        if !in_deps || line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        if let Some((name, rest)) = line.split_once('=') {
+            let name = name.trim().trim_matches('"');
+            let rest = rest.trim();
+            if let Some(github_repo) = extract_quoted_value(rest, "github") {
+                let target = Path::new("turbo_modules").join(name);
+                if !target.exists() {
+                    eprintln!("  \x1b[33m!\x1b[0m {} not installed — run `turbo install` first", name);
+                    continue;
+                }
+                eprintln!("  \x1b[36m\u{2193}\x1b[0m Updating {} from github:{}...", name, github_repo);
+                let output = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&target)
+                    .arg("pull")
+                    .arg("--ff-only")
+                    .output();
+                match output {
+                    Ok(o) if o.status.success() => {
+                        let stdout = String::from_utf8_lossy(&o.stdout);
+                        if stdout.contains("Already up to date") {
+                            eprintln!("  \x1b[32m\u{2713}\x1b[0m {} already up to date", name);
+                        } else {
+                            eprintln!("  \x1b[32m\u{2713}\x1b[0m Updated {}", name);
+                        }
+                        count += 1;
+                    }
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        eprintln!("  \x1b[31m\u{2717}\x1b[0m Failed to update {}: {}", name, stderr.trim());
+                    }
+                    Err(e) => {
+                        eprintln!("  \x1b[31m\u{2717}\x1b[0m Failed to update {}: {}", name, e);
+                    }
+                }
+            }
+        }
+    }
+
+    if count == 0 {
+        eprintln!("No GitHub dependencies found to update.");
+    } else {
+        eprintln!("Updated {} dependenc{}.", count, if count == 1 { "y" } else { "ies" });
     }
 }
 
