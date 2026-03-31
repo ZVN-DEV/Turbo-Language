@@ -1,0 +1,1171 @@
+//! Runtime functions linked into the JIT module.
+//!
+//! All `extern "C" fn rt_*` functions live here. They are completely
+//! standalone — no Cranelift types, no `Ctx`, no compiler state.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+pub(crate) extern "C" fn rt_print_str(s: *const u8) {
+    if s.is_null() {
+        println!();
+        return;
+    }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) };
+    if let Ok(string) = cstr.to_str() {
+        println!("{}", string);
+    }
+}
+
+pub(crate) extern "C" fn rt_print_i64(n: i64) {
+    println!("{}", n);
+}
+
+pub(crate) extern "C" fn rt_print_f64(n: f64) {
+    println!("{}", n);
+}
+
+pub(crate) extern "C" fn rt_print_bool(b: i8) {
+    println!("{}", if b != 0 { "true" } else { "false" });
+}
+
+pub(crate) extern "C" fn rt_panic(msg: *const u8) {
+    if !msg.is_null() {
+        let cstr = unsafe { std::ffi::CStr::from_ptr(msg as *const std::ffi::c_char) };
+        if let Ok(s) = cstr.to_str() {
+            eprintln!("panic: {}", s);
+        }
+    } else {
+        eprintln!("panic: explicit panic");
+    }
+    std::process::exit(1);
+}
+
+pub(crate) extern "C" fn rt_assert_fail(msg: *const u8) {
+    if !msg.is_null() {
+        let cstr = unsafe { std::ffi::CStr::from_ptr(msg as *const std::ffi::c_char) };
+        if let Ok(s) = cstr.to_str() {
+            eprintln!("assertion failed: {}", s);
+        }
+    } else {
+        eprintln!("assertion failed");
+    }
+    std::process::exit(1);
+}
+
+/// Runtime function for assert_eq/assert_ne failure.
+/// kind: 0 = assert_eq, 1 = assert_ne
+/// actual and expected are C-string pointers (stringified values).
+pub(crate) extern "C" fn rt_assert_eq_fail(kind: i64, actual: *const u8, expected: *const u8) {
+    let actual_str = if actual.is_null() {
+        "<null>"
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(actual as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("<invalid>")
+    };
+    let expected_str = if expected.is_null() {
+        "<null>"
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(expected as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("<invalid>")
+    };
+    if kind == 0 {
+        eprintln!(
+            "assertion failed: assert_eq({}, {})",
+            actual_str, expected_str
+        );
+        eprintln!("  left:  {}", actual_str);
+        eprintln!("  right: {}", expected_str);
+    } else {
+        eprintln!(
+            "assertion failed: assert_ne({}, {})",
+            actual_str, expected_str
+        );
+        eprintln!("  both values are: {}", actual_str);
+    }
+    std::process::exit(1);
+}
+
+pub(crate) extern "C" fn rt_div_by_zero() {
+    eprintln!("runtime error: division by zero");
+    std::process::exit(1);
+}
+
+pub(crate) extern "C" fn rt_int_overflow() {
+    eprintln!("runtime error: integer overflow");
+    std::process::exit(1);
+}
+
+pub(crate) extern "C" fn rt_array_alloc(len: i64) -> *mut u8 {
+    let data_bytes = 8 + (len as usize) * 8; // 8 for length + 8 per element
+    let total_bytes = 8 + data_bytes; // +8 for refcount header
+    let layout = std::alloc::Layout::from_size_align(total_bytes, 8).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) }; // pointer past refcount header
+                                          // Store length at the start of the data region
+    unsafe {
+        *(data_ptr as *mut i64) = len;
+    }
+    data_ptr
+}
+
+pub(crate) extern "C" fn rt_array_get(arr: *const u8, index: i64) -> i64 {
+    let len = unsafe { *(arr as *const i64) };
+    if index < 0 || index >= len {
+        eprintln!(
+            "runtime error: array index {} out of bounds (length {})",
+            index, len
+        );
+        std::process::exit(1);
+    }
+    unsafe { *((arr as *const i64).add(1 + index as usize)) }
+}
+
+pub(crate) extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) -> *mut u8 {
+    // COW: check refcount before mutating
+    let rc_ptr = unsafe { arr.sub(8) as *mut std::sync::atomic::AtomicI64 };
+    let rc = unsafe { (*rc_ptr).load(std::sync::atomic::Ordering::Relaxed) };
+    let target = if rc > 1 {
+        // Copy-on-write: make a private copy
+        let len = unsafe { *(arr as *const i64) };
+        let data_size = (1 + len as usize) * 8;
+        let total = 8 + data_size;
+        let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
+        let new_alloc = unsafe { std::alloc::alloc_zeroed(layout) };
+        if new_alloc.is_null() {
+            eprintln!("turbo: fatal: memory allocation failed");
+            std::process::exit(1);
+        }
+        unsafe {
+            *(new_alloc as *mut i64) = 1;
+        } // new refcount = 1
+        let new_data = unsafe { new_alloc.add(8) };
+        unsafe {
+            std::ptr::copy_nonoverlapping(arr, new_data, data_size);
+        }
+        // Decrement old refcount
+        unsafe {
+            (*rc_ptr).fetch_sub(1, std::sync::atomic::Ordering::Release);
+        }
+        new_data
+    } else {
+        arr
+    };
+    // Bounds check + set on the target (possibly new) array
+    let len = unsafe { *(target as *const i64) };
+    if index < 0 || index >= len {
+        eprintln!(
+            "runtime error: array index {} out of bounds (length {})",
+            index, len
+        );
+        std::process::exit(1);
+    }
+    unsafe {
+        *((target as *mut i64).add(1 + index as usize)) = value;
+    }
+    target
+}
+
+pub(crate) extern "C" fn rt_array_len(arr: *const u8) -> i64 {
+    unsafe { *(arr as *const i64) }
+}
+
+pub(crate) extern "C" fn rt_str_len(s: *const u8) -> i64 {
+    if s.is_null() {
+        return 0;
+    }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) };
+    cstr.to_bytes().len() as i64
+}
+
+pub(crate) extern "C" fn rt_str_concat(a: *const u8, b: *const u8) -> *const u8 {
+    let a_str = if a.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(a as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let b_str = if b.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(b as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let mut result = String::with_capacity(a_str.len() + b_str.len());
+    result.push_str(a_str);
+    result.push_str(b_str);
+    let c_string = std::ffi::CString::new(result).unwrap();
+    c_string.into_raw() as *const u8 // leaked — no GC
+}
+
+pub(crate) extern "C" fn rt_str_eq(a: *const u8, b: *const u8) -> i8 {
+    let a_str = if a.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(a as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let b_str = if b.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(b as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    if a_str == b_str {
+        1
+    } else {
+        0
+    }
+}
+
+pub(crate) extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
+    let data_size = (num_fields as usize) * 8;
+    let total_size = 8 + data_size.max(8); // +8 for refcount header
+    let layout = std::alloc::Layout::from_size_align(total_size, 8).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
+    unsafe { ptr.add(8) } // return pointer past refcount header
+}
+
+pub(crate) extern "C" fn rt_i64_to_str(n: i64) -> *const u8 {
+    let s = format!("{}", n);
+    let c = std::ffi::CString::new(s).unwrap();
+    c.into_raw() as *const u8
+}
+
+pub(crate) extern "C" fn rt_f64_to_str(n: f64) -> *const u8 {
+    let s = format!("{}", n);
+    let c = std::ffi::CString::new(s).unwrap();
+    c.into_raw() as *const u8
+}
+
+pub(crate) extern "C" fn rt_bool_to_str(b: i8) -> *const u8 {
+    let s = if b != 0 { "true" } else { "false" };
+    let c = std::ffi::CString::new(s).unwrap();
+    c.into_raw() as *const u8
+}
+
+// ── Result type runtime functions ────────────────────────────────────
+
+pub(crate) extern "C" fn rt_result_ok(value: i64) -> *mut u8 {
+    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe {
+        *(data_ptr as *mut i64) = 0; // tag = ok
+        *((data_ptr as *mut i64).add(1)) = value;
+    }
+    data_ptr
+}
+
+pub(crate) extern "C" fn rt_result_err(value: i64) -> *mut u8 {
+    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe {
+        *(data_ptr as *mut i64) = 1; // tag = err
+        *((data_ptr as *mut i64).add(1)) = value;
+    }
+    data_ptr
+}
+
+pub(crate) extern "C" fn rt_result_tag(result: *const u8) -> i64 {
+    unsafe { *(result as *const i64) }
+}
+
+pub(crate) extern "C" fn rt_result_value(result: *const u8) -> i64 {
+    unsafe { *((result as *const i64).add(1)) }
+}
+
+// ── Optional type runtime functions ──────────────────────────────────
+
+pub(crate) extern "C" fn rt_option_some(value: i64) -> *mut u8 {
+    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe {
+        *(data_ptr as *mut i64) = 1; // tag = some
+        *((data_ptr as *mut i64).add(1)) = value;
+    }
+    data_ptr
+}
+
+pub(crate) extern "C" fn rt_option_none() -> *mut u8 {
+    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe {
+        *(data_ptr as *mut i64) = 0; // tag = none
+        *((data_ptr as *mut i64).add(1)) = 0;
+    }
+    data_ptr
+}
+
+pub(crate) extern "C" fn rt_option_tag(opt: *const u8) -> i64 {
+    unsafe { *(opt as *const i64) }
+}
+
+pub(crate) extern "C" fn rt_option_value(opt: *const u8) -> i64 {
+    unsafe { *((opt as *const i64).add(1)) }
+}
+
+// ── Standard library runtime functions ──────────────────────────────
+
+pub(crate) extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let sep = unsafe { std::ffi::CStr::from_ptr(sep as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let parts: Vec<&str> = s.split(sep).collect();
+    let len = parts.len() as i64;
+    // Array format: [refcount: i64][len: i64][ptr0: i64][ptr1: i64]...
+    let data_size = 8 + (len as usize) * 8;
+    let total = 8 + data_size; // +8 for refcount header
+    let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe {
+        *(data_ptr as *mut i64) = len;
+    }
+    for (i, part) in parts.iter().enumerate() {
+        let cs = std::ffi::CString::new(*part).unwrap();
+        let p = cs.into_raw() as i64;
+        unsafe {
+            *((data_ptr as *mut i64).add(1 + i)) = p;
+        }
+    }
+    data_ptr
+}
+
+pub(crate) extern "C" fn rt_str_trim(s: *const u8) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let trimmed = s.trim();
+    let cs = std::ffi::CString::new(trimmed).unwrap();
+    cs.into_raw() as *const u8
+}
+
+pub(crate) extern "C" fn rt_str_upper(s: *const u8) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let upper = s.to_uppercase();
+    let cs = std::ffi::CString::new(upper).unwrap();
+    cs.into_raw() as *const u8
+}
+
+pub(crate) extern "C" fn rt_str_lower(s: *const u8) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let lower = s.to_lowercase();
+    let cs = std::ffi::CString::new(lower).unwrap();
+    cs.into_raw() as *const u8
+}
+
+pub(crate) extern "C" fn rt_str_starts_with(s: *const u8, prefix: *const u8) -> i8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let prefix = unsafe { std::ffi::CStr::from_ptr(prefix as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    if s.starts_with(prefix) {
+        1
+    } else {
+        0
+    }
+}
+
+pub(crate) extern "C" fn rt_str_ends_with(s: *const u8, suffix: *const u8) -> i8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let suffix = unsafe { std::ffi::CStr::from_ptr(suffix as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    if s.ends_with(suffix) {
+        1
+    } else {
+        0
+    }
+}
+
+pub(crate) extern "C" fn rt_str_replace(s: *const u8, from: *const u8, to: *const u8) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let from = unsafe { std::ffi::CStr::from_ptr(from as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let to_s = unsafe { std::ffi::CStr::from_ptr(to as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let result = s.replace(from, to_s);
+    let cs = std::ffi::CString::new(result).unwrap();
+    cs.into_raw() as *const u8
+}
+
+pub(crate) extern "C" fn rt_str_char_at(s: *const u8, index: i64) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    if let Some(c) = s.chars().nth(index as usize) {
+        let cs = std::ffi::CString::new(c.to_string()).unwrap();
+        cs.into_raw() as *const u8
+    } else {
+        eprintln!(
+            "runtime error: string index {} out of bounds (length {})",
+            index,
+            s.chars().count()
+        );
+        std::process::exit(1);
+    }
+}
+
+/// contains(s, sub) -> bool — returns true if s contains sub
+pub(crate) extern "C" fn rt_str_contains(s: *const u8, sub: *const u8) -> i8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let sub = unsafe { std::ffi::CStr::from_ptr(sub as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    if s.contains(sub) {
+        1
+    } else {
+        0
+    }
+}
+
+/// index_of(s, sub) -> i64 — returns byte offset or -1 if not found
+pub(crate) extern "C" fn rt_str_index_of(s: *const u8, sub: *const u8) -> i64 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let sub = unsafe { std::ffi::CStr::from_ptr(sub as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    match s.find(sub) {
+        Some(pos) => pos as i64,
+        None => -1,
+    }
+}
+
+/// join(arr, sep) -> str — join string array elements with separator
+pub(crate) extern "C" fn rt_str_join(arr: *const u8, sep: *const u8) -> *const u8 {
+    let sep = unsafe { std::ffi::CStr::from_ptr(sep as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    // arr is a Turbo array: first 8 bytes = length, then 8 bytes per element (string pointers)
+    let len = unsafe { *(arr as *const i64) } as usize;
+    let mut parts = Vec::with_capacity(len);
+    for i in 0..len {
+        let elem_ptr = unsafe { *((arr as *const i64).add(1 + i)) } as *const u8;
+        let elem = unsafe { std::ffi::CStr::from_ptr(elem_ptr as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("");
+        parts.push(elem.to_string());
+    }
+    let joined = parts.join(sep);
+    let cs = std::ffi::CString::new(joined).unwrap();
+    cs.into_raw() as *const u8
+}
+
+/// repeat(s, n) -> str — repeat string n times
+pub(crate) extern "C" fn rt_str_repeat(s: *const u8, n: i64) -> *const u8 {
+    let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let repeated = s.repeat(n.max(0) as usize);
+    let cs = std::ffi::CString::new(repeated).unwrap();
+    cs.into_raw() as *const u8
+}
+
+pub(crate) extern "C" fn rt_read_line() -> *const u8 {
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).unwrap_or(0);
+    let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+    let cs = std::ffi::CString::new(trimmed).unwrap();
+    cs.into_raw() as *const u8
+}
+
+pub(crate) extern "C" fn rt_read_file(path: *const u8) -> *const u8 {
+    let path = unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let cs = std::ffi::CString::new(content).unwrap();
+            cs.into_raw() as *const u8
+        }
+        Err(e) => {
+            eprintln!("runtime error: cannot read file '{}': {}", path, e);
+            std::process::exit(1);
+        }
+    }
+}
+
+pub(crate) extern "C" fn rt_write_file(path: *const u8, content: *const u8) {
+    let path = unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let content = unsafe { std::ffi::CStr::from_ptr(content as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    if let Err(e) = std::fs::write(path, content) {
+        eprintln!("runtime error: cannot write file '{}': {}", path, e);
+        std::process::exit(1);
+    }
+}
+
+pub(crate) extern "C" fn rt_pow(base: i64, exp: i64) -> i64 {
+    if exp < 0 {
+        return 0;
+    }
+    let mut result: i64 = 1;
+    for _ in 0..exp {
+        result = result.wrapping_mul(base);
+    }
+    result
+}
+
+pub(crate) extern "C" fn rt_sqrt(x: f64) -> f64 {
+    x.sqrt()
+}
+
+// ── HTTP + JSON runtime functions ───────────────────────────────────
+
+/// HTTP GET via system curl. Returns response body as a C string.
+pub(crate) extern "C" fn rt_http_get(url: *const u8) -> *const u8 {
+    let url = unsafe { std::ffi::CStr::from_ptr(url as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let output = std::process::Command::new("curl")
+        .arg("-s")
+        .arg("-L")
+        .arg(url)
+        .output();
+    match output {
+        Ok(out) => {
+            let body = String::from_utf8_lossy(&out.stdout).to_string();
+            let cs = std::ffi::CString::new(body)
+                .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+            cs.into_raw() as *const u8
+        }
+        Err(e) => {
+            let cs = std::ffi::CString::new(format!("error: {}", e)).unwrap();
+            cs.into_raw() as *const u8
+        }
+    }
+}
+
+/// HTTP POST via system curl. Takes URL and body, returns response body as a C string.
+pub(crate) extern "C" fn rt_http_post(url: *const u8, body: *const u8) -> *const u8 {
+    let url = unsafe { std::ffi::CStr::from_ptr(url as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let body_str = unsafe { std::ffi::CStr::from_ptr(body as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let output = std::process::Command::new("curl")
+        .arg("-s")
+        .arg("-L")
+        .arg("-X")
+        .arg("POST")
+        .arg("-H")
+        .arg("Content-Type: application/json")
+        .arg("-d")
+        .arg(body_str)
+        .arg(url)
+        .output();
+    match output {
+        Ok(out) => {
+            let resp = String::from_utf8_lossy(&out.stdout).to_string();
+            let cs = std::ffi::CString::new(resp)
+                .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+            cs.into_raw() as *const u8
+        }
+        Err(e) => {
+            let cs = std::ffi::CString::new(format!("error: {}", e)).unwrap();
+            cs.into_raw() as *const u8
+        }
+    }
+}
+
+/// Extract a top-level key from a JSON string. Returns the value as a string.
+/// Handles string values, numbers, booleans, and null.
+pub(crate) extern "C" fn rt_json_get(json: *const u8, key: *const u8) -> *const u8 {
+    let json_str = unsafe { std::ffi::CStr::from_ptr(json as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let key_str = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+
+    // Search for "key" in the JSON
+    let search = format!("\"{}\"", key_str);
+    if let Some(pos) = json_str.find(&search) {
+        let after_key = &json_str[pos + search.len()..];
+        // Skip whitespace and colon
+        let trimmed = after_key.trim_start();
+        if let Some(after_colon) = trimmed.strip_prefix(':') {
+            let value_start = after_colon.trim_start();
+            if let Some(inner) = value_start.strip_prefix('"') {
+                // String value: find closing quote, handling escaped quotes
+                let mut end = 0;
+                let bytes = inner.as_bytes();
+                while end < bytes.len() {
+                    if bytes[end] == b'\\' {
+                        end += 2; // skip escaped char
+                    } else if bytes[end] == b'"' {
+                        break;
+                    } else {
+                        end += 1;
+                    }
+                }
+                let value = &inner[..end];
+                let cs = std::ffi::CString::new(value)
+                    .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+                return cs.into_raw() as *const u8;
+            } else {
+                // Number, bool, or null: read until , } ] or whitespace
+                let end = value_start
+                    .find(|c: char| {
+                        c == ','
+                            || c == '}'
+                            || c == ']'
+                            || c == ' '
+                            || c == '\n'
+                            || c == '\r'
+                            || c == '\t'
+                    })
+                    .unwrap_or(value_start.len());
+                let value = &value_start[..end];
+                let cs = std::ffi::CString::new(value)
+                    .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+                return cs.into_raw() as *const u8;
+            }
+        }
+    }
+    // Key not found: return empty string
+    let cs = std::ffi::CString::new("").unwrap();
+    cs.into_raw() as *const u8
+}
+
+/// Build a JSON object string from a key and value: {"key": "value"}
+pub(crate) extern "C" fn rt_json_stringify(key: *const u8, value: *const u8) -> *const u8 {
+    let key_str = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let value_str = unsafe { std::ffi::CStr::from_ptr(value as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let result = format!(
+        "{{\"{}\":\"{}\"}}",
+        key_str.replace('\\', "\\\\").replace('"', "\\\""),
+        value_str.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+    let cs = std::ffi::CString::new(result).unwrap();
+    cs.into_raw() as *const u8
+}
+
+// ── HTTP server runtime functions ───────────────────────────────────
+
+/// Route handler function pointer: (env_ptr, request_body_cstr) -> response_cstr
+pub(crate) type RouteHandler = extern "C" fn(*const u8, *const u8) -> *const u8;
+
+pub(crate) struct HttpServer {
+    port: u16,
+    routes: Vec<(String, String, RouteHandler, *const u8)>, // (method, path, handler_fn, env_ptr)
+}
+
+unsafe impl Send for HttpServer {}
+
+pub(crate) static HTTP_SERVERS: Mutex<Vec<HttpServer>> = Mutex::new(Vec::new());
+
+/// Create a new HTTP server. Returns a server id (index).
+pub(crate) extern "C" fn rt_http_server(port: i64) -> i64 {
+    let server = HttpServer {
+        port: port as u16,
+        routes: Vec::new(),
+    };
+    let mut servers = HTTP_SERVERS.lock().unwrap();
+    let id = servers.len() as i64;
+    servers.push(server);
+    id
+}
+
+/// Register a route handler on the server.
+pub(crate) extern "C" fn rt_http_route(
+    server_id: i64,
+    method: *const u8,
+    path: *const u8,
+    handler: *const u8,
+    env_ptr: *const u8,
+) {
+    let method = unsafe { std::ffi::CStr::from_ptr(method as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("")
+        .to_string();
+    let path = unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("")
+        .to_string();
+    let handler: RouteHandler = unsafe { std::mem::transmute(handler) };
+
+    let mut servers = HTTP_SERVERS.lock().unwrap();
+    if let Some(server) = servers.get_mut(server_id as usize) {
+        server.routes.push((method, path, handler, env_ptr));
+    }
+}
+
+/// Start the HTTP server. Blocks forever accepting connections.
+pub(crate) extern "C" fn rt_http_listen(server_id: i64) {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+
+    let (port, routes) = {
+        let servers = HTTP_SERVERS.lock().unwrap();
+        let server = &servers[server_id as usize];
+        let port = server.port;
+        let routes: Vec<(String, String, RouteHandler, *const u8)> = server.routes.clone();
+        (port, routes)
+    };
+
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = TcpListener::bind(&addr).expect("failed to bind HTTP server");
+
+    for stream in listener.incoming().flatten() {
+        let mut reader = BufReader::new(&stream);
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).is_err() {
+            continue;
+        }
+
+        let parts: Vec<&str> = request_line.split_whitespace().collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let method = parts[0];
+        let path = parts[1];
+
+        // Read headers
+        let mut content_length: usize = 0;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                break;
+            }
+            if line.trim().is_empty() {
+                break;
+            }
+            if line.to_lowercase().starts_with("content-length:") {
+                content_length = line
+                    .split(':')
+                    .nth(1)
+                    .unwrap_or("0")
+                    .trim()
+                    .parse()
+                    .unwrap_or(0);
+            }
+        }
+
+        // Read body
+        let mut body = vec![0u8; content_length];
+        if content_length > 0 {
+            let _ = reader.read_exact(&mut body);
+        }
+
+        // We need a mutable reference to stream for writing, drop the BufReader first
+        drop(reader);
+        let mut stream = stream;
+
+        // Find matching route
+        let mut matched = false;
+        for (route_method, route_path, handler, env_ptr) in &routes {
+            if route_method == method && route_path == path {
+                let body_str = String::from_utf8_lossy(&body);
+                let req_cstr = std::ffi::CString::new(body_str.as_ref())
+                    .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+                let response_ptr = handler(*env_ptr, req_cstr.as_ptr() as *const u8);
+
+                let http_response = if response_ptr.is_null() {
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n\r\n"
+                        .to_string()
+                } else {
+                    let resp = unsafe {
+                        std::ffi::CStr::from_ptr(response_ptr as *const std::ffi::c_char)
+                    }
+                    .to_str()
+                    .unwrap_or("");
+                    if let Some((status, resp_body)) = resp.split_once(':') {
+                        let code = status.parse::<u16>().unwrap_or(200);
+                        let status_text = match code {
+                            200 => "OK",
+                            201 => "Created",
+                            204 => "No Content",
+                            400 => "Bad Request",
+                            401 => "Unauthorized",
+                            403 => "Forbidden",
+                            404 => "Not Found",
+                            500 => "Internal Server Error",
+                            _ => "OK",
+                        };
+                        format!(
+                            "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
+                            code, status_text, resp_body.len(), resp_body
+                        )
+                    } else {
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                            resp.len(), resp
+                        )
+                    }
+                };
+
+                let _ = stream.write_all(http_response.as_bytes());
+                let _ = stream.flush();
+                matched = true;
+                break;
+            }
+        }
+
+        if !matched {
+            let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
+            let _ = stream.write_all(not_found.as_bytes());
+            let _ = stream.flush();
+        }
+    }
+}
+
+/// Build a response string in "STATUS:BODY" format.
+pub(crate) extern "C" fn rt_respond(status: i64, body: *const u8) -> *const u8 {
+    let body_str = unsafe { std::ffi::CStr::from_ptr(body as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let response = format!("{}:{}", status, body_str);
+    let cs = std::ffi::CString::new(response)
+        .unwrap_or_else(|_| std::ffi::CString::new("200:").unwrap());
+    cs.into_raw() as *const u8
+}
+
+/// Extract body from request (identity — request is already the body string).
+pub(crate) extern "C" fn rt_request_body(req: *const u8) -> *const u8 {
+    req
+}
+
+// ── Async runtime functions ─────────────────────────────────────────
+
+/// Sleep the current thread for `ms` milliseconds.
+pub(crate) extern "C" fn rt_sleep_ms(ms: i64) {
+    std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+}
+
+/// Spawn a thunk with an args pointer on a new OS thread.
+/// The thunk is `extern "C" fn(args_ptr: *mut u8) -> i64`.
+/// Returns a pointer to a heap-allocated JoinHandle.
+pub(crate) extern "C" fn rt_spawn_with_args(
+    thunk: extern "C" fn(*mut u8) -> i64,
+    args_ptr: *mut u8,
+) -> *mut u8 {
+    // Cast pointer to usize (which is Send) to pass across thread boundary
+    let args_addr = args_ptr as usize;
+    let handle = std::thread::spawn(move || thunk(args_addr as *mut u8));
+    let boxed: Box<std::thread::JoinHandle<i64>> = Box::new(handle);
+    Box::into_raw(boxed) as *mut u8
+}
+
+/// Await (join) a spawned thread handle and return its result.
+pub(crate) extern "C" fn rt_await_handle(handle_ptr: *mut u8) -> i64 {
+    if handle_ptr.is_null() {
+        return 0;
+    }
+    let handle: Box<std::thread::JoinHandle<i64>> =
+        unsafe { Box::from_raw(handle_ptr as *mut std::thread::JoinHandle<i64>) };
+    handle.join().unwrap_or(0)
+}
+
+// ── Channel runtime functions ────────────────────────────────────────
+
+/// Create a new channel. Returns a heap-allocated struct: [refcount: i64][sender_ptr: i64, receiver_ptr: i64].
+pub(crate) extern "C" fn rt_channel_create() -> *mut u8 {
+    let (tx, rx) = std::sync::mpsc::channel::<i64>();
+    let tx_box = Box::into_raw(Box::new(tx)) as i64;
+    let rx_box = Box::into_raw(Box::new(rx)) as i64;
+
+    let ptr = unsafe {
+        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(8 + 16, 8).unwrap())
+    };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe {
+        *(data_ptr as *mut i64) = tx_box;
+        *((data_ptr as *mut i64).add(1)) = rx_box;
+    }
+    data_ptr
+}
+
+/// Send a value on a channel.
+pub(crate) extern "C" fn rt_channel_send(ch: *const u8, value: i64) {
+    let tx_ptr = unsafe { *(ch as *const i64) } as *mut std::sync::mpsc::Sender<i64>;
+    let tx = unsafe { &*tx_ptr };
+    tx.send(value).ok();
+}
+
+/// Receive a value from a channel (blocking).
+pub(crate) extern "C" fn rt_channel_recv(ch: *const u8) -> i64 {
+    let rx_ptr = unsafe { *((ch as *const i64).add(1)) } as *mut std::sync::mpsc::Receiver<i64>;
+    let rx = unsafe { &*rx_ptr };
+    rx.recv().unwrap_or(0)
+}
+
+/// Clone a channel's sender for passing to spawned threads.
+/// Returns a new channel handle with a cloned sender and the same receiver pointer.
+pub(crate) extern "C" fn rt_channel_clone_sender(ch: *const u8) -> *mut u8 {
+    let tx_ptr = unsafe { *(ch as *const i64) } as *mut std::sync::mpsc::Sender<i64>;
+    let tx = unsafe { &*tx_ptr };
+    let cloned = tx.clone();
+    let new_tx = Box::into_raw(Box::new(cloned)) as i64;
+
+    let rx_ptr = unsafe { *((ch as *const i64).add(1)) };
+    let ptr = unsafe {
+        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(8 + 16, 8).unwrap())
+    };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe {
+        *(data_ptr as *mut i64) = new_tx;
+        *((data_ptr as *mut i64).add(1)) = rx_ptr;
+    }
+    data_ptr
+}
+
+// ── Mutex runtime functions ─────────────────────────────────────────
+
+/// Create a mutex wrapping an i64 value. Returns a pointer to an Arc<Mutex<i64>>.
+pub(crate) extern "C" fn rt_mutex_create(value: i64) -> *mut u8 {
+    let m = std::sync::Arc::new(std::sync::Mutex::new(value));
+    std::sync::Arc::into_raw(m) as *mut u8
+}
+
+/// Get the current value inside a mutex.
+pub(crate) extern "C" fn rt_mutex_get(m: *const u8) -> i64 {
+    let arc = unsafe { std::sync::Arc::from_raw(m as *const std::sync::Mutex<i64>) };
+    let val = *arc.lock().unwrap();
+    let _ = std::sync::Arc::into_raw(arc); // don't drop
+    val
+}
+
+/// Set the value inside a mutex.
+pub(crate) extern "C" fn rt_mutex_set(m: *const u8, value: i64) {
+    let arc = unsafe { std::sync::Arc::from_raw(m as *const std::sync::Mutex<i64>) };
+    *arc.lock().unwrap() = value;
+    let _ = std::sync::Arc::into_raw(arc); // don't drop
+}
+
+/// Clone a mutex handle (increments the Arc refcount). Returns a new pointer.
+pub(crate) extern "C" fn rt_mutex_clone(m: *const u8) -> *mut u8 {
+    let arc = unsafe { std::sync::Arc::from_raw(m as *const std::sync::Mutex<i64>) };
+    let cloned = arc.clone();
+    let _ = std::sync::Arc::into_raw(arc); // don't drop original
+    std::sync::Arc::into_raw(cloned) as *mut u8
+}
+
+// ── HashMap runtime functions ───────────────────────────────────────
+
+/// Create a new empty HashMap<String, String>. Returns an opaque pointer.
+pub(crate) extern "C" fn rt_hashmap_new() -> *mut u8 {
+    let map: HashMap<String, String> = HashMap::new();
+    let boxed = Box::new(map);
+    Box::into_raw(boxed) as *mut u8
+}
+
+/// Set a key-value pair in the hashmap.
+pub(crate) extern "C" fn rt_hashmap_set(map_ptr: *mut u8, key: *const u8, value: *const u8) {
+    let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("")
+        .to_string();
+    let value = unsafe { std::ffi::CStr::from_ptr(value as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("")
+        .to_string();
+    map.insert(key, value);
+}
+
+/// Get a value by key. Returns a C string pointer, or null if not found.
+pub(crate) extern "C" fn rt_hashmap_get(map_ptr: *const u8, key: *const u8) -> *const u8 {
+    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    match map.get(key) {
+        Some(v) => {
+            let cs = std::ffi::CString::new(v.as_str()).unwrap();
+            cs.into_raw() as *const u8
+        }
+        None => std::ptr::null(),
+    }
+}
+
+/// Check if a key exists. Returns 1 (true) or 0 (false).
+pub(crate) extern "C" fn rt_hashmap_has(map_ptr: *const u8, key: *const u8) -> i8 {
+    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    if map.contains_key(key) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Return the number of entries in the hashmap.
+pub(crate) extern "C" fn rt_hashmap_len(map_ptr: *const u8) -> i64 {
+    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
+    map.len() as i64
+}
+
+/// Return all keys as a [str] array (same format as rt_str_split).
+pub(crate) extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
+    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
+    let mut keys: Vec<&str> = map.keys().map(|k| k.as_str()).collect();
+    keys.sort(); // deterministic order for testing
+    let len = keys.len() as i64;
+    // Array format: [refcount: i64][len: i64][ptr0: i64][ptr1: i64]...
+    let data_size = 8 + (len as usize) * 8;
+    let total = 8 + data_size; // +8 for refcount header
+    let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe {
+        *(data_ptr as *mut i64) = len;
+    }
+    for (i, key) in keys.iter().enumerate() {
+        let cs = std::ffi::CString::new(*key).unwrap();
+        unsafe {
+            *((data_ptr as *mut i64).add(1 + i)) = cs.into_raw() as i64;
+        }
+    }
+    data_ptr
+}
+
+/// Remove a key from the hashmap.
+pub(crate) extern "C" fn rt_hashmap_remove(map_ptr: *mut u8, key: *const u8) {
+    let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    map.remove(key);
+}
+
+// ── ARC (Automatic Reference Counting) runtime functions ────────────
+
+/// Increment the reference count of a heap-allocated object.
+/// The refcount lives at data_ptr - 8 (the header before the data).
+pub(crate) extern "C" fn rt_retain(data_ptr: *mut u8) {
+    if data_ptr.is_null() {
+        return;
+    }
+    let header = unsafe { data_ptr.sub(8) as *mut std::sync::atomic::AtomicI64 };
+    unsafe {
+        (*header).fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Decrement the reference count of a heap-allocated object.
+/// When the refcount reaches 0, the memory could be freed.
+/// For now (Sprint 17), we track but don't free — proper dealloc
+/// requires storing allocation size in the header.
+pub(crate) extern "C" fn rt_release(data_ptr: *mut u8) {
+    if data_ptr.is_null() {
+        return;
+    }
+    let header = unsafe { data_ptr.sub(8) as *mut std::sync::atomic::AtomicI64 };
+    let _prev = unsafe { (*header).fetch_sub(1, std::sync::atomic::Ordering::Release) };
+    if _prev == 1 {
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
+        // Refcount reached 0 — memory could be freed here.
+        // TODO: store allocation size in header for proper dealloc.
+        // For now we just let it leak (same as before ARC).
+    }
+}
