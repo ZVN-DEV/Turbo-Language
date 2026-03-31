@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: turbo
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: turbo
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: turbo
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: |
+          cd turbo
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          cd turbo/target/${{ matrix.target }}/release
+          tar czf turbo-${{ github.ref_name }}-${{ matrix.target }}.tar.gz turbo
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: turbo-${{ matrix.target }}
+          path: turbo/target/${{ matrix.target }}/release/turbo-*.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            turbo-aarch64-apple-darwin/*.tar.gz
+            turbo-x86_64-apple-darwin/*.tar.gz
+            turbo-x86_64-unknown-linux-gnu/*.tar.gz
+          draft: false
+          prerelease: false
