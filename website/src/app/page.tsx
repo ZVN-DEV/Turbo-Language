@@ -221,7 +221,7 @@ export default function Home() {
         {/* Gradient orb background */}
         <div className="absolute top-[-200px] left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-gradient-to-b from-[#00ff8810] via-[#00d4ff08] to-transparent rounded-full blur-3xl pointer-events-none" />
 
-        <div className="max-w-6xl mx-auto px-6 pt-24 pb-20 md:pt-32 md:pb-28">
+        <div className="max-w-5xl mx-auto px-6 pt-28 pb-24 md:pt-40 md:pb-32">
           <div className="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
             <div>
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[#1a1a2e] text-xs text-gray-400 mb-6">
@@ -229,7 +229,7 @@ export default function Home() {
                 Now open source
               </div>
 
-              <h1 className="text-4xl md:text-6xl font-bold text-white leading-tight tracking-tight mb-6">
+              <h1 className="text-5xl md:text-[3.75rem] font-bold text-white leading-[1.05] tracking-tight mb-6">
                 JavaScript&apos;s Soul.
                 <br />
                 <span className="bg-gradient-to-r from-[#00ff88] to-[#00d4ff] bg-clip-text text-transparent">
@@ -289,7 +289,7 @@ export default function Home() {
       </section>
 
       {/* ── Features Grid ──────────────────────────────────── */}
-      <section className="max-w-6xl mx-auto px-6 py-20 md:py-28">
+      <section className="max-w-5xl mx-auto px-6 py-24 md:py-32">
         <div className="text-center mb-16">
           <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
             Why Turbo?
@@ -322,7 +322,7 @@ export default function Home() {
 
       {/* ── Code Examples ──────────────────────────────────── */}
       <section className="border-t border-[#1a1a2e]">
-        <div className="max-w-6xl mx-auto px-6 py-20 md:py-28">
+        <div className="max-w-5xl mx-auto px-6 py-24 md:py-32">
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
               Expressive by Default
@@ -341,7 +341,7 @@ export default function Home() {
 
       {/* ── Benchmarks ─────────────────────────────────────── */}
       <section className="border-t border-[#1a1a2e]">
-        <div className="max-w-6xl mx-auto px-6 py-20 md:py-28">
+        <div className="max-w-5xl mx-auto px-6 py-24 md:py-32">
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
               Performance
@@ -399,7 +399,7 @@ export default function Home() {
 
       {/* ── Installation ───────────────────────────────────── */}
       <section className="border-t border-[#1a1a2e]">
-        <div className="max-w-6xl mx-auto px-6 py-20 md:py-28">
+        <div className="max-w-5xl mx-auto px-6 py-24 md:py-32">
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
               Get Started in Seconds
@@ -455,10 +455,10 @@ export default function Home() {
       {/* ── CTA ────────────────────────────────────────────── */}
       <section className="border-t border-[#1a1a2e]">
         <div className="max-w-6xl mx-auto px-6 py-24 md:py-32 text-center">
-          <h2 className="text-3xl md:text-5xl font-bold text-white mb-6">
+          <h2 className="text-4xl md:text-5xl font-bold text-white mb-6">
             Ready to build?
           </h2>
-          <p className="text-gray-400 text-lg mb-10 max-w-lg mx-auto">
+          <p className="text-gray-400 text-xl mb-12 max-w-lg mx-auto">
             Start writing Turbo today. Native speed, modern syntax, AI-ready
             from day one.
           </p>
