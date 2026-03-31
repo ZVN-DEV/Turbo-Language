@@ -2075,6 +2075,64 @@ fn compile_module<M: Module>(
         }
     }
 
+    // Declare default trait methods for impl blocks that don't override them
+    // Collect (type_name, method_sig) pairs for default methods that need compilation
+    let mut default_method_impls: Vec<(String, &turbo_ast::TraitMethodSig)> = Vec::new();
+    for item in &ast_module.items {
+        let Item::Impl(imp) = &item.node else { continue };
+        let Some(trait_name) = &imp.trait_name else { continue };
+        let Some(trait_def) = trait_defs.get(trait_name.as_str()) else { continue };
+        let impl_method_names: Vec<String> = imp.methods.iter().map(|m| m.node.name.clone()).collect();
+        for trait_method in &trait_def.methods {
+            if trait_method.default_body.is_some() && !impl_method_names.contains(&trait_method.name) {
+                let mangled = format!("{}__{}", imp.type_name, trait_method.name);
+                if !user_fns.contains_key(&mangled) {
+                    let mut sig = module.make_signature();
+                    sig.call_conv = CallConv::Fast;
+                    for param in &trait_method.params {
+                        if param.name == "self" {
+                            sig.params.push(AbiParam::new(ptr_type));
+                        } else {
+                            sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?));
+                        }
+                    }
+                    let ret_turbo = if let Some(ret_ty) = &trait_method.return_type {
+                        let cl = resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?;
+                        sig.returns.push(AbiParam::new(cl));
+                        turbo_ty_from_type_expr(&ret_ty.node, &enum_variants)
+                    } else {
+                        TurboTy::Unit
+                    };
+                    let id = module.declare_function(&mangled, Linkage::Local, &sig)
+                        .map_err(|e| CodegenError { message: e.to_string() })?;
+                    user_fns.insert(mangled.clone(), id);
+                    fn_ret_types.insert(mangled, ret_turbo);
+                    default_method_impls.push((imp.type_name.clone(), trait_method));
+                }
+            }
+        }
+    }
+
+    // Declare @derive(Display) auto-generated to_string methods
+    let mut derive_display_structs: Vec<String> = Vec::new();
+    for item in &ast_module.items {
+        let Item::Struct(s) = &item.node else { continue };
+        if s.derives.contains(&"Display".to_string()) {
+            let mangled = format!("{}__{}", s.name, "to_string");
+            if !user_fns.contains_key(&mangled) {
+                let mut sig = module.make_signature();
+                sig.call_conv = CallConv::Fast;
+                sig.params.push(AbiParam::new(ptr_type)); // self
+                sig.returns.push(AbiParam::new(ptr_type)); // returns str
+                let id = module.declare_function(&mangled, Linkage::Local, &sig)
+                    .map_err(|e| CodegenError { message: e.to_string() })?;
+                user_fns.insert(mangled.clone(), id);
+                fn_ret_types.insert(mangled, TurboTy::Str);
+                derive_display_structs.push(s.name.clone());
+            }
+        }
+    }
+
     // Extract and compile closures
     let extracted_closures = extract_all_closures(ast_module);
     let mut closure_fns_map: HashMap<usize, (String, TurboTy, Vec<String>)> = HashMap::new();
