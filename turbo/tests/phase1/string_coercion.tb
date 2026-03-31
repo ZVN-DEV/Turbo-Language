@@ -1,0 +1,14 @@
+fn main() {
+    // str + int
+    print("count: " + 42)
+    // str + bool
+    print("flag: " + true)
+    // str + float
+    print("pi: " + 3.14)
+    // int + str
+    print(10 + " items")
+    // bool + str
+    print(false + " alarm")
+    // float + str
+    print(2.72 + " is e")
+}

@@ -352,6 +352,10 @@ pub enum Expr {
     Spawn(Box<Spanned<Expr>>),
     /// Try operator: expr? — unwraps Ok, propagates Err
     Try(Box<Spanned<Expr>>),
+    /// Break out of the innermost loop
+    Break,
+    /// Continue to the next iteration of the innermost loop
+    Continue,
 }
 
 /// Statements (things that don't produce values in statement position)

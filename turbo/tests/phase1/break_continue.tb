@@ -1,0 +1,31 @@
+fn main() {
+    // break: stop at 5
+    for i in 0..100 {
+        if i == 5 { break }
+        if i % 2 == 0 { continue }
+        print(i)
+    }
+
+    // break in while loop
+    let mut n = 0
+    while true {
+        if n == 3 { break }
+        print("w" + n)
+        n = n + 1
+    }
+
+    // continue in while loop
+    let mut j = 0
+    while j < 6 {
+        j = j + 1
+        if j % 2 == 0 { continue }
+        print("odd: " + j)
+    }
+
+    // break in for-in array
+    let arr = [10, 20, 30, 40, 50]
+    for x in arr {
+        if x == 30 { break }
+        print(x)
+    }
+}
