@@ -6,30 +6,43 @@ fn main() {
     let (connection, io_threads) = Connection::stdio();
 
     let capabilities = ServerCapabilities {
-        text_document_sync: Some(TextDocumentSyncCapability::Kind(
-            TextDocumentSyncKind::FULL,
-        )),
+        text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         ..Default::default()
     };
 
-    let init_result = serde_json::to_value(InitializeResult {
+    let init_result = match serde_json::to_value(InitializeResult {
         capabilities,
         ..Default::default()
-    })
-    .unwrap();
+    }) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("turbo-lsp: failed to serialize InitializeResult: {e}");
+            return;
+        }
+    };
 
-    connection.initialize(init_result).unwrap();
+    if let Err(e) = connection.initialize(init_result) {
+        eprintln!("turbo-lsp: initialization handshake failed: {e}");
+        return;
+    }
 
+    #[allow(clippy::mutable_key_type)] // Uri from lsp-types uses interior mutability for caching
     let mut documents: HashMap<Uri, String> = HashMap::new();
 
     for msg in &connection.receiver {
         match msg {
             Message::Notification(not) => match not.method.as_str() {
                 "textDocument/didOpen" => {
-                    let params: DidOpenTextDocumentParams =
-                        serde_json::from_value(not.params).unwrap();
+                    let params: DidOpenTextDocumentParams = match serde_json::from_value(not.params)
+                    {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("turbo-lsp: bad didOpen params: {e}");
+                            continue;
+                        }
+                    };
                     let uri = params.text_document.uri.clone();
                     let text = params.text_document.text.clone();
                     documents.insert(uri.clone(), text.clone());
@@ -37,7 +50,13 @@ fn main() {
                 }
                 "textDocument/didChange" => {
                     let params: DidChangeTextDocumentParams =
-                        serde_json::from_value(not.params).unwrap();
+                        match serde_json::from_value(not.params) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!("turbo-lsp: bad didChange params: {e}");
+                                continue;
+                            }
+                        };
                     let uri = params.text_document.uri.clone();
                     if let Some(change) = params.content_changes.into_iter().last() {
                         documents.insert(uri.clone(), change.text.clone());
@@ -46,66 +65,90 @@ fn main() {
                 }
                 "textDocument/didClose" => {
                     let params: DidCloseTextDocumentParams =
-                        serde_json::from_value(not.params).unwrap();
+                        match serde_json::from_value(not.params) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!("turbo-lsp: bad didClose params: {e}");
+                                continue;
+                            }
+                        };
                     documents.remove(&params.text_document.uri);
                 }
                 _ => {}
             },
             Message::Request(req) => match req.method.as_str() {
                 "textDocument/hover" => {
-                    let params: HoverParams =
-                        serde_json::from_value(req.params.clone()).unwrap();
+                    let params: HoverParams = match serde_json::from_value(req.params.clone()) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("turbo-lsp: bad hover params: {e}");
+                            let _ = send_response(
+                                &connection,
+                                Response::new_ok(req.id, serde_json::Value::Null),
+                            );
+                            continue;
+                        }
+                    };
                     let uri = &params.text_document_position_params.text_document.uri;
                     let pos = params.text_document_position_params.position;
                     let hover = documents.get(uri).and_then(|text| compute_hover(text, pos));
-                    let result = serde_json::to_value(hover).unwrap();
-                    connection
-                        .sender
-                        .send(Message::Response(Response::new_ok(req.id, result)))
-                        .unwrap();
+                    let result = serde_json::to_value(hover).unwrap_or(serde_json::Value::Null);
+                    let _ = send_response(&connection, Response::new_ok(req.id, result));
                 }
                 "textDocument/definition" => {
                     let params: GotoDefinitionParams =
-                        serde_json::from_value(req.params.clone()).unwrap();
+                        match serde_json::from_value(req.params.clone()) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!("turbo-lsp: bad definition params: {e}");
+                                let _ = send_response(
+                                    &connection,
+                                    Response::new_ok(req.id, serde_json::Value::Null),
+                                );
+                                continue;
+                            }
+                        };
                     let uri = &params.text_document_position_params.text_document.uri;
                     let pos = params.text_document_position_params.position;
                     let location = documents
                         .get(uri)
                         .and_then(|text| compute_definition(text, pos, uri));
-                    let result = serde_json::to_value(
-                        location.map(GotoDefinitionResponse::Scalar),
-                    )
-                    .unwrap();
-                    connection
-                        .sender
-                        .send(Message::Response(Response::new_ok(req.id, result)))
-                        .unwrap();
+                    let result = serde_json::to_value(location.map(GotoDefinitionResponse::Scalar))
+                        .unwrap_or(serde_json::Value::Null);
+                    let _ = send_response(&connection, Response::new_ok(req.id, result));
                 }
                 "shutdown" => {
-                    connection
-                        .sender
-                        .send(Message::Response(Response::new_ok(
-                            req.id,
-                            serde_json::Value::Null,
-                        )))
-                        .unwrap();
+                    let _ = send_response(
+                        &connection,
+                        Response::new_ok(req.id, serde_json::Value::Null),
+                    );
                     break;
                 }
                 _ => {
-                    connection
-                        .sender
-                        .send(Message::Response(Response::new_ok(
-                            req.id,
-                            serde_json::Value::Null,
-                        )))
-                        .unwrap();
+                    let _ = send_response(
+                        &connection,
+                        Response::new_ok(req.id, serde_json::Value::Null),
+                    );
                 }
             },
             _ => {}
         }
     }
 
-    io_threads.join().unwrap();
+    if let Err(e) = io_threads.join() {
+        eprintln!("turbo-lsp: I/O thread error: {e}");
+    }
+}
+
+/// Send an LSP response, logging failures instead of panicking.
+fn send_response(connection: &Connection, response: Response) -> Result<(), String> {
+    connection
+        .sender
+        .send(Message::Response(response))
+        .map_err(|e| {
+            eprintln!("turbo-lsp: failed to send response: {e}");
+            e.to_string()
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -156,13 +199,20 @@ fn publish_diagnostics(connection: &Connection, uri: &Uri, source: &str) {
         version: None,
     };
 
-    connection
-        .sender
-        .send(Message::Notification(Notification {
-            method: "textDocument/publishDiagnostics".to_string(),
-            params: serde_json::to_value(params).unwrap(),
-        }))
-        .unwrap();
+    let value = match serde_json::to_value(params) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("turbo-lsp: failed to serialize diagnostics: {e}");
+            return;
+        }
+    };
+
+    if let Err(e) = connection.sender.send(Message::Notification(Notification {
+        method: "textDocument/publishDiagnostics".to_string(),
+        params: value,
+    })) {
+        eprintln!("turbo-lsp: failed to send diagnostics: {e}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -199,57 +249,31 @@ fn compute_hover(source: &str, pos: Position) -> Option<Hover> {
                 turbo_lexer::Token::In => "keyword: `in` -- iterator binding".to_string(),
                 turbo_lexer::Token::Return => "keyword: `return` -- early return".to_string(),
                 turbo_lexer::Token::Match => "keyword: `match` -- pattern matching".to_string(),
-                turbo_lexer::Token::Struct => {
-                    "keyword: `struct` -- struct definition".to_string()
-                }
-                turbo_lexer::Token::TypeKw => {
-                    "keyword: `type` -- type alias".to_string()
-                }
-                turbo_lexer::Token::Impl => {
-                    "keyword: `impl` -- implementation block".to_string()
-                }
-                turbo_lexer::Token::Trait => {
-                    "keyword: `trait` -- trait definition".to_string()
-                }
-                turbo_lexer::Token::Pub => {
-                    "keyword: `pub` -- public visibility".to_string()
-                }
-                turbo_lexer::Token::Import => {
-                    "keyword: `import` -- import declaration".to_string()
-                }
-                turbo_lexer::Token::From => {
-                    "keyword: `from` -- import source".to_string()
-                }
+                turbo_lexer::Token::Struct => "keyword: `struct` -- struct definition".to_string(),
+                turbo_lexer::Token::TypeKw => "keyword: `type` -- type alias".to_string(),
+                turbo_lexer::Token::Impl => "keyword: `impl` -- implementation block".to_string(),
+                turbo_lexer::Token::Trait => "keyword: `trait` -- trait definition".to_string(),
+                turbo_lexer::Token::Pub => "keyword: `pub` -- public visibility".to_string(),
+                turbo_lexer::Token::Import => "keyword: `import` -- import declaration".to_string(),
+                turbo_lexer::Token::From => "keyword: `from` -- import source".to_string(),
                 turbo_lexer::Token::Async => {
                     "keyword: `async` -- asynchronous function".to_string()
                 }
-                turbo_lexer::Token::Await => {
-                    "keyword: `await` -- await a future".to_string()
-                }
+                turbo_lexer::Token::Await => "keyword: `await` -- await a future".to_string(),
                 turbo_lexer::Token::Spawn => {
                     "keyword: `spawn` -- spawn concurrent task".to_string()
                 }
-                turbo_lexer::Token::Defer => {
-                    "keyword: `defer` -- deferred execution".to_string()
-                }
-                turbo_lexer::Token::Agent => {
-                    "keyword: `agent` -- AI agent definition".to_string()
-                }
+                turbo_lexer::Token::Defer => "keyword: `defer` -- deferred execution".to_string(),
+                turbo_lexer::Token::Agent => "keyword: `agent` -- AI agent definition".to_string(),
                 turbo_lexer::Token::Tool => {
                     "keyword: `tool` -- tool function for agents".to_string()
                 }
                 turbo_lexer::Token::True => "boolean literal: `true`".to_string(),
                 turbo_lexer::Token::False => "boolean literal: `false`".to_string(),
                 turbo_lexer::Token::None => "keyword: `none` -- absent optional value".to_string(),
-                turbo_lexer::Token::Some => {
-                    "keyword: `some` -- present optional value".to_string()
-                }
-                turbo_lexer::Token::Ok => {
-                    "keyword: `ok` -- success result constructor".to_string()
-                }
-                turbo_lexer::Token::Err => {
-                    "keyword: `err` -- error result constructor".to_string()
-                }
+                turbo_lexer::Token::Some => "keyword: `some` -- present optional value".to_string(),
+                turbo_lexer::Token::Ok => "keyword: `ok` -- success result constructor".to_string(),
+                turbo_lexer::Token::Err => "keyword: `err` -- error result constructor".to_string(),
                 other => format!("token: `{other}`"),
             };
 
@@ -559,7 +583,13 @@ mod tests {
     #[test]
     fn test_compute_hover_keyword() {
         let src = "fn main() {}";
-        let hover = compute_hover(src, Position { line: 0, character: 0 });
+        let hover = compute_hover(
+            src,
+            Position {
+                line: 0,
+                character: 0,
+            },
+        );
         assert!(hover.is_some());
         let content = match hover.unwrap().contents {
             HoverContents::Scalar(MarkedString::String(s)) => s,
@@ -572,7 +602,13 @@ mod tests {
     fn test_compute_hover_identifier() {
         let src = "fn main() {}";
         // "main" starts at character 3
-        let hover = compute_hover(src, Position { line: 0, character: 3 });
+        let hover = compute_hover(
+            src,
+            Position {
+                line: 0,
+                character: 3,
+            },
+        );
         assert!(hover.is_some());
         let content = match hover.unwrap().contents {
             HoverContents::Scalar(MarkedString::String(s)) => s,
@@ -589,7 +625,13 @@ mod tests {
     fn test_compute_hover_integer() {
         let src = "let x = 42";
         // "42" starts at character 8
-        let hover = compute_hover(src, Position { line: 0, character: 8 });
+        let hover = compute_hover(
+            src,
+            Position {
+                line: 0,
+                character: 8,
+            },
+        );
         assert!(hover.is_some());
         let content = match hover.unwrap().contents {
             HoverContents::Scalar(MarkedString::String(s)) => s,
@@ -602,7 +644,13 @@ mod tests {
     fn test_compute_hover_no_token() {
         let src = "fn main() {}";
         // Position way past end of line
-        let hover = compute_hover(src, Position { line: 5, character: 0 });
+        let hover = compute_hover(
+            src,
+            Position {
+                line: 5,
+                character: 0,
+            },
+        );
         assert!(hover.is_none());
     }
 
@@ -611,7 +659,14 @@ mod tests {
         let src = "fn greet() {\n    print(\"hi\")\n}\n\nfn main() {\n    greet()\n}";
         let uri = "file:///test.tb".parse::<Uri>().unwrap();
         // "greet" in the call on line 5 (0-indexed), character 4
-        let loc = compute_definition(src, Position { line: 5, character: 4 }, &uri);
+        let loc = compute_definition(
+            src,
+            Position {
+                line: 5,
+                character: 4,
+            },
+            &uri,
+        );
         assert!(loc.is_some(), "should find definition of greet");
         let loc = loc.unwrap();
         // The definition should point to line 0 (where `fn greet` is)
@@ -623,7 +678,14 @@ mod tests {
         let src = "struct Point {\n    x: i32,\n    y: i32,\n}\n\nfn main() {\n    let p = Point { x: 1, y: 2 }\n}";
         let uri = "file:///test.tb".parse::<Uri>().unwrap();
         // "Point" in the struct literal on line 6
-        let loc = compute_definition(src, Position { line: 6, character: 12 }, &uri);
+        let loc = compute_definition(
+            src,
+            Position {
+                line: 6,
+                character: 12,
+            },
+            &uri,
+        );
         assert!(loc.is_some(), "should find definition of Point");
         let loc = loc.unwrap();
         assert_eq!(loc.range.start.line, 0);
@@ -631,18 +693,27 @@ mod tests {
 
     #[test]
     fn test_format_type_named() {
-        assert_eq!(format_type(&turbo_ast::TypeExpr::Named("i32".to_string())), "i32");
+        assert_eq!(
+            format_type(&turbo_ast::TypeExpr::Named("i32".to_string())),
+            "i32"
+        );
     }
 
     #[test]
     fn test_format_type_optional() {
         let inner = turbo_ast::Spanned::new(turbo_ast::TypeExpr::Named("str".to_string()), 0..3);
-        assert_eq!(format_type(&turbo_ast::TypeExpr::Optional(Box::new(inner))), "str?");
+        assert_eq!(
+            format_type(&turbo_ast::TypeExpr::Optional(Box::new(inner))),
+            "str?"
+        );
     }
 
     #[test]
     fn test_format_type_array() {
         let inner = turbo_ast::Spanned::new(turbo_ast::TypeExpr::Named("i32".to_string()), 0..3);
-        assert_eq!(format_type(&turbo_ast::TypeExpr::Array(Box::new(inner))), "[i32]");
+        assert_eq!(
+            format_type(&turbo_ast::TypeExpr::Array(Box::new(inner))),
+            "[i32]"
+        );
     }
 }

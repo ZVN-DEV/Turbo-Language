@@ -3,7 +3,9 @@ use std::io::{self, BufRead, Write};
 pub fn run_repl() {
     let version = env!("CARGO_PKG_VERSION");
     println!("\x1b[1;36mTurbo v{version}\x1b[0m \x1b[90m\u{2014} Interactive Mode\x1b[0m");
-    println!("\x1b[90mType expressions or statements. Use :help for commands, :quit to exit.\x1b[0m");
+    println!(
+        "\x1b[90mType expressions or statements. Use :help for commands, :quit to exit.\x1b[0m"
+    );
     println!();
 
     let stdin = io::stdin();
@@ -73,8 +75,7 @@ pub fn run_repl() {
                     break;
                 }
                 let more = more.trim_end();
-                brace_count +=
-                    more.matches('{').count() as i32 - more.matches('}').count() as i32;
+                brace_count += more.matches('{').count() as i32 - more.matches('}').count() as i32;
                 full.push('\n');
                 full.push_str(more);
             }

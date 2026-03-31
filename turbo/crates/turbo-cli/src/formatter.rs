@@ -135,11 +135,9 @@ fn net_brace_change(line: &str, skip_leading_close: bool) -> i32 {
             continue;
         }
         // Check for line comment
-        if c == '/' {
-            if chars.peek() == Some(&'/') {
-                in_line_comment = true;
-                continue;
-            }
+        if c == '/' && chars.peek() == Some(&'/') {
+            in_line_comment = true;
+            continue;
         }
         if c == '{' {
             net += 1;
@@ -175,10 +173,8 @@ fn normalize_top_level_spacing(lines: &[String]) -> Vec<String> {
         }
 
         // Collapse multiple consecutive blank lines into one
-        if stripped.is_empty() {
-            if result.last().map(|l| l.is_empty()).unwrap_or(false) {
-                continue; // skip duplicate blank line
-            }
+        if stripped.is_empty() && result.last().map(|l| l.is_empty()).unwrap_or(false) {
+            continue; // skip duplicate blank line
         }
 
         result.push(line.clone());

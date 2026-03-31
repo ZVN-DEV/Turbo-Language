@@ -729,6 +729,9 @@ dependencies = [
  "cranelift-object",
  "target-lexicon",
  "turbo-ast",
+ "turbo-lexer",
+ "turbo-parser",
+ "turbo-sema",
 ]
 
 [[package]]

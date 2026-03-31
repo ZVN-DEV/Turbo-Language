@@ -65,7 +65,9 @@ impl std::fmt::Display for Ty {
             Ty::Fn(params, ret) => {
                 write!(f, "fn(")?;
                 for (i, p) in params.iter().enumerate() {
-                    if i > 0 { write!(f, ", ")?; }
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
                     write!(f, "{}", p)?;
                 }
                 write!(f, ") -> {}", ret)
@@ -96,7 +98,6 @@ impl Ty {
     fn is_error(&self) -> bool {
         matches!(self, Ty::Error)
     }
-
 }
 
 /// Check if two types are compatible (allowing partial Result types where Error = unknown).
@@ -119,11 +120,20 @@ fn types_compatible(expected: &Ty, actual: &Ty) -> bool {
     }
 }
 
-fn resolve_type_expr(te: &TypeExpr, structs: Option<&HashMap<String, StructInfo>>, enums: Option<&HashMap<String, EnumInfo>>) -> Option<Ty> {
+fn resolve_type_expr(
+    te: &TypeExpr,
+    structs: Option<&HashMap<String, StructInfo>>,
+    enums: Option<&HashMap<String, EnumInfo>>,
+) -> Option<Ty> {
     resolve_type_expr_with_params(te, structs, enums, &[])
 }
 
-fn resolve_type_expr_with_params(te: &TypeExpr, structs: Option<&HashMap<String, StructInfo>>, enums: Option<&HashMap<String, EnumInfo>>, type_params: &[String]) -> Option<Ty> {
+fn resolve_type_expr_with_params(
+    te: &TypeExpr,
+    structs: Option<&HashMap<String, StructInfo>>,
+    enums: Option<&HashMap<String, EnumInfo>>,
+    type_params: &[String],
+) -> Option<Ty> {
     match te {
         TypeExpr::Named(name) => {
             // Check if name is a type parameter first
@@ -131,31 +141,31 @@ fn resolve_type_expr_with_params(te: &TypeExpr, structs: Option<&HashMap<String,
                 return Some(Ty::TypeParam(name.clone()));
             }
             match name.as_str() {
-            "i32" => Some(Ty::I32),
-            "i64" => Some(Ty::I64),
-            "u32" => Some(Ty::U32),
-            "u64" => Some(Ty::U64),
-            "f32" => Some(Ty::F32),
-            "f64" => Some(Ty::F64),
-            "bool" => Some(Ty::Bool),
-            "str" => Some(Ty::Str),
-            _ => {
-                // Check if it's a struct type
-                if let Some(s) = structs {
-                    if s.contains_key(name.as_str()) {
-                        return Some(Ty::Struct(name.clone()));
+                "i32" => Some(Ty::I32),
+                "i64" => Some(Ty::I64),
+                "u32" => Some(Ty::U32),
+                "u64" => Some(Ty::U64),
+                "f32" => Some(Ty::F32),
+                "f64" => Some(Ty::F64),
+                "bool" => Some(Ty::Bool),
+                "str" => Some(Ty::Str),
+                _ => {
+                    // Check if it's a struct type
+                    if let Some(s) = structs {
+                        if s.contains_key(name.as_str()) {
+                            return Some(Ty::Struct(name.clone()));
+                        }
                     }
-                }
-                // Check if it's an enum type
-                if let Some(e) = enums {
-                    if e.contains_key(name.as_str()) {
-                        return Some(Ty::Enum(name.clone()));
+                    // Check if it's an enum type
+                    if let Some(e) = enums {
+                        if e.contains_key(name.as_str()) {
+                            return Some(Ty::Enum(name.clone()));
+                        }
                     }
+                    None
                 }
-                None
             }
-            }
-        },
+        }
         TypeExpr::Unit => Some(Ty::Unit),
         TypeExpr::Array(inner) => {
             resolve_type_expr(&inner.node, structs, enums).map(|t| Ty::Array(Box::new(t)))
@@ -182,7 +192,8 @@ fn resolve_type_expr_with_params(te: &TypeExpr, structs: Option<&HashMap<String,
         TypeExpr::Future(inner) => {
             resolve_type_expr(&inner.node, structs, enums).map(|t| Ty::Future(Box::new(t)))
         }
-        #[allow(unreachable_patterns)] _ => None,
+        #[allow(unreachable_patterns)]
+        _ => None,
     }
 }
 
@@ -254,7 +265,10 @@ impl EnumInfo {
 
     /// Get the field types for a variant
     fn variant_fields(&self, name: &str) -> Option<&Vec<Ty>> {
-        self.variants.iter().find(|(n, _)| n == name).map(|(_, fields)| fields)
+        self.variants
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, fields)| fields)
     }
 }
 
@@ -308,14 +322,17 @@ impl Checker {
     fn new() -> Self {
         // Pre-register built-in traits
         let mut traits = HashMap::new();
-        traits.insert("Display".to_string(), TraitInfo {
-            methods: vec![TraitMethodInfo {
-                name: "to_string".to_string(),
-                params: vec![("self".to_string(), Ty::Error)], // self type filled at impl
-                ret: Ty::Str,
-                has_default: false,
-            }],
-        });
+        traits.insert(
+            "Display".to_string(),
+            TraitInfo {
+                methods: vec![TraitMethodInfo {
+                    name: "to_string".to_string(),
+                    params: vec![("self".to_string(), Ty::Error)], // self type filled at impl
+                    ret: Ty::Str,
+                    has_default: false,
+                }],
+            },
+        );
 
         Self {
             errors: Vec::new(),
@@ -343,7 +360,9 @@ impl Checker {
     // === Scope management ===
 
     fn push_scope(&mut self) {
-        self.scopes.push(Scope { vars: HashMap::new() });
+        self.scopes.push(Scope {
+            vars: HashMap::new(),
+        });
     }
 
     fn pop_scope(&mut self) {
@@ -369,22 +388,67 @@ impl Checker {
     // === Check module ===
 
     fn is_builtin_function(name: &str) -> bool {
-        matches!(name, "print" | "panic" | "assert" | "assert_eq" | "assert_ne" | "len" | "abs" | "min" | "max" | "to_str"
-            | "map" | "filter" | "reduce"
-            | "split" | "trim" | "upper" | "lower" | "starts_with" | "ends_with"
-            | "replace" | "char_at" | "contains" | "index_of" | "join" | "repeat"
-            | "read_line" | "read_file" | "write_file"
-            | "pow" | "sqrt"
-            | "sleep"
-            | "http_get" | "http_post" | "json_get" | "json_stringify"
-            | "http_server" | "route" | "http_listen" | "respond" | "request_body"
-            | "channel" | "send" | "recv"
-            | "mutex" | "mutex_get" | "mutex_set"
-            | "clone"
-            | "hashmap" | "hashmap_set" | "hashmap_get" | "hashmap_has"
-            | "hashmap_len" | "hashmap_keys" | "hashmap_remove"
-            | "to_json" | "to_json_array"
-            | "deref" | "store")
+        matches!(
+            name,
+            "print"
+                | "panic"
+                | "assert"
+                | "assert_eq"
+                | "assert_ne"
+                | "len"
+                | "abs"
+                | "min"
+                | "max"
+                | "to_str"
+                | "map"
+                | "filter"
+                | "reduce"
+                | "split"
+                | "trim"
+                | "upper"
+                | "lower"
+                | "starts_with"
+                | "ends_with"
+                | "replace"
+                | "char_at"
+                | "contains"
+                | "index_of"
+                | "join"
+                | "repeat"
+                | "read_line"
+                | "read_file"
+                | "write_file"
+                | "pow"
+                | "sqrt"
+                | "sleep"
+                | "http_get"
+                | "http_post"
+                | "json_get"
+                | "json_stringify"
+                | "http_server"
+                | "route"
+                | "http_listen"
+                | "respond"
+                | "request_body"
+                | "channel"
+                | "send"
+                | "recv"
+                | "mutex"
+                | "mutex_get"
+                | "mutex_set"
+                | "clone"
+                | "hashmap"
+                | "hashmap_set"
+                | "hashmap_get"
+                | "hashmap_has"
+                | "hashmap_len"
+                | "hashmap_keys"
+                | "hashmap_remove"
+                | "to_json"
+                | "to_json_array"
+                | "deref"
+                | "store"
+        )
     }
 
     /// Walk a chain of FieldAccess / Index expressions to find the root variable name.
@@ -400,7 +464,9 @@ impl Checker {
     fn check_module(&mut self, module: &Module) {
         // Pass 0: register all struct definitions
         for item in &module.items {
-            let Item::Struct(s) = &item.node else { continue };
+            let Item::Struct(s) = &item.node else {
+                continue;
+            };
             if self.structs.contains_key(&s.name) {
                 self.error(
                     format!("struct `{}` is already defined", s.name),
@@ -411,7 +477,12 @@ impl Checker {
             let tp_names: Vec<String> = s.type_param_names();
             let mut fields = Vec::new();
             for field in &s.fields {
-                match resolve_type_expr_with_params(&field.ty.node, Some(&self.structs), Some(&self.enums), &tp_names) {
+                match resolve_type_expr_with_params(
+                    &field.ty.node,
+                    Some(&self.structs),
+                    Some(&self.enums),
+                    &tp_names,
+                ) {
                     Some(ty) => fields.push((field.name.clone(), ty)),
                     None => {
                         if let TypeExpr::Named(name) = &field.ty.node {
@@ -436,7 +507,14 @@ impl Checker {
                     }
                 }
             }
-            self.structs.insert(s.name.clone(), StructInfo { fields, type_params: tp_names, derives: s.derives.clone() });
+            self.structs.insert(
+                s.name.clone(),
+                StructInfo {
+                    fields,
+                    type_params: tp_names,
+                    derives: s.derives.clone(),
+                },
+            );
         }
 
         // Pass 0b: register all enum definitions
@@ -450,13 +528,32 @@ impl Checker {
                 continue;
             }
             let tp_names: Vec<String> = e.type_param_names();
-            let variants: Vec<(String, Vec<Ty>)> = e.variants.iter().map(|v| {
-                let field_tys: Vec<Ty> = v.fields.iter().filter_map(|f| {
-                    resolve_type_expr_with_params(&f.node, Some(&self.structs), Some(&self.enums), &tp_names)
-                }).collect();
-                (v.name.clone(), field_tys)
-            }).collect();
-            self.enums.insert(e.name.clone(), EnumInfo { variants, type_params: tp_names });
+            let variants: Vec<(String, Vec<Ty>)> = e
+                .variants
+                .iter()
+                .map(|v| {
+                    let field_tys: Vec<Ty> = v
+                        .fields
+                        .iter()
+                        .filter_map(|f| {
+                            resolve_type_expr_with_params(
+                                &f.node,
+                                Some(&self.structs),
+                                Some(&self.enums),
+                                &tp_names,
+                            )
+                        })
+                        .collect();
+                    (v.name.clone(), field_tys)
+                })
+                .collect();
+            self.enums.insert(
+                e.name.clone(),
+                EnumInfo {
+                    variants,
+                    type_params: tp_names,
+                },
+            );
         }
 
         // Pass 0c: register all trait definitions
@@ -476,7 +573,11 @@ impl Checker {
                     if param.name == "self" {
                         params.push(("self".to_string(), Ty::Error));
                     } else {
-                        match resolve_type_expr(&param.ty.node, Some(&self.structs), Some(&self.enums)) {
+                        match resolve_type_expr(
+                            &param.ty.node,
+                            Some(&self.structs),
+                            Some(&self.enums),
+                        ) {
                             Some(ty) => params.push((param.name.clone(), ty)),
                             None => {
                                 self.error(
@@ -489,7 +590,8 @@ impl Checker {
                     }
                 }
                 let ret = if let Some(ret_type) = &method.return_type {
-                    match resolve_type_expr(&ret_type.node, Some(&self.structs), Some(&self.enums)) {
+                    match resolve_type_expr(&ret_type.node, Some(&self.structs), Some(&self.enums))
+                    {
                         Some(ty) => ty,
                         None => {
                             self.error(
@@ -509,12 +611,19 @@ impl Checker {
                     has_default: method.default_body.is_some(),
                 });
             }
-            self.traits.insert(t.name.clone(), TraitInfo { methods: trait_methods });
+            self.traits.insert(
+                t.name.clone(),
+                TraitInfo {
+                    methods: trait_methods,
+                },
+            );
         }
 
         // First pass: register all function signatures
         for item in &module.items {
-            let Item::Function(f) = &item.node else { continue };
+            let Item::Function(f) = &item.node else {
+                continue;
+            };
 
             // Reject shadowing of builtin functions
             if Self::is_builtin_function(&f.name) {
@@ -543,14 +652,16 @@ impl Checker {
 
             let mut params = Vec::new();
             for param in &f.params {
-                match resolve_type_expr_with_params(&param.ty.node, Some(&self.structs), Some(&self.enums), &tp_names) {
+                match resolve_type_expr_with_params(
+                    &param.ty.node,
+                    Some(&self.structs),
+                    Some(&self.enums),
+                    &tp_names,
+                ) {
                     Some(ty) => params.push((param.name.clone(), ty)),
                     None => {
                         if let TypeExpr::Named(name) = &param.ty.node {
-                            self.error(
-                                format!("unknown type `{name}`"),
-                                param.ty.span.clone(),
-                            );
+                            self.error(format!("unknown type `{name}`"), param.ty.span.clone());
                         }
                         params.push((param.name.clone(), Ty::Error));
                     }
@@ -558,7 +669,12 @@ impl Checker {
             }
 
             let ret = if let Some(ret_type) = &f.return_type {
-                match resolve_type_expr_with_params(&ret_type.node, Some(&self.structs), Some(&self.enums), &tp_names) {
+                match resolve_type_expr_with_params(
+                    &ret_type.node,
+                    Some(&self.structs),
+                    Some(&self.enums),
+                    &tp_names,
+                ) {
                     Some(ty) => ty,
                     None => {
                         if let TypeExpr::Named(name) = &ret_type.node {
@@ -574,7 +690,18 @@ impl Checker {
                 Ty::Unit
             };
 
-            self.functions.insert(f.name.clone(), FnSig { type_params: tp_names, type_param_bounds: tp_bounds, params, ret, is_async: f.is_async, is_tool: f.is_tool, is_unsafe: f.is_unsafe });
+            self.functions.insert(
+                f.name.clone(),
+                FnSig {
+                    type_params: tp_names,
+                    type_param_bounds: tp_bounds,
+                    params,
+                    ret,
+                    is_async: f.is_async,
+                    is_tool: f.is_tool,
+                    is_unsafe: f.is_unsafe,
+                },
+            );
 
             // Validate @test functions: must have no parameters and no return type
             if f.is_test {
@@ -595,7 +722,9 @@ impl Checker {
 
         // Pass 1b: register agent declarations
         for item in &module.items {
-            let Item::Agent(agent) = &item.node else { continue };
+            let Item::Agent(agent) = &item.node else {
+                continue;
+            };
             if self.agents.contains_key(&agent.name) {
                 self.error(
                     format!("agent `{}` is already defined", agent.name),
@@ -603,11 +732,14 @@ impl Checker {
                 );
                 continue;
             }
-            self.agents.insert(agent.name.clone(), AgentInfo {
-                model: agent.model.clone(),
-                tools: agent.tools.clone(),
-                system_prompt: agent.system_prompt.clone(),
-            });
+            self.agents.insert(
+                agent.name.clone(),
+                AgentInfo {
+                    model: agent.model.clone(),
+                    tools: agent.tools.clone(),
+                    system_prompt: agent.system_prompt.clone(),
+                },
+            );
         }
 
         // Validate agent tool references point to actual tool functions
@@ -642,7 +774,9 @@ impl Checker {
 
         // Pass 2: register impl block methods
         for item in &module.items {
-            let Item::Impl(imp) = &item.node else { continue };
+            let Item::Impl(imp) = &item.node else {
+                continue;
+            };
 
             if !self.structs.contains_key(&imp.type_name) {
                 self.error(
@@ -660,11 +794,16 @@ impl Checker {
                 let method = &method_spanned.node;
 
                 // Check duplicate via a temporary lookup
-                let already_exists = self.methods.get(&imp.type_name)
-                    .map_or(false, |m| m.contains_key(&method.name));
+                let already_exists = self
+                    .methods
+                    .get(&imp.type_name)
+                    .is_some_and(|m| m.contains_key(&method.name));
                 if already_exists {
                     self.error(
-                        format!("method `{}` is already defined for `{}`", method.name, imp.type_name),
+                        format!(
+                            "method `{}` is already defined for `{}`",
+                            method.name, imp.type_name
+                        ),
                         method_spanned.span.clone(),
                     );
                     continue;
@@ -675,11 +814,18 @@ impl Checker {
                     if param.name == "self" {
                         params.push(("self".to_string(), Ty::Struct(imp.type_name.clone())));
                     } else {
-                        match resolve_type_expr(&param.ty.node, Some(&self.structs), Some(&self.enums)) {
+                        match resolve_type_expr(
+                            &param.ty.node,
+                            Some(&self.structs),
+                            Some(&self.enums),
+                        ) {
                             Some(ty) => params.push((param.name.clone(), ty)),
                             None => {
                                 if let TypeExpr::Named(name) = &param.ty.node {
-                                    self.error(format!("unknown type `{name}`"), param.ty.span.clone());
+                                    self.error(
+                                        format!("unknown type `{name}`"),
+                                        param.ty.span.clone(),
+                                    );
                                 }
                                 params.push((param.name.clone(), Ty::Error));
                             }
@@ -688,11 +834,15 @@ impl Checker {
                 }
 
                 let ret = if let Some(ret_type) = &method.return_type {
-                    match resolve_type_expr(&ret_type.node, Some(&self.structs), Some(&self.enums)) {
+                    match resolve_type_expr(&ret_type.node, Some(&self.structs), Some(&self.enums))
+                    {
                         Some(ty) => ty,
                         None => {
                             if let TypeExpr::Named(name) = &ret_type.node {
-                                self.error(format!("unknown return type `{name}`"), ret_type.span.clone());
+                                self.error(
+                                    format!("unknown return type `{name}`"),
+                                    ret_type.span.clone(),
+                                );
                             }
                             Ty::Error
                         }
@@ -702,7 +852,15 @@ impl Checker {
                 };
 
                 let mangled = format!("{}__{}", imp.type_name, method.name);
-                let sig = FnSig { type_params: Vec::new(), type_param_bounds: HashMap::new(), params, ret, is_async: false, is_tool: false, is_unsafe: false };
+                let sig = FnSig {
+                    type_params: Vec::new(),
+                    type_param_bounds: HashMap::new(),
+                    params,
+                    ret,
+                    is_async: false,
+                    is_tool: false,
+                    is_unsafe: false,
+                };
                 new_methods.push((method.name.clone(), sig, mangled));
             }
 
@@ -738,7 +896,8 @@ impl Checker {
                                     is_tool: false,
                                     is_unsafe: false,
                                 };
-                                let type_methods = self.methods.entry(imp.type_name.clone()).or_default();
+                                let type_methods =
+                                    self.methods.entry(imp.type_name.clone()).or_default();
                                 type_methods.insert(trait_method.name.clone(), sig.clone());
                                 self.functions.insert(mangled, sig);
                             } else {
@@ -754,7 +913,8 @@ impl Checker {
                             // Check return type matches
                             let mangled = format!("{}__{}", imp.type_name, trait_method.name);
                             if let Some(impl_sig) = self.functions.get(&mangled) {
-                                if !trait_method.ret.is_error() && !impl_sig.ret.is_error()
+                                if !trait_method.ret.is_error()
+                                    && !impl_sig.ret.is_error()
                                     && trait_method.ret != impl_sig.ret
                                 {
                                     self.error(
@@ -774,21 +934,22 @@ impl Checker {
                         .or_default()
                         .push(trait_name.clone());
                 } else {
-                    self.error(
-                        format!("undefined trait `{trait_name}`"),
-                        item.span.clone(),
-                    );
+                    self.error(format!("undefined trait `{trait_name}`"), item.span.clone());
                 }
             }
         }
 
         // Auto-register Display trait impl for structs with @derive(Display)
         for item in &module.items {
-            let Item::Struct(s) = &item.node else { continue };
+            let Item::Struct(s) = &item.node else {
+                continue;
+            };
             if s.derives.contains(&"Display".to_string()) {
                 // Only add if not already explicitly implemented
-                let already_impl = self.trait_impls.get(&s.name)
-                    .map_or(false, |impls| impls.contains(&"Display".to_string()));
+                let already_impl = self
+                    .trait_impls
+                    .get(&s.name)
+                    .is_some_and(|impls| impls.contains(&"Display".to_string()));
                 if !already_impl {
                     // Register the to_string method signature
                     let mangled = format!("{}__{}", s.name, "to_string");
@@ -828,19 +989,20 @@ impl Checker {
                 Expr::FloatLit(_) => Ty::F64,
                 Expr::BoolLit(_) => Ty::Bool,
                 Expr::StringLit(_) => Ty::Str,
-                Expr::UnaryOp { op: UnaryOp::Neg, expr } => {
-                    match &expr.node {
-                        Expr::IntLit(_) => Ty::I64,
-                        Expr::FloatLit(_) => Ty::F64,
-                        _ => {
-                            self.error(
-                                format!("constant `{}` must be a literal value", c.name),
-                                c.value.span.clone(),
-                            );
-                            Ty::Error
-                        }
+                Expr::UnaryOp {
+                    op: UnaryOp::Neg,
+                    expr,
+                } => match &expr.node {
+                    Expr::IntLit(_) => Ty::I64,
+                    Expr::FloatLit(_) => Ty::F64,
+                    _ => {
+                        self.error(
+                            format!("constant `{}` must be a literal value", c.name),
+                            c.value.span.clone(),
+                        );
+                        Ty::Error
                     }
-                }
+                },
                 _ => {
                     self.error(
                         format!("constant `{}` must be a literal value", c.name),
@@ -864,7 +1026,9 @@ impl Checker {
 
         // Second pass: check function bodies (skip those not registered, e.g. builtin shadows)
         for item in &module.items {
-            let Item::Function(f) = &item.node else { continue };
+            let Item::Function(f) = &item.node else {
+                continue;
+            };
             if self.functions.contains_key(&f.name) {
                 self.check_function(f);
             }
@@ -872,8 +1036,12 @@ impl Checker {
 
         // Check impl method bodies
         for item in &module.items {
-            let Item::Impl(imp) = &item.node else { continue };
-            if !self.structs.contains_key(&imp.type_name) { continue; }
+            let Item::Impl(imp) = &item.node else {
+                continue;
+            };
+            if !self.structs.contains_key(&imp.type_name) {
+                continue;
+            }
             for method_spanned in &imp.methods {
                 let method = &method_spanned.node;
                 let mangled = format!("{}__{}", imp.type_name, method.name);
@@ -887,9 +1055,7 @@ impl Checker {
     /// Substitute type parameters using a substitution map
     fn substitute_ty(&self, ty: &Ty, subs: &HashMap<String, Ty>) -> Ty {
         match ty {
-            Ty::TypeParam(name) => {
-                subs.get(name).cloned().unwrap_or_else(|| ty.clone())
-            }
+            Ty::TypeParam(name) => subs.get(name).cloned().unwrap_or_else(|| ty.clone()),
             other => other.clone(),
         }
     }
@@ -901,7 +1067,9 @@ impl Checker {
 
     /// Inject module-level constants into the current scope as immutable variables.
     fn inject_constants(&mut self) {
-        let consts: Vec<(String, Ty)> = self.constants.iter()
+        let consts: Vec<(String, Ty)> = self
+            .constants
+            .iter()
             .map(|(n, t)| (n.clone(), t.clone()))
             .collect();
         for (name, ty) in consts {
@@ -932,7 +1100,10 @@ impl Checker {
         for (name, ty) in &sig.params {
             self.define_var(
                 name,
-                VarInfo { ty: ty.clone(), mutable: false },
+                VarInfo {
+                    ty: ty.clone(),
+                    mutable: false,
+                },
                 &(0..0),
             );
         }
@@ -941,7 +1112,11 @@ impl Checker {
         let body_ty = self.check_expr(&f.body);
 
         // Check return type matches
-        if !sig.ret.is_error() && !body_ty.is_error() && sig.ret != Ty::Unit && !types_compatible(&sig.ret, &body_ty) {
+        if !sig.ret.is_error()
+            && !body_ty.is_error()
+            && sig.ret != Ty::Unit
+            && !types_compatible(&sig.ret, &body_ty)
+        {
             self.error(
                 format!(
                     "function `{}` should return `{}` but body returns `{}`",
@@ -966,14 +1141,28 @@ impl Checker {
         self.inject_constants();
 
         for (name, ty) in &sig.params {
-            self.define_var(name, VarInfo { ty: ty.clone(), mutable: false }, &(0..0));
+            self.define_var(
+                name,
+                VarInfo {
+                    ty: ty.clone(),
+                    mutable: false,
+                },
+                &(0..0),
+            );
         }
 
         let body_ty = self.check_expr(&f.body);
 
-        if !sig.ret.is_error() && !body_ty.is_error() && sig.ret != Ty::Unit && !types_compatible(&sig.ret, &body_ty) {
+        if !sig.ret.is_error()
+            && !body_ty.is_error()
+            && sig.ret != Ty::Unit
+            && !types_compatible(&sig.ret, &body_ty)
+        {
             self.error(
-                format!("method `{}` should return `{}` but body returns `{}`", f.name, sig.ret, body_ty),
+                format!(
+                    "method `{}` should return `{}` but body returns `{}`",
+                    f.name, sig.ret, body_ty
+                ),
                 f.body.span.clone(),
             );
         }
@@ -995,10 +1184,7 @@ impl Checker {
                 if let Some(info) = self.lookup_var(name) {
                     info.ty.clone()
                 } else {
-                    self.error(
-                        format!("undefined variable `{name}`"),
-                        expr.span.clone(),
-                    );
+                    self.error(format!("undefined variable `{name}`"), expr.span.clone());
                     Ty::Error
                 }
             }
@@ -1042,7 +1228,12 @@ impl Checker {
                         }
                         lhs
                     }
-                    BinOp::Eq | BinOp::NotEq | BinOp::Less | BinOp::LessEq | BinOp::Greater | BinOp::GreaterEq => {
+                    BinOp::Eq
+                    | BinOp::NotEq
+                    | BinOp::Less
+                    | BinOp::LessEq
+                    | BinOp::Greater
+                    | BinOp::GreaterEq => {
                         if lhs != rhs {
                             self.error(
                                 format!("cannot compare `{lhs}` with `{rhs}`"),
@@ -1064,7 +1255,9 @@ impl Checker {
                                 }
                             } else {
                                 self.error(
-                                    format!("cannot use ordering comparison on struct `{struct_name}`"),
+                                    format!(
+                                        "cannot use ordering comparison on struct `{struct_name}`"
+                                    ),
                                     expr.span.clone(),
                                 );
                                 return Ty::Error;
@@ -1098,10 +1291,7 @@ impl Checker {
                 match op {
                     UnaryOp::Neg => {
                         if !ty.is_numeric() {
-                            self.error(
-                                format!("cannot negate `{ty}`"),
-                                inner.span.clone(),
-                            );
+                            self.error(format!("cannot negate `{ty}`"), inner.span.clone());
                             Ty::Error
                         } else {
                             ty
@@ -1189,7 +1379,11 @@ impl Checker {
                         if args.len() >= 2 {
                             let left_ty = self.check_expr(&args[0]);
                             let right_ty = self.check_expr(&args[1]);
-                            if !left_ty.is_error() && !right_ty.is_error() && !types_compatible(&left_ty, &right_ty) && left_ty != right_ty {
+                            if !left_ty.is_error()
+                                && !right_ty.is_error()
+                                && !types_compatible(&left_ty, &right_ty)
+                                && left_ty != right_ty
+                            {
                                 self.error(
                                     format!("{name}() arguments must be the same type: left is `{left_ty}`, right is `{right_ty}`"),
                                     callee.span.clone(),
@@ -1289,55 +1483,88 @@ impl Checker {
                         let s_ty = self.check_expr(&args[0]);
                         let sep_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
-                            self.error(format!("split() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("split() first argument must be str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         if !sep_ty.is_error() && sep_ty != Ty::Str {
-                            self.error(format!("split() second argument must be str, found `{sep_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!("split() second argument must be str, found `{sep_ty}`"),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Array(Box::new(Ty::Str));
                     }
                     if name == "trim" {
                         if args.len() != 1 {
-                            self.error(format!("trim() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("trim() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let s_ty = self.check_expr(&args[0]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
-                            self.error(format!("trim() expects str, found `{s_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("trim() expects str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
                     if name == "upper" {
                         if args.len() != 1 {
-                            self.error(format!("upper() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("upper() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let s_ty = self.check_expr(&args[0]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
-                            self.error(format!("upper() expects str, found `{s_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("upper() expects str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
                     if name == "lower" {
                         if args.len() != 1 {
-                            self.error(format!("lower() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("lower() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let s_ty = self.check_expr(&args[0]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
-                            self.error(format!("lower() expects str, found `{s_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("lower() expects str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
                     if name == "starts_with" {
                         if args.len() != 2 {
-                            self.error(format!("starts_with() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "starts_with() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let s_ty = self.check_expr(&args[0]);
                         let prefix_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
-                            self.error(format!("starts_with() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("starts_with() first argument must be str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         if !prefix_ty.is_error() && prefix_ty != Ty::Str {
                             self.error(format!("starts_with() second argument must be str, found `{prefix_ty}`"), args[1].span.clone());
@@ -1346,111 +1573,184 @@ impl Checker {
                     }
                     if name == "ends_with" {
                         if args.len() != 2 {
-                            self.error(format!("ends_with() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "ends_with() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let s_ty = self.check_expr(&args[0]);
                         let suffix_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
-                            self.error(format!("ends_with() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("ends_with() first argument must be str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         if !suffix_ty.is_error() && suffix_ty != Ty::Str {
-                            self.error(format!("ends_with() second argument must be str, found `{suffix_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!(
+                                    "ends_with() second argument must be str, found `{suffix_ty}`"
+                                ),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Bool;
                     }
                     if name == "replace" {
                         if args.len() != 3 {
-                            self.error(format!("replace() takes exactly 3 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("replace() takes exactly 3 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let s_ty = self.check_expr(&args[0]);
                         let from_ty = self.check_expr(&args[1]);
                         let to_ty = self.check_expr(&args[2]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
-                            self.error(format!("replace() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("replace() first argument must be str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         if !from_ty.is_error() && from_ty != Ty::Str {
-                            self.error(format!("replace() second argument must be str, found `{from_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!("replace() second argument must be str, found `{from_ty}`"),
+                                args[1].span.clone(),
+                            );
                         }
                         if !to_ty.is_error() && to_ty != Ty::Str {
-                            self.error(format!("replace() third argument must be str, found `{to_ty}`"), args[2].span.clone());
+                            self.error(
+                                format!("replace() third argument must be str, found `{to_ty}`"),
+                                args[2].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
                     if name == "char_at" {
                         if args.len() != 2 {
-                            self.error(format!("char_at() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("char_at() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let s_ty = self.check_expr(&args[0]);
                         let idx_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
-                            self.error(format!("char_at() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("char_at() first argument must be str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         if !idx_ty.is_error() && !idx_ty.is_integer() {
-                            self.error(format!("char_at() second argument must be integer, found `{idx_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!(
+                                    "char_at() second argument must be integer, found `{idx_ty}`"
+                                ),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
 
                     if name == "contains" {
                         if args.len() != 2 {
-                            self.error(format!("contains() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("contains() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let s_ty = self.check_expr(&args[0]);
                         let sub_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
-                            self.error(format!("contains() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("contains() first argument must be str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         if !sub_ty.is_error() && sub_ty != Ty::Str {
-                            self.error(format!("contains() second argument must be str, found `{sub_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!("contains() second argument must be str, found `{sub_ty}`"),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Bool;
                     }
                     if name == "index_of" {
                         if args.len() != 2 {
-                            self.error(format!("index_of() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("index_of() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let s_ty = self.check_expr(&args[0]);
                         let sub_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
-                            self.error(format!("index_of() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("index_of() first argument must be str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         if !sub_ty.is_error() && sub_ty != Ty::Str {
-                            self.error(format!("index_of() second argument must be str, found `{sub_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!("index_of() second argument must be str, found `{sub_ty}`"),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::I64;
                     }
                     if name == "join" {
                         if args.len() != 2 {
-                            self.error(format!("join() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("join() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let arr_ty = self.check_expr(&args[0]);
                         let sep_ty = self.check_expr(&args[1]);
                         if !arr_ty.is_error() && arr_ty != Ty::Array(Box::new(Ty::Str)) {
-                            self.error(format!("join() first argument must be [str], found `{arr_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("join() first argument must be [str], found `{arr_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         if !sep_ty.is_error() && sep_ty != Ty::Str {
-                            self.error(format!("join() second argument must be str, found `{sep_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!("join() second argument must be str, found `{sep_ty}`"),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
                     if name == "repeat" {
                         if args.len() != 2 {
-                            self.error(format!("repeat() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("repeat() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let s_ty = self.check_expr(&args[0]);
                         let n_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
-                            self.error(format!("repeat() first argument must be str, found `{s_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("repeat() first argument must be str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         if !n_ty.is_error() && !n_ty.is_integer() {
-                            self.error(format!("repeat() second argument must be integer, found `{n_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!("repeat() second argument must be integer, found `{n_ty}`"),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
@@ -1458,31 +1758,51 @@ impl Checker {
                     // ── Stdlib I/O functions ─────────────────────────
                     if name == "read_line" {
                         if !args.is_empty() {
-                            self.error(format!("read_line() takes 0 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("read_line() takes 0 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         return Ty::Str;
                     }
                     if name == "read_file" {
                         if args.len() != 1 {
-                            self.error(format!("read_file() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("read_file() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let path_ty = self.check_expr(&args[0]);
                         if !path_ty.is_error() && path_ty != Ty::Str {
-                            self.error(format!("read_file() expects str, found `{path_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("read_file() expects str, found `{path_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
                     if name == "write_file" {
                         if args.len() != 2 {
-                            self.error(format!("write_file() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "write_file() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let path_ty = self.check_expr(&args[0]);
                         let content_ty = self.check_expr(&args[1]);
                         if !path_ty.is_error() && path_ty != Ty::Str {
-                            self.error(format!("write_file() first argument must be str, found `{path_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!(
+                                    "write_file() first argument must be str, found `{path_ty}`"
+                                ),
+                                args[0].span.clone(),
+                            );
                         }
                         if !content_ty.is_error() && content_ty != Ty::Str {
                             self.error(format!("write_file() second argument must be str, found `{content_ty}`"), args[1].span.clone());
@@ -1493,27 +1813,42 @@ impl Checker {
                     // ── Stdlib math functions ────────────────────────
                     if name == "pow" {
                         if args.len() != 2 {
-                            self.error(format!("pow() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("pow() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let base_ty = self.check_expr(&args[0]);
                         let exp_ty = self.check_expr(&args[1]);
                         if !base_ty.is_error() && !base_ty.is_integer() {
-                            self.error(format!("pow() first argument must be integer, found `{base_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("pow() first argument must be integer, found `{base_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         if !exp_ty.is_error() && !exp_ty.is_integer() {
-                            self.error(format!("pow() second argument must be integer, found `{exp_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!("pow() second argument must be integer, found `{exp_ty}`"),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::I64;
                     }
                     if name == "sqrt" {
                         if args.len() != 1 {
-                            self.error(format!("sqrt() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("sqrt() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let x_ty = self.check_expr(&args[0]);
                         if !x_ty.is_error() && x_ty != Ty::F64 && x_ty != Ty::F32 {
-                            self.error(format!("sqrt() expects float, found `{x_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("sqrt() expects float, found `{x_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::F64;
                     }
@@ -1521,12 +1856,18 @@ impl Checker {
                     // sleep(ms: i64) -> () — sleep the current thread
                     if name == "sleep" {
                         if args.len() != 1 {
-                            self.error(format!("sleep() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("sleep() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let ms_ty = self.check_expr(&args[0]);
                         if !ms_ty.is_error() && !ms_ty.is_integer() {
-                            self.error(format!("sleep() expects integer (milliseconds), found `{ms_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("sleep() expects integer (milliseconds), found `{ms_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::Unit;
                     }
@@ -1535,28 +1876,48 @@ impl Checker {
                     // http_get(url: str) -> str
                     if name == "http_get" {
                         if args.len() != 1 {
-                            self.error(format!("http_get() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("http_get() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let url_ty = self.check_expr(&args[0]);
                         if !url_ty.is_error() && url_ty != Ty::Str {
-                            self.error(format!("http_get() expects str, found `{url_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("http_get() expects str, found `{url_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
                     // http_post(url: str, body: str) -> str
                     if name == "http_post" {
                         if args.len() != 2 {
-                            self.error(format!("http_post() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "http_post() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let url_ty = self.check_expr(&args[0]);
                         let body_ty = self.check_expr(&args[1]);
                         if !url_ty.is_error() && url_ty != Ty::Str {
-                            self.error(format!("http_post() first argument must be str, found `{url_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("http_post() first argument must be str, found `{url_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         if !body_ty.is_error() && body_ty != Ty::Str {
-                            self.error(format!("http_post() second argument must be str, found `{body_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!(
+                                    "http_post() second argument must be str, found `{body_ty}`"
+                                ),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
@@ -1565,19 +1926,31 @@ impl Checker {
                     // http_server(port: i64) -> i64
                     if name == "http_server" {
                         if args.len() != 1 {
-                            self.error(format!("http_server() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "http_server() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let port_ty = self.check_expr(&args[0]);
                         if !port_ty.is_error() && !port_ty.is_integer() {
-                            self.error(format!("http_server() expects integer port, found `{port_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("http_server() expects integer port, found `{port_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::I64;
                     }
                     // route(server: i64, method: str, path: str, handler: fn(str) -> str)
                     if name == "route" {
                         if args.len() != 4 {
-                            self.error(format!("route() takes exactly 4 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("route() takes exactly 4 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let server_ty = self.check_expr(&args[0]);
@@ -1593,17 +1966,34 @@ impl Checker {
                             self.error(format!("route() second argument must be str (HTTP method), found `{method_ty}`"), args[1].span.clone());
                         }
                         if !path_ty.is_error() && path_ty != Ty::Str {
-                            self.error(format!("route() third argument must be str (path), found `{path_ty}`"), args[2].span.clone());
+                            self.error(
+                                format!(
+                                    "route() third argument must be str (path), found `{path_ty}`"
+                                ),
+                                args[2].span.clone(),
+                            );
                         }
                         match &handler_ty {
                             Ty::Fn(params, ret) => {
                                 if params.len() != 1 {
                                     self.error(format!("route() handler must take 1 parameter (request), takes {}", params.len()), args[3].span.clone());
                                 } else if !params[0].is_error() && params[0] != Ty::Str {
-                                    self.error(format!("route() handler parameter must be str, found `{}`", params[0]), args[3].span.clone());
+                                    self.error(
+                                        format!(
+                                            "route() handler parameter must be str, found `{}`",
+                                            params[0]
+                                        ),
+                                        args[3].span.clone(),
+                                    );
                                 }
                                 if !ret.is_error() && **ret != Ty::Str {
-                                    self.error(format!("route() handler must return str, returns `{}`", ret), args[3].span.clone());
+                                    self.error(
+                                        format!(
+                                            "route() handler must return str, returns `{}`",
+                                            ret
+                                        ),
+                                        args[3].span.clone(),
+                                    );
                                 }
                             }
                             _ if handler_ty.is_error() => {}
@@ -1616,19 +2006,33 @@ impl Checker {
                     // http_listen(server: i64) -> ()
                     if name == "http_listen" {
                         if args.len() != 1 {
-                            self.error(format!("http_listen() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "http_listen() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let server_ty = self.check_expr(&args[0]);
                         if !server_ty.is_error() && !server_ty.is_integer() {
-                            self.error(format!("http_listen() expects server id (i64), found `{server_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!(
+                                    "http_listen() expects server id (i64), found `{server_ty}`"
+                                ),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::Unit;
                     }
                     // respond(status: i64, body: str) -> str
                     if name == "respond" {
                         if args.len() != 2 {
-                            self.error(format!("respond() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("respond() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let status_ty = self.check_expr(&args[0]);
@@ -1637,19 +2041,31 @@ impl Checker {
                             self.error(format!("respond() first argument must be integer status code, found `{status_ty}`"), args[0].span.clone());
                         }
                         if !body_ty.is_error() && body_ty != Ty::Str {
-                            self.error(format!("respond() second argument must be str, found `{body_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!("respond() second argument must be str, found `{body_ty}`"),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
                     // request_body(req: str) -> str
                     if name == "request_body" {
                         if args.len() != 1 {
-                            self.error(format!("request_body() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "request_body() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let req_ty = self.check_expr(&args[0]);
                         if !req_ty.is_error() && req_ty != Ty::Str {
-                            self.error(format!("request_body() expects str, found `{req_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("request_body() expects str, found `{req_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
@@ -1658,29 +2074,49 @@ impl Checker {
                     // json_get(json: str, key: str) -> str
                     if name == "json_get" {
                         if args.len() != 2 {
-                            self.error(format!("json_get() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("json_get() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let json_ty = self.check_expr(&args[0]);
                         let key_ty = self.check_expr(&args[1]);
                         if !json_ty.is_error() && json_ty != Ty::Str {
-                            self.error(format!("json_get() first argument must be str, found `{json_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("json_get() first argument must be str, found `{json_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
-                            self.error(format!("json_get() second argument must be str, found `{key_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!("json_get() second argument must be str, found `{key_ty}`"),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
                     // json_stringify(key: str, value: str) -> str
                     if name == "json_stringify" {
                         if args.len() != 2 {
-                            self.error(format!("json_stringify() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "json_stringify() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let key_ty = self.check_expr(&args[0]);
                         let value_ty = self.check_expr(&args[1]);
                         if !key_ty.is_error() && key_ty != Ty::Str {
-                            self.error(format!("json_stringify() first argument must be str, found `{key_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!(
+                                    "json_stringify() first argument must be str, found `{key_ty}`"
+                                ),
+                                args[0].span.clone(),
+                            );
                         }
                         if !value_ty.is_error() && value_ty != Ty::Str {
                             self.error(format!("json_stringify() second argument must be str, found `{value_ty}`"), args[1].span.clone());
@@ -1690,7 +2126,10 @@ impl Checker {
                     // to_json(val: any) -> str
                     if name == "to_json" {
                         if args.len() != 1 {
-                            self.error(format!("to_json() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("to_json() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let _val_ty = self.check_expr(&args[0]);
@@ -1699,12 +2138,23 @@ impl Checker {
                     // to_json_array(arr: [any]) -> str
                     if name == "to_json_array" {
                         if args.len() != 1 {
-                            self.error(format!("to_json_array() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "to_json_array() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let val_ty = self.check_expr(&args[0]);
                         if !val_ty.is_error() && !matches!(val_ty, Ty::Array(_)) {
-                            self.error(format!("to_json_array() argument must be an array, found `{val_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!(
+                                    "to_json_array() argument must be an array, found `{val_ty}`"
+                                ),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
@@ -1713,7 +2163,10 @@ impl Checker {
                     // channel() -> i64 (channel pointer)
                     if name == "channel" {
                         if !args.is_empty() {
-                            self.error(format!("channel() takes no arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("channel() takes no arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         return Ty::I64;
@@ -1721,7 +2174,10 @@ impl Checker {
                     // send(ch: i64, value: i64) -> ()
                     if name == "send" {
                         if args.len() != 2 {
-                            self.error(format!("send() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("send() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let ch_ty = self.check_expr(&args[0]);
@@ -1730,19 +2186,30 @@ impl Checker {
                             self.error(format!("send() first argument must be a channel (integer), found `{ch_ty}`"), args[0].span.clone());
                         }
                         if !val_ty.is_error() && !val_ty.is_integer() {
-                            self.error(format!("send() second argument must be integer, found `{val_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!("send() second argument must be integer, found `{val_ty}`"),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Unit;
                     }
                     // recv(ch: i64) -> i64
                     if name == "recv" {
                         if args.len() != 1 {
-                            self.error(format!("recv() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("recv() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let ch_ty = self.check_expr(&args[0]);
                         if !ch_ty.is_error() && !ch_ty.is_integer() {
-                            self.error(format!("recv() argument must be a channel (integer), found `{ch_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!(
+                                    "recv() argument must be a channel (integer), found `{ch_ty}`"
+                                ),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::I64;
                     }
@@ -1751,19 +2218,28 @@ impl Checker {
                     // mutex(value: i64) -> i64 (mutex pointer)
                     if name == "mutex" {
                         if args.len() != 1 {
-                            self.error(format!("mutex() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("mutex() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let val_ty = self.check_expr(&args[0]);
                         if !val_ty.is_error() && !val_ty.is_integer() {
-                            self.error(format!("mutex() argument must be integer, found `{val_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("mutex() argument must be integer, found `{val_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::I64;
                     }
                     // mutex_get(m: i64) -> i64
                     if name == "mutex_get" {
                         if args.len() != 1 {
-                            self.error(format!("mutex_get() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("mutex_get() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let m_ty = self.check_expr(&args[0]);
@@ -1775,7 +2251,13 @@ impl Checker {
                     // mutex_set(m: i64, value: i64) -> ()
                     if name == "mutex_set" {
                         if args.len() != 2 {
-                            self.error(format!("mutex_set() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "mutex_set() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let m_ty = self.check_expr(&args[0]);
@@ -1784,7 +2266,12 @@ impl Checker {
                             self.error(format!("mutex_set() first argument must be a mutex (integer), found `{m_ty}`"), args[0].span.clone());
                         }
                         if !val_ty.is_error() && !val_ty.is_integer() {
-                            self.error(format!("mutex_set() second argument must be integer, found `{val_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!(
+                                    "mutex_set() second argument must be integer, found `{val_ty}`"
+                                ),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Unit;
                     }
@@ -1823,7 +2310,10 @@ impl Checker {
                     // hashmap() -> i64 (opaque pointer)
                     if name == "hashmap" {
                         if !args.is_empty() {
-                            self.error(format!("hashmap() takes no arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("hashmap() takes no arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         return Ty::I64;
@@ -1831,7 +2321,13 @@ impl Checker {
                     // hashmap_set(map: i64, key: str, value: str) -> ()
                     if name == "hashmap_set" {
                         if args.len() != 3 {
-                            self.error(format!("hashmap_set() takes exactly 3 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "hashmap_set() takes exactly 3 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let map_ty = self.check_expr(&args[0]);
@@ -1841,17 +2337,33 @@ impl Checker {
                             self.error(format!("hashmap_set() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
-                            self.error(format!("hashmap_set() second argument must be str, found `{key_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!(
+                                    "hashmap_set() second argument must be str, found `{key_ty}`"
+                                ),
+                                args[1].span.clone(),
+                            );
                         }
                         if !val_ty.is_error() && val_ty != Ty::Str {
-                            self.error(format!("hashmap_set() third argument must be str, found `{val_ty}`"), args[2].span.clone());
+                            self.error(
+                                format!(
+                                    "hashmap_set() third argument must be str, found `{val_ty}`"
+                                ),
+                                args[2].span.clone(),
+                            );
                         }
                         return Ty::Unit;
                     }
                     // hashmap_get(map: i64, key: str) -> str
                     if name == "hashmap_get" {
                         if args.len() != 2 {
-                            self.error(format!("hashmap_get() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "hashmap_get() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let map_ty = self.check_expr(&args[0]);
@@ -1860,14 +2372,25 @@ impl Checker {
                             self.error(format!("hashmap_get() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
-                            self.error(format!("hashmap_get() second argument must be str, found `{key_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!(
+                                    "hashmap_get() second argument must be str, found `{key_ty}`"
+                                ),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
                     // hashmap_has(map: i64, key: str) -> bool
                     if name == "hashmap_has" {
                         if args.len() != 2 {
-                            self.error(format!("hashmap_has() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "hashmap_has() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let map_ty = self.check_expr(&args[0]);
@@ -1876,14 +2399,25 @@ impl Checker {
                             self.error(format!("hashmap_has() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
-                            self.error(format!("hashmap_has() second argument must be str, found `{key_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!(
+                                    "hashmap_has() second argument must be str, found `{key_ty}`"
+                                ),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Bool;
                     }
                     // hashmap_len(map: i64) -> i64
                     if name == "hashmap_len" {
                         if args.len() != 1 {
-                            self.error(format!("hashmap_len() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "hashmap_len() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let map_ty = self.check_expr(&args[0]);
@@ -1895,7 +2429,13 @@ impl Checker {
                     // hashmap_keys(map: i64) -> [str]
                     if name == "hashmap_keys" {
                         if args.len() != 1 {
-                            self.error(format!("hashmap_keys() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "hashmap_keys() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let map_ty = self.check_expr(&args[0]);
@@ -1907,7 +2447,13 @@ impl Checker {
                     // hashmap_remove(map: i64, key: str) -> ()
                     if name == "hashmap_remove" {
                         if args.len() != 2 {
-                            self.error(format!("hashmap_remove() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!(
+                                    "hashmap_remove() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let map_ty = self.check_expr(&args[0]);
@@ -1926,17 +2472,24 @@ impl Checker {
                     if name == "deref" {
                         if !self.in_unsafe_context {
                             self.error(
-                                "`deref()` can only be called inside an `@unsafe` function".to_string(),
+                                "`deref()` can only be called inside an `@unsafe` function"
+                                    .to_string(),
                                 callee.span.clone(),
                             );
                         }
                         if args.len() != 1 {
-                            self.error(format!("deref() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("deref() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let addr_ty = self.check_expr(&args[0]);
                         if !addr_ty.is_error() && !addr_ty.is_integer() {
-                            self.error(format!("deref() argument must be i64, found `{addr_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("deref() argument must be i64, found `{addr_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::I64;
                     }
@@ -1944,21 +2497,31 @@ impl Checker {
                     if name == "store" {
                         if !self.in_unsafe_context {
                             self.error(
-                                "`store()` can only be called inside an `@unsafe` function".to_string(),
+                                "`store()` can only be called inside an `@unsafe` function"
+                                    .to_string(),
                                 callee.span.clone(),
                             );
                         }
                         if args.len() != 2 {
-                            self.error(format!("store() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            self.error(
+                                format!("store() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
                             return Ty::Error;
                         }
                         let addr_ty = self.check_expr(&args[0]);
                         let val_ty = self.check_expr(&args[1]);
                         if !addr_ty.is_error() && !addr_ty.is_integer() {
-                            self.error(format!("store() first argument must be i64, found `{addr_ty}`"), args[0].span.clone());
+                            self.error(
+                                format!("store() first argument must be i64, found `{addr_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         if !val_ty.is_error() && !val_ty.is_integer() {
-                            self.error(format!("store() second argument must be i64, found `{val_ty}`"), args[1].span.clone());
+                            self.error(
+                                format!("store() second argument must be i64, found `{val_ty}`"),
+                                args[1].span.clone(),
+                            );
                         }
                         return Ty::Unit;
                     }
@@ -1982,7 +2545,9 @@ impl Checker {
                             _ if arr_ty.is_error() => Ty::Error,
                             _ => {
                                 self.error(
-                                    format!("map() first argument must be an array, found `{arr_ty}`"),
+                                    format!(
+                                        "map() first argument must be an array, found `{arr_ty}`"
+                                    ),
                                     args[0].span.clone(),
                                 );
                                 return Ty::Error;
@@ -1992,10 +2557,16 @@ impl Checker {
                             Ty::Fn(params, ret) => {
                                 if params.len() != 1 {
                                     self.error(
-                                        format!("map() callback must take 1 parameter, takes {}", params.len()),
+                                        format!(
+                                            "map() callback must take 1 parameter, takes {}",
+                                            params.len()
+                                        ),
                                         args[1].span.clone(),
                                     );
-                                } else if !elem_ty.is_error() && !params[0].is_error() && elem_ty != params[0] {
+                                } else if !elem_ty.is_error()
+                                    && !params[0].is_error()
+                                    && elem_ty != params[0]
+                                {
                                     self.error(
                                         format!("map() callback parameter type `{}` doesn't match array element type `{}`", params[0], elem_ty),
                                         args[1].span.clone(),
@@ -2006,7 +2577,9 @@ impl Checker {
                             _ if fn_ty.is_error() => return Ty::Error,
                             _ => {
                                 self.error(
-                                    format!("map() second argument must be a function, found `{fn_ty}`"),
+                                    format!(
+                                        "map() second argument must be a function, found `{fn_ty}`"
+                                    ),
                                     args[1].span.clone(),
                                 );
                                 return Ty::Error;
@@ -2043,10 +2616,16 @@ impl Checker {
                             Ty::Fn(params, ret) => {
                                 if params.len() != 1 {
                                     self.error(
-                                        format!("filter() callback must take 1 parameter, takes {}", params.len()),
+                                        format!(
+                                            "filter() callback must take 1 parameter, takes {}",
+                                            params.len()
+                                        ),
                                         args[1].span.clone(),
                                     );
-                                } else if !elem_ty.is_error() && !params[0].is_error() && elem_ty != params[0] {
+                                } else if !elem_ty.is_error()
+                                    && !params[0].is_error()
+                                    && elem_ty != params[0]
+                                {
                                     self.error(
                                         format!("filter() callback parameter type `{}` doesn't match array element type `{}`", params[0], elem_ty),
                                         args[1].span.clone(),
@@ -2054,7 +2633,10 @@ impl Checker {
                                 }
                                 if **ret != Ty::Bool && !ret.is_error() {
                                     self.error(
-                                        format!("filter() callback must return `bool`, returns `{}`", ret),
+                                        format!(
+                                            "filter() callback must return `bool`, returns `{}`",
+                                            ret
+                                        ),
                                         args[1].span.clone(),
                                     );
                                 }
@@ -2105,17 +2687,26 @@ impl Checker {
                             Ty::Fn(params, ret) => {
                                 if params.len() != 2 {
                                     self.error(
-                                        format!("reduce() callback must take 2 parameters, takes {}", params.len()),
+                                        format!(
+                                            "reduce() callback must take 2 parameters, takes {}",
+                                            params.len()
+                                        ),
                                         args[2].span.clone(),
                                     );
                                 } else {
-                                    if !init_ty.is_error() && !params[0].is_error() && init_ty != params[0] {
+                                    if !init_ty.is_error()
+                                        && !params[0].is_error()
+                                        && init_ty != params[0]
+                                    {
                                         self.error(
                                             format!("reduce() callback first parameter type `{}` doesn't match initial value type `{}`", params[0], init_ty),
                                             args[2].span.clone(),
                                         );
                                     }
-                                    if !elem_ty.is_error() && !params[1].is_error() && elem_ty != params[1] {
+                                    if !elem_ty.is_error()
+                                        && !params[1].is_error()
+                                        && elem_ty != params[1]
+                                    {
                                         self.error(
                                             format!("reduce() callback second parameter type `{}` doesn't match array element type `{}`", params[1], elem_ty),
                                             args[2].span.clone(),
@@ -2151,11 +2742,15 @@ impl Checker {
                             }
                             for (i, arg) in args.iter().enumerate() {
                                 let arg_ty = self.check_expr(arg);
-                                if !arg_ty.is_error() && !param_tys[i].is_error() && arg_ty != param_tys[i] {
+                                if !arg_ty.is_error()
+                                    && !param_tys[i].is_error()
+                                    && arg_ty != param_tys[i]
+                                {
                                     self.error(
                                         format!(
                                             "argument {} expects `{}`, found `{arg_ty}`",
-                                            i + 1, param_tys[i]
+                                            i + 1,
+                                            param_tys[i]
                                         ),
                                         arg.span.clone(),
                                     );
@@ -2171,7 +2766,9 @@ impl Checker {
                         // Calling an @unsafe function from a safe context is an error
                         if sig.is_unsafe && !self.in_unsafe_context {
                             self.error(
-                                format!("cannot call `@unsafe` function `{name}` from a safe context"),
+                                format!(
+                                    "cannot call `@unsafe` function `{name}` from a safe context"
+                                ),
                                 callee.span.clone(),
                             );
                         }
@@ -2199,7 +2796,10 @@ impl Checker {
                             if let Ty::TypeParam(ref tp_name) = param_ty {
                                 if let Some(existing) = substitutions.get(tp_name) {
                                     // T already inferred -- check consistency
-                                    if !arg_ty.is_error() && !existing.is_error() && arg_ty != *existing {
+                                    if !arg_ty.is_error()
+                                        && !existing.is_error()
+                                        && arg_ty != *existing
+                                    {
                                         self.error(
                                             format!(
                                                 "type parameter `{tp_name}` inferred as `{existing}` but argument has type `{arg_ty}`"
@@ -2215,10 +2815,11 @@ impl Checker {
 
                         // Now check argument types against substituted parameter types
                         for (i, arg) in args.iter().enumerate() {
-                            let ref arg_ty = arg_types[i];
+                            let arg_ty = &arg_types[i];
                             let (ref param_name, ref param_ty) = &sig.params[i];
                             let concrete_param_ty = self.substitute_ty(param_ty, &substitutions);
-                            if !arg_ty.is_error() && !concrete_param_ty.is_error()
+                            if !arg_ty.is_error()
+                                && !concrete_param_ty.is_error()
                                 && !matches!(concrete_param_ty, Ty::TypeParam(_))
                                 && *arg_ty != concrete_param_ty
                             {
@@ -2250,9 +2851,10 @@ impl Checker {
                                         Ty::Struct(s) => Some(s.as_str()),
                                         _ => None,
                                     };
-                                    let has_impl = type_name.map_or(false, |tn| {
-                                        self.trait_impls.get(tn)
-                                            .map_or(false, |impls| impls.contains(bound))
+                                    let has_impl = type_name.is_some_and(|tn| {
+                                        self.trait_impls
+                                            .get(tn)
+                                            .is_some_and(|impls| impls.contains(bound))
                                     });
                                     if !has_impl && !concrete_ty.is_error() {
                                         self.error(
@@ -2290,7 +2892,12 @@ impl Checker {
                                         for (i, arg) in args.iter().skip(1).enumerate() {
                                             let arg_ty = self.check_expr(arg);
                                             // Skip type check for generic (TypeParam) fields
-                                            if i < field_tys.len() && !matches!(&field_tys[i], Ty::TypeParam(_)) && !arg_ty.is_error() && !field_tys[i].is_error() && arg_ty != field_tys[i] {
+                                            if i < field_tys.len()
+                                                && !matches!(&field_tys[i], Ty::TypeParam(_))
+                                                && !arg_ty.is_error()
+                                                && !field_tys[i].is_error()
+                                                && arg_ty != field_tys[i]
+                                            {
                                                 self.error(
                                                     format!(
                                                         "variant `{name}` field {} expects `{}`, found `{arg_ty}`",
@@ -2312,7 +2919,8 @@ impl Checker {
                         if !args.is_empty() {
                             let first_arg_ty = self.check_expr(&args[0]);
                             if let Ty::Struct(ref type_name) = first_arg_ty {
-                                if let Some(method_sig) = self.methods
+                                if let Some(method_sig) = self
+                                    .methods
                                     .get(type_name)
                                     .and_then(|m| m.get(name))
                                     .cloned()
@@ -2332,8 +2940,12 @@ impl Checker {
                                     // Check argument types (skip self at index 0, already checked)
                                     for (i, arg) in args.iter().skip(1).enumerate() {
                                         let arg_ty = self.check_expr(arg);
-                                        let (ref param_name, ref param_ty) = method_sig.params[i + 1];
-                                        if !arg_ty.is_error() && !param_ty.is_error() && arg_ty != *param_ty {
+                                        let (ref param_name, ref param_ty) =
+                                            method_sig.params[i + 1];
+                                        if !arg_ty.is_error()
+                                            && !param_ty.is_error()
+                                            && arg_ty != *param_ty
+                                        {
                                             self.error(
                                                 format!("argument `{param_name}` expects `{param_ty}`, found `{arg_ty}`"),
                                                 arg.span.clone(),
@@ -2344,17 +2956,15 @@ impl Checker {
                                 }
                             }
                         }
-                        self.error(
-                            format!("undefined function `{name}`"),
-                            callee.span.clone(),
-                        );
+                        self.error(format!("undefined function `{name}`"), callee.span.clone());
                         Ty::Error
                     }
                 } else if let Expr::FieldAccess { object, field } = &callee.node {
                     // Method call: object.method(args) — fallback for non-UFCS path
                     let obj_ty = self.check_expr(object);
                     if let Ty::Struct(ref type_name) = obj_ty {
-                        if let Some(method_sig) = self.methods
+                        if let Some(method_sig) = self
+                            .methods
                             .get(type_name)
                             .and_then(|m| m.get(field))
                             .cloned()
@@ -2373,7 +2983,8 @@ impl Checker {
                             for (i, arg) in args.iter().enumerate() {
                                 let arg_ty = self.check_expr(arg);
                                 let (ref param_name, ref param_ty) = method_sig.params[i + 1];
-                                if !arg_ty.is_error() && !param_ty.is_error() && arg_ty != *param_ty {
+                                if !arg_ty.is_error() && !param_ty.is_error() && arg_ty != *param_ty
+                                {
                                     self.error(
                                         format!("argument `{param_name}` expects `{param_ty}`, found `{arg_ty}`"),
                                         arg.span.clone(),
@@ -2406,7 +3017,11 @@ impl Checker {
                 }
             }
 
-            Expr::If { condition, then_branch, else_branch } => {
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 let cond_ty = self.check_expr(condition);
                 if !cond_ty.is_error() && cond_ty != Ty::Bool {
                     // Allow integer conditions (truthy)
@@ -2423,7 +3038,10 @@ impl Checker {
                 if let Some(else_expr) = else_branch {
                     let else_ty = self.check_expr(else_expr);
                     // If used as expression (both branches must match)
-                    if !then_ty.is_error() && !else_ty.is_error() && !types_compatible(&then_ty, &else_ty) {
+                    if !then_ty.is_error()
+                        && !else_ty.is_error()
+                        && !types_compatible(&then_ty, &else_ty)
+                    {
                         // Only warn if both are non-unit (meaning it's used as an expression)
                         if then_ty != Ty::Unit && else_ty != Ty::Unit {
                             self.error(
@@ -2477,10 +3095,7 @@ impl Checker {
                         );
                     }
                 } else {
-                    self.error(
-                        format!("undefined variable `{target}`"),
-                        expr.span.clone(),
-                    );
+                    self.error(format!("undefined variable `{target}`"), expr.span.clone());
                 }
 
                 Ty::Unit
@@ -2496,7 +3111,10 @@ impl Checker {
                     BinOp::Div => "/",
                     BinOp::Mod => "%",
                     _ => {
-                        self.error("unsupported compound assignment operator".to_string(), expr.span.clone());
+                        self.error(
+                            "unsupported compound assignment operator".to_string(),
+                            expr.span.clone(),
+                        );
                         return Ty::Unit;
                     }
                 };
@@ -2524,16 +3142,17 @@ impl Checker {
                         );
                     }
                 } else {
-                    self.error(
-                        format!("undefined variable `{target}`"),
-                        expr.span.clone(),
-                    );
+                    self.error(format!("undefined variable `{target}`"), expr.span.clone());
                 }
 
                 Ty::Unit
             }
 
-            Expr::FieldAssign { object, field, value } => {
+            Expr::FieldAssign {
+                object,
+                field,
+                value,
+            } => {
                 let val_ty = self.check_expr(value);
                 let obj_ty = self.check_expr(object);
 
@@ -2552,9 +3171,15 @@ impl Checker {
                 // Check field exists and type matches
                 if let Ty::Struct(struct_name) = &obj_ty {
                     if let Some(struct_info) = self.structs.get(struct_name).cloned() {
-                        if let Some((_, field_ty)) = struct_info.fields.iter().find(|(n, _)| n == field) {
+                        if let Some((_, field_ty)) =
+                            struct_info.fields.iter().find(|(n, _)| n == field)
+                        {
                             // Skip type check for generic (TypeParam) fields — they accept any type
-                            if !matches!(field_ty, Ty::TypeParam(_)) && !val_ty.is_error() && !field_ty.is_error() && val_ty != *field_ty {
+                            if !matches!(field_ty, Ty::TypeParam(_))
+                                && !val_ty.is_error()
+                                && !field_ty.is_error()
+                                && val_ty != *field_ty
+                            {
                                 self.error(
                                     format!(
                                         "cannot assign `{val_ty}` to field `{field}` of type `{field_ty}`"
@@ -2579,7 +3204,11 @@ impl Checker {
                 Ty::Unit
             }
 
-            Expr::IndexAssign { object, index, value } => {
+            Expr::IndexAssign {
+                object,
+                index,
+                value,
+            } => {
                 let val_ty = self.check_expr(value);
                 let obj_ty = self.check_expr(object);
                 let idx_ty = self.check_expr(index);
@@ -2628,13 +3257,11 @@ impl Checker {
 
             Expr::While { condition, body } => {
                 let cond_ty = self.check_expr(condition);
-                if !cond_ty.is_error() && cond_ty != Ty::Bool {
-                    if !cond_ty.is_integer() {
-                        self.error(
-                            format!("while condition must be `bool`, found `{cond_ty}`"),
-                            condition.span.clone(),
-                        );
-                    }
+                if !cond_ty.is_error() && cond_ty != Ty::Bool && !cond_ty.is_integer() {
+                    self.error(
+                        format!("while condition must be `bool`, found `{cond_ty}`"),
+                        condition.span.clone(),
+                    );
                 }
                 self.loop_depth += 1;
                 self.check_expr(body);
@@ -2709,7 +3336,11 @@ impl Checker {
                 Ty::Unit // Range type (treated as unit for now)
             }
 
-            Expr::ForIn { var_name, iterable, body } => {
+            Expr::ForIn {
+                var_name,
+                iterable,
+                body,
+            } => {
                 // Check the iterable expression
                 let iter_ty = self.check_expr(iterable);
 
@@ -2724,7 +3355,14 @@ impl Checker {
                 };
 
                 self.push_scope();
-                self.define_var(var_name, VarInfo { ty: elem_ty, mutable: false }, &expr.span);
+                self.define_var(
+                    var_name,
+                    VarInfo {
+                        ty: elem_ty,
+                        mutable: false,
+                    },
+                    &expr.span,
+                );
                 self.loop_depth += 1;
                 self.check_expr(body);
                 self.loop_depth -= 1;
@@ -2734,7 +3372,10 @@ impl Checker {
 
             Expr::ArrayLit(elements) => {
                 if elements.is_empty() {
-                    self.error("cannot infer type of empty array".to_string(), expr.span.clone());
+                    self.error(
+                        "cannot infer type of empty array".to_string(),
+                        expr.span.clone(),
+                    );
                     return Ty::Error;
                 }
                 let first_ty = self.check_expr(&elements[0]);
@@ -2763,10 +3404,7 @@ impl Checker {
                     Ty::Array(inner) => *inner.clone(),
                     Ty::Error => Ty::Error,
                     _ => {
-                        self.error(
-                            format!("cannot index into `{obj_ty}`"),
-                            object.span.clone(),
-                        );
+                        self.error(format!("cannot index into `{obj_ty}`"), object.span.clone());
                         Ty::Error
                     }
                 }
@@ -2785,10 +3423,7 @@ impl Checker {
                 }
 
                 let Some(struct_info) = self.structs.get(name).cloned() else {
-                    self.error(
-                        format!("undefined struct `{name}`"),
-                        expr.span.clone(),
-                    );
+                    self.error(format!("undefined struct `{name}`"), expr.span.clone());
                     // Still check field value expressions
                     for (_, value) in fields {
                         self.check_expr(value);
@@ -2797,8 +3432,11 @@ impl Checker {
                 };
 
                 // Check that all fields are provided and types match
-                let expected_fields: HashMap<&str, &Ty> = struct_info.fields.iter()
-                    .map(|(n, t)| (n.as_str(), t)).collect();
+                let expected_fields: HashMap<&str, &Ty> = struct_info
+                    .fields
+                    .iter()
+                    .map(|(n, t)| (n.as_str(), t))
+                    .collect();
 
                 // Track type parameter inference for generic structs
                 let mut tp_inferred: HashMap<String, Ty> = HashMap::new();
@@ -2823,7 +3461,10 @@ impl Checker {
                                     tp_inferred.insert(tp_name.clone(), val_ty.clone());
                                 }
                             }
-                        } else if !val_ty.is_error() && !expected_ty.is_error() && &val_ty != *expected_ty {
+                        } else if !val_ty.is_error()
+                            && !expected_ty.is_error()
+                            && &val_ty != *expected_ty
+                        {
                             self.error(
                                 format!(
                                     "field `{field_name}` of struct `{name}` expects `{}`, found `{val_ty}`",
@@ -2879,7 +3520,9 @@ impl Checker {
                 match &obj_ty {
                     Ty::Struct(struct_name) => {
                         if let Some(struct_info) = self.structs.get(struct_name).cloned() {
-                            if let Some((_, field_ty)) = struct_info.fields.iter().find(|(n, _)| n == field) {
+                            if let Some((_, field_ty)) =
+                                struct_info.fields.iter().find(|(n, _)| n == field)
+                            {
                                 field_ty.clone()
                             } else {
                                 self.error(
@@ -2896,20 +3539,18 @@ impl Checker {
                             Ty::Error
                         }
                     }
-                    Ty::Agent(agent_name) => {
-                        match field.as_str() {
-                            "model" => Ty::Str,
-                            "system" => Ty::Str,
-                            "tools" => Ty::Array(Box::new(Ty::Str)),
-                            _ => {
-                                self.error(
+                    Ty::Agent(agent_name) => match field.as_str() {
+                        "model" => Ty::Str,
+                        "system" => Ty::Str,
+                        "tools" => Ty::Array(Box::new(Ty::Str)),
+                        _ => {
+                            self.error(
                                     format!("agent `{agent_name}` has no field `{field}`; available fields: model, system, tools"),
                                     expr.span.clone(),
                                 );
-                                Ty::Error
-                            }
+                            Ty::Error
                         }
-                    }
+                    },
                     Ty::Error => Ty::Error,
                     _ => {
                         self.error(
@@ -2931,10 +3572,7 @@ impl Checker {
                     }
                     Ty::Enum(enum_name.clone())
                 } else {
-                    self.error(
-                        format!("undefined enum `{enum_name}`"),
-                        expr.span.clone(),
-                    );
+                    self.error(format!("undefined enum `{enum_name}`"), expr.span.clone());
                     Ty::Error
                 }
             }
@@ -2961,7 +3599,9 @@ impl Checker {
 
                     // Track coverage for exhaustiveness
                     match &arm.pattern.node {
-                        Pattern::Wildcard => { has_wildcard = true; }
+                        Pattern::Wildcard => {
+                            has_wildcard = true;
+                        }
                         Pattern::Ident(name) => {
                             // For enums, ident patterns are variant names
                             if let Ty::Enum(_) = &subject_ty {
@@ -3003,11 +3643,21 @@ impl Checker {
                             } else {
                                 Ty::Error
                             };
-                            self.define_var(binding, VarInfo { ty: ok_ty, mutable: false }, &arm.pattern.span);
+                            self.define_var(
+                                binding,
+                                VarInfo {
+                                    ty: ok_ty,
+                                    mutable: false,
+                                },
+                                &arm.pattern.span,
+                            );
                             if let Some(ref guard) = arm.guard {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
-                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                    self.error(
+                                        format!("match guard must be bool, got `{guard_ty}`"),
+                                        guard.span.clone(),
+                                    );
                                 }
                             }
                             let ty = self.check_expr(&arm.body);
@@ -3021,11 +3671,21 @@ impl Checker {
                             } else {
                                 Ty::Error
                             };
-                            self.define_var(binding, VarInfo { ty: err_ty, mutable: false }, &arm.pattern.span);
+                            self.define_var(
+                                binding,
+                                VarInfo {
+                                    ty: err_ty,
+                                    mutable: false,
+                                },
+                                &arm.pattern.span,
+                            );
                             if let Some(ref guard) = arm.guard {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
-                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                    self.error(
+                                        format!("match guard must be bool, got `{guard_ty}`"),
+                                        guard.span.clone(),
+                                    );
                                 }
                             }
                             let ty = self.check_expr(&arm.body);
@@ -3039,11 +3699,21 @@ impl Checker {
                             } else {
                                 Ty::Error
                             };
-                            self.define_var(binding, VarInfo { ty: inner_ty, mutable: false }, &arm.pattern.span);
+                            self.define_var(
+                                binding,
+                                VarInfo {
+                                    ty: inner_ty,
+                                    mutable: false,
+                                },
+                                &arm.pattern.span,
+                            );
                             if let Some(ref guard) = arm.guard {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
-                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                    self.error(
+                                        format!("match guard must be bool, got `{guard_ty}`"),
+                                        guard.span.clone(),
+                                    );
                                 }
                             }
                             let ty = self.check_expr(&arm.body);
@@ -3054,7 +3724,10 @@ impl Checker {
                             if let Some(ref guard) = arm.guard {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
-                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                    self.error(
+                                        format!("match guard must be bool, got `{guard_ty}`"),
+                                        guard.span.clone(),
+                                    );
                                 }
                             }
                             self.check_expr(&arm.body)
@@ -3070,7 +3743,11 @@ impl Checker {
                                             } else {
                                                 Ty::Error
                                             };
-                                            self.define_var(binding, VarInfo { ty, mutable: false }, &arm.pattern.span);
+                                            self.define_var(
+                                                binding,
+                                                VarInfo { ty, mutable: false },
+                                                &arm.pattern.span,
+                                            );
                                         }
                                     }
                                 }
@@ -3078,7 +3755,10 @@ impl Checker {
                             if let Some(ref guard) = arm.guard {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
-                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                    self.error(
+                                        format!("match guard must be bool, got `{guard_ty}`"),
+                                        guard.span.clone(),
+                                    );
                                 }
                             }
                             let ty = self.check_expr(&arm.body);
@@ -3088,11 +3768,21 @@ impl Checker {
                         Pattern::Ident(name) if !matches!(subject_ty, Ty::Enum(_)) => {
                             // Non-enum ident pattern acts as a variable binding
                             self.push_scope();
-                            self.define_var(name, VarInfo { ty: subject_ty.clone(), mutable: false }, &arm.pattern.span);
+                            self.define_var(
+                                name,
+                                VarInfo {
+                                    ty: subject_ty.clone(),
+                                    mutable: false,
+                                },
+                                &arm.pattern.span,
+                            );
                             if let Some(ref guard) = arm.guard {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
-                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                    self.error(
+                                        format!("match guard must be bool, got `{guard_ty}`"),
+                                        guard.span.clone(),
+                                    );
                                 }
                             }
                             let ty = self.check_expr(&arm.body);
@@ -3104,7 +3794,10 @@ impl Checker {
                             if let Some(ref guard) = arm.guard {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
-                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                    self.error(
+                                        format!("match guard must be bool, got `{guard_ty}`"),
+                                        guard.span.clone(),
+                                    );
                                 }
                             }
                             self.check_expr(&arm.body)
@@ -3131,11 +3824,13 @@ impl Checker {
                         Ty::Enum(enum_name) => {
                             if let Some(info) = self.enums.get(enum_name).cloned() {
                                 let variant_names = info.variant_names();
-                                let missing: Vec<&String> = variant_names.iter()
+                                let missing: Vec<&String> = variant_names
+                                    .iter()
                                     .filter(|v| !covered_variants.contains(v))
                                     .collect();
                                 if !missing.is_empty() {
-                                    let missing_str: Vec<&str> = missing.iter().map(|s| s.as_str()).collect();
+                                    let missing_str: Vec<&str> =
+                                        missing.iter().map(|s| s.as_str()).collect();
                                     self.error(
                                         format!(
                                             "match is not exhaustive; missing variants: {}",
@@ -3151,8 +3846,12 @@ impl Checker {
                             let has_false = covered_variants.contains(&"false".to_string());
                             if !has_true || !has_false {
                                 let mut missing = Vec::new();
-                                if !has_true { missing.push("true"); }
-                                if !has_false { missing.push("false"); }
+                                if !has_true {
+                                    missing.push("true");
+                                }
+                                if !has_false {
+                                    missing.push("false");
+                                }
                                 self.error(
                                     format!(
                                         "match is not exhaustive; missing variants: {}",
@@ -3167,8 +3866,12 @@ impl Checker {
                             let has_err = covered_variants.contains(&"err".to_string());
                             if !has_ok || !has_err {
                                 let mut missing = Vec::new();
-                                if !has_ok { missing.push("ok"); }
-                                if !has_err { missing.push("err"); }
+                                if !has_ok {
+                                    missing.push("ok");
+                                }
+                                if !has_err {
+                                    missing.push("err");
+                                }
                                 self.error(
                                     format!(
                                         "match is not exhaustive; missing variants: {}",
@@ -3183,8 +3886,12 @@ impl Checker {
                             let has_none = covered_variants.contains(&"none".to_string());
                             if !has_some || !has_none {
                                 let mut missing = Vec::new();
-                                if !has_some { missing.push("some"); }
-                                if !has_none { missing.push("none"); }
+                                if !has_some {
+                                    missing.push("some");
+                                }
+                                if !has_none {
+                                    missing.push("none");
+                                }
                                 self.error(
                                     format!(
                                         "match is not exhaustive; missing variants: {}",
@@ -3197,7 +3904,8 @@ impl Checker {
                         _ => {
                             // For integers, strings, etc., a wildcard is required
                             self.error(
-                                "match is not exhaustive; consider adding a wildcard `_` arm".to_string(),
+                                "match is not exhaustive; consider adding a wildcard `_` arm"
+                                    .to_string(),
                                 expr.span.clone(),
                             );
                         }
@@ -3216,7 +3924,11 @@ impl Checker {
                 Ty::Str
             }
 
-            Expr::Closure { params, return_type, body } => {
+            Expr::Closure {
+                params,
+                return_type,
+                body,
+            } => {
                 let mut param_types = Vec::new();
                 let param_hint = self.closure_param_hint.take();
                 self.push_scope();
@@ -3227,7 +3939,10 @@ impl Checker {
                                 hints[i].clone()
                             } else {
                                 self.error(
-                                    format!("cannot infer type of closure parameter `{}`", param.name),
+                                    format!(
+                                        "cannot infer type of closure parameter `{}`",
+                                        param.name
+                                    ),
                                     param.ty.span.clone(),
                                 );
                                 Ty::Error
@@ -3240,7 +3955,11 @@ impl Checker {
                             Ty::Error
                         }
                     } else {
-                        match resolve_type_expr(&param.ty.node, Some(&self.structs), Some(&self.enums)) {
+                        match resolve_type_expr(
+                            &param.ty.node,
+                            Some(&self.structs),
+                            Some(&self.enums),
+                        ) {
                             Some(ty) => ty,
                             None => {
                                 self.error(
@@ -3251,7 +3970,14 @@ impl Checker {
                             }
                         }
                     };
-                    self.define_var(&param.name, VarInfo { ty: ty.clone(), mutable: false }, &param.span);
+                    self.define_var(
+                        &param.name,
+                        VarInfo {
+                            ty: ty.clone(),
+                            mutable: false,
+                        },
+                        &param.span,
+                    );
                     param_types.push(ty);
                 }
                 let body_ty = self.check_expr(body);
@@ -3271,10 +3997,7 @@ impl Checker {
                             ty
                         }
                         None => {
-                            self.error(
-                                "unknown closure return type".to_string(),
-                                rt.span.clone(),
-                            );
+                            self.error("unknown closure return type".to_string(), rt.span.clone());
                             body_ty
                         }
                     }
@@ -3346,7 +4069,11 @@ impl Checker {
                                 default.span.clone(),
                             );
                         }
-                        if inner.is_error() { def_ty } else { *inner.clone() }
+                        if inner.is_error() {
+                            def_ty
+                        } else {
+                            *inner.clone()
+                        }
                     }
                     _ => {
                         self.error(
@@ -3357,7 +4084,6 @@ impl Checker {
                     }
                 }
             }
-
         }
     }
 
@@ -3468,7 +4194,12 @@ impl Checker {
 
     fn check_stmt(&mut self, stmt: &Spanned<Stmt>) {
         match &stmt.node {
-            Stmt::Let { mutable, name, ty, value } => {
+            Stmt::Let {
+                mutable,
+                name,
+                ty,
+                value,
+            } => {
                 let val_ty = self.check_expr(value);
 
                 let declared_ty = if let Some(ty_expr) = ty {
@@ -3497,10 +4228,7 @@ impl Checker {
                         }
                         None => {
                             if let TypeExpr::Named(name) = &ty_expr.node {
-                                self.error(
-                                    format!("unknown type `{name}`"),
-                                    ty_expr.span.clone(),
-                                );
+                                self.error(format!("unknown type `{name}`"), ty_expr.span.clone());
                             }
                             val_ty.clone()
                         }
@@ -3511,7 +4239,10 @@ impl Checker {
 
                 self.define_var(
                     name,
-                    VarInfo { ty: declared_ty, mutable: *mutable },
+                    VarInfo {
+                        ty: declared_ty,
+                        mutable: *mutable,
+                    },
                     &stmt.span,
                 );
             }
@@ -3525,8 +4256,10 @@ impl Checker {
                     Ty::Unit
                 };
 
-                if !ret_ty.is_error() && !self.current_return_type.is_error()
-                    && self.current_return_type != Ty::Unit && ret_ty != self.current_return_type
+                if !ret_ty.is_error()
+                    && !self.current_return_type.is_error()
+                    && self.current_return_type != Ty::Unit
+                    && ret_ty != self.current_return_type
                 {
                     self.error(
                         format!(
@@ -3618,10 +4351,7 @@ mod tests {
 
     #[test]
     fn test_undefined_variable() {
-        assert_has_error(
-            "fn main() { print(x) }",
-            "undefined variable `x`",
-        );
+        assert_has_error("fn main() { print(x) }", "undefined variable `x`");
     }
 
     #[test]
@@ -3701,20 +4431,14 @@ fn main() { double("hello") }"#,
 
     #[test]
     fn test_no_main() {
-        assert_has_error(
-            "fn foo() { }",
-            "no `main` function found",
-        );
+        assert_has_error("fn foo() { }", "no `main` function found");
     }
 
     // === Task 1: Builtin function shadowing ===
 
     #[test]
     fn test_shadow_builtin() {
-        assert_has_error(
-            "fn print() { }\nfn main() { }",
-            "cannot redefine builtin",
-        );
+        assert_has_error("fn print() { }\nfn main() { }", "cannot redefine builtin");
     }
 
     #[test]
@@ -3824,9 +4548,7 @@ fn main() { double("hello") }"#,
 
     #[test]
     fn test_match_int_with_wildcard_ok() {
-        assert_no_errors(
-            "fn main() { let x = 1\n match x { 1 => print(1)\n _ => print(0) } }",
-        );
+        assert_no_errors("fn main() { let x = 1\n match x { 1 => print(1)\n _ => print(0) } }");
     }
 
     #[test]
@@ -3892,9 +4614,7 @@ fn main() {
 
     #[test]
     fn test_generic_identity_int() {
-        assert_no_errors(
-            "fn identity<T>(x: T) -> T { x }\nfn main() { let r = identity(42) }",
-        );
+        assert_no_errors("fn identity<T>(x: T) -> T { x }\nfn main() { let r = identity(42) }");
     }
 
     #[test]
@@ -3907,16 +4627,12 @@ fn main() { let r = identity("hello") }"#,
 
     #[test]
     fn test_generic_identity_bool() {
-        assert_no_errors(
-            "fn identity<T>(x: T) -> T { x }\nfn main() { let r = identity(true) }",
-        );
+        assert_no_errors("fn identity<T>(x: T) -> T { x }\nfn main() { let r = identity(true) }");
     }
 
     #[test]
     fn test_generic_first() {
-        assert_no_errors(
-            "fn first<T>(a: T, b: T) -> T { a }\nfn main() { let r = first(1, 2) }",
-        );
+        assert_no_errors("fn first<T>(a: T, b: T) -> T { a }\nfn main() { let r = first(1, 2) }");
     }
 
     #[test]

@@ -1,8 +1,8 @@
+use ariadne::{Color, Label, Report, ReportKind, Source};
 use clap::{Parser, Subcommand};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use turbo_ast::{Item, Module};
-use ariadne::{Color, Label, Report, ReportKind, Source};
 
 mod formatter;
 mod playground;
@@ -108,7 +108,11 @@ fn main() {
             let path = resolve_entry_file(file);
             run_file(&path, verbose);
         }
-        Commands::Build { file, output, verbose } => {
+        Commands::Build {
+            file,
+            output,
+            verbose,
+        } => {
             let path = resolve_entry_file(file);
             build_file(&path, output.as_deref(), verbose);
         }
@@ -130,7 +134,10 @@ fn start_lsp() {
     // The LSP server is a separate binary (turbo-lsp).
     // This command provides a convenience wrapper that exec's it.
     let exe = std::env::current_exe().unwrap_or_default();
-    let lsp_bin = exe.parent().unwrap_or_else(|| Path::new(".")).join("turbo-lsp");
+    let lsp_bin = exe
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("turbo-lsp");
 
     if lsp_bin.exists() {
         use std::process::Command;
@@ -147,7 +154,10 @@ fn start_lsp() {
             }
         }
     } else {
-        eprintln!("\x1b[1;31merror\x1b[0m: turbo-lsp binary not found at `{}`", lsp_bin.display());
+        eprintln!(
+            "\x1b[1;31merror\x1b[0m: turbo-lsp binary not found at `{}`",
+            lsp_bin.display()
+        );
         eprintln!("  Build it with: cargo build -p turbo-lsp");
         std::process::exit(1);
     }
@@ -171,7 +181,9 @@ fn resolve_entry_file(file: Option<PathBuf>) -> PathBuf {
         std::process::exit(1);
     }
 
-    eprintln!("\x1b[1;31merror\x1b[0m: no file specified and no `turbo.toml` found in current directory");
+    eprintln!(
+        "\x1b[1;31merror\x1b[0m: no file specified and no `turbo.toml` found in current directory"
+    );
     eprintln!("  Usage: turbo run <file.tb>");
     eprintln!("  Or run `turbo init <name>` to create a new project");
     std::process::exit(1);
@@ -219,11 +231,7 @@ fn init_project(name: &str) {
     .unwrap();
 
     // .gitignore
-    std::fs::write(
-        dir.join(".gitignore"),
-        "turbo_modules/\ntarget/\n*.o\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join(".gitignore"), "turbo_modules/\ntarget/\n*.o\n").unwrap();
 
     eprintln!("\x1b[32m\u{2713}\x1b[0m Created project `{name}`");
     eprintln!("  cd {name} && turbo run");
@@ -314,7 +322,10 @@ fn install_deps() {
                 #[cfg(not(unix))]
                 {
                     // On non-Unix platforms, fall back to copying
-                    fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+                    fn copy_dir_recursive(
+                        src: &std::path::Path,
+                        dst: &std::path::Path,
+                    ) -> std::io::Result<()> {
                         std::fs::create_dir_all(dst)?;
                         for entry in std::fs::read_dir(src)? {
                             let entry = entry?;
@@ -348,7 +359,10 @@ fn install_deps() {
                     continue;
                 }
                 let url = format!("https://github.com/{}.git", github_repo);
-                eprintln!("  \x1b[36m\u{2193}\x1b[0m Cloning {} from github:{}...", name, github_repo);
+                eprintln!(
+                    "  \x1b[36m\u{2193}\x1b[0m Cloning {} from github:{}...",
+                    name, github_repo
+                );
                 let output = std::process::Command::new("git")
                     .arg("clone")
                     .arg("--depth=1")
@@ -357,12 +371,19 @@ fn install_deps() {
                     .output();
                 match output {
                     Ok(o) if o.status.success() => {
-                        eprintln!("  \x1b[32m\u{2713}\x1b[0m Installed {} from github:{}", name, github_repo);
+                        eprintln!(
+                            "  \x1b[32m\u{2713}\x1b[0m Installed {} from github:{}",
+                            name, github_repo
+                        );
                         count += 1;
                     }
                     Ok(o) => {
                         let stderr = String::from_utf8_lossy(&o.stderr);
-                        eprintln!("  \x1b[31m\u{2717}\x1b[0m Failed to install {}: {}", name, stderr.trim());
+                        eprintln!(
+                            "  \x1b[31m\u{2717}\x1b[0m Failed to install {}: {}",
+                            name,
+                            stderr.trim()
+                        );
                     }
                     Err(e) => {
                         eprintln!("  \x1b[31m\u{2717}\x1b[0m Failed to clone {}: {}", name, e);
@@ -375,7 +396,11 @@ fn install_deps() {
     if count == 0 {
         eprintln!("No dependencies found in turbo.toml");
     } else {
-        eprintln!("Installed {} dependenc{}.", count, if count == 1 { "y" } else { "ies" });
+        eprintln!(
+            "Installed {} dependenc{}.",
+            count,
+            if count == 1 { "y" } else { "ies" }
+        );
     }
 }
 
@@ -409,10 +434,16 @@ fn update_deps() {
             if let Some(github_repo) = extract_quoted_value(rest, "github") {
                 let target = Path::new("turbo_modules").join(name);
                 if !target.exists() {
-                    eprintln!("  \x1b[33m!\x1b[0m {} not installed — run `turbo install` first", name);
+                    eprintln!(
+                        "  \x1b[33m!\x1b[0m {} not installed — run `turbo install` first",
+                        name
+                    );
                     continue;
                 }
-                eprintln!("  \x1b[36m\u{2193}\x1b[0m Updating {} from github:{}...", name, github_repo);
+                eprintln!(
+                    "  \x1b[36m\u{2193}\x1b[0m Updating {} from github:{}...",
+                    name, github_repo
+                );
                 let output = std::process::Command::new("git")
                     .arg("-C")
                     .arg(&target)
@@ -431,7 +462,11 @@ fn update_deps() {
                     }
                     Ok(o) => {
                         let stderr = String::from_utf8_lossy(&o.stderr);
-                        eprintln!("  \x1b[31m\u{2717}\x1b[0m Failed to update {}: {}", name, stderr.trim());
+                        eprintln!(
+                            "  \x1b[31m\u{2717}\x1b[0m Failed to update {}: {}",
+                            name,
+                            stderr.trim()
+                        );
                     }
                     Err(e) => {
                         eprintln!("  \x1b[31m\u{2717}\x1b[0m Failed to update {}: {}", name, e);
@@ -444,19 +479,29 @@ fn update_deps() {
     if count == 0 {
         eprintln!("No GitHub dependencies found to update.");
     } else {
-        eprintln!("Updated {} dependenc{}.", count, if count == 1 { "y" } else { "ies" });
+        eprintln!(
+            "Updated {} dependenc{}.",
+            count,
+            if count == 1 { "y" } else { "ies" }
+        );
     }
 }
 
 /// Print a rich error diagnostic using ariadne.
-fn report_error(source: &str, filename: &str, message: &str, span: &std::ops::Range<usize>, help: Option<&str>) {
+fn report_error(
+    source: &str,
+    filename: &str,
+    message: &str,
+    span: &std::ops::Range<usize>,
+    help: Option<&str>,
+) {
     // Clamp span to source bounds to avoid panics on edge-case spans
     let start = span.start.min(source.len());
     let end = span.end.min(source.len()).max(start);
     let clamped = start..end;
 
-    let mut builder = Report::build(ReportKind::Error, filename, clamped.start)
-        .with_message(message);
+    let mut builder =
+        Report::build(ReportKind::Error, filename, clamped.start).with_message(message);
 
     builder = builder.with_label(
         Label::new((filename, clamped))
@@ -474,16 +519,51 @@ fn report_error(source: &str, filename: &str, message: &str, span: &std::ops::Ra
         .unwrap();
 }
 
+/// Maximum source file size: 50 MB. Files larger than this are rejected
+/// to prevent denial-of-service via memory exhaustion.
+const MAX_SOURCE_FILE_SIZE: u64 = 50 * 1024 * 1024;
+
+/// Check that a source file does not exceed the maximum allowed size.
+/// Prints an error and exits if the file is too large.
+fn check_file_size(path: &std::path::Path) {
+    match std::fs::metadata(path) {
+        Ok(meta) => {
+            if meta.len() > MAX_SOURCE_FILE_SIZE {
+                eprintln!(
+                    "\x1b[1;31merror\x1b[0m: file `{}` is too large ({:.1} MB, max {} MB)",
+                    path.display(),
+                    meta.len() as f64 / (1024.0 * 1024.0),
+                    MAX_SOURCE_FILE_SIZE / (1024 * 1024),
+                );
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "\x1b[1;31merror\x1b[0m: could not stat file `{}`: {e}",
+                path.display()
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
 fn run_file(path: &std::path::Path, verbose: bool) {
+    check_file_size(path);
+
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}", path.display());
+            eprintln!(
+                "\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}",
+                path.display()
+            );
             std::process::exit(1);
         }
     };
 
-    let filename = path.file_name()
+    let filename = path
+        .file_name()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| "<unknown>".to_string());
 
@@ -521,13 +601,7 @@ fn run_file(path: &std::path::Path, verbose: bool) {
 
     if !parse_errors.is_empty() {
         for err in &parse_errors {
-            report_error(
-                &source,
-                &filename,
-                &err.message,
-                &err.span,
-                None,
-            );
+            report_error(&source, &filename, &err.message, &err.span, None);
         }
         std::process::exit(1);
     }
@@ -554,7 +628,11 @@ fn run_file(path: &std::path::Path, verbose: bool) {
     }
 
     if verbose {
-        eprintln!("--- AST ({} items, {:.2?}) ---", module.items.len(), parse_time);
+        eprintln!(
+            "--- AST ({} items, {:.2?}) ---",
+            module.items.len(),
+            parse_time
+        );
         for item in &module.items {
             eprintln!("  {:#?}", item.node);
         }
@@ -567,19 +645,17 @@ fn run_file(path: &std::path::Path, verbose: bool) {
     let sema_time = sema_start.elapsed();
 
     if verbose {
-        eprintln!("--- Sema ({} errors, {:.2?}) ---", sema_errors.len(), sema_time);
+        eprintln!(
+            "--- Sema ({} errors, {:.2?}) ---",
+            sema_errors.len(),
+            sema_time
+        );
     }
 
     if !sema_errors.is_empty() {
         for err in &sema_errors {
             let help = sema_help(&err.message);
-            report_error(
-                &source,
-                &filename,
-                &err.message,
-                &err.span,
-                help.as_deref(),
-            );
+            report_error(&source, &filename, &err.message, &err.span, help.as_deref());
         }
         std::process::exit(1);
     }
@@ -595,7 +671,10 @@ fn run_file(path: &std::path::Path, verbose: bool) {
                 eprintln!("  Parse:   {:.2?}", parse_time);
                 eprintln!("  Sema:    {:.2?}", sema_time);
                 eprintln!("  Codegen: {:.2?}", codegen_time);
-                eprintln!("  Total:   {:.2?}", lex_time + parse_time + sema_time + codegen_time);
+                eprintln!(
+                    "  Total:   {:.2?}",
+                    lex_time + parse_time + sema_time + codegen_time
+                );
             }
         }
         Err(e) => {
@@ -639,12 +718,16 @@ fn test_file(file: Option<PathBuf>) {
         let source = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}", path.display());
+                eprintln!(
+                    "\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}",
+                    path.display()
+                );
                 std::process::exit(1);
             }
         };
 
-        let filename = path.file_name()
+        let filename = path
+            .file_name()
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_else(|| "<unknown>".to_string());
 
@@ -668,13 +751,7 @@ fn test_file(file: Option<PathBuf>) {
         let (mut module, parse_errors) = turbo_parser::parse(tokens);
         if !parse_errors.is_empty() {
             for err in &parse_errors {
-                report_error(
-                    &source,
-                    &filename,
-                    &err.message,
-                    &err.span,
-                    None,
-                );
+                report_error(&source, &filename, &err.message, &err.span, None);
             }
             std::process::exit(1);
         }
@@ -690,10 +767,16 @@ fn test_file(file: Option<PathBuf>) {
         }
 
         // Collect @test function names
-        let test_names: Vec<String> = module.items.iter()
+        let test_names: Vec<String> = module
+            .items
+            .iter()
             .filter_map(|item| {
                 if let Item::Function(f) = &item.node {
-                    if f.is_test { Some(f.name.clone()) } else { None }
+                    if f.is_test {
+                        Some(f.name.clone())
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -709,13 +792,7 @@ fn test_file(file: Option<PathBuf>) {
         if !sema_errors.is_empty() {
             for err in &sema_errors {
                 let help = sema_help(&err.message);
-                report_error(
-                    &source,
-                    &filename,
-                    &err.message,
-                    &err.span,
-                    help.as_deref(),
-                );
+                report_error(&source, &filename, &err.message, &err.span, help.as_deref());
             }
             std::process::exit(1);
         }
@@ -778,7 +855,9 @@ fn bench_file(file: Option<PathBuf>, iterations: u32) {
         if bench_dir.is_dir() {
             collect_bench_files(bench_dir)
         } else {
-            eprintln!("\x1b[1;31merror\x1b[0m: no file specified and no `benchmarks/` directory found");
+            eprintln!(
+                "\x1b[1;31merror\x1b[0m: no file specified and no `benchmarks/` directory found"
+            );
             eprintln!("  Usage: turbo bench <file.tb>");
             std::process::exit(1);
         }
@@ -800,7 +879,8 @@ fn bench_file(file: Option<PathBuf>, iterations: u32) {
     let mut passed = 0u32;
 
     for path in &files {
-        let name = path.file_stem()
+        let name = path
+            .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "<unknown>".to_string());
 
@@ -811,13 +891,21 @@ fn bench_file(file: Option<PathBuf>, iterations: u32) {
         let source = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("  \x1b[31merror\x1b[0m: could not read `{}`: {e}", path.display());
+                eprintln!(
+                    "  \x1b[31merror\x1b[0m: could not read `{}`: {e}",
+                    path.display()
+                );
                 continue;
             }
         };
-        let expected: Option<String> = source.lines()
+        let expected: Option<String> = source
+            .lines()
             .find(|l| l.starts_with("// Expected output:"))
-            .map(|l| l.trim_start_matches("// Expected output:").trim().to_string());
+            .map(|l| {
+                l.trim_start_matches("// Expected output:")
+                    .trim()
+                    .to_string()
+            });
         if let Some(ref exp) = expected {
             eprintln!("  \x1b[90mexpected: {exp}\x1b[0m");
         }
@@ -878,7 +966,8 @@ fn bench_file(file: Option<PathBuf>, iterations: u32) {
                         Ok(result) => {
                             aot_times.push(elapsed);
                             if aot_output.is_empty() {
-                                aot_output = String::from_utf8_lossy(&result.stdout).trim().to_string();
+                                aot_output =
+                                    String::from_utf8_lossy(&result.stdout).trim().to_string();
                             }
                         }
                         Err(e) => {
@@ -937,9 +1026,7 @@ fn collect_bench_files(dir: &Path) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().map(|e| e == "tb").unwrap_or(false) {
-                let stem = path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                 if stem.starts_with("bench_") {
                     files.push(path);
                 }
@@ -953,15 +1040,21 @@ fn collect_bench_files(dir: &Path) -> Vec<PathBuf> {
 /// Internal: compile a file and run a single named function via JIT.
 /// Used by `turbo test` to run each @test in its own subprocess.
 fn test_run_fn(path: &std::path::Path, fn_name: &str) {
+    check_file_size(path);
+
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}", path.display());
+            eprintln!(
+                "\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}",
+                path.display()
+            );
             std::process::exit(1);
         }
     };
 
-    let filename = path.file_name()
+    let filename = path
+        .file_name()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| "<unknown>".to_string());
 
@@ -985,13 +1078,7 @@ fn test_run_fn(path: &std::path::Path, fn_name: &str) {
     let (mut module, parse_errors) = turbo_parser::parse(tokens);
     if !parse_errors.is_empty() {
         for err in &parse_errors {
-            report_error(
-                &source,
-                &filename,
-                &err.message,
-                &err.span,
-                None,
-            );
+            report_error(&source, &filename, &err.message, &err.span, None);
         }
         std::process::exit(1);
     }
@@ -1032,9 +1119,7 @@ fn collect_test_files(dir: &Path) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().map(|e| e == "tb").unwrap_or(false) {
-                let stem = path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                 if stem.ends_with("_test") || stem.starts_with("test_") {
                     files.push(path);
                 }
@@ -1055,21 +1140,28 @@ fn collect_test_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose: bool) {
+    check_file_size(path);
+
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}", path.display());
+            eprintln!(
+                "\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}",
+                path.display()
+            );
             std::process::exit(1);
         }
     };
 
-    let filename = path.file_name()
+    let filename = path
+        .file_name()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| "<unknown>".to_string());
 
     // Default output: filename without .tb extension
-    let default_output = path.file_stem()
-        .map(|s| PathBuf::from(s))
+    let default_output = path
+        .file_stem()
+        .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("a.out"));
     let output_path = output.unwrap_or(&default_output);
 
@@ -1103,13 +1195,7 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
 
     if !parse_errors.is_empty() {
         for err in &parse_errors {
-            report_error(
-                &source,
-                &filename,
-                &err.message,
-                &err.span,
-                None,
-            );
+            report_error(&source, &filename, &err.message, &err.span, None);
         }
         std::process::exit(1);
     }
@@ -1136,7 +1222,11 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
     }
 
     if verbose {
-        eprintln!("--- AST ({} items, {:.2?}) ---", module.items.len(), parse_time);
+        eprintln!(
+            "--- AST ({} items, {:.2?}) ---",
+            module.items.len(),
+            parse_time
+        );
     }
 
     // Semantic analysis
@@ -1147,13 +1237,7 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
     if !sema_errors.is_empty() {
         for err in &sema_errors {
             let help = sema_help(&err.message);
-            report_error(
-                &source,
-                &filename,
-                &err.message,
-                &err.span,
-                help.as_deref(),
-            );
+            report_error(&source, &filename, &err.message, &err.span, help.as_deref());
         }
         std::process::exit(1);
     }
@@ -1163,14 +1247,20 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
     match turbo_codegen_cranelift::aot_compile(&module, output_path, true) {
         Ok(()) => {
             let codegen_time = codegen_start.elapsed();
-            eprintln!("\x1b[32m\u{2713}\x1b[0m Compiled to {}", output_path.display());
+            eprintln!(
+                "\x1b[32m\u{2713}\x1b[0m Compiled to {}",
+                output_path.display()
+            );
             if verbose {
                 eprintln!("\n--- Timing ---");
                 eprintln!("  Lex:     {:.2?}", lex_time);
                 eprintln!("  Parse:   {:.2?}", parse_time);
                 eprintln!("  Sema:    {:.2?}", sema_time);
                 eprintln!("  Codegen: {:.2?}", codegen_time);
-                eprintln!("  Total:   {:.2?}", lex_time + parse_time + sema_time + codegen_time);
+                eprintln!(
+                    "  Total:   {:.2?}",
+                    lex_time + parse_time + sema_time + codegen_time
+                );
             }
         }
         Err(e) => {
@@ -1250,7 +1340,10 @@ fn resolve_imports(
         if let Item::Import { names, path } = &item.node {
             let resolved_path = resolve_import_path(base_dir, path);
             let canonical = resolved_path.canonicalize().map_err(|e| {
-                format!("could not resolve import path `{}`: {e}", resolved_path.display())
+                format!(
+                    "could not resolve import path `{}`: {e}",
+                    resolved_path.display()
+                )
             })?;
 
             // Circular import detection
@@ -1264,7 +1357,10 @@ fn resolve_imports(
             loading.insert(canonical.clone());
 
             let source = std::fs::read_to_string(&resolved_path).map_err(|e| {
-                format!("could not read imported file `{}`: {e}", resolved_path.display())
+                format!(
+                    "could not read imported file `{}`: {e}",
+                    resolved_path.display()
+                )
             })?;
 
             let (tokens, lex_errors) = turbo_lexer::tokenize(&source);
@@ -1333,7 +1429,9 @@ fn resolve_imports(
     }
 
     // Remove import items and prepend imported items
-    module.items.retain(|item| !matches!(&item.node, Item::Import { .. }));
+    module
+        .items
+        .retain(|item| !matches!(&item.node, Item::Import { .. }));
     let mut new_items = import_items;
     new_items.append(&mut module.items);
     module.items = new_items;
@@ -1346,7 +1444,9 @@ fn sema_help(message: &str) -> Option<String> {
     if message.contains("undefined variable") {
         // Extract variable name from backticks
         if let Some(name) = extract_backtick_name(message) {
-            return Some(format!("did you mean to declare `{name}` with `let {name} = ...`?"));
+            return Some(format!(
+                "did you mean to declare `{name}` with `let {name} = ...`?"
+            ));
         }
         return Some("check the variable name for typos, or declare it with `let`".to_string());
     }
@@ -1363,7 +1463,9 @@ fn sema_help(message: &str) -> Option<String> {
         return Some("add a `fn main() { ... }` as the entry point".to_string());
     }
     if message.contains("mismatched types in arithmetic") {
-        return Some("both sides of an arithmetic operation must have the same numeric type".to_string());
+        return Some(
+            "both sides of an arithmetic operation must have the same numeric type".to_string(),
+        );
     }
     if message.contains("cannot perform arithmetic on") {
         return Some("arithmetic operators (`+`, `-`, `*`, `/`, `%`) only work on numeric types (`i32`, `i64`, `f32`, `f64`)".to_string());
@@ -1372,19 +1474,33 @@ fn sema_help(message: &str) -> Option<String> {
         return Some("either change the type annotation or the assigned value".to_string());
     }
     if message.contains("should return") && message.contains("but body returns") {
-        return Some("make sure the last expression in the function body matches the declared return type".to_string());
+        return Some(
+            "make sure the last expression in the function body matches the declared return type"
+                .to_string(),
+        );
     }
     if message.contains("if/else branches have different types") {
-        return Some("both branches of an if/else expression must produce the same type".to_string());
+        return Some(
+            "both branches of an if/else expression must produce the same type".to_string(),
+        );
     }
-    if message.contains("if condition must be `bool`") || message.contains("while condition must be `bool`") {
-        return Some("conditions must be `bool`; use a comparison like `x > 0` instead".to_string());
+    if message.contains("if condition must be `bool`")
+        || message.contains("while condition must be `bool`")
+    {
+        return Some(
+            "conditions must be `bool`; use a comparison like `x > 0` instead".to_string(),
+        );
     }
     if message.contains("expects") && message.contains("argument(s) but") {
-        return Some("check the function signature for the correct number of arguments".to_string());
+        return Some(
+            "check the function signature for the correct number of arguments".to_string(),
+        );
     }
     if message.contains("argument") && message.contains("expects") && message.contains("found") {
-        return Some("the argument type doesn't match the parameter type in the function signature".to_string());
+        return Some(
+            "the argument type doesn't match the parameter type in the function signature"
+                .to_string(),
+        );
     }
     None
 }
@@ -1411,13 +1527,7 @@ fn extract_doc_comments(source: &str) -> HashMap<usize, Vec<String>> {
         if lines[i].trim().starts_with("///") {
             let mut comments = Vec::new();
             while i < lines.len() && lines[i].trim().starts_with("///") {
-                comments.push(
-                    lines[i]
-                        .trim()
-                        .trim_start_matches("///")
-                        .trim()
-                        .to_string(),
-                );
+                comments.push(lines[i].trim().trim_start_matches("///").trim().to_string());
                 i += 1;
             }
             // Skip any decorator lines (@derive, etc.) between doc comment and item
@@ -1479,7 +1589,11 @@ fn format_type_expr(ty: &turbo_ast::TypeExpr) -> String {
             format!("fn({}) -> {}", p.join(", "), format_type_expr(&ret.node))
         }
         turbo_ast::TypeExpr::Result { ok_type, err_type } => {
-            format!("{} ! {}", format_type_expr(&ok_type.node), format_type_expr(&err_type.node))
+            format!(
+                "{} ! {}",
+                format_type_expr(&ok_type.node),
+                format_type_expr(&err_type.node)
+            )
         }
         turbo_ast::TypeExpr::Optional(inner) => format!("{}?", format_type_expr(&inner.node)),
         turbo_ast::TypeExpr::Future(inner) => format!("Future<{}>", format_type_expr(&inner.node)),
@@ -1503,7 +1617,14 @@ fn format_fn_signature(f: &turbo_ast::FnDef) -> String {
     let async_prefix = if f.is_async { "async " } else { "" };
     let tool_prefix = if f.is_tool { "tool " } else { "" };
 
-    format!("{}{}fn {}({}){}", tool_prefix, async_prefix, f.name, params.join(", "), ret)
+    format!(
+        "{}{}fn {}({}){}",
+        tool_prefix,
+        async_prefix,
+        f.name,
+        params.join(", "),
+        ret
+    )
 }
 
 /// Scan source lines for struct definitions and their fields.
@@ -1736,10 +1857,7 @@ fn scan_agents(lines: &[&str], doc_comments: &HashMap<usize, Vec<String>>) -> Ve
 }
 
 /// Scan for top-level `fn` and `async fn` definitions in source text.
-fn scan_functions(
-    lines: &[&str],
-    doc_comments: &HashMap<usize, Vec<String>>,
-) -> Vec<DocItem> {
+fn scan_functions(lines: &[&str], doc_comments: &HashMap<usize, Vec<String>>) -> Vec<DocItem> {
     let mut items = Vec::new();
     let mut i = 0;
     while i < lines.len() {
@@ -1751,7 +1869,12 @@ fn scan_functions(
             && trimmed.contains('(');
 
         if is_fn {
-            let sig = trimmed.split('{').next().unwrap_or(trimmed).trim().to_string();
+            let sig = trimmed
+                .split('{')
+                .next()
+                .unwrap_or(trimmed)
+                .trim()
+                .to_string();
             let doc = doc_comments.get(&i).cloned().unwrap_or_default();
             items.push(DocItem::Function {
                 signature: sig,
@@ -1767,7 +1890,10 @@ fn doc_file(path: &std::path::Path) {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}", path.display());
+            eprintln!(
+                "\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}",
+                path.display()
+            );
             std::process::exit(1);
         }
     };

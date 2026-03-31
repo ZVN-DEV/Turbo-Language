@@ -1,5 +1,5 @@
-use cranelift::prelude::*;
 use cranelift::prelude::isa::CallConv;
+use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
@@ -50,7 +50,11 @@ fn turbo_ty_from_type_expr(te: &TypeExpr, enum_variants: &HashMap<String, Vec<St
     turbo_ty_from_type_expr_with_params(te, enum_variants, &[])
 }
 
-fn turbo_ty_from_type_expr_with_params(te: &TypeExpr, enum_variants: &HashMap<String, Vec<String>>, type_params: &[String]) -> TurboTy {
+fn turbo_ty_from_type_expr_with_params(
+    te: &TypeExpr,
+    enum_variants: &HashMap<String, Vec<String>>,
+    type_params: &[String],
+) -> TurboTy {
     match te {
         TypeExpr::Named(name) => {
             // Type parameters use Int representation (I64/ptr sized)
@@ -58,26 +62,27 @@ fn turbo_ty_from_type_expr_with_params(te: &TypeExpr, enum_variants: &HashMap<St
                 return TurboTy::Int;
             }
             match name.as_str() {
-            "i32" | "i64" | "u32" | "u64" => TurboTy::Int,
-            "f32" | "f64" => TurboTy::Float,
-            "bool" => TurboTy::Bool,
-            "str" => TurboTy::Str,
-            _ => {
-                if enum_variants.contains_key(name.as_str()) {
-                    TurboTy::Enum(name.clone())
-                } else {
-                    TurboTy::Struct(name.clone())
+                "i32" | "i64" | "u32" | "u64" => TurboTy::Int,
+                "f32" | "f64" => TurboTy::Float,
+                "bool" => TurboTy::Bool,
+                "str" => TurboTy::Str,
+                _ => {
+                    if enum_variants.contains_key(name.as_str()) {
+                        TurboTy::Enum(name.clone())
+                    } else {
+                        TurboTy::Struct(name.clone())
+                    }
                 }
             }
-            }
-        },
+        }
         TypeExpr::Unit => TurboTy::Unit,
         TypeExpr::Array(inner) => {
             let inner_tty = turbo_ty_from_type_expr(&inner.node, enum_variants);
             TurboTy::Array(Box::new(inner_tty))
         }
         TypeExpr::FnType { params, ret } => {
-            let param_tys: Vec<TurboTy> = params.iter()
+            let param_tys: Vec<TurboTy> = params
+                .iter()
                 .map(|p| turbo_ty_from_type_expr(&p.node, enum_variants))
                 .collect();
             let ret_ty = turbo_ty_from_type_expr(&ret.node, enum_variants);
@@ -94,10 +99,12 @@ fn turbo_ty_from_type_expr_with_params(te: &TypeExpr, enum_variants: &HashMap<St
         }
         // Future<T> is a thread handle pointer (underlying value is i64/ptr)
         TypeExpr::Future(inner) => {
-            let inner_tty = turbo_ty_from_type_expr_with_params(&inner.node, enum_variants, type_params);
+            let inner_tty =
+                turbo_ty_from_type_expr_with_params(&inner.node, enum_variants, type_params);
             TurboTy::Future(Box::new(inner_tty))
         }
-        #[allow(unreachable_patterns)] _ => TurboTy::Int,
+        #[allow(unreachable_patterns)]
+        _ => TurboTy::Int,
     }
 }
 
@@ -174,11 +181,17 @@ extern "C" fn rt_assert_eq_fail(kind: i64, actual: *const u8, expected: *const u
             .unwrap_or("<invalid>")
     };
     if kind == 0 {
-        eprintln!("assertion failed: assert_eq({}, {})", actual_str, expected_str);
+        eprintln!(
+            "assertion failed: assert_eq({}, {})",
+            actual_str, expected_str
+        );
         eprintln!("  left:  {}", actual_str);
         eprintln!("  right: {}", expected_str);
     } else {
-        eprintln!("assertion failed: assert_ne({}, {})", actual_str, expected_str);
+        eprintln!(
+            "assertion failed: assert_ne({}, {})",
+            actual_str, expected_str
+        );
         eprintln!("  both values are: {}", actual_str);
     }
     std::process::exit(1);
@@ -199,17 +212,28 @@ extern "C" fn rt_array_alloc(len: i64) -> *mut u8 {
     let total_bytes = 8 + data_bytes; // +8 for refcount header
     let layout = std::alloc::Layout::from_size_align(total_bytes, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
     let data_ptr = unsafe { ptr.add(8) }; // pointer past refcount header
-    // Store length at the start of the data region
-    unsafe { *(data_ptr as *mut i64) = len; }
+                                          // Store length at the start of the data region
+    unsafe {
+        *(data_ptr as *mut i64) = len;
+    }
     data_ptr
 }
 
 extern "C" fn rt_array_get(arr: *const u8, index: i64) -> i64 {
     let len = unsafe { *(arr as *const i64) };
     if index < 0 || index >= len {
-        eprintln!("runtime error: array index {} out of bounds (length {})", index, len);
+        eprintln!(
+            "runtime error: array index {} out of bounds (length {})",
+            index, len
+        );
         std::process::exit(1);
     }
     unsafe { *((arr as *const i64).add(1 + index as usize)) }
@@ -226,11 +250,21 @@ extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) -> *mut u8 {
         let total = 8 + data_size;
         let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
         let new_alloc = unsafe { std::alloc::alloc_zeroed(layout) };
-        unsafe { *(new_alloc as *mut i64) = 1; } // new refcount = 1
+        if new_alloc.is_null() {
+            eprintln!("turbo: fatal: memory allocation failed");
+            std::process::exit(1);
+        }
+        unsafe {
+            *(new_alloc as *mut i64) = 1;
+        } // new refcount = 1
         let new_data = unsafe { new_alloc.add(8) };
-        unsafe { std::ptr::copy_nonoverlapping(arr, new_data, data_size); }
+        unsafe {
+            std::ptr::copy_nonoverlapping(arr, new_data, data_size);
+        }
         // Decrement old refcount
-        unsafe { (*rc_ptr).fetch_sub(1, std::sync::atomic::Ordering::Release); }
+        unsafe {
+            (*rc_ptr).fetch_sub(1, std::sync::atomic::Ordering::Release);
+        }
         new_data
     } else {
         arr
@@ -238,10 +272,15 @@ extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) -> *mut u8 {
     // Bounds check + set on the target (possibly new) array
     let len = unsafe { *(target as *const i64) };
     if index < 0 || index >= len {
-        eprintln!("runtime error: array index {} out of bounds (length {})", index, len);
+        eprintln!(
+            "runtime error: array index {} out of bounds (length {})",
+            index, len
+        );
         std::process::exit(1);
     }
-    unsafe { *((target as *mut i64).add(1 + index as usize)) = value; }
+    unsafe {
+        *((target as *mut i64).add(1 + index as usize)) = value;
+    }
     target
 }
 
@@ -250,7 +289,9 @@ extern "C" fn rt_array_len(arr: *const u8) -> i64 {
 }
 
 extern "C" fn rt_str_len(s: *const u8) -> i64 {
-    if s.is_null() { return 0; }
+    if s.is_null() {
+        return 0;
+    }
     let cstr = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) };
     cstr.to_bytes().len() as i64
 }
@@ -292,7 +333,11 @@ extern "C" fn rt_str_eq(a: *const u8, b: *const u8) -> i8 {
             .to_str()
             .unwrap_or("")
     };
-    if a_str == b_str { 1 } else { 0 }
+    if a_str == b_str {
+        1
+    } else {
+        0
+    }
 }
 
 extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
@@ -300,7 +345,13 @@ extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
     let total_size = 8 + data_size.max(8); // +8 for refcount header
     let layout = std::alloc::Layout::from_size_align(total_size, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
     unsafe { ptr.add(8) } // return pointer past refcount header
 }
 
@@ -327,7 +378,13 @@ extern "C" fn rt_bool_to_str(b: i8) -> *const u8 {
 extern "C" fn rt_result_ok(value: i64) -> *mut u8 {
     let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
     let data_ptr = unsafe { ptr.add(8) };
     unsafe {
         *(data_ptr as *mut i64) = 0; // tag = ok
@@ -339,7 +396,13 @@ extern "C" fn rt_result_ok(value: i64) -> *mut u8 {
 extern "C" fn rt_result_err(value: i64) -> *mut u8 {
     let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
     let data_ptr = unsafe { ptr.add(8) };
     unsafe {
         *(data_ptr as *mut i64) = 1; // tag = err
@@ -361,7 +424,13 @@ extern "C" fn rt_result_value(result: *const u8) -> i64 {
 extern "C" fn rt_option_some(value: i64) -> *mut u8 {
     let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
     let data_ptr = unsafe { ptr.add(8) };
     unsafe {
         *(data_ptr as *mut i64) = 1; // tag = some
@@ -373,7 +442,13 @@ extern "C" fn rt_option_some(value: i64) -> *mut u8 {
 extern "C" fn rt_option_none() -> *mut u8 {
     let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
     let data_ptr = unsafe { ptr.add(8) };
     unsafe {
         *(data_ptr as *mut i64) = 0; // tag = none
@@ -394,9 +469,11 @@ extern "C" fn rt_option_value(opt: *const u8) -> i64 {
 
 extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let sep = unsafe { std::ffi::CStr::from_ptr(sep as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let parts: Vec<&str> = s.split(sep).collect();
     let len = parts.len() as i64;
     // Array format: [refcount: i64][len: i64][ptr0: i64][ptr1: i64]...
@@ -404,20 +481,31 @@ extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
     let total = 8 + data_size; // +8 for refcount header
     let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
     let data_ptr = unsafe { ptr.add(8) };
-    unsafe { *(data_ptr as *mut i64) = len; }
+    unsafe {
+        *(data_ptr as *mut i64) = len;
+    }
     for (i, part) in parts.iter().enumerate() {
         let cs = std::ffi::CString::new(*part).unwrap();
         let p = cs.into_raw() as i64;
-        unsafe { *((data_ptr as *mut i64).add(1 + i)) = p; }
+        unsafe {
+            *((data_ptr as *mut i64).add(1 + i)) = p;
+        }
     }
     data_ptr
 }
 
 extern "C" fn rt_str_trim(s: *const u8) -> *const u8 {
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let trimmed = s.trim();
     let cs = std::ffi::CString::new(trimmed).unwrap();
     cs.into_raw() as *const u8
@@ -425,7 +513,8 @@ extern "C" fn rt_str_trim(s: *const u8) -> *const u8 {
 
 extern "C" fn rt_str_upper(s: *const u8) -> *const u8 {
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let upper = s.to_uppercase();
     let cs = std::ffi::CString::new(upper).unwrap();
     cs.into_raw() as *const u8
@@ -433,7 +522,8 @@ extern "C" fn rt_str_upper(s: *const u8) -> *const u8 {
 
 extern "C" fn rt_str_lower(s: *const u8) -> *const u8 {
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let lower = s.to_lowercase();
     let cs = std::ffi::CString::new(lower).unwrap();
     cs.into_raw() as *const u8
@@ -441,27 +531,42 @@ extern "C" fn rt_str_lower(s: *const u8) -> *const u8 {
 
 extern "C" fn rt_str_starts_with(s: *const u8, prefix: *const u8) -> i8 {
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let prefix = unsafe { std::ffi::CStr::from_ptr(prefix as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
-    if s.starts_with(prefix) { 1 } else { 0 }
+        .to_str()
+        .unwrap_or("");
+    if s.starts_with(prefix) {
+        1
+    } else {
+        0
+    }
 }
 
 extern "C" fn rt_str_ends_with(s: *const u8, suffix: *const u8) -> i8 {
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let suffix = unsafe { std::ffi::CStr::from_ptr(suffix as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
-    if s.ends_with(suffix) { 1 } else { 0 }
+        .to_str()
+        .unwrap_or("");
+    if s.ends_with(suffix) {
+        1
+    } else {
+        0
+    }
 }
 
 extern "C" fn rt_str_replace(s: *const u8, from: *const u8, to: *const u8) -> *const u8 {
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let from = unsafe { std::ffi::CStr::from_ptr(from as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let to_s = unsafe { std::ffi::CStr::from_ptr(to as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let result = s.replace(from, to_s);
     let cs = std::ffi::CString::new(result).unwrap();
     cs.into_raw() as *const u8
@@ -469,12 +574,17 @@ extern "C" fn rt_str_replace(s: *const u8, from: *const u8, to: *const u8) -> *c
 
 extern "C" fn rt_str_char_at(s: *const u8, index: i64) -> *const u8 {
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     if let Some(c) = s.chars().nth(index as usize) {
         let cs = std::ffi::CString::new(c.to_string()).unwrap();
         cs.into_raw() as *const u8
     } else {
-        eprintln!("runtime error: string index {} out of bounds (length {})", index, s.chars().count());
+        eprintln!(
+            "runtime error: string index {} out of bounds (length {})",
+            index,
+            s.chars().count()
+        );
         std::process::exit(1);
     }
 }
@@ -482,18 +592,26 @@ extern "C" fn rt_str_char_at(s: *const u8, index: i64) -> *const u8 {
 /// contains(s, sub) -> bool — returns true if s contains sub
 extern "C" fn rt_str_contains(s: *const u8, sub: *const u8) -> i8 {
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let sub = unsafe { std::ffi::CStr::from_ptr(sub as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
-    if s.contains(sub) { 1 } else { 0 }
+        .to_str()
+        .unwrap_or("");
+    if s.contains(sub) {
+        1
+    } else {
+        0
+    }
 }
 
 /// index_of(s, sub) -> i64 — returns byte offset or -1 if not found
 extern "C" fn rt_str_index_of(s: *const u8, sub: *const u8) -> i64 {
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let sub = unsafe { std::ffi::CStr::from_ptr(sub as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     match s.find(sub) {
         Some(pos) => pos as i64,
         None => -1,
@@ -503,14 +621,16 @@ extern "C" fn rt_str_index_of(s: *const u8, sub: *const u8) -> i64 {
 /// join(arr, sep) -> str — join string array elements with separator
 extern "C" fn rt_str_join(arr: *const u8, sep: *const u8) -> *const u8 {
     let sep = unsafe { std::ffi::CStr::from_ptr(sep as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     // arr is a Turbo array: first 8 bytes = length, then 8 bytes per element (string pointers)
     let len = unsafe { *(arr as *const i64) } as usize;
     let mut parts = Vec::with_capacity(len);
     for i in 0..len {
         let elem_ptr = unsafe { *((arr as *const i64).add(1 + i)) } as *const u8;
         let elem = unsafe { std::ffi::CStr::from_ptr(elem_ptr as *const std::ffi::c_char) }
-            .to_str().unwrap_or("");
+            .to_str()
+            .unwrap_or("");
         parts.push(elem.to_string());
     }
     let joined = parts.join(sep);
@@ -521,7 +641,8 @@ extern "C" fn rt_str_join(arr: *const u8, sep: *const u8) -> *const u8 {
 /// repeat(s, n) -> str — repeat string n times
 extern "C" fn rt_str_repeat(s: *const u8, n: i64) -> *const u8 {
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let repeated = s.repeat(n.max(0) as usize);
     let cs = std::ffi::CString::new(repeated).unwrap();
     cs.into_raw() as *const u8
@@ -537,7 +658,8 @@ extern "C" fn rt_read_line() -> *const u8 {
 
 extern "C" fn rt_read_file(path: *const u8) -> *const u8 {
     let path = unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     match std::fs::read_to_string(path) {
         Ok(content) => {
             let cs = std::ffi::CString::new(content).unwrap();
@@ -552,9 +674,11 @@ extern "C" fn rt_read_file(path: *const u8) -> *const u8 {
 
 extern "C" fn rt_write_file(path: *const u8, content: *const u8) {
     let path = unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let content = unsafe { std::ffi::CStr::from_ptr(content as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     if let Err(e) = std::fs::write(path, content) {
         eprintln!("runtime error: cannot write file '{}': {}", path, e);
         std::process::exit(1);
@@ -562,7 +686,9 @@ extern "C" fn rt_write_file(path: *const u8, content: *const u8) {
 }
 
 extern "C" fn rt_pow(base: i64, exp: i64) -> i64 {
-    if exp < 0 { return 0; }
+    if exp < 0 {
+        return 0;
+    }
     let mut result: i64 = 1;
     for _ in 0..exp {
         result = result.wrapping_mul(base);
@@ -579,7 +705,8 @@ extern "C" fn rt_sqrt(x: f64) -> f64 {
 /// HTTP GET via system curl. Returns response body as a C string.
 extern "C" fn rt_http_get(url: *const u8) -> *const u8 {
     let url = unsafe { std::ffi::CStr::from_ptr(url as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let output = std::process::Command::new("curl")
         .arg("-s")
         .arg("-L")
@@ -588,9 +715,8 @@ extern "C" fn rt_http_get(url: *const u8) -> *const u8 {
     match output {
         Ok(out) => {
             let body = String::from_utf8_lossy(&out.stdout).to_string();
-            let cs = std::ffi::CString::new(body).unwrap_or_else(|_| {
-                std::ffi::CString::new("").unwrap()
-            });
+            let cs = std::ffi::CString::new(body)
+                .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
             cs.into_raw() as *const u8
         }
         Err(e) => {
@@ -603,23 +729,27 @@ extern "C" fn rt_http_get(url: *const u8) -> *const u8 {
 /// HTTP POST via system curl. Takes URL and body, returns response body as a C string.
 extern "C" fn rt_http_post(url: *const u8, body: *const u8) -> *const u8 {
     let url = unsafe { std::ffi::CStr::from_ptr(url as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let body_str = unsafe { std::ffi::CStr::from_ptr(body as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let output = std::process::Command::new("curl")
         .arg("-s")
         .arg("-L")
-        .arg("-X").arg("POST")
-        .arg("-H").arg("Content-Type: application/json")
-        .arg("-d").arg(body_str)
+        .arg("-X")
+        .arg("POST")
+        .arg("-H")
+        .arg("Content-Type: application/json")
+        .arg("-d")
+        .arg(body_str)
         .arg(url)
         .output();
     match output {
         Ok(out) => {
             let resp = String::from_utf8_lossy(&out.stdout).to_string();
-            let cs = std::ffi::CString::new(resp).unwrap_or_else(|_| {
-                std::ffi::CString::new("").unwrap()
-            });
+            let cs = std::ffi::CString::new(resp)
+                .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
             cs.into_raw() as *const u8
         }
         Err(e) => {
@@ -633,9 +763,11 @@ extern "C" fn rt_http_post(url: *const u8, body: *const u8) -> *const u8 {
 /// Handles string values, numbers, booleans, and null.
 extern "C" fn rt_json_get(json: *const u8, key: *const u8) -> *const u8 {
     let json_str = unsafe { std::ffi::CStr::from_ptr(json as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let key_str = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
 
     // Search for "key" in the JSON
     let search = format!("\"{}\"", key_str);
@@ -645,9 +777,8 @@ extern "C" fn rt_json_get(json: *const u8, key: *const u8) -> *const u8 {
         let trimmed = after_key.trim_start();
         if let Some(after_colon) = trimmed.strip_prefix(':') {
             let value_start = after_colon.trim_start();
-            if value_start.starts_with('"') {
+            if let Some(inner) = value_start.strip_prefix('"') {
                 // String value: find closing quote, handling escaped quotes
-                let inner = &value_start[1..];
                 let mut end = 0;
                 let bytes = inner.as_bytes();
                 while end < bytes.len() {
@@ -660,18 +791,25 @@ extern "C" fn rt_json_get(json: *const u8, key: *const u8) -> *const u8 {
                     }
                 }
                 let value = &inner[..end];
-                let cs = std::ffi::CString::new(value).unwrap_or_else(|_| {
-                    std::ffi::CString::new("").unwrap()
-                });
+                let cs = std::ffi::CString::new(value)
+                    .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
                 return cs.into_raw() as *const u8;
             } else {
                 // Number, bool, or null: read until , } ] or whitespace
-                let end = value_start.find(|c: char| c == ',' || c == '}' || c == ']' || c == ' ' || c == '\n' || c == '\r' || c == '\t')
+                let end = value_start
+                    .find(|c: char| {
+                        c == ','
+                            || c == '}'
+                            || c == ']'
+                            || c == ' '
+                            || c == '\n'
+                            || c == '\r'
+                            || c == '\t'
+                    })
                     .unwrap_or(value_start.len());
                 let value = &value_start[..end];
-                let cs = std::ffi::CString::new(value).unwrap_or_else(|_| {
-                    std::ffi::CString::new("").unwrap()
-                });
+                let cs = std::ffi::CString::new(value)
+                    .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
                 return cs.into_raw() as *const u8;
             }
         }
@@ -684,12 +822,16 @@ extern "C" fn rt_json_get(json: *const u8, key: *const u8) -> *const u8 {
 /// Build a JSON object string from a key and value: {"key": "value"}
 extern "C" fn rt_json_stringify(key: *const u8, value: *const u8) -> *const u8 {
     let key_str = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let value_str = unsafe { std::ffi::CStr::from_ptr(value as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
-    let result = format!("{{\"{}\":\"{}\"}}",
+        .to_str()
+        .unwrap_or("");
+    let result = format!(
+        "{{\"{}\":\"{}\"}}",
         key_str.replace('\\', "\\\\").replace('"', "\\\""),
-        value_str.replace('\\', "\\\\").replace('"', "\\\""));
+        value_str.replace('\\', "\\\\").replace('"', "\\\"")
+    );
     let cs = std::ffi::CString::new(result).unwrap();
     cs.into_raw() as *const u8
 }
@@ -708,14 +850,14 @@ struct HttpServer {
 
 unsafe impl Send for HttpServer {}
 
-static HTTP_SERVERS: Mutex<Vec<Box<HttpServer>>> = Mutex::new(Vec::new());
+static HTTP_SERVERS: Mutex<Vec<HttpServer>> = Mutex::new(Vec::new());
 
 /// Create a new HTTP server. Returns a server id (index).
 extern "C" fn rt_http_server(port: i64) -> i64 {
-    let server = Box::new(HttpServer {
+    let server = HttpServer {
         port: port as u16,
         routes: Vec::new(),
-    });
+    };
     let mut servers = HTTP_SERVERS.lock().unwrap();
     let id = servers.len() as i64;
     servers.push(server);
@@ -723,11 +865,21 @@ extern "C" fn rt_http_server(port: i64) -> i64 {
 }
 
 /// Register a route handler on the server.
-extern "C" fn rt_http_route(server_id: i64, method: *const u8, path: *const u8, handler: *const u8, env_ptr: *const u8) {
+extern "C" fn rt_http_route(
+    server_id: i64,
+    method: *const u8,
+    path: *const u8,
+    handler: *const u8,
+    env_ptr: *const u8,
+) {
     let method = unsafe { std::ffi::CStr::from_ptr(method as *const std::ffi::c_char) }
-        .to_str().unwrap_or("").to_string();
+        .to_str()
+        .unwrap_or("")
+        .to_string();
     let path = unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
-        .to_str().unwrap_or("").to_string();
+        .to_str()
+        .unwrap_or("")
+        .to_string();
     let handler: RouteHandler = unsafe { std::mem::transmute(handler) };
 
     let mut servers = HTTP_SERVERS.lock().unwrap();
@@ -738,7 +890,7 @@ extern "C" fn rt_http_route(server_id: i64, method: *const u8, path: *const u8, 
 
 /// Start the HTTP server. Blocks forever accepting connections.
 extern "C" fn rt_http_listen(server_id: i64) {
-    use std::io::{Read, Write, BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
 
     let (port, routes) = {
@@ -752,84 +904,105 @@ extern "C" fn rt_http_listen(server_id: i64) {
     let addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&addr).expect("failed to bind HTTP server");
 
-    for stream in listener.incoming() {
-        if let Ok(stream) = stream {
-            let mut reader = BufReader::new(&stream);
-            let mut request_line = String::new();
-            if reader.read_line(&mut request_line).is_err() { continue; }
+    for stream in listener.incoming().flatten() {
+        let mut reader = BufReader::new(&stream);
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).is_err() {
+            continue;
+        }
 
-            let parts: Vec<&str> = request_line.trim().split_whitespace().collect();
-            if parts.len() < 2 { continue; }
-            let method = parts[0];
-            let path = parts[1];
+        let parts: Vec<&str> = request_line.split_whitespace().collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let method = parts[0];
+        let path = parts[1];
 
-            // Read headers
-            let mut content_length: usize = 0;
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).is_err() { break; }
-                if line.trim().is_empty() { break; }
-                if line.to_lowercase().starts_with("content-length:") {
-                    content_length = line.split(':').nth(1).unwrap_or("0").trim().parse().unwrap_or(0);
-                }
+        // Read headers
+        let mut content_length: usize = 0;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                break;
             }
-
-            // Read body
-            let mut body = vec![0u8; content_length];
-            if content_length > 0 {
-                let _ = reader.read_exact(&mut body);
+            if line.trim().is_empty() {
+                break;
             }
+            if line.to_lowercase().starts_with("content-length:") {
+                content_length = line
+                    .split(':')
+                    .nth(1)
+                    .unwrap_or("0")
+                    .trim()
+                    .parse()
+                    .unwrap_or(0);
+            }
+        }
 
-            // We need a mutable reference to stream for writing, drop the BufReader first
-            drop(reader);
-            let mut stream = stream;
+        // Read body
+        let mut body = vec![0u8; content_length];
+        if content_length > 0 {
+            let _ = reader.read_exact(&mut body);
+        }
 
-            // Find matching route
-            let mut matched = false;
-            for (route_method, route_path, handler, env_ptr) in &routes {
-                if route_method == method && route_path == path {
-                    let body_str = String::from_utf8_lossy(&body);
-                    let req_cstr = std::ffi::CString::new(body_str.as_ref()).unwrap_or_else(|_| {
-                        std::ffi::CString::new("").unwrap()
-                    });
-                    let response_ptr = handler(*env_ptr, req_cstr.as_ptr() as *const u8);
+        // We need a mutable reference to stream for writing, drop the BufReader first
+        drop(reader);
+        let mut stream = stream;
 
-                    let http_response = if response_ptr.is_null() {
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n\r\n".to_string()
+        // Find matching route
+        let mut matched = false;
+        for (route_method, route_path, handler, env_ptr) in &routes {
+            if route_method == method && route_path == path {
+                let body_str = String::from_utf8_lossy(&body);
+                let req_cstr = std::ffi::CString::new(body_str.as_ref())
+                    .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+                let response_ptr = handler(*env_ptr, req_cstr.as_ptr() as *const u8);
+
+                let http_response = if response_ptr.is_null() {
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n\r\n"
+                        .to_string()
+                } else {
+                    let resp = unsafe {
+                        std::ffi::CStr::from_ptr(response_ptr as *const std::ffi::c_char)
+                    }
+                    .to_str()
+                    .unwrap_or("");
+                    if let Some((status, resp_body)) = resp.split_once(':') {
+                        let code = status.parse::<u16>().unwrap_or(200);
+                        let status_text = match code {
+                            200 => "OK",
+                            201 => "Created",
+                            204 => "No Content",
+                            400 => "Bad Request",
+                            401 => "Unauthorized",
+                            403 => "Forbidden",
+                            404 => "Not Found",
+                            500 => "Internal Server Error",
+                            _ => "OK",
+                        };
+                        format!(
+                            "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
+                            code, status_text, resp_body.len(), resp_body
+                        )
                     } else {
-                        let resp = unsafe { std::ffi::CStr::from_ptr(response_ptr as *const std::ffi::c_char) }
-                            .to_str().unwrap_or("");
-                        if let Some((status, resp_body)) = resp.split_once(':') {
-                            let code = status.parse::<u16>().unwrap_or(200);
-                            let status_text = match code {
-                                200 => "OK", 201 => "Created", 204 => "No Content",
-                                400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden",
-                                404 => "Not Found", 500 => "Internal Server Error", _ => "OK",
-                            };
-                            format!(
-                                "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
-                                code, status_text, resp_body.len(), resp_body
-                            )
-                        } else {
-                            format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                                resp.len(), resp
-                            )
-                        }
-                    };
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                            resp.len(), resp
+                        )
+                    }
+                };
 
-                    let _ = stream.write_all(http_response.as_bytes());
-                    let _ = stream.flush();
-                    matched = true;
-                    break;
-                }
-            }
-
-            if !matched {
-                let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
-                let _ = stream.write_all(not_found.as_bytes());
+                let _ = stream.write_all(http_response.as_bytes());
                 let _ = stream.flush();
+                matched = true;
+                break;
             }
+        }
+
+        if !matched {
+            let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
+            let _ = stream.write_all(not_found.as_bytes());
+            let _ = stream.flush();
         }
     }
 }
@@ -837,11 +1010,11 @@ extern "C" fn rt_http_listen(server_id: i64) {
 /// Build a response string in "STATUS:BODY" format.
 extern "C" fn rt_respond(status: i64, body: *const u8) -> *const u8 {
     let body_str = unsafe { std::ffi::CStr::from_ptr(body as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     let response = format!("{}:{}", status, body_str);
-    let cs = std::ffi::CString::new(response).unwrap_or_else(|_| {
-        std::ffi::CString::new("200:").unwrap()
-    });
+    let cs = std::ffi::CString::new(response)
+        .unwrap_or_else(|_| std::ffi::CString::new("200:").unwrap());
     cs.into_raw() as *const u8
 }
 
@@ -892,7 +1065,13 @@ extern "C" fn rt_channel_create() -> *mut u8 {
     let ptr = unsafe {
         std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(8 + 16, 8).unwrap())
     };
-    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
     let data_ptr = unsafe { ptr.add(8) };
     unsafe {
         *(data_ptr as *mut i64) = tx_box;
@@ -927,7 +1106,13 @@ extern "C" fn rt_channel_clone_sender(ch: *const u8) -> *mut u8 {
     let ptr = unsafe {
         std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(8 + 16, 8).unwrap())
     };
-    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
     let data_ptr = unsafe { ptr.add(8) };
     unsafe {
         *(data_ptr as *mut i64) = new_tx;
@@ -980,9 +1165,13 @@ extern "C" fn rt_hashmap_new() -> *mut u8 {
 extern "C" fn rt_hashmap_set(map_ptr: *mut u8, key: *const u8, value: *const u8) {
     let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
     let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
-        .to_str().unwrap_or("").to_string();
+        .to_str()
+        .unwrap_or("")
+        .to_string();
     let value = unsafe { std::ffi::CStr::from_ptr(value as *const std::ffi::c_char) }
-        .to_str().unwrap_or("").to_string();
+        .to_str()
+        .unwrap_or("")
+        .to_string();
     map.insert(key, value);
 }
 
@@ -990,13 +1179,14 @@ extern "C" fn rt_hashmap_set(map_ptr: *mut u8, key: *const u8, value: *const u8)
 extern "C" fn rt_hashmap_get(map_ptr: *const u8, key: *const u8) -> *const u8 {
     let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
     let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     match map.get(key) {
         Some(v) => {
             let cs = std::ffi::CString::new(v.as_str()).unwrap();
             cs.into_raw() as *const u8
         }
-        None => std::ptr::null()
+        None => std::ptr::null(),
     }
 }
 
@@ -1004,8 +1194,13 @@ extern "C" fn rt_hashmap_get(map_ptr: *const u8, key: *const u8) -> *const u8 {
 extern "C" fn rt_hashmap_has(map_ptr: *const u8, key: *const u8) -> i8 {
     let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
     let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
-    if map.contains_key(key) { 1 } else { 0 }
+        .to_str()
+        .unwrap_or("");
+    if map.contains_key(key) {
+        1
+    } else {
+        0
+    }
 }
 
 /// Return the number of entries in the hashmap.
@@ -1025,12 +1220,22 @@ extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
     let total = 8 + data_size; // +8 for refcount header
     let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount = 1
     let data_ptr = unsafe { ptr.add(8) };
-    unsafe { *(data_ptr as *mut i64) = len; }
+    unsafe {
+        *(data_ptr as *mut i64) = len;
+    }
     for (i, key) in keys.iter().enumerate() {
         let cs = std::ffi::CString::new(*key).unwrap();
-        unsafe { *((data_ptr as *mut i64).add(1 + i)) = cs.into_raw() as i64; }
+        unsafe {
+            *((data_ptr as *mut i64).add(1 + i)) = cs.into_raw() as i64;
+        }
     }
     data_ptr
 }
@@ -1039,7 +1244,8 @@ extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
 extern "C" fn rt_hashmap_remove(map_ptr: *mut u8, key: *const u8) {
     let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
     let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
-        .to_str().unwrap_or("");
+        .to_str()
+        .unwrap_or("");
     map.remove(key);
 }
 
@@ -1048,9 +1254,13 @@ extern "C" fn rt_hashmap_remove(map_ptr: *mut u8, key: *const u8) {
 /// Increment the reference count of a heap-allocated object.
 /// The refcount lives at data_ptr - 8 (the header before the data).
 extern "C" fn rt_retain(data_ptr: *mut u8) {
-    if data_ptr.is_null() { return; }
+    if data_ptr.is_null() {
+        return;
+    }
     let header = unsafe { data_ptr.sub(8) as *mut std::sync::atomic::AtomicI64 };
-    unsafe { (*header).fetch_add(1, std::sync::atomic::Ordering::Relaxed); }
+    unsafe {
+        (*header).fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// Decrement the reference count of a heap-allocated object.
@@ -1058,7 +1268,9 @@ extern "C" fn rt_retain(data_ptr: *mut u8) {
 /// For now (Sprint 17), we track but don't free — proper dealloc
 /// requires storing allocation size in the header.
 extern "C" fn rt_release(data_ptr: *mut u8) {
-    if data_ptr.is_null() { return; }
+    if data_ptr.is_null() {
+        return;
+    }
     let header = unsafe { data_ptr.sub(8) as *mut std::sync::atomic::AtomicI64 };
     let _prev = unsafe { (*header).fetch_sub(1, std::sync::atomic::Ordering::Release) };
     if _prev == 1 {
@@ -1145,16 +1357,23 @@ impl<'a, M: Module> Ctx<'a, M> {
         let name = format!(".str.{}", *self.string_counter);
         *self.string_counter += 1;
 
-        let data_id = self.module.declare_data(&name, Linkage::Local, false, false)
-            .map_err(|e| CodegenError { message: e.to_string() })?;
+        let data_id = self
+            .module
+            .declare_data(&name, Linkage::Local, false, false)
+            .map_err(|e| CodegenError {
+                message: e.to_string(),
+            })?;
 
         self.data_desc.clear();
         let mut bytes = s.as_bytes().to_vec();
         bytes.push(0);
         self.data_desc.define(bytes.into_boxed_slice());
 
-        self.module.define_data(data_id, self.data_desc)
-            .map_err(|e| CodegenError { message: e.to_string() })?;
+        self.module
+            .define_data(data_id, self.data_desc)
+            .map_err(|e| CodegenError {
+                message: e.to_string(),
+            })?;
 
         let data_ref = self.module.declare_data_in_func(data_id, self.builder.func);
         let ptr = self.builder.ins().global_value(self.ptr_type, data_ref);
@@ -1170,6 +1389,7 @@ impl<'a, M: Module> Ctx<'a, M> {
     /// Convert a value to an I8 boolean for use in `brif`.
     /// If the value is already I8 (e.g. from `icmp` or a bool variable),
     /// return it directly — avoiding a redundant `icmp(NotEqual, val, 0)`.
+    #[allow(clippy::wrong_self_convention)]
     fn to_bool(&mut self, val: Value) -> Value {
         let ty = self.builder.func.dfg.value_type(val);
         if ty == types::I8 {
@@ -1191,11 +1411,14 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     flag_builder.set("enable_verifier", "false").unwrap();
     flag_builder.set("enable_alias_analysis", "true").unwrap();
 
-    let isa_builder = cranelift_native::builder()
-        .map_err(|e| CodegenError { message: e.to_string() })?;
+    let isa_builder = cranelift_native::builder().map_err(|e| CodegenError {
+        message: e.to_string(),
+    })?;
     let isa = isa_builder
         .finish(settings::Flags::new(flag_builder))
-        .map_err(|e| CodegenError { message: e.to_string() })?;
+        .map_err(|e| CodegenError {
+            message: e.to_string(),
+        })?;
 
     let ptr_type = isa.pointer_type();
 
@@ -1267,7 +1490,10 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_channel_create", rt_channel_create as *const u8);
     jit_builder.symbol("rt_channel_send", rt_channel_send as *const u8);
     jit_builder.symbol("rt_channel_recv", rt_channel_recv as *const u8);
-    jit_builder.symbol("rt_channel_clone_sender", rt_channel_clone_sender as *const u8);
+    jit_builder.symbol(
+        "rt_channel_clone_sender",
+        rt_channel_clone_sender as *const u8,
+    );
     // Mutex builtins
     jit_builder.symbol("rt_mutex_create", rt_mutex_create as *const u8);
     jit_builder.symbol("rt_mutex_get", rt_mutex_get as *const u8);
@@ -1288,11 +1514,13 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     let mut module = JITModule::new(jit_builder);
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
 
-    module.finalize_definitions()
-        .map_err(|e| CodegenError { message: e.to_string() })?;
+    module.finalize_definitions().map_err(|e| CodegenError {
+        message: e.to_string(),
+    })?;
 
-    let main_id = user_fns.get("main")
-        .ok_or_else(|| CodegenError { message: "no `main` function found".to_string() })?;
+    let main_id = user_fns.get("main").ok_or_else(|| CodegenError {
+        message: "no `main` function found".to_string(),
+    })?;
     let main_ptr = module.get_finalized_function(*main_id);
     let main_fn: fn() = unsafe { std::mem::transmute(main_ptr) };
     main_fn();
@@ -1311,11 +1539,14 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     flag_builder.set("enable_verifier", "false").unwrap();
     flag_builder.set("enable_alias_analysis", "true").unwrap();
 
-    let isa_builder = cranelift_native::builder()
-        .map_err(|e| CodegenError { message: e.to_string() })?;
+    let isa_builder = cranelift_native::builder().map_err(|e| CodegenError {
+        message: e.to_string(),
+    })?;
     let isa = isa_builder
         .finish(settings::Flags::new(flag_builder))
-        .map_err(|e| CodegenError { message: e.to_string() })?;
+        .map_err(|e| CodegenError {
+            message: e.to_string(),
+        })?;
 
     let ptr_type = isa.pointer_type();
 
@@ -1382,7 +1613,10 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_channel_create", rt_channel_create as *const u8);
     jit_builder.symbol("rt_channel_send", rt_channel_send as *const u8);
     jit_builder.symbol("rt_channel_recv", rt_channel_recv as *const u8);
-    jit_builder.symbol("rt_channel_clone_sender", rt_channel_clone_sender as *const u8);
+    jit_builder.symbol(
+        "rt_channel_clone_sender",
+        rt_channel_clone_sender as *const u8,
+    );
     jit_builder.symbol("rt_mutex_create", rt_mutex_create as *const u8);
     jit_builder.symbol("rt_mutex_get", rt_mutex_get as *const u8);
     jit_builder.symbol("rt_mutex_set", rt_mutex_set as *const u8);
@@ -1393,11 +1627,13 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     let mut module = JITModule::new(jit_builder);
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
 
-    module.finalize_definitions()
-        .map_err(|e| CodegenError { message: e.to_string() })?;
+    module.finalize_definitions().map_err(|e| CodegenError {
+        message: e.to_string(),
+    })?;
 
-    let func_id = user_fns.get(fn_name)
-        .ok_or_else(|| CodegenError { message: format!("no function `{fn_name}` found") })?;
+    let func_id = user_fns.get(fn_name).ok_or_else(|| CodegenError {
+        message: format!("no function `{fn_name}` found"),
+    })?;
     let func_ptr = module.get_finalized_function(*func_id);
     let func: fn() = unsafe { std::mem::transmute(func_ptr) };
     func();
@@ -1419,11 +1655,14 @@ pub fn aot_compile(
         flag_builder.set("enable_alias_analysis", "true").unwrap();
     }
 
-    let isa_builder = cranelift_native::builder()
-        .map_err(|e| CodegenError { message: e.to_string() })?;
+    let isa_builder = cranelift_native::builder().map_err(|e| CodegenError {
+        message: e.to_string(),
+    })?;
     let isa = isa_builder
         .finish(settings::Flags::new(flag_builder))
-        .map_err(|e| CodegenError { message: e.to_string() })?;
+        .map_err(|e| CodegenError {
+            message: e.to_string(),
+        })?;
 
     let ptr_type = isa.pointer_type();
 
@@ -1431,27 +1670,34 @@ pub fn aot_compile(
         isa,
         "turbo_module",
         cranelift_module::default_libcall_names(),
-    ).map_err(|e| CodegenError { message: e.to_string() })?;
+    )
+    .map_err(|e| CodegenError {
+        message: e.to_string(),
+    })?;
 
     let mut module = ObjectModule::new(obj_builder);
     compile_module(&mut module, ast_module, ptr_type, Linkage::Export, true)?;
 
     let product = module.finish();
-    let obj_bytes = product.emit()
-        .map_err(|e| CodegenError { message: format!("failed to emit object: {e}") })?;
+    let obj_bytes = product.emit().map_err(|e| CodegenError {
+        message: format!("failed to emit object: {e}"),
+    })?;
 
     // Write object file and runtime to temp, then link with cc
     let tmp_dir = std::env::temp_dir().join(format!("turbo_aot_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_dir)
-        .map_err(|e| CodegenError { message: format!("failed to create temp dir: {e}") })?;
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| CodegenError {
+        message: format!("failed to create temp dir: {e}"),
+    })?;
 
     let obj_path = tmp_dir.join("turbo.o");
     let rt_path = tmp_dir.join("turbo_rt.c");
 
-    std::fs::write(&obj_path, &obj_bytes)
-        .map_err(|e| CodegenError { message: format!("failed to write object file: {e}") })?;
-    std::fs::write(&rt_path, RUNTIME_C)
-        .map_err(|e| CodegenError { message: format!("failed to write runtime: {e}") })?;
+    std::fs::write(&obj_path, &obj_bytes).map_err(|e| CodegenError {
+        message: format!("failed to write object file: {e}"),
+    })?;
+    std::fs::write(&rt_path, RUNTIME_C).map_err(|e| CodegenError {
+        message: format!("failed to write runtime: {e}"),
+    })?;
 
     let output = std::process::Command::new("cc")
         .arg(&rt_path)
@@ -1460,7 +1706,9 @@ pub fn aot_compile(
         .arg("-o")
         .arg(output_path)
         .output()
-        .map_err(|e| CodegenError { message: format!("failed to run linker: {e}") })?;
+        .map_err(|e| CodegenError {
+            message: format!("failed to run linker: {e}"),
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1485,27 +1733,37 @@ fn has_return(expr: &Expr) -> bool {
             for stmt in stmts {
                 match &stmt.node {
                     Stmt::Return(_) => return true,
-                    Stmt::Let { value, .. } => { if has_return(&value.node) { return true; } }
-                    Stmt::Expr(e) => { if has_return(&e.node) { return true; } }
-                    Stmt::Defer(e) => { if has_return(&e.node) { return true; } }
+                    Stmt::Let { value, .. } => {
+                        if has_return(&value.node) {
+                            return true;
+                        }
+                    }
+                    Stmt::Expr(e) => {
+                        if has_return(&e.node) {
+                            return true;
+                        }
+                    }
+                    Stmt::Defer(e) => {
+                        if has_return(&e.node) {
+                            return true;
+                        }
+                    }
                 }
             }
             tail_expr.as_ref().is_some_and(|t| has_return(&t.node))
         }
-        Expr::If { condition, then_branch, else_branch } => {
-            has_return(&condition.node) ||
-            has_return(&then_branch.node) ||
-            else_branch.as_ref().is_some_and(|e| has_return(&e.node))
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            has_return(&condition.node)
+                || has_return(&then_branch.node)
+                || else_branch.as_ref().is_some_and(|e| has_return(&e.node))
         }
-        Expr::While { condition, body } => {
-            has_return(&condition.node) || has_return(&body.node)
-        }
-        Expr::ForIn { iterable, body, .. } => {
-            has_return(&iterable.node) || has_return(&body.node)
-        }
-        Expr::BinaryOp { left, right, .. } => {
-            has_return(&left.node) || has_return(&right.node)
-        }
+        Expr::While { condition, body } => has_return(&condition.node) || has_return(&body.node),
+        Expr::ForIn { iterable, body, .. } => has_return(&iterable.node) || has_return(&body.node),
+        Expr::BinaryOp { left, right, .. } => has_return(&left.node) || has_return(&right.node),
         Expr::UnaryOp { expr, .. } => has_return(&expr.node),
         Expr::Call { callee, args } => {
             has_return(&callee.node) || args.iter().any(|a| has_return(&a.node))
@@ -1515,27 +1773,28 @@ fn has_return(expr: &Expr) -> bool {
         Expr::FieldAssign { object, value, .. } => {
             has_return(&object.node) || has_return(&value.node)
         }
-        Expr::IndexAssign { object, index, value } => {
-            has_return(&object.node) || has_return(&index.node) || has_return(&value.node)
-        }
-        Expr::Index { object, index } => {
-            has_return(&object.node) || has_return(&index.node)
-        }
+        Expr::IndexAssign {
+            object,
+            index,
+            value,
+        } => has_return(&object.node) || has_return(&index.node) || has_return(&value.node),
+        Expr::Index { object, index } => has_return(&object.node) || has_return(&index.node),
         Expr::Closure { body, .. } => has_return(&body.node),
         Expr::Match { subject, arms } => {
-            has_return(&subject.node) ||
-            arms.iter().any(|a| has_return(&a.body.node))
+            has_return(&subject.node) || arms.iter().any(|a| has_return(&a.body.node))
         }
         Expr::OkExpr(e) | Expr::ErrExpr(e) | Expr::SomeExpr(e) => has_return(&e.node),
         Expr::NoneExpr => false,
         Expr::NullCoalesce { value, default } => {
             has_return(&value.node) || has_return(&default.node)
         }
-        Expr::Interpolation(parts) => {
-            parts.iter().any(|p| {
-                if let InterpolPart::Expr(e) = p { has_return(&e.node) } else { false }
-            })
-        }
+        Expr::Interpolation(parts) => parts.iter().any(|p| {
+            if let InterpolPart::Expr(e) = p {
+                has_return(&e.node)
+            } else {
+                false
+            }
+        }),
         _ => false,
     }
 }
@@ -1549,7 +1808,7 @@ fn turbo_ty_to_cl_type(tty: &TurboTy, ptr_type: types::Type) -> types::Type {
         TurboTy::Float => types::F64,
         TurboTy::Bool => types::I8,
         TurboTy::Str => ptr_type,
-        TurboTy::Unit => types::I64, // should not happen, but fallback
+        TurboTy::Unit => types::I64,   // should not happen, but fallback
         TurboTy::Fn(_, _) => ptr_type, // function pointers are pointers
         TurboTy::Array(_) => ptr_type,
         TurboTy::Struct(_) => ptr_type,
@@ -1605,7 +1864,11 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
                 collect_free_vars(&arg.node, bound, free);
             }
         }
-        Expr::If { condition, then_branch, else_branch } => {
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             collect_free_vars(&condition.node, bound, free);
             collect_free_vars(&then_branch.node, bound, free);
             if let Some(e) = else_branch {
@@ -1616,7 +1879,11 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
             collect_free_vars(&condition.node, bound, free);
             collect_free_vars(&body.node, bound, free);
         }
-        Expr::ForIn { var_name, iterable, body } => {
+        Expr::ForIn {
+            var_name,
+            iterable,
+            body,
+        } => {
             collect_free_vars(&iterable.node, bound, free);
             let orig_len = bound.len();
             bound.push(var_name.clone());
@@ -1639,7 +1906,11 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
             collect_free_vars(&object.node, bound, free);
             collect_free_vars(&value.node, bound, free);
         }
-        Expr::IndexAssign { object, index, value } => {
+        Expr::IndexAssign {
+            object,
+            index,
+            value,
+        } => {
             collect_free_vars(&object.node, bound, free);
             collect_free_vars(&index.node, bound, free);
             collect_free_vars(&value.node, bound, free);
@@ -1710,9 +1981,15 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
         Expr::Await(inner) | Expr::Spawn(inner) | Expr::Try(inner) => {
             collect_free_vars(&inner.node, bound, free);
         }
-        Expr::EnumVariant { .. } | Expr::IntLit(_) | Expr::FloatLit(_)
-        | Expr::StringLit(_) | Expr::BoolLit(_) | Expr::Unit | Expr::NoneExpr
-        | Expr::Break | Expr::Continue => {}
+        Expr::EnumVariant { .. }
+        | Expr::IntLit(_)
+        | Expr::FloatLit(_)
+        | Expr::StringLit(_)
+        | Expr::BoolLit(_)
+        | Expr::Unit
+        | Expr::NoneExpr
+        | Expr::Break
+        | Expr::Continue => {}
     }
 }
 
@@ -1756,7 +2033,11 @@ fn extract_closures_from_expr<'a>(
     counter: &mut usize,
 ) {
     match &expr.node {
-        Expr::Closure { params, return_type, body } => {
+        Expr::Closure {
+            params,
+            return_type,
+            body,
+        } => {
             let name = format!("__closure_{}", *counter);
             *counter += 1;
             let mut bound: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
@@ -1787,7 +2068,11 @@ fn extract_closures_from_expr<'a>(
                 extract_closures_from_expr(tail, out, counter);
             }
         }
-        Expr::If { condition, then_branch, else_branch } => {
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             extract_closures_from_expr(condition, out, counter);
             extract_closures_from_expr(then_branch, out, counter);
             if let Some(e) = else_branch {
@@ -1822,7 +2107,11 @@ fn extract_closures_from_expr<'a>(
             extract_closures_from_expr(object, out, counter);
             extract_closures_from_expr(value, out, counter);
         }
-        Expr::IndexAssign { object, index, value } => {
+        Expr::IndexAssign {
+            object,
+            index,
+            value,
+        } => {
             extract_closures_from_expr(object, out, counter);
             extract_closures_from_expr(index, out, counter);
             extract_closures_from_expr(value, out, counter);
@@ -1887,7 +2176,9 @@ fn extract_spawn_sites_from_expr(
                         num_args: args.len(),
                     });
                     *counter += 1;
-                    for arg in args { extract_spawn_sites_from_expr(arg, out, counter); }
+                    for arg in args {
+                        extract_spawn_sites_from_expr(arg, out, counter);
+                    }
                     return;
                 }
             }
@@ -1903,12 +2194,20 @@ fn extract_spawn_sites_from_expr(
                     Stmt::Defer(e) => extract_spawn_sites_from_expr(e, out, counter),
                 }
             }
-            if let Some(tail) = tail_expr { extract_spawn_sites_from_expr(tail, out, counter); }
+            if let Some(tail) = tail_expr {
+                extract_spawn_sites_from_expr(tail, out, counter);
+            }
         }
-        Expr::If { condition, then_branch, else_branch } => {
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             extract_spawn_sites_from_expr(condition, out, counter);
             extract_spawn_sites_from_expr(then_branch, out, counter);
-            if let Some(e) = else_branch { extract_spawn_sites_from_expr(e, out, counter); }
+            if let Some(e) = else_branch {
+                extract_spawn_sites_from_expr(e, out, counter);
+            }
         }
         Expr::While { condition, body } => {
             extract_spawn_sites_from_expr(condition, out, counter);
@@ -1922,10 +2221,14 @@ fn extract_spawn_sites_from_expr(
             extract_spawn_sites_from_expr(left, out, counter);
             extract_spawn_sites_from_expr(right, out, counter);
         }
-        Expr::UnaryOp { expr, .. } => { extract_spawn_sites_from_expr(expr, out, counter); }
+        Expr::UnaryOp { expr, .. } => {
+            extract_spawn_sites_from_expr(expr, out, counter);
+        }
         Expr::Call { callee, args } => {
             extract_spawn_sites_from_expr(callee, out, counter);
-            for arg in args { extract_spawn_sites_from_expr(arg, out, counter); }
+            for arg in args {
+                extract_spawn_sites_from_expr(arg, out, counter);
+            }
         }
         Expr::Assign { value, .. } | Expr::CompoundAssign { value, .. } => {
             extract_spawn_sites_from_expr(value, out, counter);
@@ -1934,7 +2237,11 @@ fn extract_spawn_sites_from_expr(
             extract_spawn_sites_from_expr(object, out, counter);
             extract_spawn_sites_from_expr(value, out, counter);
         }
-        Expr::IndexAssign { object, index, value } => {
+        Expr::IndexAssign {
+            object,
+            index,
+            value,
+        } => {
             extract_spawn_sites_from_expr(object, out, counter);
             extract_spawn_sites_from_expr(index, out, counter);
             extract_spawn_sites_from_expr(value, out, counter);
@@ -1947,9 +2254,19 @@ fn extract_spawn_sites_from_expr(
             extract_spawn_sites_from_expr(start, out, counter);
             extract_spawn_sites_from_expr(end, out, counter);
         }
-        Expr::FieldAccess { object, .. } => { extract_spawn_sites_from_expr(object, out, counter); }
-        Expr::ArrayLit(elems) => { for e in elems { extract_spawn_sites_from_expr(e, out, counter); } }
-        Expr::StructLit { fields, .. } => { for (_, e) in fields { extract_spawn_sites_from_expr(e, out, counter); } }
+        Expr::FieldAccess { object, .. } => {
+            extract_spawn_sites_from_expr(object, out, counter);
+        }
+        Expr::ArrayLit(elems) => {
+            for e in elems {
+                extract_spawn_sites_from_expr(e, out, counter);
+            }
+        }
+        Expr::StructLit { fields, .. } => {
+            for (_, e) in fields {
+                extract_spawn_sites_from_expr(e, out, counter);
+            }
+        }
         Expr::Match { subject, arms } => {
             extract_spawn_sites_from_expr(subject, out, counter);
             for arm in arms {
@@ -1959,7 +2276,9 @@ fn extract_spawn_sites_from_expr(
                 extract_spawn_sites_from_expr(&arm.body, out, counter);
             }
         }
-        Expr::Closure { body, .. } => { extract_spawn_sites_from_expr(body, out, counter); }
+        Expr::Closure { body, .. } => {
+            extract_spawn_sites_from_expr(body, out, counter);
+        }
         Expr::OkExpr(e) | Expr::ErrExpr(e) | Expr::SomeExpr(e) | Expr::Await(e) | Expr::Try(e) => {
             extract_spawn_sites_from_expr(e, out, counter);
         }
@@ -1969,7 +2288,9 @@ fn extract_spawn_sites_from_expr(
         }
         Expr::Interpolation(parts) => {
             for part in parts {
-                if let InterpolPart::Expr(e) = part { extract_spawn_sites_from_expr(e, out, counter); }
+                if let InterpolPart::Expr(e) = part {
+                    extract_spawn_sites_from_expr(e, out, counter);
+                }
             }
         }
         _ => {}
@@ -2008,79 +2329,433 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_print_bool", &[types::I8], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_panic", &[ptr_type], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_assert_fail", &[ptr_type], None)?;
-    declare_rt_fn(module, &mut rt_fns, "rt_assert_eq_fail", &[types::I64, ptr_type, ptr_type], None)?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_assert_eq_fail",
+        &[types::I64, ptr_type, ptr_type],
+        None,
+    )?;
     declare_rt_fn(module, &mut rt_fns, "rt_div_by_zero", &[], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_int_overflow", &[], None)?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_concat", &[ptr_type, ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_eq", &[ptr_type, ptr_type], Some(types::I8))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_array_alloc", &[types::I64], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_array_get", &[ptr_type, types::I64], Some(types::I64))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_array_set", &[ptr_type, types::I64, types::I64], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_array_len", &[ptr_type], Some(types::I64))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_len", &[ptr_type], Some(types::I64))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_struct_alloc", &[types::I64], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_i64_to_str", &[types::I64], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_f64_to_str", &[types::F64], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_bool_to_str", &[types::I8], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_result_ok", &[types::I64], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_result_err", &[types::I64], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_result_tag", &[ptr_type], Some(types::I64))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_result_value", &[ptr_type], Some(types::I64))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_option_some", &[types::I64], Some(ptr_type))?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_concat",
+        &[ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_eq",
+        &[ptr_type, ptr_type],
+        Some(types::I8),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_array_alloc",
+        &[types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_array_get",
+        &[ptr_type, types::I64],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_array_set",
+        &[ptr_type, types::I64, types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_array_len",
+        &[ptr_type],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_len",
+        &[ptr_type],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_struct_alloc",
+        &[types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_i64_to_str",
+        &[types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_f64_to_str",
+        &[types::F64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_bool_to_str",
+        &[types::I8],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_result_ok",
+        &[types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_result_err",
+        &[types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_result_tag",
+        &[ptr_type],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_result_value",
+        &[ptr_type],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_option_some",
+        &[types::I64],
+        Some(ptr_type),
+    )?;
     declare_rt_fn(module, &mut rt_fns, "rt_option_none", &[], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_option_tag", &[ptr_type], Some(types::I64))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_option_value", &[ptr_type], Some(types::I64))?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_option_tag",
+        &[ptr_type],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_option_value",
+        &[ptr_type],
+        Some(types::I64),
+    )?;
     // Stdlib runtime declarations
-    declare_rt_fn(module, &mut rt_fns, "rt_str_split", &[ptr_type, ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_trim", &[ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_upper", &[ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_lower", &[ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_starts_with", &[ptr_type, ptr_type], Some(types::I8))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_ends_with", &[ptr_type, ptr_type], Some(types::I8))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_replace", &[ptr_type, ptr_type, ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_char_at", &[ptr_type, types::I64], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_contains", &[ptr_type, ptr_type], Some(types::I8))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_index_of", &[ptr_type, ptr_type], Some(types::I64))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_join", &[ptr_type, ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_str_repeat", &[ptr_type, types::I64], Some(ptr_type))?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_split",
+        &[ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_trim",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_upper",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_lower",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_starts_with",
+        &[ptr_type, ptr_type],
+        Some(types::I8),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_ends_with",
+        &[ptr_type, ptr_type],
+        Some(types::I8),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_replace",
+        &[ptr_type, ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_char_at",
+        &[ptr_type, types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_contains",
+        &[ptr_type, ptr_type],
+        Some(types::I8),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_index_of",
+        &[ptr_type, ptr_type],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_join",
+        &[ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_str_repeat",
+        &[ptr_type, types::I64],
+        Some(ptr_type),
+    )?;
     declare_rt_fn(module, &mut rt_fns, "rt_read_line", &[], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_read_file", &[ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_write_file", &[ptr_type, ptr_type], None)?;
-    declare_rt_fn(module, &mut rt_fns, "rt_pow", &[types::I64, types::I64], Some(types::I64))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_sqrt", &[types::F64], Some(types::F64))?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_read_file",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_write_file",
+        &[ptr_type, ptr_type],
+        None,
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_pow",
+        &[types::I64, types::I64],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqrt",
+        &[types::F64],
+        Some(types::F64),
+    )?;
     // Async runtime declarations
     declare_rt_fn(module, &mut rt_fns, "rt_sleep_ms", &[types::I64], None)?;
-    declare_rt_fn(module, &mut rt_fns, "rt_spawn_with_args", &[ptr_type, ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_await_handle", &[ptr_type], Some(types::I64))?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_spawn_with_args",
+        &[ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_await_handle",
+        &[ptr_type],
+        Some(types::I64),
+    )?;
     // HTTP + JSON runtime declarations
-    declare_rt_fn(module, &mut rt_fns, "rt_http_get", &[ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_http_post", &[ptr_type, ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_json_get", &[ptr_type, ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_json_stringify", &[ptr_type, ptr_type], Some(ptr_type))?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_http_get",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_http_post",
+        &[ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_json_get",
+        &[ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_json_stringify",
+        &[ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
     // HTTP server runtime declarations
-    declare_rt_fn(module, &mut rt_fns, "rt_http_server", &[types::I64], Some(types::I64))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_http_route", &[types::I64, ptr_type, ptr_type, ptr_type, ptr_type], None)?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_http_server",
+        &[types::I64],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_http_route",
+        &[types::I64, ptr_type, ptr_type, ptr_type, ptr_type],
+        None,
+    )?;
     declare_rt_fn(module, &mut rt_fns, "rt_http_listen", &[types::I64], None)?;
-    declare_rt_fn(module, &mut rt_fns, "rt_respond", &[types::I64, ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_request_body", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_respond",
+        &[types::I64, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_request_body",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
     // Channel runtime declarations
-    declare_rt_fn(module, &mut rt_fns, "rt_channel_create", &[], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_channel_send", &[ptr_type, types::I64], None)?;
-    declare_rt_fn(module, &mut rt_fns, "rt_channel_recv", &[ptr_type], Some(types::I64))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_channel_clone_sender", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_channel_create",
+        &[],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_channel_send",
+        &[ptr_type, types::I64],
+        None,
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_channel_recv",
+        &[ptr_type],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_channel_clone_sender",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
     // Mutex runtime declarations
-    declare_rt_fn(module, &mut rt_fns, "rt_mutex_create", &[types::I64], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_mutex_get", &[ptr_type], Some(types::I64))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_mutex_set", &[ptr_type, types::I64], None)?;
-    declare_rt_fn(module, &mut rt_fns, "rt_mutex_clone", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_mutex_create",
+        &[types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_mutex_get",
+        &[ptr_type],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_mutex_set",
+        &[ptr_type, types::I64],
+        None,
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_mutex_clone",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
     // HashMap runtime declarations
     declare_rt_fn(module, &mut rt_fns, "rt_hashmap_new", &[], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_set", &[ptr_type, ptr_type, ptr_type], None)?;
-    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_get", &[ptr_type, ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_has", &[ptr_type, ptr_type], Some(types::I8))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_len", &[ptr_type], Some(types::I64))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_keys", &[ptr_type], Some(ptr_type))?;
-    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_remove", &[ptr_type, ptr_type], None)?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_set",
+        &[ptr_type, ptr_type, ptr_type],
+        None,
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_get",
+        &[ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_has",
+        &[ptr_type, ptr_type],
+        Some(types::I8),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_len",
+        &[ptr_type],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_keys",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_remove",
+        &[ptr_type, ptr_type],
+        None,
+    )?;
     // ARC runtime declarations
     declare_rt_fn(module, &mut rt_fns, "rt_retain", &[ptr_type], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_release", &[ptr_type], None)?;
@@ -2095,8 +2770,12 @@ fn compile_module<M: Module>(
             let tp_names: Vec<String> = e.type_param_names();
             let mut max_fields: usize = 0;
             for v in &e.variants {
-                let field_tys: Vec<TurboTy> = v.fields.iter()
-                    .map(|f| turbo_ty_from_type_expr_with_params(&f.node, &enum_variants, &tp_names))
+                let field_tys: Vec<TurboTy> = v
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        turbo_ty_from_type_expr_with_params(&f.node, &enum_variants, &tp_names)
+                    })
                     .collect();
                 if !field_tys.is_empty() {
                     max_fields = max_fields.max(field_tys.len());
@@ -2113,10 +2792,19 @@ fn compile_module<M: Module>(
     // Build struct field layouts from AST
     let mut struct_fields: HashMap<String, Vec<(String, TurboTy)>> = HashMap::new();
     for item in &ast_module.items {
-        let Item::Struct(s) = &item.node else { continue };
+        let Item::Struct(s) = &item.node else {
+            continue;
+        };
         let tp_names: Vec<String> = s.type_param_names();
-        let fields: Vec<(String, TurboTy)> = s.fields.iter()
-            .map(|f| (f.name.clone(), turbo_ty_from_type_expr_with_params(&f.ty.node, &enum_variants, &tp_names)))
+        let fields: Vec<(String, TurboTy)> = s
+            .fields
+            .iter()
+            .map(|f| {
+                (
+                    f.name.clone(),
+                    turbo_ty_from_type_expr_with_params(&f.ty.node, &enum_variants, &tp_names),
+                )
+            })
             .collect();
         struct_fields.insert(s.name.clone(), fields);
     }
@@ -2124,7 +2812,9 @@ fn compile_module<M: Module>(
     // Build struct derives map from AST
     let mut struct_derives: HashMap<String, Vec<String>> = HashMap::new();
     for item in &ast_module.items {
-        let Item::Struct(s) = &item.node else { continue };
+        let Item::Struct(s) = &item.node else {
+            continue;
+        };
         if !s.derives.is_empty() {
             struct_derives.insert(s.name.clone(), s.derives.clone());
         }
@@ -2136,7 +2826,11 @@ fn compile_module<M: Module>(
         if let Item::Agent(agent) = &item.node {
             agent_defs.insert(
                 agent.name.clone(),
-                (agent.model.clone(), agent.tools.clone(), agent.system_prompt.clone()),
+                (
+                    agent.model.clone(),
+                    agent.tools.clone(),
+                    agent.system_prompt.clone(),
+                ),
             );
         }
     }
@@ -2154,7 +2848,10 @@ fn compile_module<M: Module>(
     for item in &ast_module.items {
         if let Item::Impl(imp) = &item.node {
             if let Some(trait_name) = &imp.trait_name {
-                trait_impls.entry(imp.type_name.clone()).or_default().push(trait_name.clone());
+                trait_impls
+                    .entry(imp.type_name.clone())
+                    .or_default()
+                    .push(trait_name.clone());
             }
         }
     }
@@ -2162,10 +2859,14 @@ fn compile_module<M: Module>(
     for item in &ast_module.items {
         if let Item::Struct(s) = &item.node {
             if s.derives.contains(&"Display".to_string()) {
-                let already = trait_impls.get(&s.name)
-                    .map_or(false, |impls| impls.contains(&"Display".to_string()));
+                let already = trait_impls
+                    .get(&s.name)
+                    .is_some_and(|impls| impls.contains(&"Display".to_string()));
                 if !already {
-                    trait_impls.entry(s.name.clone()).or_default().push("Display".to_string());
+                    trait_impls
+                        .entry(s.name.clone())
+                        .or_default()
+                        .push("Display".to_string());
                 }
             }
         }
@@ -2184,7 +2885,9 @@ fn compile_module<M: Module>(
     let mut fn_ret_types: HashMap<String, TurboTy> = HashMap::new();
 
     for item in &ast_module.items {
-        let Item::Function(f) = &item.node else { continue };
+        let Item::Function(f) = &item.node else {
+            continue;
+        };
         let mut sig = module.make_signature();
         // Use fast calling convention for internal functions (not main)
         // — reduces prologue/epilogue overhead on the hot recursive path
@@ -2192,19 +2895,40 @@ fn compile_module<M: Module>(
             sig.call_conv = CallConv::Fast;
         }
         for param in &f.params {
-            sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &f.type_param_names())?));
+            sig.params.push(AbiParam::new(resolve_cl_type(
+                &param.ty.node,
+                ptr_type,
+                &enum_variants,
+                &f.type_param_names(),
+            )?));
         }
         let ret_turbo = if let Some(ret_ty) = &f.return_type {
-            let cl = resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &f.type_param_names())?;
+            let cl = resolve_cl_type(
+                &ret_ty.node,
+                ptr_type,
+                &enum_variants,
+                &f.type_param_names(),
+            )?;
             sig.returns.push(AbiParam::new(cl));
             turbo_ty_from_type_expr_with_params(&ret_ty.node, &enum_variants, &f.type_param_names())
         } else {
             TurboTy::Unit
         };
-        let linkage = if f.name == "main" { main_linkage } else { Linkage::Local };
-        let sym_name = if f.name == "main" && rename_main { "turbo_main" } else { &f.name };
-        let id = module.declare_function(sym_name, linkage, &sig)
-            .map_err(|e| CodegenError { message: e.to_string() })?;
+        let linkage = if f.name == "main" {
+            main_linkage
+        } else {
+            Linkage::Local
+        };
+        let sym_name = if f.name == "main" && rename_main {
+            "turbo_main"
+        } else {
+            &f.name
+        };
+        let id = module
+            .declare_function(sym_name, linkage, &sig)
+            .map_err(|e| CodegenError {
+                message: e.to_string(),
+            })?;
         user_fns.insert(f.name.clone(), id);
         fn_ret_types.insert(f.name.clone(), ret_turbo);
     }
@@ -2213,14 +2937,18 @@ fn compile_module<M: Module>(
     let mut fn_asts: HashMap<String, &FnDef> = HashMap::new();
     let mut fn_type_params: HashMap<String, Vec<String>> = HashMap::new();
     for item in &ast_module.items {
-        let Item::Function(f) = &item.node else { continue };
+        let Item::Function(f) = &item.node else {
+            continue;
+        };
         fn_asts.insert(f.name.clone(), f);
         fn_type_params.insert(f.name.clone(), f.type_param_names());
     }
 
     // Declare all methods from impl blocks
     for item in &ast_module.items {
-        let Item::Impl(imp) = &item.node else { continue };
+        let Item::Impl(imp) = &item.node else {
+            continue;
+        };
         for method_spanned in &imp.methods {
             let method = &method_spanned.node;
             let mangled = format!("{}__{}", imp.type_name, method.name);
@@ -2232,7 +2960,12 @@ fn compile_module<M: Module>(
                 if param.name == "self" {
                     sig.params.push(AbiParam::new(ptr_type));
                 } else {
-                    sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?));
+                    sig.params.push(AbiParam::new(resolve_cl_type(
+                        &param.ty.node,
+                        ptr_type,
+                        &enum_variants,
+                        &[],
+                    )?));
                 }
             }
 
@@ -2244,8 +2977,11 @@ fn compile_module<M: Module>(
                 TurboTy::Unit
             };
 
-            let id = module.declare_function(&mangled, Linkage::Local, &sig)
-                .map_err(|e| CodegenError { message: e.to_string() })?;
+            let id = module
+                .declare_function(&mangled, Linkage::Local, &sig)
+                .map_err(|e| CodegenError {
+                    message: e.to_string(),
+                })?;
             user_fns.insert(mangled.clone(), id);
             fn_ret_types.insert(mangled, ret_turbo);
         }
@@ -2255,12 +2991,21 @@ fn compile_module<M: Module>(
     // Collect (type_name, method_sig) pairs for default methods that need compilation
     let mut default_method_impls: Vec<(String, &turbo_ast::TraitMethodSig)> = Vec::new();
     for item in &ast_module.items {
-        let Item::Impl(imp) = &item.node else { continue };
-        let Some(trait_name) = &imp.trait_name else { continue };
-        let Some(trait_def) = trait_defs.get(trait_name.as_str()) else { continue };
-        let impl_method_names: Vec<String> = imp.methods.iter().map(|m| m.node.name.clone()).collect();
+        let Item::Impl(imp) = &item.node else {
+            continue;
+        };
+        let Some(trait_name) = &imp.trait_name else {
+            continue;
+        };
+        let Some(trait_def) = trait_defs.get(trait_name.as_str()) else {
+            continue;
+        };
+        let impl_method_names: Vec<String> =
+            imp.methods.iter().map(|m| m.node.name.clone()).collect();
         for trait_method in &trait_def.methods {
-            if trait_method.default_body.is_some() && !impl_method_names.contains(&trait_method.name) {
+            if trait_method.default_body.is_some()
+                && !impl_method_names.contains(&trait_method.name)
+            {
                 let mangled = format!("{}__{}", imp.type_name, trait_method.name);
                 if !user_fns.contains_key(&mangled) {
                     let mut sig = module.make_signature();
@@ -2269,7 +3014,12 @@ fn compile_module<M: Module>(
                         if param.name == "self" {
                             sig.params.push(AbiParam::new(ptr_type));
                         } else {
-                            sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?));
+                            sig.params.push(AbiParam::new(resolve_cl_type(
+                                &param.ty.node,
+                                ptr_type,
+                                &enum_variants,
+                                &[],
+                            )?));
                         }
                     }
                     let ret_turbo = if let Some(ret_ty) = &trait_method.return_type {
@@ -2279,8 +3029,11 @@ fn compile_module<M: Module>(
                     } else {
                         TurboTy::Unit
                     };
-                    let id = module.declare_function(&mangled, Linkage::Local, &sig)
-                        .map_err(|e| CodegenError { message: e.to_string() })?;
+                    let id = module
+                        .declare_function(&mangled, Linkage::Local, &sig)
+                        .map_err(|e| CodegenError {
+                            message: e.to_string(),
+                        })?;
                     user_fns.insert(mangled.clone(), id);
                     fn_ret_types.insert(mangled, ret_turbo);
                     default_method_impls.push((imp.type_name.clone(), trait_method));
@@ -2292,7 +3045,9 @@ fn compile_module<M: Module>(
     // Declare @derive(Display) auto-generated to_string methods
     let mut derive_display_structs: Vec<String> = Vec::new();
     for item in &ast_module.items {
-        let Item::Struct(s) = &item.node else { continue };
+        let Item::Struct(s) = &item.node else {
+            continue;
+        };
         if s.derives.contains(&"Display".to_string()) {
             let mangled = format!("{}__{}", s.name, "to_string");
             if !user_fns.contains_key(&mangled) {
@@ -2300,8 +3055,11 @@ fn compile_module<M: Module>(
                 sig.call_conv = CallConv::Fast;
                 sig.params.push(AbiParam::new(ptr_type)); // self
                 sig.returns.push(AbiParam::new(ptr_type)); // returns str
-                let id = module.declare_function(&mangled, Linkage::Local, &sig)
-                    .map_err(|e| CodegenError { message: e.to_string() })?;
+                let id = module
+                    .declare_function(&mangled, Linkage::Local, &sig)
+                    .map_err(|e| CodegenError {
+                        message: e.to_string(),
+                    })?;
                 user_fns.insert(mangled.clone(), id);
                 fn_ret_types.insert(mangled, TurboTy::Str);
                 derive_display_structs.push(s.name.clone());
@@ -2322,7 +3080,12 @@ fn compile_module<M: Module>(
         sig.params.push(AbiParam::new(ptr_type));
         let mut param_turbo_tys = Vec::new();
         for param in closure.params.iter() {
-            sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?));
+            sig.params.push(AbiParam::new(resolve_cl_type(
+                &param.ty.node,
+                ptr_type,
+                &enum_variants,
+                &[],
+            )?));
             param_turbo_tys.push(turbo_ty_from_type_expr(&param.ty.node, &enum_variants));
         }
         let ret_turbo = if let Some(ret_ty) = closure.return_type {
@@ -2330,7 +3093,10 @@ fn compile_module<M: Module>(
             sig.returns.push(AbiParam::new(cl));
             turbo_ty_from_type_expr(&ret_ty.node, &enum_variants)
         } else {
-            let has_inferred_params = closure.params.iter().any(|p| matches!(p.ty.node, TypeExpr::Inferred));
+            let has_inferred_params = closure
+                .params
+                .iter()
+                .any(|p| matches!(p.ty.node, TypeExpr::Inferred));
             if has_inferred_params {
                 sig.returns.push(AbiParam::new(types::I64));
                 TurboTy::Int
@@ -2338,13 +3104,20 @@ fn compile_module<M: Module>(
                 TurboTy::Unit
             }
         };
-        let id = module.declare_function(&closure.name, Linkage::Local, &sig)
-            .map_err(|e| CodegenError { message: e.to_string() })?;
+        let id = module
+            .declare_function(&closure.name, Linkage::Local, &sig)
+            .map_err(|e| CodegenError {
+                message: e.to_string(),
+            })?;
         user_fns.insert(closure.name.clone(), id);
         fn_ret_types.insert(closure.name.clone(), ret_turbo.clone());
         closure_fns_map.insert(
             closure.span_start,
-            (closure.name.clone(), TurboTy::Fn(param_turbo_tys, Box::new(ret_turbo)), closure.free_vars.clone()),
+            (
+                closure.name.clone(),
+                TurboTy::Fn(param_turbo_tys, Box::new(ret_turbo)),
+                closure.free_vars.clone(),
+            ),
         );
     }
 
@@ -2359,8 +3132,11 @@ fn compile_module<M: Module>(
         // Single parameter: pointer to args struct [fn_ptr, arg0, arg1, ...]
         sig.params.push(AbiParam::new(ptr_type));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = module.declare_function(&site.thunk_name, Linkage::Local, &sig)
-            .map_err(|e| CodegenError { message: e.to_string() })?;
+        let id = module
+            .declare_function(&site.thunk_name, Linkage::Local, &sig)
+            .map_err(|e| CodegenError {
+                message: e.to_string(),
+            })?;
         user_fns.insert(site.thunk_name.clone(), id);
         fn_ret_types.insert(site.thunk_name.clone(), TurboTy::Int);
         spawn_thunk_map.insert(site.span_start, site.thunk_name.clone());
@@ -2375,7 +3151,9 @@ fn compile_module<M: Module>(
     // Expr::Closure can determine capture types from the enclosing scope.
 
     for item in &ast_module.items {
-        let Item::Function(f) = &item.node else { continue };
+        let Item::Function(f) = &item.node else {
+            continue;
+        };
         let func_id = user_fns[&f.name];
 
         cl_ctx.func.signature = module.make_signature();
@@ -2383,10 +3161,28 @@ fn compile_module<M: Module>(
             cl_ctx.func.signature.call_conv = CallConv::Fast;
         }
         for param in &f.params {
-            cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &f.type_param_names())?));
+            cl_ctx
+                .func
+                .signature
+                .params
+                .push(AbiParam::new(resolve_cl_type(
+                    &param.ty.node,
+                    ptr_type,
+                    &enum_variants,
+                    &f.type_param_names(),
+                )?));
         }
         if let Some(ret_ty) = &f.return_type {
-            cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &f.type_param_names())?));
+            cl_ctx
+                .func
+                .signature
+                .returns
+                .push(AbiParam::new(resolve_cl_type(
+                    &ret_ty.node,
+                    ptr_type,
+                    &enum_variants,
+                    &f.type_param_names(),
+                )?));
         }
 
         let mut fn_ctx = FunctionBuilderContext::new();
@@ -2435,8 +3231,17 @@ fn compile_module<M: Module>(
 
             // Define parameters as variables
             for (i, param) in f.params.iter().enumerate() {
-                let cl_ty = resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &f.type_param_names())?;
-                let turbo_ty = turbo_ty_from_type_expr_with_params(&param.ty.node, &enum_variants, &f.type_param_names());
+                let cl_ty = resolve_cl_type(
+                    &param.ty.node,
+                    ptr_type,
+                    &enum_variants,
+                    &f.type_param_names(),
+                )?;
+                let turbo_ty = turbo_ty_from_type_expr_with_params(
+                    &param.ty.node,
+                    &enum_variants,
+                    &f.type_param_names(),
+                );
                 let var = cx.fresh_var(cl_ty, turbo_ty.clone());
                 let val = cx.builder.block_params(entry)[i];
                 cx.builder.def_var(var, val);
@@ -2462,14 +3267,19 @@ fn compile_module<M: Module>(
             cx.builder.finalize();
         }
 
-        module.define_function(func_id, &mut cl_ctx)
-            .map_err(|e| CodegenError { message: e.to_string() })?;
+        module
+            .define_function(func_id, &mut cl_ctx)
+            .map_err(|e| CodegenError {
+                message: e.to_string(),
+            })?;
         module.clear_context(&mut cl_ctx);
     }
 
     // Define all methods from impl blocks
     for item in &ast_module.items {
-        let Item::Impl(imp) = &item.node else { continue };
+        let Item::Impl(imp) = &item.node else {
+            continue;
+        };
         for method_spanned in &imp.methods {
             let method = &method_spanned.node;
             let mangled = format!("{}__{}", imp.type_name, method.name);
@@ -2482,11 +3292,29 @@ fn compile_module<M: Module>(
                 if param.name == "self" {
                     cl_ctx.func.signature.params.push(AbiParam::new(ptr_type));
                 } else {
-                    cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?));
+                    cl_ctx
+                        .func
+                        .signature
+                        .params
+                        .push(AbiParam::new(resolve_cl_type(
+                            &param.ty.node,
+                            ptr_type,
+                            &enum_variants,
+                            &[],
+                        )?));
                 }
             }
             if let Some(ret_ty) = &method.return_type {
-                cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?));
+                cl_ctx
+                    .func
+                    .signature
+                    .returns
+                    .push(AbiParam::new(resolve_cl_type(
+                        &ret_ty.node,
+                        ptr_type,
+                        &enum_variants,
+                        &[],
+                    )?));
             }
 
             let mut fn_ctx = FunctionBuilderContext::new();
@@ -2507,8 +3335,8 @@ fn compile_module<M: Module>(
                     ptr_type,
                     struct_fields: &struct_fields,
                     enum_variants: &enum_variants,
-                enum_variant_fields: &enum_variant_fields,
-                enum_max_slots: &enum_max_slots,
+                    enum_variant_fields: &enum_variant_fields,
+                    enum_max_slots: &enum_max_slots,
                     closure_fns: &closure_fns_map,
                     trait_impls: &trait_impls,
                     inline_depth: 0,
@@ -2560,8 +3388,11 @@ fn compile_module<M: Module>(
                 cx.builder.finalize();
             }
 
-            module.define_function(func_id, &mut cl_ctx)
-                .map_err(|e| CodegenError { message: e.to_string() })?;
+            module
+                .define_function(func_id, &mut cl_ctx)
+                .map_err(|e| CodegenError {
+                    message: e.to_string(),
+                })?;
             module.clear_context(&mut cl_ctx);
         }
     }
@@ -2579,11 +3410,29 @@ fn compile_module<M: Module>(
             if param.name == "self" {
                 cl_ctx.func.signature.params.push(AbiParam::new(ptr_type));
             } else {
-                cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?));
+                cl_ctx
+                    .func
+                    .signature
+                    .params
+                    .push(AbiParam::new(resolve_cl_type(
+                        &param.ty.node,
+                        ptr_type,
+                        &enum_variants,
+                        &[],
+                    )?));
             }
         }
         if let Some(ret_ty) = &trait_method.return_type {
-            cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?));
+            cl_ctx
+                .func
+                .signature
+                .returns
+                .push(AbiParam::new(resolve_cl_type(
+                    &ret_ty.node,
+                    ptr_type,
+                    &enum_variants,
+                    &[],
+                )?));
         }
 
         let mut fn_ctx = FunctionBuilderContext::new();
@@ -2657,8 +3506,11 @@ fn compile_module<M: Module>(
             cx.builder.finalize();
         }
 
-        module.define_function(func_id, &mut cl_ctx)
-            .map_err(|e| CodegenError { message: e.to_string() })?;
+        module
+            .define_function(func_id, &mut cl_ctx)
+            .map_err(|e| CodegenError {
+                message: e.to_string(),
+            })?;
         module.clear_context(&mut cl_ctx);
     }
 
@@ -2715,7 +3567,10 @@ fn compile_module<M: Module>(
             let self_val = cx.builder.block_params(entry)[0];
 
             // Build "StructName { field1: val1, field2: val2 }" string
-            let fields = struct_fields.get(struct_name.as_str()).cloned().unwrap_or_default();
+            let fields = struct_fields
+                .get(struct_name.as_str())
+                .cloned()
+                .unwrap_or_default();
 
             // Start with "StructName { "
             let mut result = cx.create_string(&format!("{} {{ ", struct_name))?;
@@ -2736,7 +3591,10 @@ fn compile_module<M: Module>(
 
                 // Load field value from struct
                 let offset = (i * 8) as i32;
-                let raw_val = cx.builder.ins().load(types::I64, MemFlags::new(), self_val, offset);
+                let raw_val = cx
+                    .builder
+                    .ins()
+                    .load(types::I64, MemFlags::new(), self_val, offset);
 
                 // Convert field value to string based on type
                 let field_str = match field_ty {
@@ -2758,7 +3616,10 @@ fn compile_module<M: Module>(
                         cx.builder.inst_results(call)[0]
                     }
                     TurboTy::Float => {
-                        let float_val = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val);
+                        let float_val =
+                            cx.builder
+                                .ins()
+                                .bitcast(types::F64, MemFlags::new(), raw_val);
                         let fid = cx.rt_fns["rt_f64_to_str"];
                         let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
                         let call = cx.builder.ins().call(fref, &[float_val]);
@@ -2787,8 +3648,11 @@ fn compile_module<M: Module>(
             cx.builder.finalize();
         }
 
-        module.define_function(func_id, &mut cl_ctx)
-            .map_err(|e| CodegenError { message: e.to_string() })?;
+        module
+            .define_function(func_id, &mut cl_ctx)
+            .map_err(|e| CodegenError {
+                message: e.to_string(),
+            })?;
         module.clear_context(&mut cl_ctx);
     }
 
@@ -2801,15 +3665,40 @@ fn compile_module<M: Module>(
         // First parameter is always the env pointer
         cl_ctx.func.signature.params.push(AbiParam::new(ptr_type));
         for param in closure.params.iter() {
-            cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?));
+            cl_ctx
+                .func
+                .signature
+                .params
+                .push(AbiParam::new(resolve_cl_type(
+                    &param.ty.node,
+                    ptr_type,
+                    &enum_variants,
+                    &[],
+                )?));
         }
         if let Some(ret_ty) = closure.return_type {
-            cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?));
+            cl_ctx
+                .func
+                .signature
+                .returns
+                .push(AbiParam::new(resolve_cl_type(
+                    &ret_ty.node,
+                    ptr_type,
+                    &enum_variants,
+                    &[],
+                )?));
         } else {
             // For closures with inferred params, add i64 return to match the declaration
-            let has_inferred_params = closure.params.iter().any(|p| matches!(p.ty.node, TypeExpr::Inferred));
+            let has_inferred_params = closure
+                .params
+                .iter()
+                .any(|p| matches!(p.ty.node, TypeExpr::Inferred));
             if has_inferred_params {
-                cl_ctx.func.signature.returns.push(AbiParam::new(types::I64));
+                cl_ctx
+                    .func
+                    .signature
+                    .returns
+                    .push(AbiParam::new(types::I64));
             }
         }
 
@@ -2861,14 +3750,22 @@ fn compile_module<M: Module>(
                     let cl_ty = turbo_ty_to_cl_type(cap_tty, ptr_type);
                     let var = cx.fresh_var(cl_ty, cap_tty.clone());
                     let offset = (cap_idx * 8) as i32;
-                    let raw_val = cx.builder.ins().load(types::I64, MemFlags::new(), env_ptr_val, offset);
+                    let raw_val =
+                        cx.builder
+                            .ins()
+                            .load(types::I64, MemFlags::new(), env_ptr_val, offset);
                     let val = match cap_tty {
                         TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_val),
-                        TurboTy::Float => cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val),
+                        TurboTy::Float => {
+                            cx.builder
+                                .ins()
+                                .bitcast(types::F64, MemFlags::new(), raw_val)
+                        }
                         _ => raw_val,
                     };
                     cx.builder.def_var(var, val);
-                    cx.vars.insert(cap_name.clone(), (var, cl_ty, cap_tty.clone()));
+                    cx.vars
+                        .insert(cap_name.clone(), (var, cl_ty, cap_tty.clone()));
                 }
             }
 
@@ -2885,7 +3782,10 @@ fn compile_module<M: Module>(
             let result = compile_expr(&mut cx, closure.body)?;
 
             if !cx.builder.is_unreachable() {
-                let has_inferred = closure.params.iter().any(|p| matches!(p.ty.node, TypeExpr::Inferred));
+                let has_inferred = closure
+                    .params
+                    .iter()
+                    .any(|p| matches!(p.ty.node, TypeExpr::Inferred));
                 if closure.return_type.is_some() || has_inferred {
                     if let Some((val, _)) = result {
                         cx.builder.ins().return_(&[val]);
@@ -2900,8 +3800,11 @@ fn compile_module<M: Module>(
             cx.builder.finalize();
         }
 
-        module.define_function(func_id, &mut cl_ctx)
-            .map_err(|e| CodegenError { message: e.to_string() })?;
+        module
+            .define_function(func_id, &mut cl_ctx)
+            .map_err(|e| CodegenError {
+                message: e.to_string(),
+            })?;
         module.clear_context(&mut cl_ctx);
     }
 
@@ -2913,7 +3816,11 @@ fn compile_module<M: Module>(
         cl_ctx.func.signature = module.make_signature();
         // Default (SystemV/C ABI) calling convention — callable from rt_spawn_thunk
         cl_ctx.func.signature.params.push(AbiParam::new(ptr_type)); // args_struct_ptr
-        cl_ctx.func.signature.returns.push(AbiParam::new(types::I64));
+        cl_ctx
+            .func
+            .signature
+            .returns
+            .push(AbiParam::new(types::I64));
 
         let mut fn_ctx = FunctionBuilderContext::new();
         {
@@ -2933,7 +3840,9 @@ fn compile_module<M: Module>(
             let mut arg_vals = Vec::new();
             for i in 0..site.num_args {
                 let offset = ((i + 1) * 8) as i32;
-                let val = builder.ins().load(types::I64, MemFlags::new(), args_ptr, offset);
+                let val = builder
+                    .ins()
+                    .load(types::I64, MemFlags::new(), args_ptr, offset);
                 arg_vals.push(val);
             }
 
@@ -2948,7 +3857,8 @@ fn compile_module<M: Module>(
                     callee_sig.params.push(AbiParam::new(types::I64));
                 }
                 // Check if the target function has a return type
-                let has_return = fn_ret_types.get(&site.callee_name)
+                let has_return = fn_ret_types
+                    .get(&site.callee_name)
                     .map(|t| *t != TurboTy::Unit)
                     .unwrap_or(false);
                 if has_return {
@@ -2974,8 +3884,11 @@ fn compile_module<M: Module>(
             builder.finalize();
         }
 
-        module.define_function(func_id, &mut cl_ctx)
-            .map_err(|e| CodegenError { message: e.to_string() })?;
+        module
+            .define_function(func_id, &mut cl_ctx)
+            .map_err(|e| CodegenError {
+                message: e.to_string(),
+            })?;
         module.clear_context(&mut cl_ctx);
     }
 
@@ -2998,23 +3911,43 @@ fn declare_rt_fn<M: Module>(
     if let Some(r) = ret {
         sig.returns.push(AbiParam::new(r));
     }
-    let id = module.declare_function(name, Linkage::Import, &sig)
-        .map_err(|e| CodegenError { message: e.to_string() })?;
+    let id = module
+        .declare_function(name, Linkage::Import, &sig)
+        .map_err(|e| CodegenError {
+            message: e.to_string(),
+        })?;
     rt_fns.insert(name.to_string(), id);
     Ok(())
 }
 
-fn resolve_cl_type(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &HashMap<String, Vec<String>>, type_params: &[String]) -> Result<types::Type, CodegenError> {
+fn resolve_cl_type(
+    ty: &TypeExpr,
+    ptr_type: types::Type,
+    enum_variants: &HashMap<String, Vec<String>>,
+    type_params: &[String],
+) -> Result<types::Type, CodegenError> {
     resolve_cl_type_inner(ty, ptr_type, enum_variants, type_params, &HashMap::new())
 }
 
 /// Resolve Cranelift type, accounting for data-carrying enums that need pointer types.
 #[allow(dead_code)]
-fn resolve_cl_type_with_data(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &HashMap<String, Vec<String>>, type_params: &[String], enum_max_slots: &HashMap<String, usize>) -> Result<types::Type, CodegenError> {
+fn resolve_cl_type_with_data(
+    ty: &TypeExpr,
+    ptr_type: types::Type,
+    enum_variants: &HashMap<String, Vec<String>>,
+    type_params: &[String],
+    enum_max_slots: &HashMap<String, usize>,
+) -> Result<types::Type, CodegenError> {
     resolve_cl_type_inner(ty, ptr_type, enum_variants, type_params, enum_max_slots)
 }
 
-fn resolve_cl_type_inner(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &HashMap<String, Vec<String>>, type_params: &[String], enum_max_slots: &HashMap<String, usize>) -> Result<types::Type, CodegenError> {
+fn resolve_cl_type_inner(
+    ty: &TypeExpr,
+    ptr_type: types::Type,
+    enum_variants: &HashMap<String, Vec<String>>,
+    type_params: &[String],
+    enum_max_slots: &HashMap<String, usize>,
+) -> Result<types::Type, CodegenError> {
     match ty {
         TypeExpr::Named(name) => {
             // Type parameters are represented as I64 (same size as ptr on 64-bit)
@@ -3022,42 +3955,54 @@ fn resolve_cl_type_inner(ty: &TypeExpr, ptr_type: types::Type, enum_variants: &H
                 return Ok(types::I64);
             }
             match name.as_str() {
-            "i32" => Ok(types::I32),
-            "i64" => Ok(types::I64),
-            "u32" => Ok(types::I32),
-            "u64" => Ok(types::I64),
-            "f32" => Ok(types::F32),
-            "f64" => Ok(types::F64),
-            "bool" => Ok(types::I8),
-            "str" => Ok(ptr_type),
-            _ => {
-                if enum_variants.contains_key(name.as_str()) {
-                    // Data-carrying enums are heap-allocated pointers
-                    if enum_max_slots.contains_key(name.as_str()) {
-                        Ok(ptr_type)
+                "i32" => Ok(types::I32),
+                "i64" => Ok(types::I64),
+                "u32" => Ok(types::I32),
+                "u64" => Ok(types::I64),
+                "f32" => Ok(types::F32),
+                "f64" => Ok(types::F64),
+                "bool" => Ok(types::I8),
+                "str" => Ok(ptr_type),
+                _ => {
+                    if enum_variants.contains_key(name.as_str()) {
+                        // Data-carrying enums are heap-allocated pointers
+                        if enum_max_slots.contains_key(name.as_str()) {
+                            Ok(ptr_type)
+                        } else {
+                            Ok(types::I64) // unit-only enums are i64 tags
+                        }
                     } else {
-                        Ok(types::I64) // unit-only enums are i64 tags
+                        Ok(ptr_type) // Struct types are represented as pointers at runtime
                     }
-                } else {
-                    Ok(ptr_type) // Struct types are represented as pointers at runtime
                 }
             }
-            }
-        },
-        TypeExpr::Unit => Err(CodegenError { message: "unit type has no runtime representation".to_string() }),
+        }
+        TypeExpr::Unit => Err(CodegenError {
+            message: "unit type has no runtime representation".to_string(),
+        }),
         TypeExpr::Array(_) => Ok(ptr_type), // Arrays are represented as pointers at runtime
         TypeExpr::FnType { .. } => Ok(ptr_type), // Function pointers are pointers
         TypeExpr::Result { .. } => Ok(ptr_type), // Result types are heap-allocated tagged unions
         TypeExpr::Optional(_) => Ok(ptr_type), // Optional types are heap-allocated tagged unions
         // Sprint 9: Future<T> compiles identically to T
-        TypeExpr::Future(inner) => resolve_cl_type_inner(&inner.node, ptr_type, enum_variants, type_params, enum_max_slots),
-        #[allow(unreachable_patterns)] _ => Ok(types::I64),
+        TypeExpr::Future(inner) => resolve_cl_type_inner(
+            &inner.node,
+            ptr_type,
+            enum_variants,
+            type_params,
+            enum_max_slots,
+        ),
+        #[allow(unreachable_patterns)]
+        _ => Ok(types::I64),
     }
 }
 
 // ── Expression compilation ──────────────────────────────────────────
 
-fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<MaybeTyped, CodegenError> {
+fn compile_expr<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    expr: &Spanned<Expr>,
+) -> Result<MaybeTyped, CodegenError> {
     match &expr.node {
         Expr::IntLit(n) => {
             let val = cx.builder.ins().iconst(types::I64, *n);
@@ -3083,8 +4028,9 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                 let const_expr = const_expr.clone();
                 return compile_expr(cx, &const_expr);
             }
-            let (var, _cl_ty, turbo_ty) = cx.vars.get(name)
-                .ok_or_else(|| CodegenError { message: format!("undefined variable: {name}") })?;
+            let (var, _cl_ty, turbo_ty) = cx.vars.get(name).ok_or_else(|| CodegenError {
+                message: format!("undefined variable: {name}"),
+            })?;
             let turbo_ty = turbo_ty.clone();
             let val = cx.builder.use_var(*var);
             Ok(Some((val, turbo_ty)))
@@ -3135,8 +4081,14 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
 
             // Comparison/logical ops produce Bool, arithmetic preserves input type
             let result_tty = match op {
-                BinOp::Eq | BinOp::NotEq | BinOp::Less | BinOp::LessEq
-                | BinOp::Greater | BinOp::GreaterEq | BinOp::And | BinOp::Or => TurboTy::Bool,
+                BinOp::Eq
+                | BinOp::NotEq
+                | BinOp::Less
+                | BinOp::LessEq
+                | BinOp::Greater
+                | BinOp::GreaterEq
+                | BinOp::And
+                | BinOp::Or => TurboTy::Bool,
                 _ => lhs_tty,
             };
             Ok(Some((result, result_tty)))
@@ -3167,9 +4119,11 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
 
         Expr::Call { callee, args } => compile_call(cx, callee, args),
 
-        Expr::If { condition, then_branch, else_branch } => {
-            compile_if(cx, condition, then_branch, else_branch.as_deref())
-        }
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => compile_if(cx, condition, then_branch, else_branch.as_deref()),
 
         Expr::Block { stmts, tail_expr } => {
             let saved_vars = cx.vars.clone();
@@ -3206,8 +4160,9 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
 
         Expr::Assign { target, value } => {
             let (val, tty) = compile_expr(cx, value)?.unwrap();
-            let (var, _, _) = cx.vars.get(target)
-                .ok_or_else(|| CodegenError { message: format!("undefined variable: {target}") })?;
+            let (var, _, _) = cx.vars.get(target).ok_or_else(|| CodegenError {
+                message: format!("undefined variable: {target}"),
+            })?;
             let var = *var;
             cx.builder.def_var(var, val);
             // Update the turbo type in case it changed
@@ -3219,8 +4174,9 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
 
         Expr::CompoundAssign { target, op, value } => {
             let (rhs, _) = compile_expr(cx, value)?.unwrap();
-            let (var, _, _) = cx.vars.get(target)
-                .ok_or_else(|| CodegenError { message: format!("undefined variable: {target}") })?;
+            let (var, _, _) = cx.vars.get(target).ok_or_else(|| CodegenError {
+                message: format!("undefined variable: {target}"),
+            })?;
             let var = *var;
             let lhs = cx.builder.use_var(var);
             let result = compile_binop(cx, lhs, *op, rhs)?;
@@ -3228,22 +4184,37 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             Ok(None)
         }
 
-        Expr::FieldAssign { object, field, value } => {
+        Expr::FieldAssign {
+            object,
+            field,
+            value,
+        } => {
             let (obj_ptr, obj_tty) = compile_expr(cx, object)?.unwrap();
             let (val, _) = compile_expr(cx, value)?.unwrap();
 
             let struct_name = match &obj_tty {
                 TurboTy::Struct(name) => name.clone(),
-                _ => return Err(CodegenError { message: "field assignment on non-struct type".to_string() }),
+                _ => {
+                    return Err(CodegenError {
+                        message: "field assignment on non-struct type".to_string(),
+                    })
+                }
             };
 
-            let struct_layout = cx.struct_fields.get(&struct_name)
-                .ok_or_else(|| CodegenError { message: format!("undefined struct: {struct_name}") })?
+            let struct_layout = cx
+                .struct_fields
+                .get(&struct_name)
+                .ok_or_else(|| CodegenError {
+                    message: format!("undefined struct: {struct_name}"),
+                })?
                 .clone();
 
-            let field_index = struct_layout.iter()
+            let field_index = struct_layout
+                .iter()
                 .position(|(n, _)| n == field)
-                .ok_or_else(|| CodegenError { message: format!("struct `{struct_name}` has no field `{field}`") })?;
+                .ok_or_else(|| CodegenError {
+                    message: format!("struct `{struct_name}` has no field `{field}`"),
+                })?;
 
             let offset = (field_index * 8) as i32;
 
@@ -3255,16 +4226,24 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                 cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
             } else if val_ty.is_float() && val_ty.bits() == 32 {
                 let extended = cx.builder.ins().fpromote(types::F64, val);
-                cx.builder.ins().bitcast(types::I64, MemFlags::new(), extended)
+                cx.builder
+                    .ins()
+                    .bitcast(types::I64, MemFlags::new(), extended)
             } else {
                 val
             };
 
-            cx.builder.ins().store(MemFlags::new(), val, obj_ptr, offset);
+            cx.builder
+                .ins()
+                .store(MemFlags::new(), val, obj_ptr, offset);
             Ok(None)
         }
 
-        Expr::IndexAssign { object, index, value } => {
+        Expr::IndexAssign {
+            object,
+            index,
+            value,
+        } => {
             let (arr, _arr_tty) = compile_expr(cx, object)?.unwrap();
             let (idx, _) = compile_expr(cx, index)?.unwrap();
             let (val, _) = compile_expr(cx, value)?.unwrap();
@@ -3277,7 +4256,9 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                 cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
             } else if val_ty.is_float() && val_ty.bits() == 32 {
                 let extended = cx.builder.ins().fpromote(types::F64, val);
-                cx.builder.ins().bitcast(types::I64, MemFlags::new(), extended)
+                cx.builder
+                    .ins()
+                    .bitcast(types::I64, MemFlags::new(), extended)
             } else {
                 val
             };
@@ -3332,13 +4313,21 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                 if let Expr::Call { callee, args } = &inner.node {
                     if let Expr::Ident(callee_name) = &callee.node {
                         // Determine the return type of the spawned function
-                        let inner_ret_tty = cx.fn_ret_types.get(callee_name.as_str())
-                            .cloned().unwrap_or(TurboTy::Unit);
+                        let inner_ret_tty = cx
+                            .fn_ret_types
+                            .get(callee_name.as_str())
+                            .cloned()
+                            .unwrap_or(TurboTy::Unit);
 
                         // Get the target function's address
-                        let target_fid = *cx.user_fns.get(callee_name.as_str())
-                            .ok_or_else(|| CodegenError { message: format!("spawn: unknown function `{}`", callee_name) })?;
-                        let target_fref = cx.module.declare_func_in_func(target_fid, cx.builder.func);
+                        let target_fid =
+                            *cx.user_fns
+                                .get(callee_name.as_str())
+                                .ok_or_else(|| CodegenError {
+                                    message: format!("spawn: unknown function `{}`", callee_name),
+                                })?;
+                        let target_fref =
+                            cx.module.declare_func_in_func(target_fid, cx.builder.func);
                         let target_fn_ptr = cx.builder.ins().func_addr(cx.ptr_type, target_fref);
 
                         // Compile all arguments
@@ -3347,7 +4336,9 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                             if let Some((val, tty)) = compile_expr(cx, arg)? {
                                 let val = match tty {
                                     TurboTy::Bool => cx.builder.ins().sextend(types::I64, val),
-                                    TurboTy::Float => cx.builder.ins().bitcast(types::I64, MemFlags::new(), val),
+                                    TurboTy::Float => {
+                                        cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
+                                    }
                                     _ => val,
                                 };
                                 arg_vals.push(val);
@@ -3363,16 +4354,24 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                         let args_ptr = cx.builder.inst_results(call)[0];
 
                         // Store fn_ptr at offset 0
-                        cx.builder.ins().store(MemFlags::new(), target_fn_ptr, args_ptr, 0);
+                        cx.builder
+                            .ins()
+                            .store(MemFlags::new(), target_fn_ptr, args_ptr, 0);
                         // Store args at offsets 8, 16, 24, ...
                         for (i, val) in arg_vals.iter().enumerate() {
                             let offset = ((i + 1) * 8) as i32;
-                            cx.builder.ins().store(MemFlags::new(), *val, args_ptr, offset);
+                            cx.builder
+                                .ins()
+                                .store(MemFlags::new(), *val, args_ptr, offset);
                         }
 
                         // Get the thunk function address
-                        let thunk_fid = *cx.user_fns.get(thunk_name.as_str())
-                            .ok_or_else(|| CodegenError { message: format!("spawn: thunk `{}` not found", thunk_name) })?;
+                        let thunk_fid =
+                            *cx.user_fns
+                                .get(thunk_name.as_str())
+                                .ok_or_else(|| CodegenError {
+                                    message: format!("spawn: thunk `{}` not found", thunk_name),
+                                })?;
                         let thunk_fref = cx.module.declare_func_in_func(thunk_fid, cx.builder.func);
                         let thunk_fn_ptr = cx.builder.ins().func_addr(cx.ptr_type, thunk_fref);
 
@@ -3427,11 +4426,15 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             Ok(Some((ok_value, TurboTy::Int)))
         }
 
-        Expr::ForIn { var_name, iterable, body } => compile_for_in(cx, var_name, iterable, body),
+        Expr::ForIn {
+            var_name,
+            iterable,
+            body,
+        } => compile_for_in(cx, var_name, iterable, body),
 
-        Expr::Range { .. } => {
-            Err(CodegenError { message: "range expressions can only be used in for-in loops".to_string() })
-        }
+        Expr::Range { .. } => Err(CodegenError {
+            message: "range expressions can only be used in for-in loops".to_string(),
+        }),
 
         Expr::Break => {
             if let Some(&(_header, exit)) = cx.loop_stack.last() {
@@ -3531,22 +4534,30 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                 let tools_len = tools.len() as i64;
                 let tools_len_val = cx.builder.ins().iconst(types::I64, tools_len);
                 let arr_alloc_fid = cx.rt_fns["rt_array_alloc"];
-                let arr_alloc_ref = cx.module.declare_func_in_func(arr_alloc_fid, cx.builder.func);
+                let arr_alloc_ref = cx
+                    .module
+                    .declare_func_in_func(arr_alloc_fid, cx.builder.func);
                 let arr_call = cx.builder.ins().call(arr_alloc_ref, &[tools_len_val]);
                 let arr_ptr = cx.builder.inst_results(arr_call)[0];
                 for (i, tool_name) in tools.iter().enumerate() {
                     let tool_str = cx.create_string(tool_name)?;
                     let offset = cx.builder.ins().iconst(cx.ptr_type, (8 + i * 8) as i64);
                     let elem_ptr = cx.builder.ins().iadd(arr_ptr, offset);
-                    cx.builder.ins().store(MemFlags::new(), tool_str, elem_ptr, 0);
+                    cx.builder
+                        .ins()
+                        .store(MemFlags::new(), tool_str, elem_ptr, 0);
                 }
                 cx.builder.ins().store(MemFlags::new(), arr_ptr, ptr, 16);
 
                 return Ok(Some((ptr, TurboTy::Agent(name.clone()))));
             }
 
-            let struct_layout = cx.struct_fields.get(name)
-                .ok_or_else(|| CodegenError { message: format!("undefined struct: {name}") })?
+            let struct_layout = cx
+                .struct_fields
+                .get(name)
+                .ok_or_else(|| CodegenError {
+                    message: format!("undefined struct: {name}"),
+                })?
                 .clone();
 
             let num_fields = struct_layout.len() as i64;
@@ -3563,9 +4574,12 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
 
             // Store each field at its offset
             for (field_name, field_value) in fields {
-                let field_index = struct_layout.iter()
+                let field_index = struct_layout
+                    .iter()
                     .position(|(n, _)| n == field_name)
-                    .ok_or_else(|| CodegenError { message: format!("struct `{name}` has no field `{field_name}`") })?;
+                    .ok_or_else(|| CodegenError {
+                        message: format!("struct `{name}` has no field `{field_name}`"),
+                    })?;
 
                 let (val, tty) = compile_expr(cx, field_value)?.unwrap();
                 concrete_fields.push((field_name.clone(), tty));
@@ -3579,7 +4593,9 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                     cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
                 } else if val_ty.is_float() && val_ty.bits() == 32 {
                     let extended = cx.builder.ins().fpromote(types::F64, val);
-                    cx.builder.ins().bitcast(types::I64, MemFlags::new(), extended)
+                    cx.builder
+                        .ins()
+                        .bitcast(types::I64, MemFlags::new(), extended)
                 } else {
                     val
                 };
@@ -3597,14 +4613,20 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             // Check if this is actually an enum variant access: EnumName.VariantName
             if let Expr::Ident(ref name) = object.node {
                 if let Some(variants) = cx.enum_variants.get(name.as_str()) {
-                    let index = variants.iter().position(|v| v == field)
-                        .ok_or_else(|| CodegenError { message: format!("enum `{name}` has no variant `{field}`") })?;
+                    let index =
+                        variants
+                            .iter()
+                            .position(|v| v == field)
+                            .ok_or_else(|| CodegenError {
+                                message: format!("enum `{name}` has no variant `{field}`"),
+                            })?;
 
                     // Check if this is a data-carrying enum
                     if let Some(&max_slots) = cx.enum_max_slots.get(name.as_str()) {
                         // Allocate tagged union: [tag][slot0][slot1]...[slotN]
                         let total_slots = 1 + max_slots; // tag + payload
-                        let num_fields_val = cx.builder.ins().iconst(types::I64, total_slots as i64);
+                        let num_fields_val =
+                            cx.builder.ins().iconst(types::I64, total_slots as i64);
                         let alloc_fid = cx.rt_fns["rt_struct_alloc"];
                         let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
                         let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
@@ -3628,31 +4650,51 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                     "model" => (0i32, TurboTy::Str),
                     "system" => (8i32, TurboTy::Str),
                     "tools" => (16i32, TurboTy::Array(Box::new(TurboTy::Str))),
-                    _ => return Err(CodegenError { message: format!("agent has no field `{field}`") }),
+                    _ => {
+                        return Err(CodegenError {
+                            message: format!("agent has no field `{field}`"),
+                        })
+                    }
                 };
-                let val = cx.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, offset);
+                let val = cx
+                    .builder
+                    .ins()
+                    .load(types::I64, MemFlags::new(), obj_ptr, offset);
                 return Ok(Some((val, tty)));
             }
 
             let struct_name = match &obj_tty {
                 TurboTy::Struct(name) => name.clone(),
-                _ => return Err(CodegenError { message: format!("field access on non-struct type") }),
+                _ => {
+                    return Err(CodegenError {
+                        message: "field access on non-struct type".to_string(),
+                    })
+                }
             };
 
-            let struct_layout = cx.struct_fields.get(&struct_name)
-                .ok_or_else(|| CodegenError { message: format!("undefined struct: {struct_name}") })?
+            let struct_layout = cx
+                .struct_fields
+                .get(&struct_name)
+                .ok_or_else(|| CodegenError {
+                    message: format!("undefined struct: {struct_name}"),
+                })?
                 .clone();
 
-            let field_index = struct_layout.iter()
+            let field_index = struct_layout
+                .iter()
                 .position(|(n, _)| n == field)
-                .ok_or_else(|| CodegenError { message: format!("struct `{struct_name}` has no field `{field}`") })?;
+                .ok_or_else(|| CodegenError {
+                    message: format!("struct `{struct_name}` has no field `{field}`"),
+                })?;
 
             let mut field_tty = struct_layout[field_index].1.clone();
 
             // For generic structs, check if we have concrete field type overrides
             if let Expr::Ident(ref var_name) = object.node {
                 if let Some(concrete_fields) = cx.generic_struct_field_overrides.get(var_name) {
-                    if let Some((_, concrete_tty)) = concrete_fields.iter().find(|(n, _)| n == field) {
+                    if let Some((_, concrete_tty)) =
+                        concrete_fields.iter().find(|(n, _)| n == field)
+                    {
                         field_tty = concrete_tty.clone();
                     }
                 }
@@ -3661,7 +4703,10 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             let offset = (field_index * 8) as i32;
 
             // Load from the struct pointer
-            let raw_val = cx.builder.ins().load(types::I64, MemFlags::new(), obj_ptr, offset);
+            let raw_val = cx
+                .builder
+                .ins()
+                .load(types::I64, MemFlags::new(), obj_ptr, offset);
 
             // Convert back to the appropriate type
             let (val, tty) = match &field_tty {
@@ -3671,7 +4716,10 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                     (truncated, TurboTy::Bool)
                 }
                 TurboTy::Float => {
-                    let f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val);
+                    let f = cx
+                        .builder
+                        .ins()
+                        .bitcast(types::F64, MemFlags::new(), raw_val);
                     (f, TurboTy::Float)
                 }
                 TurboTy::Str => (raw_val, TurboTy::Str),
@@ -3683,10 +4731,18 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
         }
 
         Expr::EnumVariant { enum_name, variant } => {
-            let variants = cx.enum_variants.get(enum_name.as_str())
-                .ok_or_else(|| CodegenError { message: format!("undefined enum: {enum_name}") })?;
-            let index = variants.iter().position(|v| v == variant)
-                .ok_or_else(|| CodegenError { message: format!("enum `{enum_name}` has no variant `{variant}`") })?;
+            let variants =
+                cx.enum_variants
+                    .get(enum_name.as_str())
+                    .ok_or_else(|| CodegenError {
+                        message: format!("undefined enum: {enum_name}"),
+                    })?;
+            let index = variants
+                .iter()
+                .position(|v| v == variant)
+                .ok_or_else(|| CodegenError {
+                    message: format!("enum `{enum_name}` has no variant `{variant}`"),
+                })?;
 
             // Check if this is a data-carrying enum
             if let Some(&max_slots) = cx.enum_max_slots.get(enum_name.as_str()) {
@@ -3713,12 +4769,23 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
         Expr::Closure { params, .. } => {
             // Look up the pre-declared closure function by span start
             let span_start = expr.span.start;
-            let (closure_name, closure_ty, _free_vars) = cx.closure_fns.get(&span_start)
-                .ok_or_else(|| CodegenError { message: "internal error: closure not found in pre-compiled map".to_string() })?;
+            let (closure_name, closure_ty, _free_vars) = cx
+                .closure_fns
+                .get(&span_start)
+                .ok_or_else(|| CodegenError {
+                    message: "internal error: closure not found in pre-compiled map".to_string(),
+                })?;
             let closure_ty = closure_ty.clone();
             let closure_name = closure_name.clone();
-            let func_id = *cx.user_fns.get(closure_name.as_str())
-                .ok_or_else(|| CodegenError { message: format!("internal error: closure function {} not found", closure_name) })?;
+            let func_id = *cx
+                .user_fns
+                .get(closure_name.as_str())
+                .ok_or_else(|| CodegenError {
+                    message: format!(
+                        "internal error: closure function {} not found",
+                        closure_name
+                    ),
+                })?;
             let func_ref = cx.module.declare_func_in_func(func_id, cx.builder.func);
             let fn_ptr = cx.builder.ins().func_addr(cx.ptr_type, func_ref);
 
@@ -3735,7 +4802,12 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             }
 
             // Store capture info for the closure body compiler
-            cx.closure_captures.insert(span_start, CaptureInfo { captures: captures.clone() });
+            cx.closure_captures.insert(
+                span_start,
+                CaptureInfo {
+                    captures: captures.clone(),
+                },
+            );
 
             // Allocate environment struct for captured variables
             let num_captures = captures.len() as i64;
@@ -3748,8 +4820,13 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
 
                 // Store each captured variable into the env struct
                 for (cap_idx, (cap_name, _cap_tty)) in captures.iter().enumerate() {
-                    let (var, _cl_ty, _turbo_ty) = cx.vars.get(cap_name)
-                        .ok_or_else(|| CodegenError { message: format!("internal error: capture variable {} not found", cap_name) })?;
+                    let (var, _cl_ty, _turbo_ty) =
+                        cx.vars.get(cap_name).ok_or_else(|| CodegenError {
+                            message: format!(
+                                "internal error: capture variable {} not found",
+                                cap_name
+                            ),
+                        })?;
                     let val = cx.builder.use_var(*var);
                     let offset = (cap_idx * 8) as i32;
 
@@ -3761,11 +4838,15 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
                         cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
                     } else if val_ty.is_float() && val_ty.bits() == 32 {
                         let extended = cx.builder.ins().fpromote(types::F64, val);
-                        cx.builder.ins().bitcast(types::I64, MemFlags::new(), extended)
+                        cx.builder
+                            .ins()
+                            .bitcast(types::I64, MemFlags::new(), extended)
                     } else {
                         val
                     };
-                    cx.builder.ins().store(MemFlags::new(), val, env_ptr, offset);
+                    cx.builder
+                        .ins()
+                        .store(MemFlags::new(), val, env_ptr, offset);
                 }
                 env_ptr
             } else {
@@ -3781,9 +4862,13 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             let closure_ptr = cx.builder.inst_results(call)[0];
 
             // Store fn_ptr at offset 0
-            cx.builder.ins().store(MemFlags::new(), fn_ptr, closure_ptr, 0);
+            cx.builder
+                .ins()
+                .store(MemFlags::new(), fn_ptr, closure_ptr, 0);
             // Store env_ptr at offset 8
-            cx.builder.ins().store(MemFlags::new(), env_ptr, closure_ptr, 8);
+            cx.builder
+                .ins()
+                .store(MemFlags::new(), env_ptr, closure_ptr, 8);
 
             Ok(Some((closure_ptr, closure_ty)))
         }
@@ -3803,7 +4888,10 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
             let call = cx.builder.ins().call(fref, &[val]);
             let ptr = cx.builder.inst_results(call)[0];
-            Ok(Some((ptr, TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Int)))))
+            Ok(Some((
+                ptr,
+                TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Int)),
+            )))
         }
 
         Expr::ErrExpr(value) => {
@@ -3821,7 +4909,10 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
             let call = cx.builder.ins().call(fref, &[val]);
             let ptr = cx.builder.inst_results(call)[0];
-            Ok(Some((ptr, TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Int)))))
+            Ok(Some((
+                ptr,
+                TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Int)),
+            )))
         }
 
         Expr::SomeExpr(value) => {
@@ -3868,7 +4959,9 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             let none_block = cx.builder.create_block();
             let merge_block = cx.builder.create_block();
 
-            cx.builder.ins().brif(is_some, some_block, &[], none_block, &[]);
+            cx.builder
+                .ins()
+                .brif(is_some, some_block, &[], none_block, &[]);
 
             // Some path: extract value
             cx.builder.switch_to_block(some_block);
@@ -3888,7 +4981,9 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
             let def_val = if def_ty.is_int() && def_ty.bits() < 64 {
                 cx.builder.ins().sextend(types::I64, def_val)
             } else if def_ty.is_float() {
-                cx.builder.ins().bitcast(types::I64, MemFlags::new(), def_val)
+                cx.builder
+                    .ins()
+                    .bitcast(types::I64, MemFlags::new(), def_val)
             } else {
                 def_val
             };
@@ -3902,7 +4997,6 @@ fn compile_expr<M: Module>(cx: &mut Ctx<'_, M>, expr: &Spanned<Expr>) -> Result<
 
             Ok(Some((result, def_tty)))
         }
-
     }
 }
 
@@ -3918,7 +5012,8 @@ fn compile_stmt<M: Module>(cx: &mut Ctx<'_, M>, stmt: &Spanned<Stmt>) -> Result<
             let result = compile_expr(cx, value)?;
             // If the value was a struct literal, capture concrete field types for generic structs
             if let Some(concrete_fields) = cx.last_struct_lit_concrete_fields.take() {
-                cx.generic_struct_field_overrides.insert(name.clone(), concrete_fields);
+                cx.generic_struct_field_overrides
+                    .insert(name.clone(), concrete_fields);
             }
             let (cl_ty, turbo_ty, val) = if let Some((v, tty)) = result {
                 (cx.builder.func.dfg.value_type(v), tty, Some(v))
@@ -3931,11 +5026,15 @@ fn compile_stmt<M: Module>(cx: &mut Ctx<'_, M>, stmt: &Spanned<Stmt>) -> Result<
                 if let Some(v) = val {
                     let needs_retain = matches!(
                         &turbo_ty,
-                        TurboTy::Array(_) | TurboTy::Struct(_) | TurboTy::Result(_, _) | TurboTy::Optional(_)
+                        TurboTy::Array(_)
+                            | TurboTy::Struct(_)
+                            | TurboTy::Result(_, _)
+                            | TurboTy::Optional(_)
                     );
                     if needs_retain {
                         let retain_fid = cx.rt_fns["rt_retain"];
-                        let retain_ref = cx.module.declare_func_in_func(retain_fid, cx.builder.func);
+                        let retain_ref =
+                            cx.module.declare_func_in_func(retain_fid, cx.builder.func);
                         cx.builder.ins().call(retain_ref, &[v]);
                     }
                 }
@@ -3999,20 +5098,32 @@ fn compile_binop<M: Module>(
             BinOp::LessEq => cx.builder.ins().fcmp(FloatCC::LessThanOrEqual, lhs, rhs),
             BinOp::Greater => cx.builder.ins().fcmp(FloatCC::GreaterThan, lhs, rhs),
             BinOp::GreaterEq => cx.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lhs, rhs),
-            _ => return Err(CodegenError { message: format!("unsupported float op: {op:?}") }),
+            _ => {
+                return Err(CodegenError {
+                    message: format!("unsupported float op: {op:?}"),
+                })
+            }
         };
         Ok(result)
     } else {
         // Widen mismatched integer widths
         let rhs_ty = cx.builder.func.dfg.value_type(rhs);
         let (lhs, rhs) = if lhs_ty.bits() != rhs_ty.bits() {
-            let target = if lhs_ty.bits() > rhs_ty.bits() { lhs_ty } else { rhs_ty };
+            let target = if lhs_ty.bits() > rhs_ty.bits() {
+                lhs_ty
+            } else {
+                rhs_ty
+            };
             let lhs = if lhs_ty.bits() < target.bits() {
                 cx.builder.ins().sextend(target, lhs)
-            } else { lhs };
+            } else {
+                lhs
+            };
             let rhs = if rhs_ty.bits() < target.bits() {
                 cx.builder.ins().sextend(target, rhs)
-            } else { rhs };
+            } else {
+                rhs
+            };
             (lhs, rhs)
         } else {
             (lhs, rhs)
@@ -4034,9 +5145,15 @@ fn compile_binop<M: Module>(
             BinOp::Eq => cx.builder.ins().icmp(IntCC::Equal, lhs, rhs),
             BinOp::NotEq => cx.builder.ins().icmp(IntCC::NotEqual, lhs, rhs),
             BinOp::Less => cx.builder.ins().icmp(IntCC::SignedLessThan, lhs, rhs),
-            BinOp::LessEq => cx.builder.ins().icmp(IntCC::SignedLessThanOrEqual, lhs, rhs),
+            BinOp::LessEq => cx
+                .builder
+                .ins()
+                .icmp(IntCC::SignedLessThanOrEqual, lhs, rhs),
             BinOp::Greater => cx.builder.ins().icmp(IntCC::SignedGreaterThan, lhs, rhs),
-            BinOp::GreaterEq => cx.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs),
+            BinOp::GreaterEq => cx
+                .builder
+                .ins()
+                .icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs),
             BinOp::And => cx.builder.ins().band(lhs, rhs),
             BinOp::Or => cx.builder.ins().bor(lhs, rhs),
         };
@@ -4052,7 +5169,9 @@ fn emit_div_zero_check<M: Module>(cx: &mut Ctx<'_, M>, divisor: Value) {
     let trap_block = cx.builder.create_block();
     let ok_block = cx.builder.create_block();
 
-    cx.builder.ins().brif(is_zero, trap_block, &[], ok_block, &[]);
+    cx.builder
+        .ins()
+        .brif(is_zero, trap_block, &[], ok_block, &[]);
 
     cx.builder.switch_to_block(trap_block);
     cx.builder.seal_block(trap_block);
@@ -4080,7 +5199,9 @@ fn emit_int_overflow_check<M: Module>(cx: &mut Ctx<'_, M>, dividend: Value, divi
     let trap_block = cx.builder.create_block();
     let ok_block = cx.builder.create_block();
 
-    cx.builder.ins().brif(is_overflow, trap_block, &[], ok_block, &[]);
+    cx.builder
+        .ins()
+        .brif(is_overflow, trap_block, &[], ok_block, &[]);
 
     cx.builder.switch_to_block(trap_block);
     cx.builder.seal_block(trap_block);
@@ -4109,11 +5230,15 @@ fn compile_short_circuit<M: Module>(
     match op {
         BinOp::And => {
             let false_val = cx.builder.ins().iconst(types::I8, 0);
-            cx.builder.ins().brif(lhs_bool, eval_rhs_block, &[], merge_block, &[false_val]);
+            cx.builder
+                .ins()
+                .brif(lhs_bool, eval_rhs_block, &[], merge_block, &[false_val]);
         }
         BinOp::Or => {
             let true_val = cx.builder.ins().iconst(types::I8, 1);
-            cx.builder.ins().brif(lhs_bool, merge_block, &[true_val], eval_rhs_block, &[]);
+            cx.builder
+                .ins()
+                .brif(lhs_bool, merge_block, &[true_val], eval_rhs_block, &[]);
         }
         _ => unreachable!(),
     }
@@ -4141,7 +5266,11 @@ fn compile_call<M: Module>(
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
     // Handle method calls: expr.method(args)
-    if let Expr::FieldAccess { ref object, ref field } = callee.node {
+    if let Expr::FieldAccess {
+        ref object,
+        ref field,
+    } = callee.node
+    {
         let (obj_val, obj_tty) = compile_expr(cx, object)?.unwrap();
         if let TurboTy::Struct(ref type_name) = obj_tty {
             let mangled = format!("{}__{}", type_name, field);
@@ -4155,7 +5284,11 @@ fn compile_call<M: Module>(
                 let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
                 let call = cx.builder.ins().call(fref, &arg_vals);
                 let results = cx.builder.inst_results(call);
-                let ret_tty = cx.fn_ret_types.get(&mangled).cloned().unwrap_or(TurboTy::Unit);
+                let ret_tty = cx
+                    .fn_ret_types
+                    .get(&mangled)
+                    .cloned()
+                    .unwrap_or(TurboTy::Unit);
                 if results.is_empty() {
                     return Ok(None);
                 } else {
@@ -4163,11 +5296,15 @@ fn compile_call<M: Module>(
                 }
             }
         }
-        return Err(CodegenError { message: format!("no method `{field}` found") });
+        return Err(CodegenError {
+            message: format!("no method `{field}` found"),
+        });
     }
 
     let Expr::Ident(name) = &callee.node else {
-        return Err(CodegenError { message: "indirect function calls not yet supported".to_string() });
+        return Err(CodegenError {
+            message: "indirect function calls not yet supported".to_string(),
+        });
     };
 
     match name.as_str() {
@@ -4254,18 +5391,22 @@ fn compile_call<M: Module>(
                             if let Some(&max_slots) = cx.enum_max_slots.get(enum_name.as_str()) {
                                 // Data-carrying enum: allocate tagged union
                                 let total_slots = 1 + max_slots; // tag + payload
-                                let num_fields_val = cx.builder.ins().iconst(types::I64, total_slots as i64);
+                                let num_fields_val =
+                                    cx.builder.ins().iconst(types::I64, total_slots as i64);
                                 let alloc_fid = cx.rt_fns["rt_struct_alloc"];
-                                let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+                                let alloc_fref =
+                                    cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
                                 let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
                                 let ptr = cx.builder.inst_results(call)[0];
 
                                 // Store tag at offset 0
-                                let tag_val = cx.builder.ins().iconst(types::I64, variant_index as i64);
+                                let tag_val =
+                                    cx.builder.ins().iconst(types::I64, variant_index as i64);
                                 cx.builder.ins().store(MemFlags::new(), tag_val, ptr, 0);
 
                                 // Get the field types for this variant
-                                let _field_tys = cx.enum_variant_fields
+                                let _field_tys = cx
+                                    .enum_variant_fields
                                     .get(&(enum_name.clone(), name.to_string()))
                                     .cloned()
                                     .unwrap_or_default();
@@ -4281,14 +5422,20 @@ fn compile_call<M: Module>(
                                         cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
                                     } else if val_ty.is_float() && val_ty.bits() == 32 {
                                         let extended = cx.builder.ins().fpromote(types::F64, val);
-                                        cx.builder.ins().bitcast(types::I64, MemFlags::new(), extended)
+                                        cx.builder.ins().bitcast(
+                                            types::I64,
+                                            MemFlags::new(),
+                                            extended,
+                                        )
                                     } else if val_ty.bits() < 64 && val_ty.is_int() {
                                         cx.builder.ins().sextend(types::I64, val)
                                     } else {
                                         val
                                     };
 
-                                    cx.builder.ins().store(MemFlags::new(), store_val, ptr, offset);
+                                    cx.builder
+                                        .ins()
+                                        .store(MemFlags::new(), store_val, ptr, offset);
                                 }
 
                                 return Ok(Some((ptr, TurboTy::Enum(enum_name.clone()))));
@@ -4318,7 +5465,11 @@ fn compile_call<M: Module>(
                         let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
                         let call = cx.builder.ins().call(fref, &arg_vals);
                         let results = cx.builder.inst_results(call);
-                        let ret_tty = cx.fn_ret_types.get(&mangled).cloned().unwrap_or(TurboTy::Unit);
+                        let ret_tty = cx
+                            .fn_ret_types
+                            .get(&mangled)
+                            .cloned()
+                            .unwrap_or(TurboTy::Unit);
                         if results.is_empty() {
                             return Ok(None);
                         } else {
@@ -4329,57 +5480,75 @@ fn compile_call<M: Module>(
             }
 
             // Check if the callee is a variable with a function pointer type (closure)
-            if let Some((var, _cl_ty, turbo_ty)) = cx.vars.get(name).cloned() {
-                if let TurboTy::Fn(ref param_tys, ref ret_ty) = turbo_ty {
-                    // Closure is a pair struct: [fn_ptr, env_ptr]
-                    let closure_ptr = cx.builder.use_var(var);
-                    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
-                    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
+            if let Some((var, _cl_ty, TurboTy::Fn(ref param_tys, ref ret_ty))) =
+                cx.vars.get(name).cloned()
+            {
+                // Closure is a pair struct: [fn_ptr, env_ptr]
+                let closure_ptr = cx.builder.use_var(var);
+                let fn_ptr = cx
+                    .builder
+                    .ins()
+                    .load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+                let env_ptr = cx
+                    .builder
+                    .ins()
+                    .load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
-                    // Build the Cranelift signature: env_ptr first, then user params
-                    let mut sig = cx.module.make_signature();
-                    sig.call_conv = CallConv::Fast;
-                    sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
-                    for param_tty in param_tys {
-                        let cl_ty = turbo_ty_to_cl_type(param_tty, cx.ptr_type);
-                        sig.params.push(AbiParam::new(cl_ty));
-                    }
-                    let ret_tty = *ret_ty.clone();
-                    if ret_tty != TurboTy::Unit {
-                        let cl_ret = turbo_ty_to_cl_type(&ret_tty, cx.ptr_type);
-                        sig.returns.push(AbiParam::new(cl_ret));
-                    }
+                // Build the Cranelift signature: env_ptr first, then user params
+                let mut sig = cx.module.make_signature();
+                sig.call_conv = CallConv::Fast;
+                sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
+                for param_tty in param_tys {
+                    let cl_ty = turbo_ty_to_cl_type(param_tty, cx.ptr_type);
+                    sig.params.push(AbiParam::new(cl_ty));
+                }
+                let ret_tty = *ret_ty.clone();
+                if ret_tty != TurboTy::Unit {
+                    let cl_ret = turbo_ty_to_cl_type(&ret_tty, cx.ptr_type);
+                    sig.returns.push(AbiParam::new(cl_ret));
+                }
 
-                    let sig_ref = cx.builder.import_signature(sig);
+                let sig_ref = cx.builder.import_signature(sig);
 
-                    let mut arg_values = vec![env_ptr]; // env_ptr is first hidden arg
-                    for arg in args {
-                        if let Some((val, _)) = compile_expr(cx, arg)? {
-                            arg_values.push(val);
-                        }
+                let mut arg_values = vec![env_ptr]; // env_ptr is first hidden arg
+                for arg in args {
+                    if let Some((val, _)) = compile_expr(cx, arg)? {
+                        arg_values.push(val);
                     }
+                }
 
-                    let call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
-                    let results = cx.builder.inst_results(call);
-                    if results.is_empty() {
-                        return Ok(None);
-                    } else {
-                        return Ok(Some((results[0], ret_tty)));
-                    }
+                let call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
+                let results = cx.builder.inst_results(call);
+                if results.is_empty() {
+                    return Ok(None);
+                } else {
+                    return Ok(Some((results[0], ret_tty)));
                 }
             }
 
-            let func_id = *cx.user_fns.get(name.as_str())
-                .ok_or_else(|| CodegenError { message: format!("undefined function: {name}") })?;
+            let func_id = *cx.user_fns.get(name.as_str()).ok_or_else(|| CodegenError {
+                message: format!("undefined function: {name}"),
+            })?;
 
-            let ret_tty = cx.fn_ret_types.get(name.as_str()).cloned().unwrap_or(TurboTy::Unit);
+            let ret_tty = cx
+                .fn_ret_types
+                .get(name.as_str())
+                .cloned()
+                .unwrap_or(TurboTy::Unit);
             let ret_is_result = matches!(&ret_tty, TurboTy::Result(_, _));
-            let type_params = cx.fn_type_params.get(name.as_str()).cloned().unwrap_or_default();
+            let type_params = cx
+                .fn_type_params
+                .get(name.as_str())
+                .cloned()
+                .unwrap_or_default();
 
             let func_ref = cx.module.declare_func_in_func(func_id, cx.builder.func);
             let sig = cx.builder.func.dfg.ext_funcs[func_ref].signature;
             let param_types: Vec<types::Type> = cx.builder.func.dfg.signatures[sig]
-                .params.iter().map(|p| p.value_type).collect();
+                .params
+                .iter()
+                .map(|p| p.value_type)
+                .collect();
             let mut arg_values = Vec::new();
             let mut arg_ttys = Vec::new();
             for (i, arg) in args.iter().enumerate() {
@@ -4457,7 +5626,9 @@ fn compile_call<M: Module>(
             // tagged unions require proper call/return semantics).
             if cx.inline_depth < MAX_INLINE_DEPTH && type_params.is_empty() && !ret_is_result {
                 if let Some(callee_def) = cx.fn_asts.get(name.as_str()).cloned() {
-                    if !has_return(&callee_def.body.node) && callee_def.params.len() == arg_values.len() {
+                    if !has_return(&callee_def.body.node)
+                        && callee_def.params.len() == arg_values.len()
+                    {
                         // Save and restore outer variable scope so inlined
                         // parameter bindings don't leak out.
                         let saved_vars = cx.vars.clone();
@@ -4466,8 +5637,14 @@ fn compile_call<M: Module>(
 
                         // Bind each parameter to the already-compiled argument value.
                         for (i, param) in callee_def.params.iter().enumerate() {
-                            let cl_ty = resolve_cl_type(&param.ty.node, cx.ptr_type, cx.enum_variants, &type_params)?;
-                            let turbo_ty = turbo_ty_from_type_expr(&param.ty.node, cx.enum_variants);
+                            let cl_ty = resolve_cl_type(
+                                &param.ty.node,
+                                cx.ptr_type,
+                                cx.enum_variants,
+                                &type_params,
+                            )?;
+                            let turbo_ty =
+                                turbo_ty_from_type_expr(&param.ty.node, cx.enum_variants);
                             let var = cx.fresh_var(cl_ty, turbo_ty.clone());
                             cx.builder.def_var(var, arg_values[i]);
                             cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
@@ -4495,7 +5672,10 @@ fn compile_call<M: Module>(
     }
 }
 
-fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_print<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     if args.is_empty() {
         let ptr = cx.create_string("")?;
         cx.rt_call("rt_print_str", &[ptr]);
@@ -4521,7 +5701,9 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
                 let ty = cx.builder.func.dfg.value_type(v);
                 let v = if ty.bits() < 64 {
                     cx.builder.ins().sextend(types::I64, v)
-                } else { v };
+                } else {
+                    v
+                };
                 cx.rt_call("rt_print_i64", &[v]);
             }
             TurboTy::Unit => {
@@ -4536,7 +5718,9 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
                 } else {
                     let v = if cx.builder.func.dfg.value_type(v).bits() < 64 {
                         cx.builder.ins().sextend(types::I64, v)
-                    } else { v };
+                    } else {
+                        v
+                    };
                     v
                 };
                 cx.rt_call("rt_print_i64", &[tag_val]);
@@ -4547,8 +5731,10 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
             }
             TurboTy::Struct(ref name) => {
                 // Check if struct implements Display trait
-                let has_display = cx.trait_impls.get(name)
-                    .map_or(false, |traits| traits.contains(&"Display".to_string()));
+                let has_display = cx
+                    .trait_impls
+                    .get(name)
+                    .is_some_and(|traits| traits.contains(&"Display".to_string()));
                 if has_display {
                     let mangled = format!("{name}__to_string");
                     if let Some(&fid) = cx.user_fns.get(&mangled) {
@@ -4594,7 +5780,10 @@ fn compile_print<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
     Ok(None)
 }
 
-fn compile_panic<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_panic<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let msg = if !args.is_empty() {
         compile_expr(cx, &args[0])?.unwrap().0
     } else {
@@ -4611,9 +5800,14 @@ fn compile_panic<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Resu
     Ok(None)
 }
 
-fn compile_assert<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_assert<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     if args.is_empty() {
-        return Err(CodegenError { message: "assert() requires at least one argument".to_string() });
+        return Err(CodegenError {
+            message: "assert() requires at least one argument".to_string(),
+        });
     }
 
     let (cond, _) = compile_expr(cx, &args[0])?.unwrap();
@@ -4622,7 +5816,9 @@ fn compile_assert<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Res
     let fail_block = cx.builder.create_block();
     let ok_block = cx.builder.create_block();
 
-    cx.builder.ins().brif(cond_bool, ok_block, &[], fail_block, &[]);
+    cx.builder
+        .ins()
+        .brif(cond_bool, ok_block, &[], fail_block, &[]);
 
     cx.builder.switch_to_block(fail_block);
     cx.builder.seal_block(fail_block);
@@ -4642,10 +5838,16 @@ fn compile_assert<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Res
     Ok(None)
 }
 
-fn compile_assert_eq<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>], is_ne: bool) -> Result<MaybeTyped, CodegenError> {
+fn compile_assert_eq<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+    is_ne: bool,
+) -> Result<MaybeTyped, CodegenError> {
     if args.len() != 2 {
         let name = if is_ne { "assert_ne" } else { "assert_eq" };
-        return Err(CodegenError { message: format!("{name}() requires exactly 2 arguments") });
+        return Err(CodegenError {
+            message: format!("{name}() requires exactly 2 arguments"),
+        });
     }
 
     let (left_val, left_tty) = compile_expr(cx, &args[0])?.unwrap();
@@ -4659,12 +5861,8 @@ fn compile_assert_eq<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>], is_
             let call = cx.builder.ins().call(fref, &[left_val, right_val]);
             cx.builder.inst_results(call)[0]
         }
-        TurboTy::Float => {
-            cx.builder.ins().fcmp(FloatCC::Equal, left_val, right_val)
-        }
-        TurboTy::Bool => {
-            cx.builder.ins().icmp(IntCC::Equal, left_val, right_val)
-        }
+        TurboTy::Float => cx.builder.ins().fcmp(FloatCC::Equal, left_val, right_val),
+        TurboTy::Bool => cx.builder.ins().icmp(IntCC::Equal, left_val, right_val),
         _ => {
             // For Int, Enum (unit), etc: i64 comparison
             let lv = {
@@ -4705,11 +5903,16 @@ fn compile_assert_eq<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>], is_
     let left_str = convert_to_str(cx, left_val, &left_tty)?;
     let right_str = convert_to_str(cx, right_val, &right_tty)?;
 
-    let kind_val = cx.builder.ins().iconst(types::I64, if is_ne { 1 } else { 0 });
+    let kind_val = cx
+        .builder
+        .ins()
+        .iconst(types::I64, if is_ne { 1 } else { 0 });
 
     let fid = cx.rt_fns["rt_assert_eq_fail"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-    cx.builder.ins().call(fref, &[kind_val, left_str, right_str]);
+    cx.builder
+        .ins()
+        .call(fref, &[kind_val, left_str, right_str]);
     cx.builder.ins().trap(TrapCode::unwrap_user(1));
 
     cx.builder.switch_to_block(ok_block);
@@ -4718,9 +5921,14 @@ fn compile_assert_eq<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>], is_
     Ok(None)
 }
 
-fn compile_len<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_len<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     if args.is_empty() {
-        return Err(CodegenError { message: "len() requires exactly 1 argument".to_string() });
+        return Err(CodegenError {
+            message: "len() requires exactly 1 argument".to_string(),
+        });
     }
     let (val, tty) = compile_expr(cx, &args[0])?.unwrap();
     if tty == TurboTy::Str {
@@ -4740,7 +5948,10 @@ fn compile_len<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result
 
 // ── abs/min/max/to_str builtins ─────────────────────────────────────
 
-fn compile_abs<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_abs<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (val, _) = compile_expr(cx, &args[0])?.unwrap();
     let zero = cx.builder.ins().iconst(types::I64, 0);
     let is_neg = cx.builder.ins().icmp(IntCC::SignedLessThan, val, zero);
@@ -4749,7 +5960,10 @@ fn compile_abs<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result
     Ok(Some((result, TurboTy::Int)))
 }
 
-fn compile_min<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_min<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (a, _) = compile_expr(cx, &args[0])?.unwrap();
     let (b, _) = compile_expr(cx, &args[1])?.unwrap();
     let cmp = cx.builder.ins().icmp(IntCC::SignedLessThan, a, b);
@@ -4757,7 +5971,10 @@ fn compile_min<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result
     Ok(Some((result, TurboTy::Int)))
 }
 
-fn compile_max<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_max<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (a, _) = compile_expr(cx, &args[0])?.unwrap();
     let (b, _) = compile_expr(cx, &args[1])?.unwrap();
     let cmp = cx.builder.ins().icmp(IntCC::SignedGreaterThan, a, b);
@@ -4765,7 +5982,10 @@ fn compile_max<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result
     Ok(Some((result, TurboTy::Int)))
 }
 
-fn compile_to_str_builtin<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_to_str_builtin<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (val, tty) = compile_expr(cx, &args[0])?.unwrap();
     let str_val = convert_to_str(cx, val, &tty)?;
     Ok(Some((str_val, TurboTy::Str)))
@@ -4774,7 +5994,10 @@ fn compile_to_str_builtin<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
 // ── Stdlib builtins ─────────────────────────────────────────────────
 
 /// split(s, sep) -> [str] — calls rt_str_split, returns Array(Str)
-fn compile_stdlib_split<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_stdlib_split<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (sep_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let fid = cx.rt_fns["rt_str_split"];
@@ -4785,7 +6008,11 @@ fn compile_stdlib_split<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) 
 }
 
 /// Generic helper for str->str builtins (trim, upper, lower)
-fn compile_stdlib_str1<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>], rt_name: &str) -> Result<MaybeTyped, CodegenError> {
+fn compile_stdlib_str1<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+    rt_name: &str,
+) -> Result<MaybeTyped, CodegenError> {
     let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let fid = cx.rt_fns[rt_name];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -4795,7 +6022,11 @@ fn compile_stdlib_str1<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>], r
 }
 
 /// Generic helper for (str, str)->bool builtins (starts_with, ends_with)
-fn compile_stdlib_str_bool2<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>], rt_name: &str) -> Result<MaybeTyped, CodegenError> {
+fn compile_stdlib_str_bool2<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+    rt_name: &str,
+) -> Result<MaybeTyped, CodegenError> {
     let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (other_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let fid = cx.rt_fns[rt_name];
@@ -4806,7 +6037,10 @@ fn compile_stdlib_str_bool2<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr
 }
 
 /// replace(s, from, to) -> str
-fn compile_stdlib_replace<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_stdlib_replace<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (from_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let (to_val, _) = compile_expr(cx, &args[2])?.unwrap();
@@ -4818,7 +6052,10 @@ fn compile_stdlib_replace<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
 }
 
 /// char_at(s, index) -> str
-fn compile_stdlib_char_at<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_stdlib_char_at<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (idx_val, _) = compile_expr(cx, &args[1])?.unwrap();
     // Ensure index is i64
@@ -4836,7 +6073,10 @@ fn compile_stdlib_char_at<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
 }
 
 /// index_of(s, sub) -> i64
-fn compile_stdlib_index_of<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_stdlib_index_of<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (sub_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let fid = cx.rt_fns["rt_str_index_of"];
@@ -4847,7 +6087,10 @@ fn compile_stdlib_index_of<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>
 }
 
 /// join(arr, sep) -> str
-fn compile_stdlib_join<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_stdlib_join<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (arr_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (sep_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let fid = cx.rt_fns["rt_str_join"];
@@ -4858,7 +6101,10 @@ fn compile_stdlib_join<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -
 }
 
 /// repeat(s, n) -> str
-fn compile_stdlib_repeat<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_stdlib_repeat<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (n_val, _) = compile_expr(cx, &args[1])?.unwrap();
     // Ensure n is i64
@@ -4885,7 +6131,10 @@ fn compile_stdlib_read_line<M: Module>(cx: &mut Ctx<'_, M>) -> Result<MaybeTyped
 }
 
 /// read_file(path) -> str
-fn compile_stdlib_read_file<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_stdlib_read_file<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (path_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let fid = cx.rt_fns["rt_read_file"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -4895,7 +6144,10 @@ fn compile_stdlib_read_file<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr
 }
 
 /// write_file(path, content) -> ()
-fn compile_stdlib_write_file<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_stdlib_write_file<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (path_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (content_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let fid = cx.rt_fns["rt_write_file"];
@@ -4905,14 +6157,25 @@ fn compile_stdlib_write_file<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Exp
 }
 
 /// pow(base, exp) -> i64
-fn compile_stdlib_pow<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_stdlib_pow<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (base_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (exp_val, _) = compile_expr(cx, &args[1])?.unwrap();
     // Ensure both are i64
     let base_ty = cx.builder.func.dfg.value_type(base_val);
-    let base_val = if base_ty.bits() < 64 { cx.builder.ins().sextend(types::I64, base_val) } else { base_val };
+    let base_val = if base_ty.bits() < 64 {
+        cx.builder.ins().sextend(types::I64, base_val)
+    } else {
+        base_val
+    };
     let exp_ty = cx.builder.func.dfg.value_type(exp_val);
-    let exp_val = if exp_ty.bits() < 64 { cx.builder.ins().sextend(types::I64, exp_val) } else { exp_val };
+    let exp_val = if exp_ty.bits() < 64 {
+        cx.builder.ins().sextend(types::I64, exp_val)
+    } else {
+        exp_val
+    };
     let fid = cx.rt_fns["rt_pow"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[base_val, exp_val]);
@@ -4921,7 +6184,10 @@ fn compile_stdlib_pow<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) ->
 }
 
 /// sqrt(x) -> f64
-fn compile_stdlib_sqrt<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_stdlib_sqrt<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (x_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let fid = cx.rt_fns["rt_sqrt"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -4931,11 +6197,18 @@ fn compile_stdlib_sqrt<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -
 }
 
 /// sleep(ms) -> () — sleep the current thread for ms milliseconds
-fn compile_builtin_sleep<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_sleep<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (ms_val, _) = compile_expr(cx, &args[0])?.unwrap();
     // Ensure it's i64
     let ms_ty = cx.builder.func.dfg.value_type(ms_val);
-    let ms_val = if ms_ty.bits() < 64 { cx.builder.ins().sextend(types::I64, ms_val) } else { ms_val };
+    let ms_val = if ms_ty.bits() < 64 {
+        cx.builder.ins().sextend(types::I64, ms_val)
+    } else {
+        ms_val
+    };
     let fid = cx.rt_fns["rt_sleep_ms"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     cx.builder.ins().call(fref, &[ms_val]);
@@ -4945,7 +6218,10 @@ fn compile_builtin_sleep<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>])
 // ── HTTP + JSON builtins ────────────────────────────────────────────
 
 /// http_get(url) -> str
-fn compile_builtin_http_get<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_http_get<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (url_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let fid = cx.rt_fns["rt_http_get"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -4955,7 +6231,10 @@ fn compile_builtin_http_get<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr
 }
 
 /// http_post(url, body) -> str
-fn compile_builtin_http_post<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_http_post<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (url_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (body_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let fid = cx.rt_fns["rt_http_post"];
@@ -4966,7 +6245,10 @@ fn compile_builtin_http_post<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Exp
 }
 
 /// json_get(json_str, key) -> str
-fn compile_builtin_json_get<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_json_get<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (json_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let fid = cx.rt_fns["rt_json_get"];
@@ -4977,7 +6259,10 @@ fn compile_builtin_json_get<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr
 }
 
 /// json_stringify(key, value) -> str
-fn compile_builtin_json_stringify<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_json_stringify<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (key_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (value_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let fid = cx.rt_fns["rt_json_stringify"];
@@ -4990,7 +6275,10 @@ fn compile_builtin_json_stringify<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanne
 // ── HTTP server builtins ────────────────────────────────────────────
 
 /// http_server(port) -> i64 (server id)
-fn compile_builtin_http_server<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_http_server<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (port_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let fid = cx.rt_fns["rt_http_server"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -5001,24 +6289,38 @@ fn compile_builtin_http_server<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<E
 
 /// route(server_id, method, path, handler_closure)
 /// Extracts fn_ptr and env_ptr from the closure pair and passes to rt_http_route.
-fn compile_builtin_route<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_route<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (server_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (method_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let (path_val, _) = compile_expr(cx, &args[2])?.unwrap();
     let (closure_ptr, _) = compile_expr(cx, &args[3])?.unwrap();
 
     // Extract fn_ptr and env_ptr from the closure pair struct (offset 0 = fn_ptr, offset 8 = env_ptr)
-    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
-    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
+    let fn_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
     let fid = cx.rt_fns["rt_http_route"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-    cx.builder.ins().call(fref, &[server_val, method_val, path_val, fn_ptr, env_ptr]);
+    cx.builder
+        .ins()
+        .call(fref, &[server_val, method_val, path_val, fn_ptr, env_ptr]);
     Ok(None)
 }
 
 /// http_listen(server_id) -> () — starts the server, blocks forever
-fn compile_builtin_http_listen<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_http_listen<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (server_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let fid = cx.rt_fns["rt_http_listen"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -5027,7 +6329,10 @@ fn compile_builtin_http_listen<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<E
 }
 
 /// respond(status, body) -> str — builds "STATUS:BODY" format response
-fn compile_builtin_respond<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_respond<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (status_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (body_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let fid = cx.rt_fns["rt_respond"];
@@ -5038,7 +6343,10 @@ fn compile_builtin_respond<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>
 }
 
 /// request_body(req) -> str — extracts body from request (identity for now)
-fn compile_builtin_request_body<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_request_body<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (req_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let fid = cx.rt_fns["rt_request_body"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -5051,7 +6359,10 @@ fn compile_builtin_request_body<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<
 
 /// to_json(val) -> str — serialize a struct to a JSON string at codegen time
 /// Uses struct field layout to generate field-by-field concatenation.
-fn compile_builtin_to_json<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_to_json<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (val, tty) = compile_expr(cx, &args[0])?.unwrap();
 
     if let TurboTy::Struct(ref struct_name) = tty {
@@ -5069,8 +6380,12 @@ fn compile_struct_to_json<M: Module>(
     struct_ptr: Value,
     struct_name: &str,
 ) -> Result<MaybeTyped, CodegenError> {
-    let struct_layout = cx.struct_fields.get(struct_name)
-        .ok_or_else(|| CodegenError { message: format!("undefined struct: {struct_name}") })?
+    let struct_layout = cx
+        .struct_fields
+        .get(struct_name)
+        .ok_or_else(|| CodegenError {
+            message: format!("undefined struct: {struct_name}"),
+        })?
         .clone();
 
     let concat_fid = cx.rt_fns["rt_str_concat"];
@@ -5092,7 +6407,10 @@ fn compile_struct_to_json<M: Module>(
 
         // Load field value from struct
         let offset = (i * 8) as i32;
-        let raw_val = cx.builder.ins().load(types::I64, MemFlags::new(), struct_ptr, offset);
+        let raw_val = cx
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::new(), struct_ptr, offset);
 
         // For string fields, wrap the value in quotes; for numeric/bool, emit raw
         let field_json_str = match field_ty {
@@ -5103,7 +6421,10 @@ fn compile_struct_to_json<M: Module>(
                 let with_open_quote = cx.builder.inst_results(call)[0];
                 let quote_str2 = cx.create_string("\"")?;
                 let concat_ref2 = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
-                let call2 = cx.builder.ins().call(concat_ref2, &[with_open_quote, quote_str2]);
+                let call2 = cx
+                    .builder
+                    .ins()
+                    .call(concat_ref2, &[with_open_quote, quote_str2]);
                 cx.builder.inst_results(call2)[0]
             }
             TurboTy::Int => {
@@ -5120,15 +6441,16 @@ fn compile_struct_to_json<M: Module>(
                 cx.builder.inst_results(call)[0]
             }
             TurboTy::Float => {
-                let float_val = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val);
+                let float_val = cx
+                    .builder
+                    .ins()
+                    .bitcast(types::F64, MemFlags::new(), raw_val);
                 let fid = cx.rt_fns["rt_f64_to_str"];
                 let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
                 let call = cx.builder.ins().call(fref, &[float_val]);
                 cx.builder.inst_results(call)[0]
             }
-            _ => {
-                convert_to_str(cx, raw_val, field_ty)?
-            }
+            _ => convert_to_str(cx, raw_val, field_ty)?,
         };
 
         // Concat the field value
@@ -5148,17 +6470,28 @@ fn compile_struct_to_json<M: Module>(
 
 /// to_json_array(arr) -> str — serialize an array of structs to JSON array string
 /// Generates [item1,item2,...] by iterating and calling to_json on each element.
-fn compile_builtin_to_json_array<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_to_json_array<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (arr_ptr, arr_tty) = compile_expr(cx, &args[0])?.unwrap();
 
     let elem_tty = match &arr_tty {
         TurboTy::Array(inner) => *inner.clone(),
-        _ => return Err(CodegenError { message: "to_json_array() argument must be an array".to_string() }),
+        _ => {
+            return Err(CodegenError {
+                message: "to_json_array() argument must be an array".to_string(),
+            })
+        }
     };
 
     let struct_name = match &elem_tty {
         TurboTy::Struct(name) => name.clone(),
-        _ => return Err(CodegenError { message: "to_json_array() requires an array of structs".to_string() }),
+        _ => {
+            return Err(CodegenError {
+                message: "to_json_array() requires an array of structs".to_string(),
+            })
+        }
     };
 
     let concat_fid = cx.rt_fns["rt_str_concat"];
@@ -5190,7 +6523,9 @@ fn compile_builtin_to_json_array<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned
     cx.builder.switch_to_block(header_block);
     let idx = cx.builder.use_var(idx_var);
     let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, arr_len);
-    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+    cx.builder
+        .ins()
+        .brif(cond, body_block, &[], exit_block, &[]);
 
     // Body: get element, serialize, concat
     cx.builder.switch_to_block(body_block);
@@ -5199,13 +6534,18 @@ fn compile_builtin_to_json_array<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned
     let current_idx = cx.builder.use_var(idx_var);
 
     // Add comma before element if idx > 0
-    let needs_comma = cx.builder.ins().icmp(IntCC::SignedGreaterThan, current_idx, zero);
+    let needs_comma = cx
+        .builder
+        .ins()
+        .icmp(IntCC::SignedGreaterThan, current_idx, zero);
     let comma_block = cx.builder.create_block();
     let no_comma_block = cx.builder.create_block();
     let merge_block = cx.builder.create_block();
     cx.builder.append_block_param(merge_block, cx.ptr_type);
 
-    cx.builder.ins().brif(needs_comma, comma_block, &[], no_comma_block, &[]);
+    cx.builder
+        .ins()
+        .brif(needs_comma, comma_block, &[], no_comma_block, &[]);
 
     // comma_block: append ","
     cx.builder.switch_to_block(comma_block);
@@ -5213,7 +6553,10 @@ fn compile_builtin_to_json_array<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned
     let comma_str = cx.create_string(",")?;
     let concat_ref = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
     let with_comma_result = cx.builder.use_var(result_var);
-    let call = cx.builder.ins().call(concat_ref, &[with_comma_result, comma_str]);
+    let call = cx
+        .builder
+        .ins()
+        .call(concat_ref, &[with_comma_result, comma_str]);
     let after_comma = cx.builder.inst_results(call)[0];
     cx.builder.ins().jump(merge_block, &[after_comma]);
 
@@ -5236,8 +6579,12 @@ fn compile_builtin_to_json_array<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned
     let elem_ptr = cx.builder.inst_results(get_call)[0];
 
     // Serialize the struct element to JSON (inline the field iteration)
-    let struct_layout = cx.struct_fields.get(&struct_name)
-        .ok_or_else(|| CodegenError { message: format!("undefined struct: {struct_name}") })?
+    let struct_layout = cx
+        .struct_fields
+        .get(&struct_name)
+        .ok_or_else(|| CodegenError {
+            message: format!("undefined struct: {struct_name}"),
+        })?
         .clone();
 
     let inner_concat_fid = cx.rt_fns["rt_str_concat"];
@@ -5250,21 +6597,33 @@ fn compile_builtin_to_json_array<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned
             format!("\"{}\":", fname)
         };
         let prefix_str = cx.create_string(&prefix)?;
-        let inner_concat_ref = cx.module.declare_func_in_func(inner_concat_fid, cx.builder.func);
-        let c = cx.builder.ins().call(inner_concat_ref, &[elem_json, prefix_str]);
+        let inner_concat_ref = cx
+            .module
+            .declare_func_in_func(inner_concat_fid, cx.builder.func);
+        let c = cx
+            .builder
+            .ins()
+            .call(inner_concat_ref, &[elem_json, prefix_str]);
         elem_json = cx.builder.inst_results(c)[0];
 
         let foffset = (fi * 8) as i32;
-        let raw_val = cx.builder.ins().load(types::I64, MemFlags::new(), elem_ptr, foffset);
+        let raw_val = cx
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::new(), elem_ptr, foffset);
 
         let field_json_str = match fty {
             TurboTy::Str => {
                 let q = cx.create_string("\"")?;
-                let cr = cx.module.declare_func_in_func(inner_concat_fid, cx.builder.func);
+                let cr = cx
+                    .module
+                    .declare_func_in_func(inner_concat_fid, cx.builder.func);
                 let c1 = cx.builder.ins().call(cr, &[q, raw_val]);
                 let wq = cx.builder.inst_results(c1)[0];
                 let q2 = cx.create_string("\"")?;
-                let cr2 = cx.module.declare_func_in_func(inner_concat_fid, cx.builder.func);
+                let cr2 = cx
+                    .module
+                    .declare_func_in_func(inner_concat_fid, cx.builder.func);
                 let c2 = cx.builder.ins().call(cr2, &[wq, q2]);
                 cx.builder.inst_results(c2)[0]
             }
@@ -5282,30 +6641,38 @@ fn compile_builtin_to_json_array<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned
                 cx.builder.inst_results(c)[0]
             }
             TurboTy::Float => {
-                let float_val = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val);
+                let float_val = cx
+                    .builder
+                    .ins()
+                    .bitcast(types::F64, MemFlags::new(), raw_val);
                 let fid = cx.rt_fns["rt_f64_to_str"];
                 let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
                 let c = cx.builder.ins().call(fref, &[float_val]);
                 cx.builder.inst_results(c)[0]
             }
-            _ => {
-                convert_to_str(cx, raw_val, fty)?
-            }
+            _ => convert_to_str(cx, raw_val, fty)?,
         };
 
-        let cr = cx.module.declare_func_in_func(inner_concat_fid, cx.builder.func);
+        let cr = cx
+            .module
+            .declare_func_in_func(inner_concat_fid, cx.builder.func);
         let c = cx.builder.ins().call(cr, &[elem_json, field_json_str]);
         elem_json = cx.builder.inst_results(c)[0];
     }
 
     let close_brace = cx.create_string("}")?;
-    let cr = cx.module.declare_func_in_func(inner_concat_fid, cx.builder.func);
+    let cr = cx
+        .module
+        .declare_func_in_func(inner_concat_fid, cx.builder.func);
     let c = cx.builder.ins().call(cr, &[elem_json, close_brace]);
     elem_json = cx.builder.inst_results(c)[0];
 
     // Concat element JSON to accumulated result
     let concat_ref2 = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
-    let call2 = cx.builder.ins().call(concat_ref2, &[merged_result, elem_json]);
+    let call2 = cx
+        .builder
+        .ins()
+        .call(concat_ref2, &[merged_result, elem_json]);
     let new_result = cx.builder.inst_results(call2)[0];
     cx.builder.def_var(result_var, new_result);
 
@@ -5325,7 +6692,10 @@ fn compile_builtin_to_json_array<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned
     let final_result = cx.builder.use_var(result_var);
     let close_bracket = cx.create_string("]")?;
     let concat_ref3 = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
-    let call3 = cx.builder.ins().call(concat_ref3, &[final_result, close_bracket]);
+    let call3 = cx
+        .builder
+        .ins()
+        .call(concat_ref3, &[final_result, close_bracket]);
     let result = cx.builder.inst_results(call3)[0];
 
     Ok(Some((result, TurboTy::Str)))
@@ -5336,7 +6706,10 @@ fn compile_builtin_to_json_array<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned
 /// compile_builtin_map: map(arr, fn) -> [U]
 /// Allocates a new array of the same length, iterates the source array,
 /// calls fn_ptr on each element via call_indirect, and stores results.
-fn compile_builtin_map<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_map<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (arr_ptr, _arr_tty) = compile_expr(cx, &args[0])?.unwrap();
     let (closure_ptr, fn_tty) = compile_expr(cx, &args[1])?.unwrap();
 
@@ -5346,8 +6719,14 @@ fn compile_builtin_map<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -
     };
 
     // Extract fn_ptr and env_ptr from closure pair struct
-    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
-    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
+    let fn_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
     let len_fid = cx.rt_fns["rt_array_len"];
     let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
@@ -5383,7 +6762,9 @@ fn compile_builtin_map<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -
     cx.builder.switch_to_block(header_block);
     let idx = cx.builder.use_var(idx_var);
     let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, arr_len);
-    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+    cx.builder
+        .ins()
+        .brif(cond, body_block, &[], exit_block, &[]);
 
     cx.builder.switch_to_block(body_block);
     cx.builder.seal_block(body_block);
@@ -5396,23 +6777,34 @@ fn compile_builtin_map<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -
 
     let typed_elem = match &param_tty {
         TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_elem),
-        TurboTy::Float => cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_elem),
+        TurboTy::Float => cx
+            .builder
+            .ins()
+            .bitcast(types::F64, MemFlags::new(), raw_elem),
         _ => raw_elem,
     };
 
-    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[env_ptr, typed_elem]);
+    let indirect_call = cx
+        .builder
+        .ins()
+        .call_indirect(sig_ref, fn_ptr, &[env_ptr, typed_elem]);
     let mapped_val = cx.builder.inst_results(indirect_call)[0];
 
     let store_val = match &ret_tty {
         TurboTy::Bool => cx.builder.ins().sextend(types::I64, mapped_val),
-        TurboTy::Float => cx.builder.ins().bitcast(types::I64, MemFlags::new(), mapped_val),
+        TurboTy::Float => cx
+            .builder
+            .ins()
+            .bitcast(types::I64, MemFlags::new(), mapped_val),
         _ => mapped_val,
     };
 
     let set_fid = cx.rt_fns["rt_array_set"];
     let set_ref = cx.module.declare_func_in_func(set_fid, cx.builder.func);
     let idx_val2 = cx.builder.use_var(idx_var);
-    cx.builder.ins().call(set_ref, &[result_ptr, idx_val2, store_val]);
+    cx.builder
+        .ins()
+        .call(set_ref, &[result_ptr, idx_val2, store_val]);
 
     let current_idx = cx.builder.use_var(idx_var);
     let one = cx.builder.ins().iconst(types::I64, 1);
@@ -5426,12 +6818,18 @@ fn compile_builtin_map<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -
     cx.builder.seal_block(exit_block);
 
     let result_elem_tty = ret_tty;
-    Ok(Some((result_ptr, TurboTy::Array(Box::new(result_elem_tty)))))
+    Ok(Some((
+        result_ptr,
+        TurboTy::Array(Box::new(result_elem_tty)),
+    )))
 }
 
 /// compile_builtin_filter: filter(arr, fn) -> [T]
 /// Allocates same-size array, filters elements by predicate, patches length.
-fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_filter<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (arr_ptr, arr_tty) = compile_expr(cx, &args[0])?.unwrap();
     let (closure_ptr, fn_tty) = compile_expr(cx, &args[1])?.unwrap();
 
@@ -5446,8 +6844,14 @@ fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
     };
 
     // Extract fn_ptr and env_ptr from closure pair struct
-    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
-    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
+    let fn_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
     let len_fid = cx.rt_fns["rt_array_len"];
     let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
@@ -5486,7 +6890,9 @@ fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
     cx.builder.switch_to_block(header_block);
     let idx = cx.builder.use_var(idx_var);
     let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, arr_len);
-    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+    cx.builder
+        .ins()
+        .brif(cond, body_block, &[], exit_block, &[]);
 
     cx.builder.switch_to_block(body_block);
     cx.builder.seal_block(body_block);
@@ -5499,14 +6905,22 @@ fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
 
     let typed_elem = match &param_tty {
         TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_elem),
-        TurboTy::Float => cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_elem),
+        TurboTy::Float => cx
+            .builder
+            .ins()
+            .bitcast(types::F64, MemFlags::new(), raw_elem),
         _ => raw_elem,
     };
 
-    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[env_ptr, typed_elem]);
+    let indirect_call = cx
+        .builder
+        .ins()
+        .call_indirect(sig_ref, fn_ptr, &[env_ptr, typed_elem]);
     let pred_result = cx.builder.inst_results(indirect_call)[0];
 
-    cx.builder.ins().brif(pred_result, store_block, &[], inc_block, &[]);
+    cx.builder
+        .ins()
+        .brif(pred_result, store_block, &[], inc_block, &[]);
 
     cx.builder.switch_to_block(store_block);
     cx.builder.seal_block(store_block);
@@ -5514,7 +6928,9 @@ fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
     let set_fid = cx.rt_fns["rt_array_set"];
     let set_ref = cx.module.declare_func_in_func(set_fid, cx.builder.func);
     let out_idx = cx.builder.use_var(out_var);
-    cx.builder.ins().call(set_ref, &[result_ptr, out_idx, raw_elem]);
+    cx.builder
+        .ins()
+        .call(set_ref, &[result_ptr, out_idx, raw_elem]);
 
     let one = cx.builder.ins().iconst(types::I64, 1);
     let next_out = cx.builder.ins().iadd(out_idx, one);
@@ -5537,14 +6953,19 @@ fn compile_builtin_filter<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
     cx.builder.seal_block(exit_block);
 
     let final_count = cx.builder.use_var(out_var);
-    cx.builder.ins().store(MemFlags::new(), final_count, result_ptr, 0);
+    cx.builder
+        .ins()
+        .store(MemFlags::new(), final_count, result_ptr, 0);
 
     Ok(Some((result_ptr, TurboTy::Array(Box::new(elem_tty)))))
 }
 
 /// compile_builtin_reduce: reduce(arr, init, fn) -> U
 /// Folds through the array calling fn(acc, elem) for each element.
-fn compile_builtin_reduce<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_reduce<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (arr_ptr, _arr_tty) = compile_expr(cx, &args[0])?.unwrap();
     let (init_val, init_tty) = compile_expr(cx, &args[1])?.unwrap();
     let (closure_ptr, fn_tty) = compile_expr(cx, &args[2])?.unwrap();
@@ -5555,8 +6976,14 @@ fn compile_builtin_reduce<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
     };
 
     // Extract fn_ptr and env_ptr from closure pair struct
-    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
-    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
+    let fn_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
     let acc_cl_ty = turbo_ty_to_cl_type(&acc_tty, cx.ptr_type);
     let elem_cl_ty = turbo_ty_to_cl_type(&elem_tty, cx.ptr_type);
@@ -5591,7 +7018,9 @@ fn compile_builtin_reduce<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
     cx.builder.switch_to_block(header_block);
     let idx = cx.builder.use_var(idx_var);
     let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, arr_len);
-    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+    cx.builder
+        .ins()
+        .brif(cond, body_block, &[], exit_block, &[]);
 
     cx.builder.switch_to_block(body_block);
     cx.builder.seal_block(body_block);
@@ -5604,12 +7033,18 @@ fn compile_builtin_reduce<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]
 
     let typed_elem = match &elem_tty {
         TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_elem),
-        TurboTy::Float => cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_elem),
+        TurboTy::Float => cx
+            .builder
+            .ins()
+            .bitcast(types::F64, MemFlags::new(), raw_elem),
         _ => raw_elem,
     };
 
     let current_acc = cx.builder.use_var(acc_var);
-    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[env_ptr, current_acc, typed_elem]);
+    let indirect_call =
+        cx.builder
+            .ins()
+            .call_indirect(sig_ref, fn_ptr, &[env_ptr, current_acc, typed_elem]);
     let new_acc = cx.builder.inst_results(indirect_call)[0];
     cx.builder.def_var(acc_var, new_acc);
 
@@ -5643,7 +7078,9 @@ fn compile_if<M: Module>(
     let else_block = cx.builder.create_block();
     let merge_block = cx.builder.create_block();
 
-    cx.builder.ins().brif(cond_bool, then_block, &[], else_block, &[]);
+    cx.builder
+        .ins()
+        .brif(cond_bool, then_block, &[], else_block, &[]);
 
     // Then
     cx.builder.switch_to_block(then_block);
@@ -5731,8 +7168,12 @@ fn compile_struct_eq<M: Module>(
     struct_name: &str,
     op: BinOp,
 ) -> Result<MaybeTyped, CodegenError> {
-    let struct_layout = cx.struct_fields.get(struct_name)
-        .ok_or_else(|| CodegenError { message: format!("undefined struct: {struct_name}") })?
+    let struct_layout = cx
+        .struct_fields
+        .get(struct_name)
+        .ok_or_else(|| CodegenError {
+            message: format!("undefined struct: {struct_name}"),
+        })?
         .clone();
 
     if struct_layout.is_empty() {
@@ -5753,8 +7194,14 @@ fn compile_struct_eq<M: Module>(
     for (i, (_, field_tty)) in struct_layout.iter().enumerate() {
         let offset = (i * 8) as i32;
 
-        let lhs_raw = cx.builder.ins().load(types::I64, MemFlags::new(), lhs_ptr, offset);
-        let rhs_raw = cx.builder.ins().load(types::I64, MemFlags::new(), rhs_ptr, offset);
+        let lhs_raw = cx
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::new(), lhs_ptr, offset);
+        let rhs_raw = cx
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::new(), rhs_ptr, offset);
 
         let fields_eq = match field_tty {
             TurboTy::Str => {
@@ -5766,8 +7213,14 @@ fn compile_struct_eq<M: Module>(
             }
             TurboTy::Float => {
                 // Bitcast back to f64 and compare
-                let lhs_f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), lhs_raw);
-                let rhs_f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), rhs_raw);
+                let lhs_f = cx
+                    .builder
+                    .ins()
+                    .bitcast(types::F64, MemFlags::new(), lhs_raw);
+                let rhs_f = cx
+                    .builder
+                    .ins()
+                    .bitcast(types::F64, MemFlags::new(), rhs_raw);
                 cx.builder.ins().fcmp(FloatCC::Equal, lhs_f, rhs_f)
             }
             TurboTy::Bool => {
@@ -5784,7 +7237,9 @@ fn compile_struct_eq<M: Module>(
             // Not the last field: if mismatch, jump to merge with false; else continue
             let next_block = cx.builder.create_block();
             let false_val = cx.builder.ins().iconst(types::I8, 0);
-            cx.builder.ins().brif(fields_eq, next_block, &[], merge_block, &[false_val]);
+            cx.builder
+                .ins()
+                .brif(fields_eq, next_block, &[], merge_block, &[false_val]);
             cx.builder.switch_to_block(next_block);
             cx.builder.seal_block(next_block);
         } else {
@@ -5816,11 +7271,19 @@ fn compile_clone<M: Module>(
 
     let struct_name = match &src_tty {
         TurboTy::Struct(name) => name.clone(),
-        _ => return Err(CodegenError { message: "clone() expects a struct argument".to_string() }),
+        _ => {
+            return Err(CodegenError {
+                message: "clone() expects a struct argument".to_string(),
+            })
+        }
     };
 
-    let struct_layout = cx.struct_fields.get(&struct_name)
-        .ok_or_else(|| CodegenError { message: format!("undefined struct: {struct_name}") })?
+    let struct_layout = cx
+        .struct_fields
+        .get(&struct_name)
+        .ok_or_else(|| CodegenError {
+            message: format!("undefined struct: {struct_name}"),
+        })?
         .clone();
 
     let num_fields = struct_layout.len() as i64;
@@ -5835,8 +7298,13 @@ fn compile_clone<M: Module>(
     // Copy each field from source to destination
     for (i, (_field_name, _field_tty)) in struct_layout.iter().enumerate() {
         let offset = (i * 8) as i32;
-        let val = cx.builder.ins().load(types::I64, MemFlags::new(), src_ptr, offset);
-        cx.builder.ins().store(MemFlags::new(), val, new_ptr, offset);
+        let val = cx
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::new(), src_ptr, offset);
+        cx.builder
+            .ins()
+            .store(MemFlags::new(), val, new_ptr, offset);
     }
 
     Ok(Some((new_ptr, TurboTy::Struct(struct_name))))
@@ -5852,9 +7320,7 @@ fn compile_interpolation<M: Module>(
 
     for part in parts {
         let part_str = match part {
-            turbo_ast::InterpolPart::Lit(s) => {
-                cx.create_string(s)?
-            }
+            turbo_ast::InterpolPart::Lit(s) => cx.create_string(s)?,
             turbo_ast::InterpolPart::Expr(expr) => {
                 let (val, tty) = compile_expr(cx, expr)?.unwrap();
                 convert_to_str(cx, val, &tty)?
@@ -5912,9 +7378,7 @@ fn convert_to_str<M: Module>(
             let call = cx.builder.ins().call(fref, &[val]);
             Ok(cx.builder.inst_results(call)[0])
         }
-        TurboTy::Unit => {
-            cx.create_string("()")
-        }
+        TurboTy::Unit => cx.create_string("()"),
         TurboTy::Enum(ref enum_name) => {
             let tag_val = if cx.enum_max_slots.contains_key(enum_name.as_str()) {
                 cx.builder.ins().load(types::I64, MemFlags::new(), val, 0)
@@ -5931,13 +7395,13 @@ fn convert_to_str<M: Module>(
             let call = cx.builder.ins().call(fref, &[tag_val]);
             Ok(cx.builder.inst_results(call)[0])
         }
-        TurboTy::Array(_) => {
-            cx.create_string("[array]")
-        }
+        TurboTy::Array(_) => cx.create_string("[array]"),
         TurboTy::Struct(ref name) => {
             // Check if struct implements Display trait
-            let has_display = cx.trait_impls.get(name)
-                .map_or(false, |traits| traits.contains(&"Display".to_string()));
+            let has_display = cx
+                .trait_impls
+                .get(name)
+                .is_some_and(|traits| traits.contains(&"Display".to_string()));
             if has_display {
                 let mangled = format!("{name}__to_string");
                 if let Some(&fid) = cx.user_fns.get(&mangled) {
@@ -5951,21 +7415,11 @@ fn convert_to_str<M: Module>(
                 cx.create_string(&format!("[struct {}]", name))
             }
         }
-        TurboTy::Fn(_, _) => {
-            cx.create_string("[function]")
-        }
-        TurboTy::Result(_, _) => {
-            cx.create_string("[result]")
-        }
-        TurboTy::Optional(_) => {
-            cx.create_string("[optional]")
-        }
-        TurboTy::Agent(ref name) => {
-            cx.create_string(&format!("[agent {}]", name))
-        }
-        TurboTy::Future(_) => {
-            cx.create_string("[future]")
-        }
+        TurboTy::Fn(_, _) => cx.create_string("[function]"),
+        TurboTy::Result(_, _) => cx.create_string("[result]"),
+        TurboTy::Optional(_) => cx.create_string("[optional]"),
+        TurboTy::Agent(ref name) => cx.create_string(&format!("[agent {}]", name)),
+        TurboTy::Future(_) => cx.create_string("[future]"),
     }
 }
 
@@ -5987,7 +7441,9 @@ fn compile_while<M: Module>(
     let (cond, _) = compile_expr(cx, condition)?.unwrap();
     let cond_bool = cx.to_bool(cond);
 
-    cx.builder.ins().brif(cond_bool, body_block, &[], exit_block, &[]);
+    cx.builder
+        .ins()
+        .brif(cond_bool, body_block, &[], exit_block, &[]);
 
     // Body
     cx.builder.switch_to_block(body_block);
@@ -6037,7 +7493,8 @@ fn compile_for_in_range<M: Module>(
     cx.next_var += 1;
     cx.builder.declare_var(var, types::I64);
     cx.builder.def_var(var, range_start);
-    cx.vars.insert(var_name.to_string(), (var, types::I64, TurboTy::Int));
+    cx.vars
+        .insert(var_name.to_string(), (var, types::I64, TurboTy::Int));
 
     // Create blocks: header, body, continue (increment), exit
     let header_block = cx.builder.create_block();
@@ -6052,8 +7509,13 @@ fn compile_for_in_range<M: Module>(
     cx.builder.switch_to_block(header_block);
 
     let current_i = cx.builder.use_var(var);
-    let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, current_i, range_end);
-    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+    let cond = cx
+        .builder
+        .ins()
+        .icmp(IntCC::SignedLessThan, current_i, range_end);
+    cx.builder
+        .ins()
+        .brif(cond, body_block, &[], exit_block, &[]);
 
     // Body
     cx.builder.switch_to_block(body_block);
@@ -6132,7 +7594,10 @@ fn compile_for_in_array<M: Module>(
         _ => cx.builder.ins().iconst(elem_cl_ty, 0),
     };
     cx.builder.def_var(elem_var, default_val);
-    cx.vars.insert(var_name.to_string(), (elem_var, elem_cl_ty, elem_tty.clone()));
+    cx.vars.insert(
+        var_name.to_string(),
+        (elem_var, elem_cl_ty, elem_tty.clone()),
+    );
 
     // Loop blocks
     let header_block = cx.builder.create_block();
@@ -6147,7 +7612,9 @@ fn compile_for_in_array<M: Module>(
     cx.builder.switch_to_block(header_block);
     let idx = cx.builder.use_var(idx_var);
     let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, arr_len);
-    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+    cx.builder
+        .ins()
+        .brif(cond, body_block, &[], exit_block, &[]);
 
     // Body: load element, execute body
     cx.builder.switch_to_block(body_block);
@@ -6163,7 +7630,10 @@ fn compile_for_in_array<M: Module>(
     // rt_array_get returns raw i64 bits; convert to the correct type
     let typed_elem = match &elem_tty {
         TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_elem),
-        TurboTy::Float => cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_elem),
+        TurboTy::Float => cx
+            .builder
+            .ins()
+            .bitcast(types::F64, MemFlags::new(), raw_elem),
         _ => raw_elem,
     };
     cx.builder.def_var(elem_var, typed_elem);
@@ -6237,7 +7707,13 @@ fn compile_match<M: Module>(
             }
             let body_result = compile_expr(cx, &arm.body)?;
             cx.vars = saved_vars;
-            emit_match_arm_jump(cx, merge_block, body_result, &mut has_result, &mut result_turbo_ty);
+            emit_match_arm_jump(
+                cx,
+                merge_block,
+                body_result,
+                &mut has_result,
+                &mut result_turbo_ty,
+            );
             hit_catchall = true;
 
             if !is_last {
@@ -6264,7 +7740,9 @@ fn compile_match<M: Module>(
                     let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
                     let actual_tag = if let TurboTy::Enum(ref enum_name) = subj_tty {
                         if cx.enum_max_slots.contains_key(enum_name.as_str()) {
-                            cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0)
+                            cx.builder
+                                .ins()
+                                .load(types::I64, MemFlags::new(), subj_val, 0)
                         } else {
                             subj_val
                         }
@@ -6331,13 +7809,18 @@ fn compile_match<M: Module>(
                 Pattern::VariantDestructure { variant, .. } => {
                     let tag_val = lookup_variant_tag_static(cx.enum_variants, variant).unwrap();
                     let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
-                    let actual_tag = cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0);
+                    let actual_tag =
+                        cx.builder
+                            .ins()
+                            .load(types::I64, MemFlags::new(), subj_val, 0);
                     cx.builder.ins().icmp(IntCC::Equal, actual_tag, pat_val)
                 }
             };
 
             let match_block = cx.builder.create_block();
-            cx.builder.ins().brif(matches_cond, match_block, &[], next_block, &[]);
+            cx.builder
+                .ins()
+                .brif(matches_cond, match_block, &[], next_block, &[]);
             cx.builder.switch_to_block(match_block);
             cx.builder.seal_block(match_block);
         }
@@ -6397,7 +7880,10 @@ fn compile_match<M: Module>(
 
                 for (i, binding) in bindings.iter().enumerate() {
                     let offset = ((i + 1) * 8) as i32;
-                    let raw_val = cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, offset);
+                    let raw_val =
+                        cx.builder
+                            .ins()
+                            .load(types::I64, MemFlags::new(), subj_val, offset);
 
                     let field_tty = if i < field_tys.len() {
                         field_tys[i].clone()
@@ -6407,7 +7893,10 @@ fn compile_match<M: Module>(
 
                     let (val, cl_ty) = match &field_tty {
                         TurboTy::Float => {
-                            let f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val);
+                            let f = cx
+                                .builder
+                                .ins()
+                                .bitcast(types::F64, MemFlags::new(), raw_val);
                             (f, types::F64)
                         }
                         TurboTy::Bool => {
@@ -6441,7 +7930,9 @@ fn compile_match<M: Module>(
             let guard_result = compile_expr(cx, guard)?;
             if let Some((guard_val, _)) = guard_result {
                 let body_block = cx.builder.create_block();
-                cx.builder.ins().brif(guard_val, body_block, &[], next_block, &[]);
+                cx.builder
+                    .ins()
+                    .brif(guard_val, body_block, &[], next_block, &[]);
                 cx.builder.switch_to_block(body_block);
                 cx.builder.seal_block(body_block);
             }
@@ -6449,7 +7940,13 @@ fn compile_match<M: Module>(
 
         let body_result = compile_expr(cx, &arm.body)?;
         cx.vars = saved_vars;
-        emit_match_arm_jump(cx, merge_block, body_result, &mut has_result, &mut result_turbo_ty);
+        emit_match_arm_jump(
+            cx,
+            merge_block,
+            body_result,
+            &mut has_result,
+            &mut result_turbo_ty,
+        );
 
         // Continue to next arm's check
         cx.builder.switch_to_block(next_block);
@@ -6524,7 +8021,10 @@ fn compile_builtin_channel<M: Module>(cx: &mut Ctx<'_, M>) -> Result<MaybeTyped,
 }
 
 /// send(ch, value) -> ()
-fn compile_builtin_send<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_send<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (ch_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (value_val, _) = compile_expr(cx, &args[1])?.unwrap();
     // Ensure value is i64
@@ -6541,7 +8041,10 @@ fn compile_builtin_send<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) 
 }
 
 /// recv(ch) -> i64
-fn compile_builtin_recv<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_recv<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (ch_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let fid = cx.rt_fns["rt_channel_recv"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -6553,7 +8056,10 @@ fn compile_builtin_recv<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) 
 // ── Mutex builtins ──────────────────────────────────────────────────
 
 /// mutex(value) -> Mutex (pointer)
-fn compile_builtin_mutex<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_mutex<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (value_val, _) = compile_expr(cx, &args[0])?.unwrap();
     // Ensure value is i64
     let val_ty = cx.builder.func.dfg.value_type(value_val);
@@ -6570,7 +8076,10 @@ fn compile_builtin_mutex<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>])
 }
 
 /// mutex_get(m) -> i64
-fn compile_builtin_mutex_get<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_mutex_get<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (m_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let fid = cx.rt_fns["rt_mutex_get"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -6580,7 +8089,10 @@ fn compile_builtin_mutex_get<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Exp
 }
 
 /// mutex_set(m, value) -> ()
-fn compile_builtin_mutex_set<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_mutex_set<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (m_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (value_val, _) = compile_expr(cx, &args[1])?.unwrap();
     // Ensure value is i64
@@ -6608,7 +8120,10 @@ fn compile_builtin_hashmap<M: Module>(cx: &mut Ctx<'_, M>) -> Result<MaybeTyped,
 }
 
 /// hashmap_set(map, key, value) -> ()
-fn compile_builtin_hashmap_set<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_hashmap_set<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let (value_val, _) = compile_expr(cx, &args[2])?.unwrap();
@@ -6619,7 +8134,10 @@ fn compile_builtin_hashmap_set<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<E
 }
 
 /// hashmap_get(map, key) -> str
-fn compile_builtin_hashmap_get<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_hashmap_get<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let fid = cx.rt_fns["rt_hashmap_get"];
@@ -6630,7 +8148,10 @@ fn compile_builtin_hashmap_get<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<E
 }
 
 /// hashmap_has(map, key) -> bool
-fn compile_builtin_hashmap_has<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_hashmap_has<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let fid = cx.rt_fns["rt_hashmap_has"];
@@ -6641,7 +8162,10 @@ fn compile_builtin_hashmap_has<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<E
 }
 
 /// hashmap_len(map) -> i64
-fn compile_builtin_hashmap_len<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_hashmap_len<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let fid = cx.rt_fns["rt_hashmap_len"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -6651,7 +8175,10 @@ fn compile_builtin_hashmap_len<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<E
 }
 
 /// hashmap_keys(map) -> [str]
-fn compile_builtin_hashmap_keys<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_hashmap_keys<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let fid = cx.rt_fns["rt_hashmap_keys"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -6661,7 +8188,10 @@ fn compile_builtin_hashmap_keys<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<
 }
 
 /// hashmap_remove(map, key) -> ()
-fn compile_builtin_hashmap_remove<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_hashmap_remove<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
     let fid = cx.rt_fns["rt_hashmap_remove"];
@@ -6673,16 +8203,1440 @@ fn compile_builtin_hashmap_remove<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanne
 // ── Unsafe builtins — raw pointer operations ────────────────────────
 
 /// deref(addr: i64) -> i64 — load an i64 from the given memory address
-fn compile_builtin_deref<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_deref<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (addr_val, _) = compile_expr(cx, &args[0])?.unwrap();
-    let result = cx.builder.ins().load(types::I64, MemFlags::new(), addr_val, 0);
+    let result = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlags::new(), addr_val, 0);
     Ok(Some((result, TurboTy::Int)))
 }
 
 /// store(addr: i64, value: i64) — store an i64 at the given memory address
-fn compile_builtin_store<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+fn compile_builtin_store<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
     let (addr_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (val, _) = compile_expr(cx, &args[1])?.unwrap();
     cx.builder.ins().store(MemFlags::new(), val, addr_val, 0);
     Ok(None)
+}
+
+// ── Unit tests ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::{CStr, CString};
+
+    // ── Helper: compile & run a Turbo program via JIT ──────────────
+
+    fn jit_run_source(source: &str) {
+        let (tokens, lex_errors) = turbo_lexer::tokenize(source);
+        assert!(lex_errors.is_empty(), "Lex errors: {:?}", lex_errors);
+        let (module, parse_errors) = turbo_parser::parse(tokens);
+        assert!(parse_errors.is_empty(), "Parse errors: {:?}", parse_errors);
+        let sema_errors = turbo_sema::check(&module);
+        assert!(sema_errors.is_empty(), "Sema errors: {:?}", sema_errors);
+        jit_run(&module).expect("JIT compilation/execution failed");
+    }
+
+    // ================================================================
+    // 1. Runtime function tests — direct calls to extern "C" functions
+    // ================================================================
+
+    #[test]
+    fn test_rt_array_alloc_basic() {
+        let arr = rt_array_alloc(5);
+        assert!(!arr.is_null());
+        // Length should be stored at the start
+        let len = unsafe { *(arr as *const i64) };
+        assert_eq!(len, 5);
+        // All elements should be zero-initialized
+        for i in 0..5 {
+            let val = unsafe { *((arr as *const i64).add(1 + i)) };
+            assert_eq!(val, 0, "element {} should be zero", i);
+        }
+    }
+
+    #[test]
+    fn test_rt_array_get_set() {
+        let arr = rt_array_alloc(3);
+        // Set values
+        let arr = rt_array_set(arr, 0, 42);
+        let arr = rt_array_set(arr, 1, 100);
+        let arr = rt_array_set(arr, 2, -7);
+        // Get values back
+        assert_eq!(rt_array_get(arr, 0), 42);
+        assert_eq!(rt_array_get(arr, 1), 100);
+        assert_eq!(rt_array_get(arr, 2), -7);
+    }
+
+    #[test]
+    fn test_rt_array_len() {
+        let arr = rt_array_alloc(10);
+        assert_eq!(rt_array_len(arr), 10);
+
+        let arr2 = rt_array_alloc(0);
+        assert_eq!(rt_array_len(arr2), 0);
+    }
+
+    #[test]
+    fn test_rt_array_cow_on_shared() {
+        // Allocate array and set initial values
+        let arr = rt_array_alloc(2);
+        let arr = rt_array_set(arr, 0, 10);
+        let arr = rt_array_set(arr, 1, 20);
+
+        // Increment refcount to simulate sharing
+        rt_retain(arr);
+
+        // Mutating should COW — return a new pointer
+        let arr2 = rt_array_set(arr, 0, 99);
+        assert_ne!(arr as *const u8, arr2 as *const u8);
+
+        // Original should be unchanged
+        assert_eq!(rt_array_get(arr, 0), 10);
+        // New copy should have the mutation
+        assert_eq!(rt_array_get(arr2, 0), 99);
+        // Unmodified element should be copied
+        assert_eq!(rt_array_get(arr2, 1), 20);
+    }
+
+    #[test]
+    fn test_rt_struct_alloc() {
+        let s = rt_struct_alloc(3);
+        assert!(!s.is_null());
+        // Fields should be zero-initialized
+        for i in 0..3 {
+            let val = unsafe { *((s as *const i64).add(i)) };
+            assert_eq!(val, 0, "field {} should be zero", i);
+        }
+        // Set and read fields via raw pointer
+        unsafe {
+            *(s as *mut i64) = 42;
+            *((s as *mut i64).add(1)) = 100;
+            *((s as *mut i64).add(2)) = -5;
+        }
+        assert_eq!(unsafe { *(s as *const i64) }, 42);
+        assert_eq!(unsafe { *((s as *const i64).add(1)) }, 100);
+        assert_eq!(unsafe { *((s as *const i64).add(2)) }, -5);
+    }
+
+    #[test]
+    fn test_rt_result_ok_and_accessors() {
+        let r = rt_result_ok(42);
+        assert_eq!(rt_result_tag(r), 0); // tag 0 = ok
+        assert_eq!(rt_result_value(r), 42);
+    }
+
+    #[test]
+    fn test_rt_result_err_and_accessors() {
+        let r = rt_result_err(99);
+        assert_eq!(rt_result_tag(r), 1); // tag 1 = err
+        assert_eq!(rt_result_value(r), 99);
+    }
+
+    #[test]
+    fn test_rt_option_some_and_accessors() {
+        let o = rt_option_some(77);
+        assert_eq!(rt_option_tag(o), 1); // tag 1 = some
+        assert_eq!(rt_option_value(o), 77);
+    }
+
+    #[test]
+    fn test_rt_option_none_and_accessors() {
+        let o = rt_option_none();
+        assert_eq!(rt_option_tag(o), 0); // tag 0 = none
+        assert_eq!(rt_option_value(o), 0);
+    }
+
+    // ── String runtime functions ────────────────────────────────────
+
+    #[test]
+    fn test_rt_str_concat() {
+        let a = CString::new("hello ").unwrap();
+        let b = CString::new("world").unwrap();
+        let result = rt_str_concat(a.as_ptr() as *const u8, b.as_ptr() as *const u8);
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "hello world");
+    }
+
+    #[test]
+    fn test_rt_str_concat_with_null() {
+        let a = CString::new("hi").unwrap();
+        let result = rt_str_concat(a.as_ptr() as *const u8, std::ptr::null());
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "hi");
+
+        let result2 = rt_str_concat(std::ptr::null(), a.as_ptr() as *const u8);
+        let s2 = unsafe { CStr::from_ptr(result2 as *const std::ffi::c_char) };
+        assert_eq!(s2.to_str().unwrap(), "hi");
+    }
+
+    #[test]
+    fn test_rt_str_eq() {
+        let a = CString::new("hello").unwrap();
+        let b = CString::new("hello").unwrap();
+        let c = CString::new("world").unwrap();
+        assert_eq!(
+            rt_str_eq(a.as_ptr() as *const u8, b.as_ptr() as *const u8),
+            1
+        );
+        assert_eq!(
+            rt_str_eq(a.as_ptr() as *const u8, c.as_ptr() as *const u8),
+            0
+        );
+    }
+
+    #[test]
+    fn test_rt_str_len() {
+        let s = CString::new("hello").unwrap();
+        assert_eq!(rt_str_len(s.as_ptr() as *const u8), 5);
+        assert_eq!(rt_str_len(std::ptr::null()), 0);
+    }
+
+    #[test]
+    fn test_rt_str_upper_lower() {
+        let s = CString::new("Hello World").unwrap();
+        let upper = rt_str_upper(s.as_ptr() as *const u8);
+        let upper_str = unsafe { CStr::from_ptr(upper as *const std::ffi::c_char) };
+        assert_eq!(upper_str.to_str().unwrap(), "HELLO WORLD");
+
+        let lower = rt_str_lower(s.as_ptr() as *const u8);
+        let lower_str = unsafe { CStr::from_ptr(lower as *const std::ffi::c_char) };
+        assert_eq!(lower_str.to_str().unwrap(), "hello world");
+    }
+
+    #[test]
+    fn test_rt_str_trim() {
+        let s = CString::new("  hello  ").unwrap();
+        let trimmed = rt_str_trim(s.as_ptr() as *const u8);
+        let t = unsafe { CStr::from_ptr(trimmed as *const std::ffi::c_char) };
+        assert_eq!(t.to_str().unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_rt_str_starts_ends_with() {
+        let s = CString::new("hello world").unwrap();
+        let prefix = CString::new("hello").unwrap();
+        let suffix = CString::new("world").unwrap();
+        let bad = CString::new("xyz").unwrap();
+
+        assert_eq!(
+            rt_str_starts_with(s.as_ptr() as *const u8, prefix.as_ptr() as *const u8),
+            1
+        );
+        assert_eq!(
+            rt_str_starts_with(s.as_ptr() as *const u8, bad.as_ptr() as *const u8),
+            0
+        );
+        assert_eq!(
+            rt_str_ends_with(s.as_ptr() as *const u8, suffix.as_ptr() as *const u8),
+            1
+        );
+        assert_eq!(
+            rt_str_ends_with(s.as_ptr() as *const u8, bad.as_ptr() as *const u8),
+            0
+        );
+    }
+
+    #[test]
+    fn test_rt_str_contains_and_index_of() {
+        let s = CString::new("hello world").unwrap();
+        let sub = CString::new("world").unwrap();
+        let missing = CString::new("xyz").unwrap();
+
+        assert_eq!(
+            rt_str_contains(s.as_ptr() as *const u8, sub.as_ptr() as *const u8),
+            1
+        );
+        assert_eq!(
+            rt_str_contains(s.as_ptr() as *const u8, missing.as_ptr() as *const u8),
+            0
+        );
+        assert_eq!(
+            rt_str_index_of(s.as_ptr() as *const u8, sub.as_ptr() as *const u8),
+            6
+        );
+        assert_eq!(
+            rt_str_index_of(s.as_ptr() as *const u8, missing.as_ptr() as *const u8),
+            -1
+        );
+    }
+
+    #[test]
+    fn test_rt_str_replace() {
+        let s = CString::new("hello world").unwrap();
+        let from = CString::new("world").unwrap();
+        let to = CString::new("rust").unwrap();
+        let result = rt_str_replace(
+            s.as_ptr() as *const u8,
+            from.as_ptr() as *const u8,
+            to.as_ptr() as *const u8,
+        );
+        let r = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(r.to_str().unwrap(), "hello rust");
+    }
+
+    #[test]
+    fn test_rt_str_repeat() {
+        let s = CString::new("ab").unwrap();
+        let result = rt_str_repeat(s.as_ptr() as *const u8, 3);
+        let r = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(r.to_str().unwrap(), "ababab");
+
+        // Zero repetitions
+        let result0 = rt_str_repeat(s.as_ptr() as *const u8, 0);
+        let r0 = unsafe { CStr::from_ptr(result0 as *const std::ffi::c_char) };
+        assert_eq!(r0.to_str().unwrap(), "");
+    }
+
+    #[test]
+    fn test_rt_str_split() {
+        let s = CString::new("a,b,c").unwrap();
+        let sep = CString::new(",").unwrap();
+        let arr = rt_str_split(s.as_ptr() as *const u8, sep.as_ptr() as *const u8);
+        assert_eq!(rt_array_len(arr), 3);
+        // Check each element
+        let elem0_ptr = unsafe { *((arr as *const i64).add(1)) } as *const u8;
+        let elem0 = unsafe { CStr::from_ptr(elem0_ptr as *const std::ffi::c_char) };
+        assert_eq!(elem0.to_str().unwrap(), "a");
+
+        let elem2_ptr = unsafe { *((arr as *const i64).add(3)) } as *const u8;
+        let elem2 = unsafe { CStr::from_ptr(elem2_ptr as *const std::ffi::c_char) };
+        assert_eq!(elem2.to_str().unwrap(), "c");
+    }
+
+    // ── Conversion runtime functions ────────────────────────────────
+
+    #[test]
+    fn test_rt_i64_to_str() {
+        let result = rt_i64_to_str(42);
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "42");
+
+        let neg = rt_i64_to_str(-100);
+        let s2 = unsafe { CStr::from_ptr(neg as *const std::ffi::c_char) };
+        assert_eq!(s2.to_str().unwrap(), "-100");
+    }
+
+    #[test]
+    fn test_rt_f64_to_str() {
+        let result = rt_f64_to_str(3.14);
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "3.14");
+    }
+
+    #[test]
+    fn test_rt_bool_to_str() {
+        let t = rt_bool_to_str(1);
+        let s = unsafe { CStr::from_ptr(t as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "true");
+
+        let f = rt_bool_to_str(0);
+        let s2 = unsafe { CStr::from_ptr(f as *const std::ffi::c_char) };
+        assert_eq!(s2.to_str().unwrap(), "false");
+    }
+
+    // ── Math runtime functions ──────────────────────────────────────
+
+    #[test]
+    fn test_rt_pow() {
+        assert_eq!(rt_pow(2, 10), 1024);
+        assert_eq!(rt_pow(3, 0), 1);
+        assert_eq!(rt_pow(5, 1), 5);
+        assert_eq!(rt_pow(2, -1), 0); // negative exponent returns 0
+    }
+
+    #[test]
+    fn test_rt_sqrt() {
+        assert!((rt_sqrt(4.0) - 2.0).abs() < f64::EPSILON);
+        assert!((rt_sqrt(9.0) - 3.0).abs() < f64::EPSILON);
+        assert!((rt_sqrt(2.0) - std::f64::consts::SQRT_2).abs() < 1e-10);
+    }
+
+    // ── ARC runtime functions ──────────────────────────────────────
+
+    #[test]
+    fn test_rt_retain_release() {
+        let arr = rt_array_alloc(1);
+        // Refcount starts at 1 (set by rt_array_alloc)
+        let rc_ptr = unsafe { arr.sub(8) as *const i64 };
+        assert_eq!(unsafe { *rc_ptr }, 1);
+
+        rt_retain(arr);
+        assert_eq!(unsafe { *rc_ptr }, 2);
+
+        rt_release(arr);
+        assert_eq!(unsafe { *rc_ptr }, 1);
+
+        // Null should not crash
+        rt_retain(std::ptr::null_mut());
+        rt_release(std::ptr::null_mut());
+    }
+
+    // ── Mutex runtime functions ────────────────────────────────────
+
+    #[test]
+    fn test_rt_mutex_create_get_set() {
+        let m = rt_mutex_create(42);
+        assert_eq!(rt_mutex_get(m), 42);
+        rt_mutex_set(m, 100);
+        assert_eq!(rt_mutex_get(m), 100);
+    }
+
+    #[test]
+    fn test_rt_mutex_clone() {
+        let m = rt_mutex_create(10);
+        let m2 = rt_mutex_clone(m);
+
+        // Both should see the same value
+        assert_eq!(rt_mutex_get(m), 10);
+        assert_eq!(rt_mutex_get(m2), 10);
+
+        // Mutating through one clone should be visible from the other
+        rt_mutex_set(m, 99);
+        assert_eq!(rt_mutex_get(m2 as *const u8), 99);
+    }
+
+    // ── HashMap runtime functions ──────────────────────────────────
+
+    #[test]
+    fn test_rt_hashmap_basic() {
+        let map = rt_hashmap_new();
+        assert_eq!(rt_hashmap_len(map), 0);
+
+        let key = CString::new("name").unwrap();
+        let val = CString::new("turbo").unwrap();
+        rt_hashmap_set(map, key.as_ptr() as *const u8, val.as_ptr() as *const u8);
+
+        assert_eq!(rt_hashmap_len(map), 1);
+        assert_eq!(rt_hashmap_has(map, key.as_ptr() as *const u8), 1);
+
+        let got = rt_hashmap_get(map, key.as_ptr() as *const u8);
+        assert!(!got.is_null());
+        let got_str = unsafe { CStr::from_ptr(got as *const std::ffi::c_char) };
+        assert_eq!(got_str.to_str().unwrap(), "turbo");
+
+        // Key not present
+        let missing = CString::new("nope").unwrap();
+        assert_eq!(rt_hashmap_has(map, missing.as_ptr() as *const u8), 0);
+        assert!(rt_hashmap_get(map, missing.as_ptr() as *const u8).is_null());
+    }
+
+    #[test]
+    fn test_rt_hashmap_remove_and_keys() {
+        let map = rt_hashmap_new();
+        let k1 = CString::new("a").unwrap();
+        let k2 = CString::new("b").unwrap();
+        let v = CString::new("1").unwrap();
+        rt_hashmap_set(map, k1.as_ptr() as *const u8, v.as_ptr() as *const u8);
+        rt_hashmap_set(map, k2.as_ptr() as *const u8, v.as_ptr() as *const u8);
+
+        assert_eq!(rt_hashmap_len(map), 2);
+
+        let keys = rt_hashmap_keys(map);
+        assert_eq!(rt_array_len(keys), 2);
+
+        rt_hashmap_remove(map, k1.as_ptr() as *const u8);
+        assert_eq!(rt_hashmap_len(map), 1);
+        assert_eq!(rt_hashmap_has(map, k1.as_ptr() as *const u8), 0);
+        assert_eq!(rt_hashmap_has(map, k2.as_ptr() as *const u8), 1);
+    }
+
+    // ── JSON runtime functions ─────────────────────────────────────
+
+    #[test]
+    fn test_rt_json_get_string_value() {
+        let json = CString::new(r#"{"name":"turbo","version":"1.0"}"#).unwrap();
+        let key = CString::new("name").unwrap();
+        let result = rt_json_get(json.as_ptr() as *const u8, key.as_ptr() as *const u8);
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "turbo");
+    }
+
+    #[test]
+    fn test_rt_json_get_number_value() {
+        let json = CString::new(r#"{"count":42}"#).unwrap();
+        let key = CString::new("count").unwrap();
+        let result = rt_json_get(json.as_ptr() as *const u8, key.as_ptr() as *const u8);
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "42");
+    }
+
+    #[test]
+    fn test_rt_json_get_missing_key() {
+        let json = CString::new(r#"{"a":1}"#).unwrap();
+        let key = CString::new("missing").unwrap();
+        let result = rt_json_get(json.as_ptr() as *const u8, key.as_ptr() as *const u8);
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "");
+    }
+
+    #[test]
+    fn test_rt_json_stringify() {
+        let key = CString::new("lang").unwrap();
+        let val = CString::new("turbo").unwrap();
+        let result = rt_json_stringify(key.as_ptr() as *const u8, val.as_ptr() as *const u8);
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), r#"{"lang":"turbo"}"#);
+    }
+
+    // ── Type conversion tests ──────────────────────────────────────
+
+    #[test]
+    fn test_turbo_ty_from_named_types() {
+        let empty_enum: HashMap<String, Vec<String>> = HashMap::new();
+
+        let int_ty = turbo_ty_from_type_expr(&TypeExpr::Named("i64".to_string()), &empty_enum);
+        assert_eq!(int_ty, TurboTy::Int);
+
+        let float_ty = turbo_ty_from_type_expr(&TypeExpr::Named("f64".to_string()), &empty_enum);
+        assert_eq!(float_ty, TurboTy::Float);
+
+        let bool_ty = turbo_ty_from_type_expr(&TypeExpr::Named("bool".to_string()), &empty_enum);
+        assert_eq!(bool_ty, TurboTy::Bool);
+
+        let str_ty = turbo_ty_from_type_expr(&TypeExpr::Named("str".to_string()), &empty_enum);
+        assert_eq!(str_ty, TurboTy::Str);
+
+        let unit_ty = turbo_ty_from_type_expr(&TypeExpr::Unit, &empty_enum);
+        assert_eq!(unit_ty, TurboTy::Unit);
+    }
+
+    #[test]
+    fn test_turbo_ty_struct_vs_enum() {
+        let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();
+        enum_variants.insert(
+            "Color".to_string(),
+            vec!["Red".to_string(), "Green".to_string()],
+        );
+
+        let enum_ty =
+            turbo_ty_from_type_expr(&TypeExpr::Named("Color".to_string()), &enum_variants);
+        assert_eq!(enum_ty, TurboTy::Enum("Color".to_string()));
+
+        let struct_ty =
+            turbo_ty_from_type_expr(&TypeExpr::Named("Point".to_string()), &enum_variants);
+        assert_eq!(struct_ty, TurboTy::Struct("Point".to_string()));
+    }
+
+    #[test]
+    fn test_turbo_ty_array() {
+        let empty_enum: HashMap<String, Vec<String>> = HashMap::new();
+        let arr_ty = turbo_ty_from_type_expr(
+            &TypeExpr::Array(Box::new(Spanned {
+                node: TypeExpr::Named("i64".to_string()),
+                span: 0..0,
+            })),
+            &empty_enum,
+        );
+        assert_eq!(arr_ty, TurboTy::Array(Box::new(TurboTy::Int)));
+    }
+
+    #[test]
+    fn test_turbo_ty_result_and_optional() {
+        let empty_enum: HashMap<String, Vec<String>> = HashMap::new();
+
+        let result_ty = turbo_ty_from_type_expr(
+            &TypeExpr::Result {
+                ok_type: Box::new(Spanned {
+                    node: TypeExpr::Named("i64".to_string()),
+                    span: 0..0,
+                }),
+                err_type: Box::new(Spanned {
+                    node: TypeExpr::Named("str".to_string()),
+                    span: 0..0,
+                }),
+            },
+            &empty_enum,
+        );
+        assert_eq!(
+            result_ty,
+            TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Str))
+        );
+
+        let opt_ty = turbo_ty_from_type_expr(
+            &TypeExpr::Optional(Box::new(Spanned {
+                node: TypeExpr::Named("i64".to_string()),
+                span: 0..0,
+            })),
+            &empty_enum,
+        );
+        assert_eq!(opt_ty, TurboTy::Optional(Box::new(TurboTy::Int)));
+    }
+
+    #[test]
+    fn test_turbo_ty_type_params_use_int() {
+        let empty_enum: HashMap<String, Vec<String>> = HashMap::new();
+        let type_params = vec!["T".to_string()];
+        let ty = turbo_ty_from_type_expr_with_params(
+            &TypeExpr::Named("T".to_string()),
+            &empty_enum,
+            &type_params,
+        );
+        assert_eq!(ty, TurboTy::Int);
+    }
+
+    // ── CodegenError tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_codegen_error_display() {
+        let err = CodegenError {
+            message: "something broke".to_string(),
+        };
+        assert_eq!(format!("{}", err), "codegen error: something broke");
+    }
+
+    // ================================================================
+    // 2. End-to-end JIT compilation tests
+    // ================================================================
+
+    #[test]
+    fn test_jit_basic_arithmetic() {
+        // assert_eq will process-exit on failure, so we only test
+        // programs that should succeed
+        jit_run_source(
+            r#"fn main() {
+                assert_eq(2 + 3, 5)
+                assert_eq(10 - 4, 6)
+                assert_eq(3 * 7, 21)
+                assert_eq(20 / 4, 5)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_let_bindings() {
+        jit_run_source(
+            r#"fn main() {
+                let x = 10
+                let y = 20
+                assert_eq(x + y, 30)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_mutable_variable() {
+        jit_run_source(
+            r#"fn main() {
+                let mut x = 1
+                x = 42
+                assert_eq(x, 42)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_string_operations() {
+        jit_run_source(
+            r#"fn main() {
+                let s = "hello" + " " + "world"
+                assert_eq(s, "hello world")
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_function_call() {
+        jit_run_source(
+            r#"fn add(a: i64, b: i64) -> i64 { a + b }
+            fn main() {
+                assert_eq(add(3, 4), 7)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_if_else() {
+        jit_run_source(
+            r#"fn main() {
+                let x = if true { 10 } else { 20 }
+                assert_eq(x, 10)
+                let y = if false { 10 } else { 20 }
+                assert_eq(y, 20)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_while_loop() {
+        jit_run_source(
+            r#"fn main() {
+                let mut sum = 0
+                let mut i = 1
+                while i <= 10 {
+                    sum = sum + i
+                    i = i + 1
+                }
+                assert_eq(sum, 55)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_for_loop() {
+        jit_run_source(
+            r#"fn main() {
+                let mut sum = 0
+                for i in 0..5 {
+                    sum = sum + i
+                }
+                assert_eq(sum, 10)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_array_literal() {
+        jit_run_source(
+            r#"fn main() {
+                let arr = [10, 20, 30]
+                assert_eq(arr[0], 10)
+                assert_eq(arr[1], 20)
+                assert_eq(arr[2], 30)
+                assert_eq(len(arr), 3)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_struct_basic() {
+        jit_run_source(
+            r#"struct Point { x: i64, y: i64 }
+            fn main() {
+                let p = Point { x: 3, y: 4 }
+                assert_eq(p.x, 3)
+                assert_eq(p.y, 4)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_enum_basic() {
+        jit_run_source(
+            r#"type Color { Red, Green, Blue }
+            fn main() {
+                let c = Color.Red
+                let g = Color.Green
+                assert_ne(c, g)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_match_expression() {
+        jit_run_source(
+            r#"fn main() {
+                let x = 2
+                let result = match x {
+                    1 => 10
+                    2 => 20
+                    _ => 0
+                }
+                assert_eq(result, 20)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_recursion() {
+        jit_run_source(
+            r#"fn fib(n: i64) -> i64 {
+                if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+            }
+            fn main() {
+                assert_eq(fib(10), 55)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_no_main_error() {
+        let source = "fn helper() -> i64 { 42 }";
+        let (tokens, _) = turbo_lexer::tokenize(source);
+        let (module, _) = turbo_parser::parse(tokens);
+        let result = jit_run(&module);
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().message.contains("main"),
+            "Error should mention missing main"
+        );
+    }
+
+    #[test]
+    fn test_jit_boolean_logic() {
+        jit_run_source(
+            r#"fn main() {
+                assert_eq(true && true, true)
+                assert_eq(true && false, false)
+                assert_eq(false || true, true)
+                assert_eq(false || false, false)
+                assert_eq(!true, false)
+                assert_eq(!false, true)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_comparison_operators() {
+        jit_run_source(
+            r#"fn main() {
+                assert_eq(1 < 2, true)
+                assert_eq(2 > 1, true)
+                assert_eq(1 <= 1, true)
+                assert_eq(1 >= 1, true)
+                assert_eq(1 == 1, true)
+                assert_eq(1 != 2, true)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_string_builtins() {
+        jit_run_source(
+            r#"fn main() {
+                assert_eq(len("hello"), 5)
+                assert_eq(upper("hello"), "HELLO")
+                assert_eq(lower("HELLO"), "hello")
+                assert_eq(trim("  hi  "), "hi")
+                assert_eq(contains("hello world", "world"), true)
+                assert_eq(starts_with("hello", "hel"), true)
+                assert_eq(ends_with("hello", "llo"), true)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_nested_function_calls() {
+        jit_run_source(
+            r#"fn double(x: i64) -> i64 { x * 2 }
+            fn add_one(x: i64) -> i64 { x + 1 }
+            fn main() {
+                assert_eq(double(add_one(4)), 10)
+                assert_eq(add_one(double(4)), 9)
+            }"#,
+        );
+    }
+
+    // ================================================================
+    // Additional runtime function tests
+    // ================================================================
+
+    #[test]
+    fn test_rt_str_join() {
+        // Build a string array: [len=2]["hello", "world"]
+        let arr = rt_array_alloc(2);
+        let s1 = CString::new("hello").unwrap();
+        let s2 = CString::new("world").unwrap();
+        let arr = rt_array_set(arr, 0, s1.into_raw() as i64);
+        let arr = rt_array_set(arr, 1, s2.into_raw() as i64);
+
+        let sep = CString::new(", ").unwrap();
+        let result = rt_str_join(arr, sep.as_ptr() as *const u8);
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "hello, world");
+    }
+
+    #[test]
+    fn test_rt_str_char_at() {
+        let s = CString::new("abcde").unwrap();
+        let ch = rt_str_char_at(s.as_ptr() as *const u8, 2);
+        let r = unsafe { CStr::from_ptr(ch as *const std::ffi::c_char) };
+        assert_eq!(r.to_str().unwrap(), "c");
+
+        let ch0 = rt_str_char_at(s.as_ptr() as *const u8, 0);
+        let r0 = unsafe { CStr::from_ptr(ch0 as *const std::ffi::c_char) };
+        assert_eq!(r0.to_str().unwrap(), "a");
+    }
+
+    #[test]
+    fn test_rt_str_eq_with_nulls() {
+        // Both null should be equal
+        assert_eq!(rt_str_eq(std::ptr::null(), std::ptr::null()), 1);
+
+        // Null vs non-null with empty string
+        let empty = CString::new("").unwrap();
+        assert_eq!(rt_str_eq(std::ptr::null(), empty.as_ptr() as *const u8), 1);
+        assert_eq!(rt_str_eq(empty.as_ptr() as *const u8, std::ptr::null()), 1);
+
+        // Null vs non-empty
+        let hello = CString::new("hello").unwrap();
+        assert_eq!(rt_str_eq(std::ptr::null(), hello.as_ptr() as *const u8), 0);
+    }
+
+    #[test]
+    fn test_rt_str_concat_both_null() {
+        let result = rt_str_concat(std::ptr::null(), std::ptr::null());
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "");
+    }
+
+    #[test]
+    fn test_rt_str_repeat_negative() {
+        let s = CString::new("x").unwrap();
+        let result = rt_str_repeat(s.as_ptr() as *const u8, -5);
+        let r = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(r.to_str().unwrap(), "");
+    }
+
+    #[test]
+    fn test_rt_array_set_no_cow_when_unshared() {
+        let arr = rt_array_alloc(3);
+        // refcount is 1, so set should return same pointer (no COW)
+        let arr2 = rt_array_set(arr, 0, 42);
+        assert_eq!(arr as *const u8, arr2 as *const u8);
+    }
+
+    #[test]
+    fn test_rt_struct_alloc_single_field() {
+        let s = rt_struct_alloc(1);
+        assert!(!s.is_null());
+        // Should be zero-initialized
+        assert_eq!(unsafe { *(s as *const i64) }, 0);
+        // Set and read back
+        unsafe {
+            *(s as *mut i64) = 999;
+        }
+        assert_eq!(unsafe { *(s as *const i64) }, 999);
+    }
+
+    #[test]
+    fn test_rt_result_ok_negative_value() {
+        let r = rt_result_ok(-42);
+        assert_eq!(rt_result_tag(r), 0);
+        assert_eq!(rt_result_value(r), -42);
+    }
+
+    #[test]
+    fn test_rt_option_some_zero() {
+        // Some(0) should still have tag=1 (some)
+        let o = rt_option_some(0);
+        assert_eq!(rt_option_tag(o), 1);
+        assert_eq!(rt_option_value(o), 0);
+    }
+
+    #[test]
+    fn test_rt_retain_release_multiple() {
+        let arr = rt_array_alloc(2);
+        let rc_ptr = unsafe { arr.sub(8) as *const i64 };
+        assert_eq!(unsafe { *rc_ptr }, 1);
+
+        rt_retain(arr);
+        rt_retain(arr);
+        assert_eq!(unsafe { *rc_ptr }, 3);
+
+        rt_release(arr);
+        assert_eq!(unsafe { *rc_ptr }, 2);
+
+        rt_release(arr);
+        assert_eq!(unsafe { *rc_ptr }, 1);
+
+        rt_release(arr);
+        assert_eq!(unsafe { *rc_ptr }, 0);
+    }
+
+    #[test]
+    fn test_rt_hashmap_overwrite() {
+        let map = rt_hashmap_new();
+        let key = CString::new("k").unwrap();
+        let v1 = CString::new("first").unwrap();
+        let v2 = CString::new("second").unwrap();
+
+        rt_hashmap_set(map, key.as_ptr() as *const u8, v1.as_ptr() as *const u8);
+        rt_hashmap_set(map, key.as_ptr() as *const u8, v2.as_ptr() as *const u8);
+
+        assert_eq!(rt_hashmap_len(map), 1);
+        let got = rt_hashmap_get(map, key.as_ptr() as *const u8);
+        let s = unsafe { CStr::from_ptr(got as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "second");
+    }
+
+    #[test]
+    fn test_rt_hashmap_empty_keys() {
+        let map = rt_hashmap_new();
+        let keys = rt_hashmap_keys(map);
+        assert_eq!(rt_array_len(keys), 0);
+    }
+
+    #[test]
+    fn test_rt_pow_large_exponent() {
+        assert_eq!(rt_pow(2, 20), 1048576);
+        assert_eq!(rt_pow(1, 100), 1);
+        assert_eq!(rt_pow(0, 5), 0);
+    }
+
+    #[test]
+    fn test_rt_sqrt_zero_and_one() {
+        assert!((rt_sqrt(0.0) - 0.0).abs() < f64::EPSILON);
+        assert!((rt_sqrt(1.0) - 1.0).abs() < f64::EPSILON);
+        assert!(rt_sqrt(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn test_rt_i64_to_str_zero() {
+        let result = rt_i64_to_str(0);
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "0");
+    }
+
+    #[test]
+    fn test_rt_f64_to_str_negative() {
+        let result = rt_f64_to_str(-1.5);
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "-1.5");
+    }
+
+    #[test]
+    fn test_rt_str_split_single_element() {
+        let s = CString::new("hello").unwrap();
+        let sep = CString::new(",").unwrap();
+        let arr = rt_str_split(s.as_ptr() as *const u8, sep.as_ptr() as *const u8);
+        assert_eq!(rt_array_len(arr), 1);
+        let elem_ptr = unsafe { *((arr as *const i64).add(1)) } as *const u8;
+        let elem = unsafe { CStr::from_ptr(elem_ptr as *const std::ffi::c_char) };
+        assert_eq!(elem.to_str().unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_rt_str_replace_no_match() {
+        let s = CString::new("hello").unwrap();
+        let from = CString::new("xyz").unwrap();
+        let to = CString::new("abc").unwrap();
+        let result = rt_str_replace(
+            s.as_ptr() as *const u8,
+            from.as_ptr() as *const u8,
+            to.as_ptr() as *const u8,
+        );
+        let r = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(r.to_str().unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_rt_str_contains_empty_substring() {
+        let s = CString::new("hello").unwrap();
+        let empty = CString::new("").unwrap();
+        // Every string contains the empty string
+        assert_eq!(
+            rt_str_contains(s.as_ptr() as *const u8, empty.as_ptr() as *const u8),
+            1
+        );
+    }
+
+    #[test]
+    fn test_rt_str_index_of_at_start() {
+        let s = CString::new("hello").unwrap();
+        let sub = CString::new("hel").unwrap();
+        assert_eq!(
+            rt_str_index_of(s.as_ptr() as *const u8, sub.as_ptr() as *const u8),
+            0
+        );
+    }
+
+    #[test]
+    fn test_rt_json_get_boolean_value() {
+        let json = CString::new(r#"{"active":true}"#).unwrap();
+        let key = CString::new("active").unwrap();
+        let result = rt_json_get(json.as_ptr() as *const u8, key.as_ptr() as *const u8);
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), "true");
+    }
+
+    #[test]
+    fn test_rt_json_stringify_with_special_chars() {
+        let key = CString::new("msg").unwrap();
+        let val = CString::new(r#"he said "hi""#).unwrap();
+        let result = rt_json_stringify(key.as_ptr() as *const u8, val.as_ptr() as *const u8);
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        // Quotes should be escaped
+        assert!(s.to_str().unwrap().contains("\\\""));
+    }
+
+    #[test]
+    fn test_rt_mutex_initial_zero() {
+        let m = rt_mutex_create(0);
+        assert_eq!(rt_mutex_get(m), 0);
+    }
+
+    #[test]
+    fn test_rt_str_len_empty() {
+        let s = CString::new("").unwrap();
+        assert_eq!(rt_str_len(s.as_ptr() as *const u8), 0);
+    }
+
+    // ================================================================
+    // Additional end-to-end JIT tests
+    // ================================================================
+
+    #[test]
+    fn test_jit_result_type() {
+        jit_run_source(
+            r#"fn safe_div(a: i64, b: i64) -> i64 ! str {
+                if b == 0 {
+                    err("division by zero")
+                } else {
+                    ok(a / b)
+                }
+            }
+            fn main() {
+                match safe_div(10, 2) {
+                    ok(v) => assert_eq(v, 5)
+                    err(e) => assert(false, "should not be error")
+                }
+                match safe_div(10, 0) {
+                    ok(v) => assert(false, "should not be ok")
+                    err(e) => assert_eq(e, "division by zero")
+                }
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_optional_type() {
+        jit_run_source(
+            r#"fn main() {
+                let x = some(42)
+                let val = x ?? 0
+                assert_eq(val, 42)
+
+                let y = none
+                let val2 = y ?? 99
+                assert_eq(val2, 99)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_early_return() {
+        jit_run_source(
+            r#"fn find_first_positive(a: i64, b: i64, c: i64) -> i64 {
+                if a > 0 { return a }
+                if b > 0 { return b }
+                if c > 0 { return c }
+                0
+            }
+            fn main() {
+                assert_eq(find_first_positive(0, 0, 5), 5)
+                assert_eq(find_first_positive(3, 0, 5), 3)
+                assert_eq(find_first_positive(0, 7, 5), 7)
+                assert_eq(find_first_positive(0, 0, 0), 0)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_else_if_chain() {
+        jit_run_source(
+            r#"fn classify(x: i64) -> str {
+                if x > 100 {
+                    "big"
+                } else if x > 10 {
+                    "medium"
+                } else if x > 0 {
+                    "small"
+                } else {
+                    "zero or negative"
+                }
+            }
+            fn main() {
+                assert_eq(classify(200), "big")
+                assert_eq(classify(50), "medium")
+                assert_eq(classify(5), "small")
+                assert_eq(classify(0), "zero or negative")
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_for_in_array() {
+        jit_run_source(
+            r#"fn main() {
+                let arr = [10, 20, 30]
+                let mut sum = 0
+                for x in arr {
+                    sum = sum + x
+                }
+                assert_eq(sum, 60)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_struct_field_mutation() {
+        jit_run_source(
+            r#"struct Counter { val: i64 }
+            fn main() {
+                let mut c = Counter { val: 0 }
+                c.val = 42
+                assert_eq(c.val, 42)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_impl_methods() {
+        jit_run_source(
+            r#"struct Rect { w: i64, h: i64 }
+            impl Rect {
+                fn area(self) -> i64 { self.w * self.h }
+            }
+            fn main() {
+                let r = Rect { w: 5, h: 3 }
+                assert_eq(r.area(), 15)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_closure_basic() {
+        jit_run_source(
+            r#"fn main() {
+                let double = |x: i64| -> i64 { x * 2 }
+                assert_eq(double(5), 10)
+                let add = |a: i64, b: i64| -> i64 { a + b }
+                assert_eq(add(3, 7), 10)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_modulo_operator() {
+        jit_run_source(
+            r#"fn main() {
+                assert_eq(10 % 3, 1)
+                assert_eq(15 % 5, 0)
+                assert_eq(7 % 2, 1)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_string_coercion() {
+        jit_run_source(
+            r#"fn main() {
+                let s = "count: " + 42
+                assert_eq(s, "count: 42")
+                let s2 = "flag: " + true
+                assert_eq(s2, "flag: true")
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_const_values() {
+        jit_run_source(
+            r#"const MAX = 100
+            fn main() {
+                assert_eq(MAX, 100)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_break_continue() {
+        jit_run_source(
+            r#"fn main() {
+                let mut sum = 0
+                for i in 0..10 {
+                    if i == 5 { break }
+                    sum = sum + i
+                }
+                assert_eq(sum, 10)
+
+                let mut odd_sum = 0
+                for i in 0..10 {
+                    if i % 2 == 0 { continue }
+                    odd_sum = odd_sum + i
+                }
+                assert_eq(odd_sum, 25)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_match_with_enum() {
+        jit_run_source(
+            r#"type Dir { North, South, East, West }
+            fn to_num(d: Dir) -> i64 {
+                match d {
+                    North => 1
+                    South => 2
+                    East => 3
+                    West => 4
+                }
+            }
+            fn main() {
+                assert_eq(to_num(Dir.North), 1)
+                assert_eq(to_num(Dir.West), 4)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_pipe_operator() {
+        jit_run_source(
+            r#"fn double(x: i64) -> i64 { x * 2 }
+            fn add_ten(x: i64) -> i64 { x + 10 }
+            fn main() {
+                let result = 5 |> double |> add_ten
+                assert_eq(result, 20)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_higher_order_map() {
+        jit_run_source(
+            r#"fn main() {
+                let nums = [1, 2, 3]
+                let doubled = map(nums, |x: i64| -> i64 { x * 2 })
+                assert_eq(doubled[0], 2)
+                assert_eq(doubled[1], 4)
+                assert_eq(doubled[2], 6)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_nested_loops() {
+        jit_run_source(
+            r#"fn main() {
+                let mut total = 0
+                for i in 0..3 {
+                    for j in 0..3 {
+                        total = total + 1
+                    }
+                }
+                assert_eq(total, 9)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_multiple_functions() {
+        jit_run_source(
+            r#"fn square(x: i64) -> i64 { x * x }
+            fn cube(x: i64) -> i64 { x * x * x }
+            fn bigger(a: i64, b: i64) -> i64 {
+                if a > b { a } else { b }
+            }
+            fn main() {
+                assert_eq(square(5), 25)
+                assert_eq(cube(3), 27)
+                assert_eq(bigger(10, 20), 20)
+                assert_eq(bigger(square(3), cube(2)), 9)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_compound_assignment() {
+        jit_run_source(
+            r#"fn main() {
+                let mut x = 10
+                x += 5
+                assert_eq(x, 15)
+                x -= 3
+                assert_eq(x, 12)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_jit_string_methods() {
+        jit_run_source(
+            r#"fn main() {
+                assert_eq("hello".upper(), "HELLO")
+                assert_eq("  hi  ".trim(), "hi")
+                assert_eq("hello world".replace("world", "turbo"), "hello turbo")
+                assert_eq("ha".repeat(3), "hahaha")
+            }"#,
+        );
+    }
+
+    // ================================================================
+    // Additional type conversion tests
+    // ================================================================
+
+    #[test]
+    fn test_turbo_ty_fn_type() {
+        let empty_enum: HashMap<String, Vec<String>> = HashMap::new();
+        let fn_ty = turbo_ty_from_type_expr(
+            &TypeExpr::FnType {
+                params: vec![
+                    Spanned {
+                        node: TypeExpr::Named("i64".to_string()),
+                        span: 0..0,
+                    },
+                    Spanned {
+                        node: TypeExpr::Named("str".to_string()),
+                        span: 0..0,
+                    },
+                ],
+                ret: Box::new(Spanned {
+                    node: TypeExpr::Named("bool".to_string()),
+                    span: 0..0,
+                }),
+            },
+            &empty_enum,
+        );
+        assert_eq!(
+            fn_ty,
+            TurboTy::Fn(vec![TurboTy::Int, TurboTy::Str], Box::new(TurboTy::Bool))
+        );
+    }
+
+    #[test]
+    fn test_turbo_ty_nested_array() {
+        let empty_enum: HashMap<String, Vec<String>> = HashMap::new();
+        // [[i64]] — array of array of int
+        let nested = turbo_ty_from_type_expr(
+            &TypeExpr::Array(Box::new(Spanned {
+                node: TypeExpr::Array(Box::new(Spanned {
+                    node: TypeExpr::Named("i64".to_string()),
+                    span: 0..0,
+                })),
+                span: 0..0,
+            })),
+            &empty_enum,
+        );
+        assert_eq!(
+            nested,
+            TurboTy::Array(Box::new(TurboTy::Array(Box::new(TurboTy::Int))))
+        );
+    }
+
+    #[test]
+    fn test_turbo_ty_all_int_aliases() {
+        let empty_enum: HashMap<String, Vec<String>> = HashMap::new();
+        for name in &["i32", "i64", "u32", "u64"] {
+            let ty = turbo_ty_from_type_expr(&TypeExpr::Named(name.to_string()), &empty_enum);
+            assert_eq!(ty, TurboTy::Int, "{} should map to TurboTy::Int", name);
+        }
+    }
+
+    #[test]
+    fn test_turbo_ty_float_aliases() {
+        let empty_enum: HashMap<String, Vec<String>> = HashMap::new();
+        for name in &["f32", "f64"] {
+            let ty = turbo_ty_from_type_expr(&TypeExpr::Named(name.to_string()), &empty_enum);
+            assert_eq!(ty, TurboTy::Float, "{} should map to TurboTy::Float", name);
+        }
+    }
+
+    #[test]
+    fn test_codegen_error_is_std_error() {
+        let err = CodegenError {
+            message: "test".to_string(),
+        };
+        // Verify it implements std::error::Error
+        let _: &dyn std::error::Error = &err;
+        assert_eq!(err.to_string(), "codegen error: test");
+    }
 }

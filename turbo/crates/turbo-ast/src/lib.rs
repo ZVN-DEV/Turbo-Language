@@ -140,7 +140,10 @@ pub struct TypeParam {
 
 impl TypeParam {
     pub fn new(name: String) -> Self {
-        Self { name, bounds: Vec::new() }
+        Self {
+            name,
+            bounds: Vec::new(),
+        }
     }
 
     pub fn with_bounds(name: String, bounds: Vec<String>) -> Self {
@@ -316,10 +319,7 @@ pub enum Expr {
         field: String,
     },
     /// Enum variant: EnumName.VariantName
-    EnumVariant {
-        enum_name: String,
-        variant: String,
-    },
+    EnumVariant { enum_name: String, variant: String },
     /// Match expression
     Match {
         subject: Box<Spanned<Expr>>,

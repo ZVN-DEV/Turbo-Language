@@ -24,9 +24,17 @@ pub fn serve(port: u16) {
 
     // Try to open browser
     #[cfg(target_os = "macos")]
-    { let _ = Command::new("open").arg(format!("http://localhost:{port}")).spawn(); }
+    {
+        let _ = Command::new("open")
+            .arg(format!("http://localhost:{port}"))
+            .spawn();
+    }
     #[cfg(target_os = "linux")]
-    { let _ = Command::new("xdg-open").arg(format!("http://localhost:{port}")).spawn(); }
+    {
+        let _ = Command::new("xdg-open")
+            .arg(format!("http://localhost:{port}"))
+            .spawn();
+    }
 
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
@@ -37,7 +45,9 @@ pub fn serve(port: u16) {
             Ok(n) => n,
             Err(_) => continue,
         };
-        if n == 0 { continue; }
+        if n == 0 {
+            continue;
+        }
         let request = String::from_utf8_lossy(&buf[..n]);
 
         if request.starts_with("GET / ") || request.starts_with("GET / HTTP") {
@@ -87,17 +97,18 @@ fn run_code(source: &str) -> (String, String, bool) {
     // Write source to temp file
     let tmp = std::env::temp_dir().join("playground.tb");
     if std::fs::write(&tmp, source).is_err() {
-        return (String::new(), "error: could not write temp file".to_string(), false);
+        return (
+            String::new(),
+            "error: could not write temp file".to_string(),
+            false,
+        );
     }
 
     // Find our own binary
     let exe = std::env::current_exe().unwrap_or_else(|_| "turbo".into());
 
     // Run with timeout
-    let result = Command::new(&exe)
-        .arg("run")
-        .arg(&tmp)
-        .output();
+    let result = Command::new(&exe).arg("run").arg(&tmp).output();
 
     let _ = std::fs::remove_file(&tmp);
 

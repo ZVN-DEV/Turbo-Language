@@ -236,10 +236,10 @@ fn lex_triple_quote_string(lex: &mut logos::Lexer<Token>) -> Option<std::string:
         lex.bump(end_idx + 3); // skip content + closing """
 
         // Strip leading newline if present (the newline right after opening """)
-        let content = if content.starts_with('\n') {
-            &content[1..]
-        } else if content.starts_with("\r\n") {
-            &content[2..]
+        let content = if let Some(stripped) = content.strip_prefix('\n') {
+            stripped
+        } else if let Some(stripped) = content.strip_prefix("\r\n") {
+            stripped
         } else {
             content
         };
@@ -248,14 +248,16 @@ fn lex_triple_quote_string(lex: &mut logos::Lexer<Token>) -> Option<std::string:
         let content = content.trim_end();
 
         // Find the minimum indentation (non-empty lines only)
-        let min_indent = content.lines()
+        let min_indent = content
+            .lines()
             .filter(|line| !line.trim().is_empty())
             .map(|line| line.len() - line.trim_start().len())
             .min()
             .unwrap_or(0);
 
         // Strip common leading whitespace
-        let dedented: std::string::String = content.lines()
+        let dedented: std::string::String = content
+            .lines()
             .map(|line| {
                 if line.trim().is_empty() {
                     ""
@@ -291,8 +293,14 @@ fn parse_string(lex: &mut logos::Lexer<Token>) -> Option<std::string::String> {
                 std::option::Option::Some('r') => result.push('\r'),
                 std::option::Option::Some('\\') => result.push('\\'),
                 std::option::Option::Some('"') => result.push('"'),
-                std::option::Option::Some('{') => { result.push('\\'); result.push('{'); }
-                std::option::Option::Some('}') => { result.push('\\'); result.push('}'); }
+                std::option::Option::Some('{') => {
+                    result.push('\\');
+                    result.push('{');
+                }
+                std::option::Option::Some('}') => {
+                    result.push('\\');
+                    result.push('}');
+                }
                 std::option::Option::Some(other) => {
                     result.push('\\');
                     result.push(other);
@@ -561,7 +569,12 @@ mod tests {
         for (source, expected) in keywords {
             let (tokens, errors) = tokenize(source);
             assert!(errors.is_empty(), "Lex errors for `{source}`: {:?}", errors);
-            assert_eq!(tokens.len(), 1, "Expected 1 token for `{source}`, got {:?}", tokens);
+            assert_eq!(
+                tokens.len(),
+                1,
+                "Expected 1 token for `{source}`, got {:?}",
+                tokens
+            );
             assert_eq!(
                 tokens[0].value, expected,
                 "Keyword `{source}` should tokenize as {:?}, got {:?}",
