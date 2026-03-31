@@ -52,6 +52,11 @@ jobs:
       - name: Smoke test
         run: ./turbo/target/${{ matrix.target }}/release/turbo --version
 
+      - name: Smoke test - compile and run
+        run: |
+          echo 'fn main() { print("turbo works") }' > /tmp/test.tb
+          ./turbo/target/${{ matrix.target }}/release/turbo run /tmp/test.tb
+
       - name: Package
         run: |
           cd turbo/target/${{ matrix.target }}/release
@@ -72,6 +77,14 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
 
+      - name: Generate checksums
+        run: |
+          cd turbo-aarch64-apple-darwin && sha256sum *.tar.gz >> ../checksums.txt && cd ..
+          cd turbo-x86_64-apple-darwin && sha256sum *.tar.gz >> ../checksums.txt && cd ..
+          cd turbo-x86_64-unknown-linux-gnu && sha256sum *.tar.gz >> ../checksums.txt && cd ..
+          echo "Generated checksums:"
+          cat checksums.txt
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
@@ -79,5 +92,6 @@ jobs:
             turbo-aarch64-apple-darwin/*.tar.gz
             turbo-x86_64-apple-darwin/*.tar.gz
             turbo-x86_64-unknown-linux-gnu/*.tar.gz
+            checksums.txt
           draft: false
           prerelease: false

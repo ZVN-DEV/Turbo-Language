@@ -316,7 +316,13 @@ struct Checker {
     in_unsafe_context: bool,
     /// Nesting depth of loops (for break/continue validation)
     loop_depth: usize,
+    /// Current recursion depth for expression checking (prevents stack overflow)
+    expr_depth: usize,
 }
+
+/// Maximum recursion depth for expression/statement checking.
+/// Exceeding this produces a sema error instead of a stack overflow.
+const MAX_EXPR_DEPTH: usize = 200;
 
 impl Checker {
     fn new() -> Self {
@@ -350,6 +356,7 @@ impl Checker {
             in_unsafe_context: false,
             test_mode: false,
             loop_depth: 0,
+            expr_depth: 0,
         }
     }
 
@@ -1173,6 +1180,21 @@ impl Checker {
     // === Expression type checking ===
 
     fn check_expr(&mut self, expr: &Spanned<Expr>) -> Ty {
+        self.expr_depth += 1;
+        if self.expr_depth > MAX_EXPR_DEPTH {
+            self.error(
+                "expression nesting too deep (possible infinite recursion)".to_string(),
+                expr.span.clone(),
+            );
+            self.expr_depth -= 1;
+            return Ty::Error;
+        }
+        let result = self.check_expr_inner(expr);
+        self.expr_depth -= 1;
+        result
+    }
+
+    fn check_expr_inner(&mut self, expr: &Spanned<Expr>) -> Ty {
         match &expr.node {
             Expr::IntLit(_) => Ty::I64,
             Expr::FloatLit(_) => Ty::F64,

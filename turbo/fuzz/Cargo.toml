@@ -1,0 +1,14 @@
+[package]
+name = "turbo-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Keep this crate out of the parent workspace
+[workspace]
+
+[dependencies]
+turbo-lexer = { path = "../crates/turbo-lexer" }
+turbo-parser = { path = "../crates/turbo-parser" }
+turbo-sema = { path = "../crates/turbo-sema" }
+turbo-ast = { path = "../crates/turbo-ast" }

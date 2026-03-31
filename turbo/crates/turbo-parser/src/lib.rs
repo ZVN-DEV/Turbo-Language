@@ -2593,4 +2593,147 @@ fn main() { }
             .expect("failed to spawn test thread");
         handler.join().expect("test thread panicked");
     }
+
+    #[test]
+    fn test_fuzz_parser_no_panics() {
+        // Quick fuzz: 1000 random inputs, none should panic.
+        // Runs in a thread with a large stack to handle deeply nested inputs
+        // in debug mode.
+        let handler = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                for seed in 0..1000u64 {
+                    let input = generate_fuzz_input(seed);
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let (tokens, _) = tokenize(&input);
+                        let _ = parse(tokens);
+                    }));
+                    // We don't care about errors, only panics
+                }
+            })
+            .expect("failed to spawn fuzz thread");
+        handler
+            .join()
+            .expect("fuzz thread panicked — parser panicked on fuzz input");
+    }
+
+    /// Generate a deterministic fuzz input from a seed.
+    fn generate_fuzz_input(seed: u64) -> String {
+        // Simple xorshift64 PRNG
+        let mut state = seed.wrapping_add(1);
+        let mut next = || -> u64 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        let keywords = &[
+            "fn", "let", "mut", "const", "if", "else", "while", "for", "in", "return", "true",
+            "false", "match", "struct", "type", "impl", "trait", "pub", "import", "from", "break",
+            "continue",
+        ];
+        let operators = &[
+            "==", "!=", "<=", ">=", "&&", "||", "->", "=>", "+", "-", "*", "/", "%", "=", "<", ">",
+            "!", ".",
+        ];
+        let delimiters = &["(", ")", "{", "}", "[", "]", ",", ":", ";"];
+
+        match seed % 5 {
+            0 => {
+                // Random token soup
+                let count = (next() % 60 + 5) as usize;
+                let mut out = String::new();
+                for i in 0..count {
+                    if i > 0 {
+                        out.push(' ');
+                    }
+                    let kind = next() % 5;
+                    match kind {
+                        0 => out.push_str(keywords[(next() % keywords.len() as u64) as usize]),
+                        1 => out.push_str(operators[(next() % operators.len() as u64) as usize]),
+                        2 => out.push_str(delimiters[(next() % delimiters.len() as u64) as usize]),
+                        3 => out.push_str(&format!("{}", next() % 1000)),
+                        _ => {
+                            let len = (next() % 10 + 1) as usize;
+                            for j in 0..len {
+                                let c = if j == 0 {
+                                    (b'a' + (next() % 26) as u8) as char
+                                } else {
+                                    (b'a' + (next() % 26) as u8) as char
+                                };
+                                out.push(c);
+                            }
+                        }
+                    }
+                }
+                out
+            }
+            1 => {
+                // Nested parens/braces (moderate depth to avoid stack overflow in debug)
+                let depth = (next() % 80 + 1) as usize;
+                let mut out = String::new();
+                for _ in 0..depth {
+                    out.push('(');
+                }
+                out.push_str("42");
+                for _ in 0..depth {
+                    out.push(')');
+                }
+                out
+            }
+            2 => {
+                // Mutated valid program
+                let programs = &[
+                    "fn main() { let x = 42 }",
+                    "fn add(a: i64, b: i64) -> i64 { return a + b }",
+                    "struct Point { x: i64, y: i64 }",
+                ];
+                let prog = programs[(next() % programs.len() as u64) as usize];
+                let mut bytes: Vec<u8> = prog.bytes().collect();
+                let mutations = (next() % 15 + 1) as usize;
+                for _ in 0..mutations {
+                    if bytes.is_empty() {
+                        break;
+                    }
+                    let op = next() % 3;
+                    match op {
+                        0 => {
+                            bytes.remove((next() % bytes.len() as u64) as usize);
+                        }
+                        1 => {
+                            let idx = (next() % (bytes.len() as u64 + 1)) as usize;
+                            bytes.insert(idx, (next() % 128) as u8);
+                        }
+                        _ => {
+                            let idx = (next() % bytes.len() as u64) as usize;
+                            bytes[idx] = (next() % 128) as u8;
+                        }
+                    }
+                }
+                String::from_utf8_lossy(&bytes).into_owned()
+            }
+            3 => {
+                // Keyword soup
+                let count = (next() % 40 + 5) as usize;
+                let mut out = String::new();
+                for i in 0..count {
+                    if i > 0 {
+                        out.push(' ');
+                    }
+                    out.push_str(keywords[(next() % keywords.len() as u64) as usize]);
+                }
+                out
+            }
+            _ => {
+                // Boundary cases
+                match next() % 4 {
+                    0 => String::new(),
+                    1 => "x".to_string(),
+                    2 => "\0\0\0".to_string(),
+                    _ => " \t\n\r".repeat(50),
+                }
+            }
+        }
+    }
 }
