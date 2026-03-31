@@ -2527,7 +2527,8 @@ impl Checker {
                         _ => {} // IntLit and StringLit don't cover the full domain
                     }
 
-                    // For ok/err patterns, bind the variable in a scope
+                    // For patterns with bindings, push a scope so both guards and bodies
+                    // can reference destructured variables.
                     let body_ty = match &arm.pattern.node {
                         Pattern::Ok(binding) => {
                             self.push_scope();
@@ -2537,6 +2538,12 @@ impl Checker {
                                 Ty::Error
                             };
                             self.define_var(binding, VarInfo { ty: ok_ty, mutable: false }, &arm.pattern.span);
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
                             let ty = self.check_expr(&arm.body);
                             self.pop_scope();
                             ty
@@ -2549,6 +2556,12 @@ impl Checker {
                                 Ty::Error
                             };
                             self.define_var(binding, VarInfo { ty: err_ty, mutable: false }, &arm.pattern.span);
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
                             let ty = self.check_expr(&arm.body);
                             self.pop_scope();
                             ty
@@ -2561,11 +2574,23 @@ impl Checker {
                                 Ty::Error
                             };
                             self.define_var(binding, VarInfo { ty: inner_ty, mutable: false }, &arm.pattern.span);
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
                             let ty = self.check_expr(&arm.body);
                             self.pop_scope();
                             ty
                         }
                         Pattern::None => {
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
                             self.check_expr(&arm.body)
                         }
                         Pattern::VariantDestructure { variant, bindings } => {
@@ -2584,11 +2609,40 @@ impl Checker {
                                     }
                                 }
                             }
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
                             let ty = self.check_expr(&arm.body);
                             self.pop_scope();
                             ty
                         }
-                        _ => self.check_expr(&arm.body),
+                        Pattern::Ident(name) if !matches!(subject_ty, Ty::Enum(_)) => {
+                            // Non-enum ident pattern acts as a variable binding
+                            self.push_scope();
+                            self.define_var(name, VarInfo { ty: subject_ty.clone(), mutable: false }, &arm.pattern.span);
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
+                            let ty = self.check_expr(&arm.body);
+                            self.pop_scope();
+                            ty
+                        }
+                        _ => {
+                            // Enum ident patterns, wildcard, literal patterns
+                            if let Some(ref guard) = arm.guard {
+                                let guard_ty = self.check_expr(guard);
+                                if guard_ty != Ty::Bool && !guard_ty.is_error() {
+                                    self.error(format!("match guard must be bool, got `{guard_ty}`"), guard.span.clone());
+                                }
+                            }
+                            self.check_expr(&arm.body)
+                        }
                     };
 
                     if let Some(ref expected) = result_ty {

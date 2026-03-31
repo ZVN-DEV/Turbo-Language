@@ -1268,6 +1268,9 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
                     }
                     _ => {}
                 }
+                if let Some(ref guard) = arm.guard {
+                    collect_free_vars(&guard.node, bound, free);
+                }
                 collect_free_vars(&arm.body.node, bound, free);
                 bound.truncate(orig_len);
             }
@@ -1542,7 +1545,12 @@ fn extract_spawn_sites_from_expr(
         Expr::StructLit { fields, .. } => { for (_, e) in fields { extract_spawn_sites_from_expr(e, out, counter); } }
         Expr::Match { subject, arms } => {
             extract_spawn_sites_from_expr(subject, out, counter);
-            for arm in arms { extract_spawn_sites_from_expr(&arm.body, out, counter); }
+            for arm in arms {
+                if let Some(ref guard) = arm.guard {
+                    extract_spawn_sites_from_expr(guard, out, counter);
+                }
+                extract_spawn_sites_from_expr(&arm.body, out, counter);
+            }
         }
         Expr::Closure { body, .. } => { extract_spawn_sites_from_expr(body, out, counter); }
         Expr::OkExpr(e) | Expr::ErrExpr(e) | Expr::SomeExpr(e) | Expr::Await(e) | Expr::Try(e) => {
@@ -4820,17 +4828,29 @@ fn compile_match<M: Module>(
 
     for (i, arm) in arms.iter().enumerate() {
         let is_last = i == arms.len() - 1;
-        let is_catchall = matches!(&arm.pattern.node, Pattern::Wildcard)
+        let has_guard = arm.guard.is_some();
+        // A catch-all pattern is only truly unconditional when it has no guard.
+        let is_catchall_pattern = matches!(&arm.pattern.node, Pattern::Wildcard)
             || matches!(&arm.pattern.node, Pattern::Ident(name)
                 if lookup_variant_tag_static(cx.enum_variants, name).is_none());
+        let is_catchall = is_catchall_pattern && !has_guard;
 
         if is_catchall {
-            // Unconditional arm -- compile body and jump to merge
+            // Unconditional arm -- bind variable if ident pattern, compile body
+            let saved_vars = cx.vars.clone();
+            if let Pattern::Ident(name) = &arm.pattern.node {
+                let cl_ty = cx.builder.func.dfg.value_type(subj_val);
+                let var = Variable::new(cx.next_var);
+                cx.next_var += 1;
+                cx.builder.declare_var(var, cl_ty);
+                cx.builder.def_var(var, subj_val);
+                cx.vars.insert(name.clone(), (var, cl_ty, subj_tty.clone()));
+            }
             let body_result = compile_expr(cx, &arm.body)?;
+            cx.vars = saved_vars;
             emit_match_arm_jump(cx, merge_block, body_result, &mut has_result, &mut result_turbo_ty);
             hit_catchall = true;
 
-            // Create a dead block if there are more arms after this
             if !is_last {
                 let dead_block = cx.builder.create_block();
                 cx.builder.switch_to_block(dead_block);
@@ -4839,102 +4859,101 @@ fn compile_match<M: Module>(
             break;
         }
 
-        // Conditional arm: compute whether the pattern matches
-        let matches_cond = match &arm.pattern.node {
-            Pattern::Ident(name) => {
-                // Must be an enum variant (checked above: non-variant idents are catchall)
-                let tag_val = lookup_variant_tag_static(cx.enum_variants, name).unwrap();
-                let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
-                // For data enums, extract tag from pointer; for unit enums, compare directly
-                let actual_tag = if let TurboTy::Enum(ref enum_name) = subj_tty {
-                    if cx.enum_max_slots.contains_key(enum_name.as_str()) {
-                        cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0)
-                    } else {
-                        subj_val
-                    }
-                } else {
-                    subj_val
-                };
-                cx.builder.ins().icmp(IntCC::Equal, actual_tag, pat_val)
-            }
-            Pattern::IntLit(n) => {
-                let pat_val = cx.builder.ins().iconst(types::I64, *n);
-                cx.builder.ins().icmp(IntCC::Equal, subj_val, pat_val)
-            }
-            Pattern::BoolLit(b) => {
-                let pat_val = cx.builder.ins().iconst(types::I8, *b as i64);
-                let subj_narrowed = if cx.builder.func.dfg.value_type(subj_val) != types::I8 {
-                    cx.builder.ins().ireduce(types::I8, subj_val)
-                } else {
-                    subj_val
-                };
-                cx.builder.ins().icmp(IntCC::Equal, subj_narrowed, pat_val)
-            }
-            Pattern::StringLit(s) => {
-                let pat_ptr = cx.create_string(s)?;
-                let fid = cx.rt_fns["rt_str_eq"];
-                let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-                let call = cx.builder.ins().call(fref, &[subj_val, pat_ptr]);
-                let eq_result = cx.builder.inst_results(call)[0];
-                let zero = cx.builder.ins().iconst(types::I8, 0);
-                cx.builder.ins().icmp(IntCC::NotEqual, eq_result, zero)
-            }
-            Pattern::Wildcard => unreachable!(), // handled above
-            Pattern::Ok(_binding) => {
-                // Extract tag from result pointer; ok = tag 0
-                let tag_fid = cx.rt_fns["rt_result_tag"];
-                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
-                let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
-                let tag = cx.builder.inst_results(tag_call)[0];
-                let zero = cx.builder.ins().iconst(types::I64, 0);
-                cx.builder.ins().icmp(IntCC::Equal, tag, zero)
-            }
-            Pattern::Err(_binding) => {
-                // Extract tag from result pointer; err = tag 1
-                let tag_fid = cx.rt_fns["rt_result_tag"];
-                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
-                let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
-                let tag = cx.builder.inst_results(tag_call)[0];
-                let one = cx.builder.ins().iconst(types::I64, 1);
-                cx.builder.ins().icmp(IntCC::Equal, tag, one)
-            }
-            Pattern::Some(_binding) => {
-                // Extract tag from optional pointer; some = tag 1
-                let tag_fid = cx.rt_fns["rt_option_tag"];
-                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
-                let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
-                let tag = cx.builder.inst_results(tag_call)[0];
-                let one = cx.builder.ins().iconst(types::I64, 1);
-                cx.builder.ins().icmp(IntCC::Equal, tag, one)
-            }
-            Pattern::None => {
-                // Extract tag from optional pointer; none = tag 0
-                let tag_fid = cx.rt_fns["rt_option_tag"];
-                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
-                let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
-                let tag = cx.builder.inst_results(tag_call)[0];
-                let zero = cx.builder.ins().iconst(types::I64, 0);
-                cx.builder.ins().icmp(IntCC::Equal, tag, zero)
-            }
-            Pattern::VariantDestructure { variant, .. } => {
-                // Extract tag from data enum pointer and compare
-                let tag_val = lookup_variant_tag_static(cx.enum_variants, variant).unwrap();
-                let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
-                let actual_tag = cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0);
-                cx.builder.ins().icmp(IntCC::Equal, actual_tag, pat_val)
-            }
-        };
-
-        let match_block = cx.builder.create_block();
+        // For catch-all patterns with a guard, skip pattern condition check.
         let next_block = cx.builder.create_block();
 
-        cx.builder.ins().brif(matches_cond, match_block, &[], next_block, &[]);
+        if is_catchall_pattern && has_guard {
+            let match_block = cx.builder.create_block();
+            cx.builder.ins().jump(match_block, &[]);
+            cx.builder.switch_to_block(match_block);
+            cx.builder.seal_block(match_block);
+        } else {
+            // Conditional arm: compute whether the pattern matches
+            let matches_cond = match &arm.pattern.node {
+                Pattern::Ident(name) => {
+                    let tag_val = lookup_variant_tag_static(cx.enum_variants, name).unwrap();
+                    let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
+                    let actual_tag = if let TurboTy::Enum(ref enum_name) = subj_tty {
+                        if cx.enum_max_slots.contains_key(enum_name.as_str()) {
+                            cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0)
+                        } else {
+                            subj_val
+                        }
+                    } else {
+                        subj_val
+                    };
+                    cx.builder.ins().icmp(IntCC::Equal, actual_tag, pat_val)
+                }
+                Pattern::IntLit(n) => {
+                    let pat_val = cx.builder.ins().iconst(types::I64, *n);
+                    cx.builder.ins().icmp(IntCC::Equal, subj_val, pat_val)
+                }
+                Pattern::BoolLit(b) => {
+                    let pat_val = cx.builder.ins().iconst(types::I8, *b as i64);
+                    let subj_narrowed = if cx.builder.func.dfg.value_type(subj_val) != types::I8 {
+                        cx.builder.ins().ireduce(types::I8, subj_val)
+                    } else {
+                        subj_val
+                    };
+                    cx.builder.ins().icmp(IntCC::Equal, subj_narrowed, pat_val)
+                }
+                Pattern::StringLit(s) => {
+                    let pat_ptr = cx.create_string(s)?;
+                    let fid = cx.rt_fns["rt_str_eq"];
+                    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                    let call = cx.builder.ins().call(fref, &[subj_val, pat_ptr]);
+                    let eq_result = cx.builder.inst_results(call)[0];
+                    let zero = cx.builder.ins().iconst(types::I8, 0);
+                    cx.builder.ins().icmp(IntCC::NotEqual, eq_result, zero)
+                }
+                Pattern::Wildcard => unreachable!(),
+                Pattern::Ok(_binding) => {
+                    let tag_fid = cx.rt_fns["rt_result_tag"];
+                    let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+                    let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
+                    let tag = cx.builder.inst_results(tag_call)[0];
+                    let zero = cx.builder.ins().iconst(types::I64, 0);
+                    cx.builder.ins().icmp(IntCC::Equal, tag, zero)
+                }
+                Pattern::Err(_binding) => {
+                    let tag_fid = cx.rt_fns["rt_result_tag"];
+                    let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+                    let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
+                    let tag = cx.builder.inst_results(tag_call)[0];
+                    let one = cx.builder.ins().iconst(types::I64, 1);
+                    cx.builder.ins().icmp(IntCC::Equal, tag, one)
+                }
+                Pattern::Some(_binding) => {
+                    let tag_fid = cx.rt_fns["rt_option_tag"];
+                    let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+                    let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
+                    let tag = cx.builder.inst_results(tag_call)[0];
+                    let one = cx.builder.ins().iconst(types::I64, 1);
+                    cx.builder.ins().icmp(IntCC::Equal, tag, one)
+                }
+                Pattern::None => {
+                    let tag_fid = cx.rt_fns["rt_option_tag"];
+                    let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+                    let tag_call = cx.builder.ins().call(tag_fref, &[subj_val]);
+                    let tag = cx.builder.inst_results(tag_call)[0];
+                    let zero = cx.builder.ins().iconst(types::I64, 0);
+                    cx.builder.ins().icmp(IntCC::Equal, tag, zero)
+                }
+                Pattern::VariantDestructure { variant, .. } => {
+                    let tag_val = lookup_variant_tag_static(cx.enum_variants, variant).unwrap();
+                    let pat_val = cx.builder.ins().iconst(types::I64, tag_val as i64);
+                    let actual_tag = cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, 0);
+                    cx.builder.ins().icmp(IntCC::Equal, actual_tag, pat_val)
+                }
+            };
 
-        // Compile the arm body
-        cx.builder.switch_to_block(match_block);
-        cx.builder.seal_block(match_block);
+            let match_block = cx.builder.create_block();
+            cx.builder.ins().brif(matches_cond, match_block, &[], next_block, &[]);
+            cx.builder.switch_to_block(match_block);
+            cx.builder.seal_block(match_block);
+        }
 
-        // For ok/err/some patterns, extract the value and bind as a variable
+        // Bind pattern variables in the match block
         let saved_vars = cx.vars.clone();
         match &arm.pattern.node {
             Pattern::Ok(binding) | Pattern::Err(binding) => {
@@ -4948,7 +4967,6 @@ fn compile_match<M: Module>(
                 cx.builder.declare_var(var, types::I64);
                 cx.builder.def_var(var, raw_val);
 
-                // Get the inner type from the subject's Result(ok_tty, err_tty)
                 let turbo_ty = match &subj_tty {
                     TurboTy::Result(ok_tty, err_tty) => {
                         if matches!(&arm.pattern.node, Pattern::Ok(_)) {
@@ -4957,7 +4975,7 @@ fn compile_match<M: Module>(
                             *err_tty.clone()
                         }
                     }
-                    _ => TurboTy::Int, // fallback
+                    _ => TurboTy::Int,
                 };
                 cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
             }
@@ -4972,16 +4990,13 @@ fn compile_match<M: Module>(
                 cx.builder.declare_var(var, types::I64);
                 cx.builder.def_var(var, raw_val);
 
-                // Get the inner type from the subject's Optional(inner_tty)
                 let turbo_ty = match &subj_tty {
                     TurboTy::Optional(inner_tty) => *inner_tty.clone(),
-                    _ => TurboTy::Int, // fallback
+                    _ => TurboTy::Int,
                 };
                 cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
             }
             Pattern::VariantDestructure { variant, bindings } => {
-                // Extract fields from the data enum tagged union
-                // Layout: [tag: i64][field0: i64][field1: i64]...
                 let field_tys = if let TurboTy::Enum(ref enum_name) = subj_tty {
                     cx.enum_variant_fields
                         .get(&(enum_name.clone(), variant.clone()))
@@ -4992,7 +5007,7 @@ fn compile_match<M: Module>(
                 };
 
                 for (i, binding) in bindings.iter().enumerate() {
-                    let offset = ((i + 1) * 8) as i32; // +1 to skip tag
+                    let offset = ((i + 1) * 8) as i32;
                     let raw_val = cx.builder.ins().load(types::I64, MemFlags::new(), subj_val, offset);
 
                     let field_tty = if i < field_tys.len() {
@@ -5001,7 +5016,6 @@ fn compile_match<M: Module>(
                         TurboTy::Int
                     };
 
-                    // Convert back from i64 storage to the appropriate type
                     let (val, cl_ty) = match &field_tty {
                         TurboTy::Float => {
                             let f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val);
@@ -5021,7 +5035,27 @@ fn compile_match<M: Module>(
                     cx.vars.insert(binding.clone(), (var, cl_ty, field_tty));
                 }
             }
+            Pattern::Ident(name) if is_catchall_pattern => {
+                // Catch-all ident with guard: bind subject value as variable
+                let cl_ty = cx.builder.func.dfg.value_type(subj_val);
+                let var = Variable::new(cx.next_var);
+                cx.next_var += 1;
+                cx.builder.declare_var(var, cl_ty);
+                cx.builder.def_var(var, subj_val);
+                cx.vars.insert(name.clone(), (var, cl_ty, subj_tty.clone()));
+            }
             _ => {}
+        }
+
+        // If there is a guard, evaluate it: true -> body, false -> next arm
+        if let Some(ref guard) = arm.guard {
+            let guard_result = compile_expr(cx, guard)?;
+            if let Some((guard_val, _)) = guard_result {
+                let body_block = cx.builder.create_block();
+                cx.builder.ins().brif(guard_val, body_block, &[], next_block, &[]);
+                cx.builder.switch_to_block(body_block);
+                cx.builder.seal_block(body_block);
+            }
         }
 
         let body_result = compile_expr(cx, &arm.body)?;
