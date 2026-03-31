@@ -1,0 +1,13 @@
+fn classify(n: i64) -> str {
+    match n {
+        0 => "zero"
+        n if n > 0 => "positive"
+        _ => "negative"
+    }
+}
+
+fn main() {
+    print(classify(5))
+    print(classify(0))
+    print(classify(-3))
+}

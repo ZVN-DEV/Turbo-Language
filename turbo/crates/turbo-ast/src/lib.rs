@@ -364,10 +364,11 @@ pub enum Stmt {
     Defer(Spanned<Expr>),
 }
 
-/// A match arm: pattern => body
+/// A match arm: pattern [if guard] => body
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub pattern: Spanned<Pattern>,
+    pub guard: Option<Spanned<Expr>>,
     pub body: Spanned<Expr>,
 }
 

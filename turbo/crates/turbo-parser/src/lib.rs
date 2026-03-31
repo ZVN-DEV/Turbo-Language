@@ -1354,9 +1354,15 @@ impl Parser {
         let mut arms = Vec::new();
         while !matches!(self.peek(), Some(Token::RBrace) | None) {
             let pattern = self.parse_pattern()?;
+            let guard = if matches!(self.peek(), Some(Token::If)) {
+                self.advance();
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
             self.expect(&Token::FatArrow)?;
             let body = self.parse_expr()?;
-            arms.push(MatchArm { pattern, body });
+            arms.push(MatchArm { pattern, guard, body });
         }
 
         let end = self.peek_span().end;
