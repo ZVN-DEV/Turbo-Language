@@ -1,0 +1,10 @@
+fn main() {
+    let m = hashmap()
+    hashmap_set(m, "lang", "Turbo")
+    hashmap_set(m, "fast", "yes")
+    print(hashmap_get(m, "lang"))
+    print(hashmap_has(m, "fast"))
+    print(hashmap_len(m))
+    hashmap_remove(m, "fast")
+    print(hashmap_len(m))
+}

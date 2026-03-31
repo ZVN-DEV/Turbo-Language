@@ -790,6 +790,82 @@ extern "C" fn rt_mutex_clone(m: *const u8) -> *mut u8 {
     std::sync::Arc::into_raw(cloned) as *mut u8
 }
 
+// ── HashMap runtime functions ───────────────────────────────────────
+
+/// Create a new empty HashMap<String, String>. Returns an opaque pointer.
+extern "C" fn rt_hashmap_new() -> *mut u8 {
+    let map: HashMap<String, String> = HashMap::new();
+    let boxed = Box::new(map);
+    Box::into_raw(boxed) as *mut u8
+}
+
+/// Set a key-value pair in the hashmap.
+extern "C" fn rt_hashmap_set(map_ptr: *mut u8, key: *const u8, value: *const u8) {
+    let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str().unwrap_or("").to_string();
+    let value = unsafe { std::ffi::CStr::from_ptr(value as *const std::ffi::c_char) }
+        .to_str().unwrap_or("").to_string();
+    map.insert(key, value);
+}
+
+/// Get a value by key. Returns a C string pointer, or null if not found.
+extern "C" fn rt_hashmap_get(map_ptr: *const u8, key: *const u8) -> *const u8 {
+    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    match map.get(key) {
+        Some(v) => {
+            let cs = std::ffi::CString::new(v.as_str()).unwrap();
+            cs.into_raw() as *const u8
+        }
+        None => std::ptr::null()
+    }
+}
+
+/// Check if a key exists. Returns 1 (true) or 0 (false).
+extern "C" fn rt_hashmap_has(map_ptr: *const u8, key: *const u8) -> i8 {
+    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    if map.contains_key(key) { 1 } else { 0 }
+}
+
+/// Return the number of entries in the hashmap.
+extern "C" fn rt_hashmap_len(map_ptr: *const u8) -> i64 {
+    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
+    map.len() as i64
+}
+
+/// Return all keys as a [str] array (same format as rt_str_split).
+extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
+    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
+    let mut keys: Vec<&str> = map.keys().map(|k| k.as_str()).collect();
+    keys.sort(); // deterministic order for testing
+    let len = keys.len() as i64;
+    // Array format: [refcount: i64][len: i64][ptr0: i64][ptr1: i64]...
+    let data_size = 8 + (len as usize) * 8;
+    let total = 8 + data_size; // +8 for refcount header
+    let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    unsafe { *(ptr as *mut i64) = 1; } // refcount = 1
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe { *(data_ptr as *mut i64) = len; }
+    for (i, key) in keys.iter().enumerate() {
+        let cs = std::ffi::CString::new(*key).unwrap();
+        unsafe { *((data_ptr as *mut i64).add(1 + i)) = cs.into_raw() as i64; }
+    }
+    data_ptr
+}
+
+/// Remove a key from the hashmap.
+extern "C" fn rt_hashmap_remove(map_ptr: *mut u8, key: *const u8) {
+    let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str().unwrap_or("");
+    map.remove(key);
+}
+
 // ── ARC (Automatic Reference Counting) runtime functions ────────────
 
 /// Increment the reference count of a heap-allocated object.
@@ -1012,6 +1088,14 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_mutex_get", rt_mutex_get as *const u8);
     jit_builder.symbol("rt_mutex_set", rt_mutex_set as *const u8);
     jit_builder.symbol("rt_mutex_clone", rt_mutex_clone as *const u8);
+    // HashMap builtins
+    jit_builder.symbol("rt_hashmap_new", rt_hashmap_new as *const u8);
+    jit_builder.symbol("rt_hashmap_set", rt_hashmap_set as *const u8);
+    jit_builder.symbol("rt_hashmap_get", rt_hashmap_get as *const u8);
+    jit_builder.symbol("rt_hashmap_has", rt_hashmap_has as *const u8);
+    jit_builder.symbol("rt_hashmap_len", rt_hashmap_len as *const u8);
+    jit_builder.symbol("rt_hashmap_keys", rt_hashmap_keys as *const u8);
+    jit_builder.symbol("rt_hashmap_remove", rt_hashmap_remove as *const u8);
     // ARC runtime
     jit_builder.symbol("rt_retain", rt_retain as *const u8);
     jit_builder.symbol("rt_release", rt_release as *const u8);
@@ -1792,6 +1876,14 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_mutex_get", &[ptr_type], Some(types::I64))?;
     declare_rt_fn(module, &mut rt_fns, "rt_mutex_set", &[ptr_type, types::I64], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_mutex_clone", &[ptr_type], Some(ptr_type))?;
+    // HashMap runtime declarations
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_new", &[], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_set", &[ptr_type, ptr_type, ptr_type], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_get", &[ptr_type, ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_has", &[ptr_type, ptr_type], Some(types::I8))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_len", &[ptr_type], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_keys", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_remove", &[ptr_type, ptr_type], None)?;
     // ARC runtime declarations
     declare_rt_fn(module, &mut rt_fns, "rt_retain", &[ptr_type], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_release", &[ptr_type], None)?;
@@ -3562,6 +3654,14 @@ fn compile_call<M: Module>(
         "mutex_set" => compile_builtin_mutex_set(cx, args),
         // Derive builtins
         "clone" => compile_clone(cx, args),
+        // HashMap builtins
+        "hashmap" => compile_builtin_hashmap(cx),
+        "hashmap_set" => compile_builtin_hashmap_set(cx, args),
+        "hashmap_get" => compile_builtin_hashmap_get(cx, args),
+        "hashmap_has" => compile_builtin_hashmap_has(cx, args),
+        "hashmap_len" => compile_builtin_hashmap_len(cx, args),
+        "hashmap_keys" => compile_builtin_hashmap_keys(cx, args),
+        "hashmap_remove" => compile_builtin_hashmap_remove(cx, args),
         _ => {
             // Check if this is an enum variant construction via UFCS rewrite:
             // Parser transforms Shape.Circle(5.0) into Call { callee: Ident("Circle"), args: [Ident("Shape"), 5.0] }
@@ -5556,5 +5656,79 @@ fn compile_builtin_mutex_set<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Exp
     let fid = cx.rt_fns["rt_mutex_set"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     cx.builder.ins().call(fref, &[m_val, value_val]);
+    Ok(None)
+}
+
+// ── HashMap builtins ────────────────────────────────────────────────
+
+/// hashmap() -> HashMap (opaque pointer)
+fn compile_builtin_hashmap<M: Module>(cx: &mut Ctx<'_, M>) -> Result<MaybeTyped, CodegenError> {
+    let fid = cx.rt_fns["rt_hashmap_new"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// hashmap_set(map, key, value) -> ()
+fn compile_builtin_hashmap_set<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let (value_val, _) = compile_expr(cx, &args[2])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_set"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    cx.builder.ins().call(fref, &[map_val, key_val, value_val]);
+    Ok(None)
+}
+
+/// hashmap_get(map, key) -> str
+fn compile_builtin_hashmap_get<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_get"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[map_val, key_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// hashmap_has(map, key) -> bool
+fn compile_builtin_hashmap_has<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_has"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[map_val, key_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Bool)))
+}
+
+/// hashmap_len(map) -> i64
+fn compile_builtin_hashmap_len<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_len"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[map_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// hashmap_keys(map) -> [str]
+fn compile_builtin_hashmap_keys<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_keys"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[map_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Array(Box::new(TurboTy::Str)))))
+}
+
+/// hashmap_remove(map, key) -> ()
+fn compile_builtin_hashmap_remove<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_remove"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    cx.builder.ins().call(fref, &[map_val, key_val]);
     Ok(None)
 }

@@ -363,7 +363,9 @@ impl Checker {
             | "http_get" | "http_post" | "json_get" | "json_stringify"
             | "channel" | "send" | "recv"
             | "mutex" | "mutex_get" | "mutex_set"
-            | "clone")
+            | "clone"
+            | "hashmap" | "hashmap_set" | "hashmap_get" | "hashmap_has"
+            | "hashmap_len" | "hashmap_keys" | "hashmap_remove")
     }
 
     /// Walk a chain of FieldAccess / Index expressions to find the root variable name.
@@ -1615,6 +1617,108 @@ impl Checker {
                             return Ty::Error;
                         }
                         return arg_ty;
+                    }
+
+                    // ── HashMap builtins ────────────────────────────────
+                    // hashmap() -> i64 (opaque pointer)
+                    if name == "hashmap" {
+                        if !args.is_empty() {
+                            self.error(format!("hashmap() takes no arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        return Ty::I64;
+                    }
+                    // hashmap_set(map: i64, key: str, value: str) -> ()
+                    if name == "hashmap_set" {
+                        if args.len() != 3 {
+                            self.error(format!("hashmap_set() takes exactly 3 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        let key_ty = self.check_expr(&args[1]);
+                        let val_ty = self.check_expr(&args[2]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(format!("hashmap_set() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        if !key_ty.is_error() && key_ty != Ty::Str {
+                            self.error(format!("hashmap_set() second argument must be str, found `{key_ty}`"), args[1].span.clone());
+                        }
+                        if !val_ty.is_error() && val_ty != Ty::Str {
+                            self.error(format!("hashmap_set() third argument must be str, found `{val_ty}`"), args[2].span.clone());
+                        }
+                        return Ty::Unit;
+                    }
+                    // hashmap_get(map: i64, key: str) -> str
+                    if name == "hashmap_get" {
+                        if args.len() != 2 {
+                            self.error(format!("hashmap_get() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        let key_ty = self.check_expr(&args[1]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(format!("hashmap_get() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        if !key_ty.is_error() && key_ty != Ty::Str {
+                            self.error(format!("hashmap_get() second argument must be str, found `{key_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+                    // hashmap_has(map: i64, key: str) -> bool
+                    if name == "hashmap_has" {
+                        if args.len() != 2 {
+                            self.error(format!("hashmap_has() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        let key_ty = self.check_expr(&args[1]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(format!("hashmap_has() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        if !key_ty.is_error() && key_ty != Ty::Str {
+                            self.error(format!("hashmap_has() second argument must be str, found `{key_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Bool;
+                    }
+                    // hashmap_len(map: i64) -> i64
+                    if name == "hashmap_len" {
+                        if args.len() != 1 {
+                            self.error(format!("hashmap_len() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(format!("hashmap_len() argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::I64;
+                    }
+                    // hashmap_keys(map: i64) -> [str]
+                    if name == "hashmap_keys" {
+                        if args.len() != 1 {
+                            self.error(format!("hashmap_keys() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(format!("hashmap_keys() argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::Array(Box::new(Ty::Str));
+                    }
+                    // hashmap_remove(map: i64, key: str) -> ()
+                    if name == "hashmap_remove" {
+                        if args.len() != 2 {
+                            self.error(format!("hashmap_remove() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        let key_ty = self.check_expr(&args[1]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(format!("hashmap_remove() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        if !key_ty.is_error() && key_ty != Ty::Str {
+                            self.error(format!("hashmap_remove() second argument must be str, found `{key_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Unit;
                     }
 
                     // map(arr, fn) -> [U]

@@ -691,6 +691,193 @@ void *rt_mutex_clone(const void *mptr) {
     return (void *)mptr;
 }
 
+/* ── HashMap runtime ─────────────────────────────────────────────────── */
+
+/* Simple hash table using open addressing with linear probing.
+ * Keys and values are C strings (owned copies).
+ */
+
+#define HASHMAP_INIT_CAP 16
+#define HASHMAP_LOAD_FACTOR 0.75
+
+typedef struct {
+    char *key;
+    char *value;
+    char occupied;
+} hashmap_entry;
+
+typedef struct {
+    hashmap_entry *entries;
+    long long capacity;
+    long long count;
+} turbo_hashmap;
+
+static unsigned long hashmap_hash(const char *key) {
+    unsigned long hash = 5381;
+    int c;
+    while ((c = (unsigned char)*key++))
+        hash = ((hash << 5) + hash) + (unsigned long)c; /* hash * 33 + c */
+    return hash;
+}
+
+static void hashmap_resize(turbo_hashmap *map, long long new_cap) {
+    hashmap_entry *old = map->entries;
+    long long old_cap = map->capacity;
+    map->entries = (hashmap_entry *)calloc((size_t)new_cap, sizeof(hashmap_entry));
+    map->capacity = new_cap;
+    map->count = 0;
+    for (long long i = 0; i < old_cap; i++) {
+        if (old[i].occupied) {
+            /* Re-insert */
+            unsigned long h = hashmap_hash(old[i].key) % (unsigned long)new_cap;
+            while (map->entries[h].occupied) {
+                h = (h + 1) % (unsigned long)new_cap;
+            }
+            map->entries[h].key = old[i].key;
+            map->entries[h].value = old[i].value;
+            map->entries[h].occupied = 1;
+            map->count++;
+        }
+    }
+    free(old);
+}
+
+void *rt_hashmap_new(void) {
+    turbo_hashmap *map = (turbo_hashmap *)malloc(sizeof(turbo_hashmap));
+    map->entries = (hashmap_entry *)calloc(HASHMAP_INIT_CAP, sizeof(hashmap_entry));
+    map->capacity = HASHMAP_INIT_CAP;
+    map->count = 0;
+    return map;
+}
+
+void rt_hashmap_set(void *map_ptr, const char *key, const char *value) {
+    turbo_hashmap *map = (turbo_hashmap *)map_ptr;
+    /* Check if we need to resize */
+    if ((double)(map->count + 1) > (double)map->capacity * HASHMAP_LOAD_FACTOR) {
+        hashmap_resize(map, map->capacity * 2);
+    }
+    unsigned long h = hashmap_hash(key) % (unsigned long)map->capacity;
+    while (map->entries[h].occupied) {
+        if (strcmp(map->entries[h].key, key) == 0) {
+            /* Update existing key */
+            free(map->entries[h].value);
+            map->entries[h].value = strdup(value);
+            return;
+        }
+        h = (h + 1) % (unsigned long)map->capacity;
+    }
+    map->entries[h].key = strdup(key);
+    map->entries[h].value = strdup(value);
+    map->entries[h].occupied = 1;
+    map->count++;
+}
+
+const char *rt_hashmap_get(const void *map_ptr, const char *key) {
+    const turbo_hashmap *map = (const turbo_hashmap *)map_ptr;
+    unsigned long h = hashmap_hash(key) % (unsigned long)map->capacity;
+    long long checked = 0;
+    while (map->entries[h].occupied && checked < map->capacity) {
+        if (strcmp(map->entries[h].key, key) == 0) {
+            return strdup(map->entries[h].value);
+        }
+        h = (h + 1) % (unsigned long)map->capacity;
+        checked++;
+    }
+    return NULL;
+}
+
+char rt_hashmap_has(const void *map_ptr, const char *key) {
+    const turbo_hashmap *map = (const turbo_hashmap *)map_ptr;
+    unsigned long h = hashmap_hash(key) % (unsigned long)map->capacity;
+    long long checked = 0;
+    while (map->entries[h].occupied && checked < map->capacity) {
+        if (strcmp(map->entries[h].key, key) == 0) {
+            return 1;
+        }
+        h = (h + 1) % (unsigned long)map->capacity;
+        checked++;
+    }
+    return 0;
+}
+
+long long rt_hashmap_len(const void *map_ptr) {
+    const turbo_hashmap *map = (const turbo_hashmap *)map_ptr;
+    return map->count;
+}
+
+void *rt_hashmap_keys(const void *map_ptr) {
+    const turbo_hashmap *map = (const turbo_hashmap *)map_ptr;
+    /* Collect keys, then sort for deterministic order */
+    char **key_ptrs = (char **)malloc((size_t)map->count * sizeof(char *));
+    long long idx = 0;
+    for (long long i = 0; i < map->capacity; i++) {
+        if (map->entries[i].occupied) {
+            key_ptrs[idx++] = map->entries[i].key;
+        }
+    }
+    /* Simple insertion sort for deterministic output */
+    for (long long i = 1; i < idx; i++) {
+        char *tmp = key_ptrs[i];
+        long long j = i - 1;
+        while (j >= 0 && strcmp(key_ptrs[j], tmp) > 0) {
+            key_ptrs[j + 1] = key_ptrs[j];
+            j--;
+        }
+        key_ptrs[j + 1] = tmp;
+    }
+    /* Build array in same format as rt_str_split: [refcount][len][ptr0][ptr1]... */
+    size_t data_size = 8 + (size_t)idx * 8;
+    size_t total = 8 + data_size; /* +8 for refcount header */
+    long long *raw = (long long *)calloc(1, total);
+    raw[0] = 1; /* refcount = 1 */
+    long long *arr = raw + 1; /* data pointer past refcount */
+    arr[0] = idx;
+    for (long long i = 0; i < idx; i++) {
+        arr[1 + i] = (long long)(size_t)strdup(key_ptrs[i]);
+    }
+    free(key_ptrs);
+    return arr;
+}
+
+void rt_hashmap_remove(void *map_ptr, const char *key) {
+    turbo_hashmap *map = (turbo_hashmap *)map_ptr;
+    unsigned long h = hashmap_hash(key) % (unsigned long)map->capacity;
+    long long checked = 0;
+    while (map->entries[h].occupied && checked < map->capacity) {
+        if (strcmp(map->entries[h].key, key) == 0) {
+            free(map->entries[h].key);
+            free(map->entries[h].value);
+            map->entries[h].key = NULL;
+            map->entries[h].value = NULL;
+            map->entries[h].occupied = 0;
+            map->count--;
+            /* Re-insert any entries that may have been displaced */
+            unsigned long next = (h + 1) % (unsigned long)map->capacity;
+            while (map->entries[next].occupied) {
+                char *rk = map->entries[next].key;
+                char *rv = map->entries[next].value;
+                map->entries[next].key = NULL;
+                map->entries[next].value = NULL;
+                map->entries[next].occupied = 0;
+                map->count--;
+                /* Re-insert */
+                unsigned long rh = hashmap_hash(rk) % (unsigned long)map->capacity;
+                while (map->entries[rh].occupied) {
+                    rh = (rh + 1) % (unsigned long)map->capacity;
+                }
+                map->entries[rh].key = rk;
+                map->entries[rh].value = rv;
+                map->entries[rh].occupied = 1;
+                map->count++;
+                next = (next + 1) % (unsigned long)map->capacity;
+            }
+            return;
+        }
+        h = (h + 1) % (unsigned long)map->capacity;
+        checked++;
+    }
+}
+
 /* ── ARC (Automatic Reference Counting) runtime ─────────────────────── */
 
 void rt_retain(void *data_ptr) {
