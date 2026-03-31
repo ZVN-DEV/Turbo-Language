@@ -2495,7 +2495,10 @@ impl Checker {
                     BinOp::Mul => "*",
                     BinOp::Div => "/",
                     BinOp::Mod => "%",
-                    other => panic!("unexpected compound assign operator: {other:?}"),
+                    _ => {
+                        self.error("unsupported compound assignment operator".to_string(), expr.span.clone());
+                        return Ty::Unit;
+                    }
                 };
 
                 if let Some(info) = self.lookup_var(target).cloned() {
