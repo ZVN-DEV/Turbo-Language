@@ -1374,6 +1374,11 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_http_post", rt_http_post as *const u8);
     jit_builder.symbol("rt_json_get", rt_json_get as *const u8);
     jit_builder.symbol("rt_json_stringify", rt_json_stringify as *const u8);
+    jit_builder.symbol("rt_http_server", rt_http_server as *const u8);
+    jit_builder.symbol("rt_http_route", rt_http_route as *const u8);
+    jit_builder.symbol("rt_http_listen", rt_http_listen as *const u8);
+    jit_builder.symbol("rt_respond", rt_respond as *const u8);
+    jit_builder.symbol("rt_request_body", rt_request_body as *const u8);
     jit_builder.symbol("rt_channel_create", rt_channel_create as *const u8);
     jit_builder.symbol("rt_channel_send", rt_channel_send as *const u8);
     jit_builder.symbol("rt_channel_recv", rt_channel_recv as *const u8);
@@ -2052,6 +2057,12 @@ fn compile_module<M: Module>(
     declare_rt_fn(module, &mut rt_fns, "rt_http_post", &[ptr_type, ptr_type], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_json_get", &[ptr_type, ptr_type], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_json_stringify", &[ptr_type, ptr_type], Some(ptr_type))?;
+    // HTTP server runtime declarations
+    declare_rt_fn(module, &mut rt_fns, "rt_http_server", &[types::I64], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_http_route", &[types::I64, ptr_type, ptr_type, ptr_type, ptr_type], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_http_listen", &[types::I64], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_respond", &[types::I64, ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_request_body", &[ptr_type], Some(ptr_type))?;
     // Channel runtime declarations
     declare_rt_fn(module, &mut rt_fns, "rt_channel_create", &[], Some(ptr_type))?;
     declare_rt_fn(module, &mut rt_fns, "rt_channel_send", &[ptr_type, types::I64], None)?;
@@ -4204,6 +4215,12 @@ fn compile_call<M: Module>(
         "http_post" => compile_builtin_http_post(cx, args),
         "json_get" => compile_builtin_json_get(cx, args),
         "json_stringify" => compile_builtin_json_stringify(cx, args),
+        // HTTP server builtins
+        "http_server" => compile_builtin_http_server(cx, args),
+        "route" => compile_builtin_route(cx, args),
+        "http_listen" => compile_builtin_http_listen(cx, args),
+        "respond" => compile_builtin_respond(cx, args),
+        "request_body" => compile_builtin_request_body(cx, args),
         "to_json" => compile_builtin_to_json(cx, args),
         "to_json_array" => compile_builtin_to_json_array(cx, args),
         // Channel builtins
@@ -4970,6 +4987,66 @@ fn compile_builtin_json_stringify<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanne
     let fid = cx.rt_fns["rt_json_stringify"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[key_val, value_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+// ── HTTP server builtins ────────────────────────────────────────────
+
+/// http_server(port) -> i64 (server id)
+fn compile_builtin_http_server<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (port_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_http_server"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[port_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// route(server_id, method, path, handler_closure)
+/// Extracts fn_ptr and env_ptr from the closure pair and passes to rt_http_route.
+fn compile_builtin_route<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (server_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (method_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let (path_val, _) = compile_expr(cx, &args[2])?.unwrap();
+    let (closure_ptr, _) = compile_expr(cx, &args[3])?.unwrap();
+
+    // Extract fn_ptr and env_ptr from the closure pair struct (offset 0 = fn_ptr, offset 8 = env_ptr)
+    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
+
+    let fid = cx.rt_fns["rt_http_route"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    cx.builder.ins().call(fref, &[server_val, method_val, path_val, fn_ptr, env_ptr]);
+    Ok(None)
+}
+
+/// http_listen(server_id) -> () — starts the server, blocks forever
+fn compile_builtin_http_listen<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (server_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_http_listen"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    cx.builder.ins().call(fref, &[server_val]);
+    Ok(None)
+}
+
+/// respond(status, body) -> str — builds "STATUS:BODY" format response
+fn compile_builtin_respond<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (status_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (body_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_respond"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[status_val, body_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// request_body(req) -> str — extracts body from request (identity for now)
+fn compile_builtin_request_body<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (req_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_request_body"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[req_val]);
     let result = cx.builder.inst_results(call)[0];
     Ok(Some((result, TurboTy::Str)))
 }
