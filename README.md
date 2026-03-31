@@ -1,109 +1,98 @@
+<div align="center">
+
 # Turbo
 
-A compiled, type-safe programming language with JavaScript's developer experience, Rust's performance, and first-class AI agent primitives. Compiles to native code via Cranelift and targets WebAssembly.
+**JavaScript's soul. Rust's speed. Built for the AI age.**
 
-**North star:** JavaScript's soul. Rust's speed. Built for the AI age.
+A compiled, type-safe programming language with familiar syntax, native performance, and first-class AI agent primitives. Compiles to machine code via Cranelift -- no VM, no garbage collector, no overhead.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-237%20passing-brightgreen.svg)](#testing)
+[![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#installation)
+
+[Website](https://website-beta-six-82.vercel.app) &middot; [Documentation](https://website-beta-six-82.vercel.app/docs) &middot; [Examples](#examples) &middot; [Contributing](CONTRIBUTING.md)
+
+</div>
+
+---
 
 ## Quick Start
 
 ### Installation
 
 ```bash
-# Clone and build from source
+# Homebrew (recommended)
+brew tap ZVN-DEV/turbo && brew install turbo-lang
+
+# Or build from source
 git clone https://github.com/ZVN-DEV/Turbo-Language.git
 cd Turbo-Language/turbo
 cargo build --release
-
-# Add to your PATH
 export PATH="$PWD/target/release:$PATH"
-
-# Verify installation
-turbo --version
 ```
 
 ### Hello, World
 
-Create `hello.tb`:
-
 ```turbo
 fn main() {
-    print("Hello, world!")
+    let name = "Turbo"
+    print("Hello, {name}!")
 }
 ```
 
-Run it:
-
 ```bash
-turbo run hello.tb
-```
-
-Compile to a native binary:
-
-```bash
-turbo build hello.tb
+turbo run hello.tb        # JIT — compile and run instantly
+turbo build hello.tb      # AOT — produce a native binary
 ./hello
 ```
 
 ### A Taste of Turbo
 
 ```turbo
-/// Compute the nth Fibonacci number.
+struct Counter { value: i64 }
+
+impl Counter {
+    fn get(self) -> i64 { self.value }
+}
+
 fn fib(n: i64) -> i64 {
-    if n <= 1 {
-        n
-    } else {
-        fib(n - 1) + fib(n - 2)
-    }
+    if n <= 1 { n }
+    else { fib(n - 1) + fib(n - 2) }
 }
 
-fn main() {
-    let mut i = 0
-    while i <= 15 {
-        print(fib(i))
-        i += 1
-    }
-}
-```
-
-```turbo
-/// Absolute value.
-fn abs(x: i64) -> i64 {
-    if x < 0 { 0 - x } else { x }
+async fn delayed_value(ms: i64, val: i64) -> i64 {
+    await sleep(ms)
+    val
 }
 
-/// Clamp a value to a range.
-fn clamp(val: i64, lo: i64, hi: i64) -> i64 {
-    if val < lo { lo }
-    else { if val > hi { hi } else { val } }
-}
+async fn main() {
+    let c = Counter { value: 42 }
+    print("counter: {c.get()}")
+    print("fib(10): {fib(10)}")
 
-fn main() {
-    assert(abs(-42) == 42)
-    assert(clamp(150, 0, 100) == 100)
-    print("All checks passed!")
+    let a = spawn delayed_value(10, 100)
+    let b = spawn delayed_value(10, 200)
+    print("async sum: {await a + await b}")
 }
 ```
 
 ## Features
 
-### Compiled to Native Code
+### Native Compilation
 
-Turbo compiles directly to machine code using Cranelift. No interpreter, no VM, no garbage collector. Programs start instantly and run at native speed.
+Turbo compiles directly to machine code. Programs start instantly and run at native speed.
 
 - **JIT execution** via `turbo run` for rapid development (Cranelift)
 - **AOT compilation** via `turbo build` for production binaries (Cranelift)
 - **Optimized AOT** via `turbo build --llvm` for maximum performance (LLVM 18)
-- Beats C and Rust on recursive benchmarks (fib(40): 160ms vs C 170ms, Rust 180ms)
 
 ### Type System
 
-Strong static typing with type inference, generics, traits, and algebraic data types:
+Strong static typing with inference, generics, traits, and algebraic data types.
 
 ```turbo
-struct Point<T> {
-    x: T,
-    y: T,
-}
+struct Point<T> { x: T, y: T }
 
 type Option<T> {
     Some(T)
@@ -117,18 +106,7 @@ trait Display {
 fn identity<T>(x: T) -> T { x }
 ```
 
-Supported types: `i32`, `i64`, `u32`, `u64`, `f32`, `f64`, `bool`, `str`, `()`, arrays `[T]`, optionals `T?`, results `T ! E`, futures `Future<T>`.
-
-### Expressions Everywhere
-
-`if`, `while`, `match`, and blocks are expressions that return values:
-
-```turbo
-fn classify(n: i64) -> str {
-    if n > 0 { "positive" }
-    else { if n < 0 { "negative" } else { "zero" } }
-}
-```
+Types: `i32`, `i64`, `u32`, `u64`, `f32`, `f64`, `bool`, `str`, `()`, `[T]`, `T?`, `T ! E`, `Future<T>`.
 
 ### Pattern Matching
 
@@ -138,17 +116,23 @@ type Shape {
     Rectangle(f64, f64)
 }
 
-fn describe(s: Shape) -> str {
+fn area(s: Shape) -> str {
     match s {
         Circle(r) => "circle"
         Rectangle(w, h) => "rectangle"
     }
 }
+
+fn classify(n: i64) -> str {
+    match n {
+        0 => "zero"
+        n if n > 0 => "positive"
+        _ => "negative"
+    }
+}
 ```
 
-### Async Runtime
-
-Real async/await with thread-based concurrency:
+### Async/Await & Concurrency
 
 ```turbo
 async fn fetch_data() -> i64 {
@@ -165,49 +149,79 @@ fn main() {
 
 ### AI Agent Primitives
 
-First-class `agent` and `tool fn` keywords for building AI-powered applications:
+First-class `agent` and `tool fn` keywords for building AI-powered applications.
 
 ```turbo
-agent Assistant {
+tool fn analyze(data: str) -> str {
+    "Analysis of: {data}"
+}
+
+agent DataAssistant {
     model: "claude-sonnet"
-    system: "You help with tasks."
+    tools: [analyze]
+    system: "You are a data analysis assistant."
 }
 
 fn main() {
-    let a = Assistant {}
+    let a = DataAssistant {}
     print(a.model)
+    print(analyze("turbo data"))
 }
 ```
 
-### Closures and Higher-Order Functions
+### Closures & Higher-Order Functions
 
 ```turbo
-fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
-    f(x)
+fn make_adder(n: i64) -> fn(i64) -> i64 {
+    |x: i64| -> i64 { x + n }
 }
 
 fn main() {
-    let double = |x: i64| -> i64 { x * 2 }
-    print(apply(double, 21))
+    let add5 = make_adder(5)
+    let nums = [1, 2, 3, 4, 5]
+    let doubled = nums.map(|x: i64| -> i64 { x * 2 })
+    let big = nums.filter(|x: i64| -> bool { x > 3 })
+    let sum = reduce(nums, 0, |acc: i64, x: i64| -> i64 { acc + x })
+    print("sum: {sum}")
 }
 ```
 
-### Module System
+### Pipes, Strings & Collections
 
 ```turbo
-import { Point, distance } from "geometry"
-
 fn main() {
-    let p = Point { x: 3, y: 4 }
-    print(distance(p))
+    let text = "  Hello, Turbo World!  "
+    let cleaned = text |> trim |> lower
+    print("cleaned: {cleaned}")
+
+    let m = hashmap()
+    hashmap_set(m, "name", "Turbo")
+    print(hashmap_get(m, "name"))
 }
 ```
 
-### Testing
-
-Built-in test framework with `@test` and `assert_eq`:
+### HTTP Server
 
 ```turbo
+fn main() {
+    let app = http_server(8080)
+    route(app, "GET", "/", |req: str| -> str {
+        respond(200, "hello")
+    })
+    route(app, "POST", "/api/echo", |req: str| -> str {
+        let body = request_body(req)
+        respond(200, body)
+    })
+    http_listen(app)
+}
+```
+
+### Derive Attributes & Testing
+
+```turbo
+@derive(Eq, Clone, Display)
+struct Point { x: i64, y: i64 }
+
 fn add(a: i64, b: i64) -> i64 { a + b }
 
 @test fn test_add() {
@@ -222,26 +236,9 @@ turbo test myfile.tb
 # 1 passed, 0 failed
 ```
 
-### Derive Attributes
-
-Auto-generate trait implementations:
-
-```turbo
-@derive(Eq, Clone, Display)
-struct Point { x: i64, y: i64 }
-
-fn main() {
-    let a = Point { x: 1, y: 2 }
-    let b = Point { x: 1, y: 2 }
-    if a == b { print("equal!") }     // @derive(Eq)
-    let c = clone(a)                   // @derive(Clone)
-    print(a)                           // @derive(Display) -> "Point { x: 1, y: 2 }"
-}
-```
-
 ### Copy-on-Write Memory
 
-Safe value semantics without a garbage collector:
+Safe value semantics without a garbage collector.
 
 ```turbo
 fn main() {
@@ -253,28 +250,41 @@ fn main() {
 }
 ```
 
-### Match Guards
+## Examples
 
-```turbo
-fn classify(n: i64) -> str {
-    match n {
-        0 => "zero"
-        n if n > 0 => "positive"
-        _ => "negative"
-    }
-}
+Three runnable example projects demonstrate real-world Turbo code.
+
+### Text Statistics Analyzer
+
+Word frequency analysis with pipes, HashMaps, and string interpolation.
+
+```bash
+turbo run examples/simple-script/main.tb
 ```
 
-### Collections
+See [`examples/simple-script/main.tb`](examples/simple-script/main.tb)
 
-```turbo
-fn main() {
-    let m = hashmap()
-    hashmap_set(m, "name", "Turbo")
-    print(hashmap_get(m, "name"))
-    print(hashmap_keys(m).len())
-}
+### REST API Benchmark Server
+
+An HTTP server on port 8080 with endpoints for fibonacci, prime counting, and sorting benchmarks. Returns JSON responses.
+
+```bash
+turbo run examples/speed-server/main.tb
+# curl http://localhost:8080/api/fib
 ```
+
+See [`examples/speed-server/main.tb`](examples/speed-server/main.tb)
+
+### Interactive Web Dashboard
+
+A full benchmark dashboard with a styled HTML UI served on port 3000. Run benchmarks from the browser and see results in real time.
+
+```bash
+turbo run examples/web-dashboard/main.tb
+# open http://localhost:3000
+```
+
+See [`examples/web-dashboard/main.tb`](examples/web-dashboard/main.tb)
 
 ## CLI Commands
 
@@ -285,73 +295,23 @@ fn main() {
 | `turbo build --llvm <file.tb>` | Compile with LLVM optimizations |
 | `turbo test <file.tb>` | Run `@test` functions |
 | `turbo bench <file.tb>` | Benchmark with timing |
-| `turbo init <name>` | Create a new project |
-| `turbo install` | Install dependencies from turbo.toml |
-| `turbo update` | Update GitHub dependencies |
+| `turbo check <file.tb>` | Type-check without running |
 | `turbo fmt <file.tb>` | Format source code |
+| `turbo init <name>` | Create a new project |
 | `turbo doc <file.tb>` | Generate documentation |
 | `turbo repl` | Interactive REPL |
 | `turbo lsp` | Start Language Server |
+| `turbo explain <code>` | Explain an error code (e.g. `turbo explain E0100`) |
 
-## Project Structure
+## Error Codes
 
-```
-turbo/
-  crates/
-    turbo-lexer/                # Tokenizer (logos-based)
-    turbo-ast/                  # Abstract syntax tree definitions
-    turbo-parser/               # Recursive descent parser
-    turbo-sema/                 # Semantic analysis and type checking
-    turbo-codegen-cranelift/    # Code generation (Cranelift JIT + AOT)
-    turbo-codegen-llvm/         # Optimized code generation (LLVM 18)
-    turbo-cli/                  # CLI frontend (run/build/doc/fmt/repl)
-    turbo-lsp/                  # Language Server Protocol implementation
-  tests/
-    phase1/                     # End-to-end test programs
-design/                         # Language specification documents
-examples/                       # Full application examples
-```
-
-## Language Design
-
-The complete language specification spans design documents in `design/`:
-
-- **SYNTAX.md** -- Full syntax reference
-- **TYPE-SYSTEM.md** -- Types, generics, error handling (`T ! E`), algebraic data types
-- **MEMORY-MODEL.md** -- CTRC ownership, auto-clone, regions, arenas
-- **CONCURRENCY.md** -- Async/await, actors, channels, structured concurrency
-- **AGENTIC.md** -- AI agent primitives: `tool fn`, `agent` keyword, streaming
-- **COMPILATION.md** -- Cranelift backend, WASM pipeline
-- **TOOLCHAIN.md** -- Testing framework, package manager, formatter, profiler
-
-## What You Can Build
-
-Turbo is designed for:
-
-- **CLI tools** — fast startup, tiny binaries, cross-platform
-- **AI agents** — `tool fn` and `agent` keywords for LLM-powered apps
-- **Web APIs** — HTTP server framework (coming soon)
-- **Data processing** — `map`/`filter`/`reduce` with native speed
-- **Systems programming** — `@unsafe` for FFI and low-level code
-
-## Status
-
-**~90% feature complete.** 17,490 lines of compiler, 259 tests, dual backends (Cranelift + LLVM). The language is usable for real programs. See the [showcase](turbo/showcase/full_demo.tb) for a 400-line program exercising all features.
-
-## LLVM Backend (Optional)
-
-For maximum performance, install LLVM 18 and rebuild:
+Every compiler diagnostic has a unique, searchable error code (E0001--E0513). Look up any code from the command line:
 
 ```bash
-# macOS
-brew install llvm@18
-
-# Build with LLVM support
-LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --release
-
-# Compile with LLVM optimizations
-turbo build --llvm myapp.tb -o myapp
+turbo explain E0100
 ```
+
+Full reference: [`docs/errors.md`](docs/errors.md)
 
 ## Performance
 
@@ -365,6 +325,69 @@ Benchmarked on Apple Silicon (fib(40), recursive):
 | Turbo (Cranelift) | 220ms | 35 KB |
 | Node.js | 580ms | N/A |
 | Python | 13.1s | N/A |
+
+## Project Structure
+
+```
+turbo/
+  crates/
+    turbo-lexer/                # Tokenizer (logos-based)
+    turbo-ast/                  # AST definitions + error codes
+    turbo-parser/               # Recursive descent parser
+    turbo-sema/                 # Semantic analysis and type checking
+    turbo-codegen-cranelift/    # Cranelift JIT + AOT codegen
+    turbo-cli/                  # CLI frontend (run/build/test/fmt/repl)
+    turbo-lsp/                  # Language Server Protocol
+  tests/
+    phase1/                     # Integration tests (.tb + .expected pairs)
+examples/                       # Runnable example projects
+design/                         # Language specification documents
+```
+
+## Language Design
+
+Full specification lives in `design/`: [SYNTAX.md](design/SYNTAX.md), [TYPE-SYSTEM.md](design/TYPE-SYSTEM.md), [MEMORY-MODEL.md](design/MEMORY-MODEL.md), [CONCURRENCY.md](design/CONCURRENCY.md), [AGENTIC.md](design/AGENTIC.md), [COMPILATION.md](design/COMPILATION.md), [TOOLCHAIN.md](design/TOOLCHAIN.md).
+
+## Testing
+
+```bash
+# Unit tests (all crates)
+cargo test --all --manifest-path turbo/Cargo.toml
+
+# Integration tests (requires release build)
+cargo build --release --manifest-path turbo/Cargo.toml
+cd turbo && ./tests/run_tests.sh
+
+# Run a single file
+turbo run turbo/tests/phase1/fibonacci.tb
+```
+
+237 tests across unit and integration suites.
+
+## LLVM Backend (Optional)
+
+For maximum performance, install LLVM 18 and rebuild:
+
+```bash
+brew install llvm@18
+LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --release
+turbo build --llvm myapp.tb -o myapp
+```
+
+## Ecosystem
+
+| Tool | Install / Link |
+|------|----------------|
+| **VS Code Extension** | `zvndev.turbo-lang` -- syntax highlighting, 23 snippets, LSP client |
+| **Tree-sitter Grammar** | [ZVN-DEV/tree-sitter-turbo](https://github.com/ZVN-DEV/tree-sitter-turbo) |
+| **Homebrew** | `brew tap ZVN-DEV/turbo && brew install turbo-lang` |
+| **Docker** | [`distribution/Dockerfile`](distribution/Dockerfile) |
+| **LSP Server** | `turbo lsp` -- diagnostics, hover, completions, go-to-definition |
+| **Install Script** | `curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/install.sh \| sh` |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on building, testing, and submitting pull requests.
 
 ## License
 
