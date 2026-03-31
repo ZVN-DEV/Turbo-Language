@@ -1,0 +1,8 @@
+@unsafe fn dangerous(addr: i64) -> i64 {
+    deref(addr)
+}
+
+fn main() {
+    let x = dangerous(42)
+    print(x)
+}

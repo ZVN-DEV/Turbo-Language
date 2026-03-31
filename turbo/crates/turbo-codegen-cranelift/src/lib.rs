@@ -1982,6 +1982,26 @@ fn compile_module<M: Module>(
             }
         }
     }
+    // Also register @derive(Display) as Display trait impl
+    for item in &ast_module.items {
+        if let Item::Struct(s) = &item.node {
+            if s.derives.contains(&"Display".to_string()) {
+                let already = trait_impls.get(&s.name)
+                    .map_or(false, |impls| impls.contains(&"Display".to_string()));
+                if !already {
+                    trait_impls.entry(s.name.clone()).or_default().push("Display".to_string());
+                }
+            }
+        }
+    }
+
+    // Build trait definitions map: trait_name -> TraitDef (for default method bodies)
+    let mut trait_defs: HashMap<String, &turbo_ast::TraitDef> = HashMap::new();
+    for item in &ast_module.items {
+        if let Item::Trait(t) = &item.node {
+            trait_defs.insert(t.name.clone(), t);
+        }
+    }
 
     // Declare all user functions + build return type map
     let mut user_fns: HashMap<String, FuncId> = HashMap::new();
@@ -3711,6 +3731,9 @@ fn compile_call<M: Module>(
         "hashmap_len" => compile_builtin_hashmap_len(cx, args),
         "hashmap_keys" => compile_builtin_hashmap_keys(cx, args),
         "hashmap_remove" => compile_builtin_hashmap_remove(cx, args),
+        // Unsafe builtins — raw pointer operations
+        "deref" => compile_builtin_deref(cx, args),
+        "store" => compile_builtin_store(cx, args),
         _ => {
             // Check if this is an enum variant construction via UFCS rewrite:
             // Parser transforms Shape.Circle(5.0) into Call { callee: Ident("Circle"), args: [Ident("Shape"), 5.0] }
@@ -5779,5 +5802,22 @@ fn compile_builtin_hashmap_remove<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanne
     let fid = cx.rt_fns["rt_hashmap_remove"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     cx.builder.ins().call(fref, &[map_val, key_val]);
+    Ok(None)
+}
+
+// ── Unsafe builtins — raw pointer operations ────────────────────────
+
+/// deref(addr: i64) -> i64 — load an i64 from the given memory address
+fn compile_builtin_deref<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (addr_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let result = cx.builder.ins().load(types::I64, MemFlags::new(), addr_val, 0);
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// store(addr: i64, value: i64) — store an i64 at the given memory address
+fn compile_builtin_store<M: Module>(cx: &mut Ctx<'_, M>, args: &[Spanned<Expr>]) -> Result<MaybeTyped, CodegenError> {
+    let (addr_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (val, _) = compile_expr(cx, &args[1])?.unwrap();
+    cx.builder.ins().store(MemFlags::new(), val, addr_val, 0);
     Ok(None)
 }

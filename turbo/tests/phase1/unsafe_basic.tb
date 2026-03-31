@@ -1,0 +1,9 @@
+@unsafe fn double_via_ptr(arr: i64, idx: i64) -> i64 {
+    let offset = arr + 8 + idx * 8
+    let val = deref(offset)
+    val * 2
+}
+
+fn main() {
+    print("unsafe available")
+}

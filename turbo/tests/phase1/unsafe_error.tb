@@ -1,0 +1,4 @@
+fn main() {
+    let x = deref(42)
+    print(x)
+}

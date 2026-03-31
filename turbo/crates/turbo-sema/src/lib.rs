@@ -195,6 +195,7 @@ struct VarInfo {
 
 /// Function signature
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct FnSig {
     type_params: Vec<String>,
     type_param_bounds: HashMap<String, Vec<String>>,
@@ -202,6 +203,7 @@ struct FnSig {
     ret: Ty,
     is_async: bool,
     is_tool: bool,
+    is_unsafe: bool,
 }
 
 /// Scope for variable tracking
@@ -211,6 +213,7 @@ struct Scope {
 
 /// Registered agent info for semantic checking
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct AgentInfo {
     model: String,
     tools: Vec<String>,
@@ -219,6 +222,7 @@ struct AgentInfo {
 
 /// Struct field info for the checker
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct StructInfo {
     fields: Vec<(String, Ty)>,
     /// Type parameter names for generic structs
@@ -229,6 +233,7 @@ struct StructInfo {
 
 /// Enum info (variant names + field types)
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct EnumInfo {
     /// Variant name -> field types (empty vec for unit variants)
     variants: Vec<(String, Vec<Ty>)>,
@@ -261,13 +266,17 @@ struct TraitInfo {
 
 /// Trait method signature info
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct TraitMethodInfo {
     name: String,
     params: Vec<(String, Ty)>,
     ret: Ty,
+    /// Whether this method has a default implementation in the trait
+    has_default: bool,
 }
 
 /// Type checker
+#[allow(dead_code)]
 struct Checker {
     errors: Vec<SemaError>,
     functions: HashMap<String, FnSig>,
@@ -289,6 +298,8 @@ struct Checker {
     closure_param_hint: Option<Vec<Ty>>,
     /// When true, `main` is not required (used for `turbo test` mode)
     test_mode: bool,
+    /// Whether we are currently checking inside an `@unsafe` function
+    in_unsafe_context: bool,
 }
 
 impl Checker {
@@ -300,6 +311,7 @@ impl Checker {
                 name: "to_string".to_string(),
                 params: vec![("self".to_string(), Ty::Error)], // self type filled at impl
                 ret: Ty::Str,
+                has_default: false,
             }],
         });
 
@@ -316,6 +328,7 @@ impl Checker {
             scopes: Vec::new(),
             current_return_type: Ty::Unit,
             closure_param_hint: None,
+            in_unsafe_context: false,
             test_mode: false,
         }
     }
@@ -365,7 +378,8 @@ impl Checker {
             | "mutex" | "mutex_get" | "mutex_set"
             | "clone"
             | "hashmap" | "hashmap_set" | "hashmap_get" | "hashmap_has"
-            | "hashmap_len" | "hashmap_keys" | "hashmap_remove")
+            | "hashmap_len" | "hashmap_keys" | "hashmap_remove"
+            | "deref" | "store")
     }
 
     /// Walk a chain of FieldAccess / Index expressions to find the root variable name.
@@ -487,6 +501,7 @@ impl Checker {
                     name: method.name.clone(),
                     params,
                     ret,
+                    has_default: method.default_body.is_some(),
                 });
             }
             self.traits.insert(t.name.clone(), TraitInfo { methods: trait_methods });
@@ -554,7 +569,7 @@ impl Checker {
                 Ty::Unit
             };
 
-            self.functions.insert(f.name.clone(), FnSig { type_params: tp_names, type_param_bounds: tp_bounds, params, ret, is_async: f.is_async, is_tool: f.is_tool });
+            self.functions.insert(f.name.clone(), FnSig { type_params: tp_names, type_param_bounds: tp_bounds, params, ret, is_async: f.is_async, is_tool: f.is_tool, is_unsafe: f.is_unsafe });
 
             // Validate @test functions: must have no parameters and no return type
             if f.is_test {
@@ -682,7 +697,7 @@ impl Checker {
                 };
 
                 let mangled = format!("{}__{}", imp.type_name, method.name);
-                let sig = FnSig { type_params: Vec::new(), type_param_bounds: HashMap::new(), params, ret, is_async: false, is_tool: false };
+                let sig = FnSig { type_params: Vec::new(), type_param_bounds: HashMap::new(), params, ret, is_async: false, is_tool: false, is_unsafe: false };
                 new_methods.push((method.name.clone(), sig, mangled));
             }
 
@@ -699,13 +714,37 @@ impl Checker {
                 if let Some(trait_info) = self.traits.get(trait_name).cloned() {
                     for trait_method in &trait_info.methods {
                         if !method_names.contains(&trait_method.name) {
-                            self.error(
-                                format!(
-                                    "trait `{trait_name}` requires method `{}` but it is not implemented for `{}`",
-                                    trait_method.name, imp.type_name
-                                ),
-                                item.span.clone(),
-                            );
+                            if trait_method.has_default {
+                                // Auto-provide the default method: register its signature
+                                let mangled = format!("{}__{}", imp.type_name, trait_method.name);
+                                let mut params = trait_method.params.clone();
+                                // Replace self's Ty::Error with the actual struct type
+                                for p in &mut params {
+                                    if p.0 == "self" {
+                                        p.1 = Ty::Struct(imp.type_name.clone());
+                                    }
+                                }
+                                let sig = FnSig {
+                                    type_params: Vec::new(),
+                                    type_param_bounds: HashMap::new(),
+                                    params,
+                                    ret: trait_method.ret.clone(),
+                                    is_async: false,
+                                    is_tool: false,
+                                    is_unsafe: false,
+                                };
+                                let type_methods = self.methods.entry(imp.type_name.clone()).or_default();
+                                type_methods.insert(trait_method.name.clone(), sig.clone());
+                                self.functions.insert(mangled, sig);
+                            } else {
+                                self.error(
+                                    format!(
+                                        "trait `{trait_name}` requires method `{}` but it is not implemented for `{}`",
+                                        trait_method.name, imp.type_name
+                                    ),
+                                    item.span.clone(),
+                                );
+                            }
                         } else {
                             // Check return type matches
                             let mangled = format!("{}__{}", imp.type_name, trait_method.name);
@@ -734,6 +773,36 @@ impl Checker {
                         format!("undefined trait `{trait_name}`"),
                         item.span.clone(),
                     );
+                }
+            }
+        }
+
+        // Auto-register Display trait impl for structs with @derive(Display)
+        for item in &module.items {
+            let Item::Struct(s) = &item.node else { continue };
+            if s.derives.contains(&"Display".to_string()) {
+                // Only add if not already explicitly implemented
+                let already_impl = self.trait_impls.get(&s.name)
+                    .map_or(false, |impls| impls.contains(&"Display".to_string()));
+                if !already_impl {
+                    // Register the to_string method signature
+                    let mangled = format!("{}__{}", s.name, "to_string");
+                    let sig = FnSig {
+                        type_params: Vec::new(),
+                        type_param_bounds: HashMap::new(),
+                        params: vec![("self".to_string(), Ty::Struct(s.name.clone()))],
+                        ret: Ty::Str,
+                        is_async: false,
+                        is_tool: false,
+                        is_unsafe: false,
+                    };
+                    let type_methods = self.methods.entry(s.name.clone()).or_default();
+                    type_methods.insert("to_string".to_string(), sig.clone());
+                    self.functions.insert(mangled, sig);
+                    self.trait_impls
+                        .entry(s.name.clone())
+                        .or_default()
+                        .push("Display".to_string());
                 }
             }
         }
@@ -846,6 +915,8 @@ impl Checker {
         }
 
         self.current_return_type = sig.ret.clone();
+        let prev_unsafe = self.in_unsafe_context;
+        self.in_unsafe_context = f.is_unsafe;
 
         self.push_scope();
 
@@ -876,6 +947,7 @@ impl Checker {
         }
 
         self.pop_scope();
+        self.in_unsafe_context = prev_unsafe;
     }
 
     /// Check a function body using a different name for looking up its signature (for methods).
@@ -1721,6 +1793,48 @@ impl Checker {
                         return Ty::Unit;
                     }
 
+                    // ── Unsafe builtins ────────────────────────────────
+                    // deref(addr: i64) -> i64 — raw memory load (unsafe only)
+                    if name == "deref" {
+                        if !self.in_unsafe_context {
+                            self.error(
+                                "`deref()` can only be called inside an `@unsafe` function".to_string(),
+                                callee.span.clone(),
+                            );
+                        }
+                        if args.len() != 1 {
+                            self.error(format!("deref() takes exactly 1 argument, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let addr_ty = self.check_expr(&args[0]);
+                        if !addr_ty.is_error() && !addr_ty.is_integer() {
+                            self.error(format!("deref() argument must be i64, found `{addr_ty}`"), args[0].span.clone());
+                        }
+                        return Ty::I64;
+                    }
+                    // store(addr: i64, value: i64) — raw memory store (unsafe only)
+                    if name == "store" {
+                        if !self.in_unsafe_context {
+                            self.error(
+                                "`store()` can only be called inside an `@unsafe` function".to_string(),
+                                callee.span.clone(),
+                            );
+                        }
+                        if args.len() != 2 {
+                            self.error(format!("store() takes exactly 2 arguments, got {}", args.len()), callee.span.clone());
+                            return Ty::Error;
+                        }
+                        let addr_ty = self.check_expr(&args[0]);
+                        let val_ty = self.check_expr(&args[1]);
+                        if !addr_ty.is_error() && !addr_ty.is_integer() {
+                            self.error(format!("store() first argument must be i64, found `{addr_ty}`"), args[0].span.clone());
+                        }
+                        if !val_ty.is_error() && !val_ty.is_integer() {
+                            self.error(format!("store() second argument must be i64, found `{val_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Unit;
+                    }
+
                     // map(arr, fn) -> [U]
                     if name == "map" {
                         if args.len() != 2 {
@@ -1926,6 +2040,13 @@ impl Checker {
 
                     // User-defined function
                     if let Some(sig) = self.functions.get(name).cloned() {
+                        // Calling an @unsafe function from a safe context is an error
+                        if sig.is_unsafe && !self.in_unsafe_context {
+                            self.error(
+                                format!("cannot call `@unsafe` function `{name}` from a safe context"),
+                                callee.span.clone(),
+                            );
+                        }
                         if args.len() != sig.params.len() {
                             self.error(
                                 format!(
