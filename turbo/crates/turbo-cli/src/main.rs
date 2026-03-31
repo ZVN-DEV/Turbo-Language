@@ -2,7 +2,7 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 use clap::{Parser, Subcommand};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use turbo_ast::{Item, Module};
+use turbo_ast::{ErrorCode, Item, Module};
 
 mod formatter;
 mod playground;
@@ -89,6 +89,11 @@ enum Commands {
         #[arg(long, short = 'n', default_value = "3")]
         iterations: u32,
     },
+    /// Explain an error code (e.g. turbo explain E0100)
+    Explain {
+        /// Error code to explain (e.g. E0100)
+        code: String,
+    },
     /// [internal] Run a single test function by name (used by test runner)
     #[command(hide = true)]
     TestRunFn {
@@ -126,6 +131,7 @@ fn main() {
         Commands::Lsp => start_lsp(),
         Commands::Test { file } => test_file(file),
         Commands::Bench { file, iterations } => bench_file(file, iterations),
+        Commands::Explain { code } => explain_error(&code),
         Commands::TestRunFn { file, func } => test_run_fn(&file, &func),
     }
 }
@@ -494,14 +500,21 @@ fn report_error(
     message: &str,
     span: &std::ops::Range<usize>,
     help: Option<&str>,
+    code: Option<ErrorCode>,
 ) {
     // Clamp span to source bounds to avoid panics on edge-case spans
     let start = span.start.min(source.len());
     let end = span.end.min(source.len()).max(start);
     let clamped = start..end;
 
+    let display_message = if let Some(c) = code {
+        format!("error[{}]: {}", c.as_str(), message)
+    } else {
+        message.to_string()
+    };
+
     let mut builder =
-        Report::build(ReportKind::Error, filename, clamped.start).with_message(message);
+        Report::build(ReportKind::Error, filename, clamped.start).with_message(&display_message);
 
     builder = builder.with_label(
         Label::new((filename, clamped))
@@ -581,6 +594,7 @@ fn run_file(path: &std::path::Path, verbose: bool) {
                 &format!("unexpected character `{snippet}`"),
                 span,
                 Some("remove this character or check for typos"),
+                None,
             );
         }
         std::process::exit(1);
@@ -601,7 +615,14 @@ fn run_file(path: &std::path::Path, verbose: bool) {
 
     if !parse_errors.is_empty() {
         for err in &parse_errors {
-            report_error(&source, &filename, &err.message, &err.span, None);
+            report_error(
+                &source,
+                &filename,
+                &err.message,
+                &err.span,
+                None,
+                Some(err.code),
+            );
         }
         std::process::exit(1);
     }
@@ -623,6 +644,7 @@ fn run_file(path: &std::path::Path, verbose: bool) {
             "no functions defined",
             &(0..source.len().min(1)),
             Some("add a `fn main() { ... }` function to get started"),
+            None,
         );
         std::process::exit(1);
     }
@@ -655,7 +677,14 @@ fn run_file(path: &std::path::Path, verbose: bool) {
     if !sema_errors.is_empty() {
         for err in &sema_errors {
             let help = sema_help(&err.message);
-            report_error(&source, &filename, &err.message, &err.span, help.as_deref());
+            report_error(
+                &source,
+                &filename,
+                &err.message,
+                &err.span,
+                help.as_deref(),
+                Some(err.code),
+            );
         }
         std::process::exit(1);
     }
@@ -742,6 +771,7 @@ fn test_file(file: Option<PathBuf>) {
                     &format!("unexpected character `{snippet}`"),
                     span,
                     Some("remove this character or check for typos"),
+                    None,
                 );
             }
             std::process::exit(1);
@@ -751,7 +781,14 @@ fn test_file(file: Option<PathBuf>) {
         let (mut module, parse_errors) = turbo_parser::parse(tokens);
         if !parse_errors.is_empty() {
             for err in &parse_errors {
-                report_error(&source, &filename, &err.message, &err.span, None);
+                report_error(
+                    &source,
+                    &filename,
+                    &err.message,
+                    &err.span,
+                    None,
+                    Some(err.code),
+                );
             }
             std::process::exit(1);
         }
@@ -792,7 +829,14 @@ fn test_file(file: Option<PathBuf>) {
         if !sema_errors.is_empty() {
             for err in &sema_errors {
                 let help = sema_help(&err.message);
-                report_error(&source, &filename, &err.message, &err.span, help.as_deref());
+                report_error(
+                    &source,
+                    &filename,
+                    &err.message,
+                    &err.span,
+                    help.as_deref(),
+                    Some(err.code),
+                );
             }
             std::process::exit(1);
         }
@@ -1069,6 +1113,7 @@ fn test_run_fn(path: &std::path::Path, fn_name: &str) {
                 &format!("unexpected character `{snippet}`"),
                 span,
                 Some("remove this character or check for typos"),
+                None,
             );
         }
         std::process::exit(1);
@@ -1078,7 +1123,14 @@ fn test_run_fn(path: &std::path::Path, fn_name: &str) {
     let (mut module, parse_errors) = turbo_parser::parse(tokens);
     if !parse_errors.is_empty() {
         for err in &parse_errors {
-            report_error(&source, &filename, &err.message, &err.span, None);
+            report_error(
+                &source,
+                &filename,
+                &err.message,
+                &err.span,
+                None,
+                Some(err.code),
+            );
         }
         std::process::exit(1);
     }
@@ -1179,6 +1231,7 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
                 &format!("unexpected character `{snippet}`"),
                 span,
                 Some("remove this character or check for typos"),
+                None,
             );
         }
         std::process::exit(1);
@@ -1195,7 +1248,14 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
 
     if !parse_errors.is_empty() {
         for err in &parse_errors {
-            report_error(&source, &filename, &err.message, &err.span, None);
+            report_error(
+                &source,
+                &filename,
+                &err.message,
+                &err.span,
+                None,
+                Some(err.code),
+            );
         }
         std::process::exit(1);
     }
@@ -1217,6 +1277,7 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
             "no functions defined",
             &(0..source.len().min(1)),
             Some("add a `fn main() { ... }` function to get started"),
+            None,
         );
         std::process::exit(1);
     }
@@ -1237,7 +1298,14 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
     if !sema_errors.is_empty() {
         for err in &sema_errors {
             let help = sema_help(&err.message);
-            report_error(&source, &filename, &err.message, &err.span, help.as_deref());
+            report_error(
+                &source,
+                &filename,
+                &err.message,
+                &err.span,
+                help.as_deref(),
+                Some(err.code),
+            );
         }
         std::process::exit(1);
     }
@@ -1510,6 +1578,21 @@ fn extract_backtick_name(message: &str) -> Option<&str> {
     let start = message.find('`')? + 1;
     let end = message[start..].find('`')? + start;
     Some(&message[start..end])
+}
+
+// =============================================================================
+// turbo explain -- Print description for an error code
+// =============================================================================
+
+fn explain_error(code_str: &str) {
+    if let Some(code) = ErrorCode::parse(code_str) {
+        println!("{}: {}", code.as_str(), code.description());
+    } else {
+        eprintln!("\x1b[1;31merror\x1b[0m: unknown error code `{code_str}`");
+        eprintln!("  Error codes range from E0001 to E0513.");
+        eprintln!("  Example: turbo explain E0100");
+        std::process::exit(1);
+    }
 }
 
 // =============================================================================

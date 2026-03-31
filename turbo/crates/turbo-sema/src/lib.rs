@@ -3,6 +3,7 @@ use turbo_ast::*;
 
 #[derive(Debug, Clone)]
 pub struct SemaError {
+    pub code: ErrorCode,
     pub message: String,
     pub span: Span,
 }
@@ -360,8 +361,12 @@ impl Checker {
         }
     }
 
-    fn error(&mut self, message: String, span: Span) {
-        self.errors.push(SemaError { message, span });
+    fn error(&mut self, code: ErrorCode, message: String, span: Span) {
+        self.errors.push(SemaError {
+            code,
+            message,
+            span,
+        });
     }
 
     // === Scope management ===
@@ -476,6 +481,7 @@ impl Checker {
             };
             if self.structs.contains_key(&s.name) {
                 self.error(
+                    ErrorCode::E0306,
                     format!("struct `{}` is already defined", s.name),
                     item.span.clone(),
                 );
@@ -494,6 +500,7 @@ impl Checker {
                     None => {
                         if let TypeExpr::Named(name) = &field.ty.node {
                             self.error(
+                                ErrorCode::E0305,
                                 format!("unknown type `{name}` in struct `{}`", s.name),
                                 field.ty.span.clone(),
                             );
@@ -508,6 +515,7 @@ impl Checker {
                     "Eq" | "Clone" | "Display" => {}
                     _ => {
                         self.error(
+                            ErrorCode::E0319,
                             format!("unknown derive trait `{derive_name}`"),
                             item.span.clone(),
                         );
@@ -529,6 +537,7 @@ impl Checker {
             let Item::Enum(e) = &item.node else { continue };
             if self.enums.contains_key(&e.name) {
                 self.error(
+                    ErrorCode::E0307,
                     format!("enum `{}` is already defined", e.name),
                     item.span.clone(),
                 );
@@ -568,6 +577,7 @@ impl Checker {
             let Item::Trait(t) = &item.node else { continue };
             if self.traits.contains_key(&t.name) {
                 self.error(
+                    ErrorCode::E0309,
                     format!("trait `{}` is already defined", t.name),
                     item.span.clone(),
                 );
@@ -588,6 +598,7 @@ impl Checker {
                             Some(ty) => params.push((param.name.clone(), ty)),
                             None => {
                                 self.error(
+                                    ErrorCode::E0323,
                                     format!("unknown type in trait method `{}`", method.name),
                                     param.ty.span.clone(),
                                 );
@@ -602,6 +613,7 @@ impl Checker {
                         Some(ty) => ty,
                         None => {
                             self.error(
+                                ErrorCode::E0324,
                                 format!("unknown return type in trait method `{}`", method.name),
                                 ret_type.span.clone(),
                             );
@@ -635,6 +647,7 @@ impl Checker {
             // Reject shadowing of builtin functions
             if Self::is_builtin_function(&f.name) {
                 self.error(
+                    ErrorCode::E0313,
                     format!("cannot redefine builtin function `{}`", f.name),
                     item.span.clone(),
                 );
@@ -643,6 +656,7 @@ impl Checker {
 
             if self.functions.contains_key(&f.name) {
                 self.error(
+                    ErrorCode::E0308,
                     format!("function `{}` is already defined", f.name),
                     item.span.clone(),
                 );
@@ -668,7 +682,11 @@ impl Checker {
                     Some(ty) => params.push((param.name.clone(), ty)),
                     None => {
                         if let TypeExpr::Named(name) = &param.ty.node {
-                            self.error(format!("unknown type `{name}`"), param.ty.span.clone());
+                            self.error(
+                                ErrorCode::E0305,
+                                format!("unknown type `{name}`"),
+                                param.ty.span.clone(),
+                            );
                         }
                         params.push((param.name.clone(), Ty::Error));
                     }
@@ -686,6 +704,7 @@ impl Checker {
                     None => {
                         if let TypeExpr::Named(name) = &ret_type.node {
                             self.error(
+                                ErrorCode::E0324,
                                 format!("unknown return type `{name}`"),
                                 ret_type.span.clone(),
                             );
@@ -714,12 +733,14 @@ impl Checker {
             if f.is_test {
                 if !f.params.is_empty() {
                     self.error(
+                        ErrorCode::E0504,
                         format!("@test function `{}` must have no parameters", f.name),
                         item.span.clone(),
                     );
                 }
                 if f.return_type.is_some() {
                     self.error(
+                        ErrorCode::E0505,
                         format!("@test function `{}` must have no return type", f.name),
                         item.span.clone(),
                     );
@@ -734,6 +755,7 @@ impl Checker {
             };
             if self.agents.contains_key(&agent.name) {
                 self.error(
+                    ErrorCode::E0312,
                     format!("agent `{}` is already defined", agent.name),
                     item.span.clone(),
                 );
@@ -757,6 +779,7 @@ impl Checker {
                         Some(sig) => {
                             if !sig.is_tool {
                                 self.error(
+                                    ErrorCode::E0322,
                                     format!(
                                         "function `{tool_name}` in agent `{}` is not a `tool fn`",
                                         agent.name
@@ -767,6 +790,7 @@ impl Checker {
                         }
                         None => {
                             self.error(
+                                ErrorCode::E0321,
                                 format!(
                                     "undefined tool function `{tool_name}` in agent `{}`",
                                     agent.name
@@ -787,6 +811,7 @@ impl Checker {
 
             if !self.structs.contains_key(&imp.type_name) {
                 self.error(
+                    ErrorCode::E0305,
                     format!("impl block for undefined type `{}`", imp.type_name),
                     item.span.clone(),
                 );
@@ -807,6 +832,7 @@ impl Checker {
                     .is_some_and(|m| m.contains_key(&method.name));
                 if already_exists {
                     self.error(
+                        ErrorCode::E0310,
                         format!(
                             "method `{}` is already defined for `{}`",
                             method.name, imp.type_name
@@ -830,6 +856,7 @@ impl Checker {
                             None => {
                                 if let TypeExpr::Named(name) = &param.ty.node {
                                     self.error(
+                                        ErrorCode::E0305,
                                         format!("unknown type `{name}`"),
                                         param.ty.span.clone(),
                                     );
@@ -847,6 +874,7 @@ impl Checker {
                         None => {
                             if let TypeExpr::Named(name) = &ret_type.node {
                                 self.error(
+                                    ErrorCode::E0324,
                                     format!("unknown return type `{name}`"),
                                     ret_type.span.clone(),
                                 );
@@ -908,7 +936,7 @@ impl Checker {
                                 type_methods.insert(trait_method.name.clone(), sig.clone());
                                 self.functions.insert(mangled, sig);
                             } else {
-                                self.error(
+                                self.error(ErrorCode::E0509,
                                     format!(
                                         "trait `{trait_name}` requires method `{}` but it is not implemented for `{}`",
                                         trait_method.name, imp.type_name
@@ -924,7 +952,7 @@ impl Checker {
                                     && !impl_sig.ret.is_error()
                                     && trait_method.ret != impl_sig.ret
                                 {
-                                    self.error(
+                                    self.error(ErrorCode::E0510,
                                         format!(
                                             "method `{}` in impl of `{trait_name}` for `{}` has return type `{}`, expected `{}`",
                                             trait_method.name, imp.type_name, impl_sig.ret, trait_method.ret
@@ -941,7 +969,11 @@ impl Checker {
                         .or_default()
                         .push(trait_name.clone());
                 } else {
-                    self.error(format!("undefined trait `{trait_name}`"), item.span.clone());
+                    self.error(
+                        ErrorCode::E0304,
+                        format!("undefined trait `{trait_name}`"),
+                        item.span.clone(),
+                    );
                 }
             }
         }
@@ -985,6 +1017,7 @@ impl Checker {
             let Item::Const(c) = &item.node else { continue };
             if self.constants.contains_key(&c.name) {
                 self.error(
+                    ErrorCode::E0311,
                     format!("constant `{}` is already defined", c.name),
                     item.span.clone(),
                 );
@@ -1004,6 +1037,7 @@ impl Checker {
                     Expr::FloatLit(_) => Ty::F64,
                     _ => {
                         self.error(
+                            ErrorCode::E0506,
                             format!("constant `{}` must be a literal value", c.name),
                             c.value.span.clone(),
                         );
@@ -1012,6 +1046,7 @@ impl Checker {
                 },
                 _ => {
                     self.error(
+                        ErrorCode::E0506,
                         format!("constant `{}` must be a literal value", c.name),
                         c.value.span.clone(),
                     );
@@ -1028,7 +1063,11 @@ impl Checker {
             } else {
                 module.items.last().unwrap().span.clone()
             };
-            self.error("no `main` function found".to_string(), span);
+            self.error(
+                ErrorCode::E0314,
+                "no `main` function found".to_string(),
+                span,
+            );
         }
 
         // Second pass: check function bodies (skip those not registered, e.g. builtin shadows)
@@ -1125,6 +1164,7 @@ impl Checker {
             && !types_compatible(&sig.ret, &body_ty)
         {
             self.error(
+                ErrorCode::E0109,
                 format!(
                     "function `{}` should return `{}` but body returns `{}`",
                     f.name, sig.ret, body_ty
@@ -1166,6 +1206,7 @@ impl Checker {
             && !types_compatible(&sig.ret, &body_ty)
         {
             self.error(
+                ErrorCode::E0109,
                 format!(
                     "method `{}` should return `{}` but body returns `{}`",
                     f.name, sig.ret, body_ty
@@ -1183,6 +1224,7 @@ impl Checker {
         self.expr_depth += 1;
         if self.expr_depth > MAX_EXPR_DEPTH {
             self.error(
+                ErrorCode::E0136,
                 "expression nesting too deep (possible infinite recursion)".to_string(),
                 expr.span.clone(),
             );
@@ -1206,7 +1248,11 @@ impl Checker {
                 if let Some(info) = self.lookup_var(name) {
                     info.ty.clone()
                 } else {
-                    self.error(format!("undefined variable `{name}`"), expr.span.clone());
+                    self.error(
+                        ErrorCode::E0300,
+                        format!("undefined variable `{name}`"),
+                        expr.span.clone(),
+                    );
                     Ty::Error
                 }
             }
@@ -1236,6 +1282,7 @@ impl Checker {
                         }
                         if !lhs.is_numeric() {
                             self.error(
+                                ErrorCode::E0101,
                                 format!("cannot perform arithmetic on `{lhs}`"),
                                 left.span.clone(),
                             );
@@ -1243,6 +1290,7 @@ impl Checker {
                         }
                         if lhs != rhs {
                             self.error(
+                                ErrorCode::E0102,
                                 format!("mismatched types in arithmetic: `{lhs}` and `{rhs}`"),
                                 expr.span.clone(),
                             );
@@ -1258,6 +1306,7 @@ impl Checker {
                     | BinOp::GreaterEq => {
                         if lhs != rhs {
                             self.error(
+                                ErrorCode::E0103,
                                 format!("cannot compare `{lhs}` with `{rhs}`"),
                                 expr.span.clone(),
                             );
@@ -1268,7 +1317,7 @@ impl Checker {
                             if matches!(op, BinOp::Eq | BinOp::NotEq) {
                                 if let Some(info) = self.structs.get(struct_name) {
                                     if !info.derives.contains(&"Eq".to_string()) {
-                                        self.error(
+                                        self.error(ErrorCode::E0128,
                                             format!("cannot compare struct `{struct_name}` with `==`/`!=` without `@derive(Eq)`"),
                                             expr.span.clone(),
                                         );
@@ -1277,6 +1326,7 @@ impl Checker {
                                 }
                             } else {
                                 self.error(
+                                    ErrorCode::E0129,
                                     format!(
                                         "cannot use ordering comparison on struct `{struct_name}`"
                                     ),
@@ -1290,12 +1340,14 @@ impl Checker {
                     BinOp::And | BinOp::Or => {
                         if lhs != Ty::Bool {
                             self.error(
+                                ErrorCode::E0104,
                                 format!("expected `bool` in logical operation, found `{lhs}`"),
                                 left.span.clone(),
                             );
                         }
                         if rhs != Ty::Bool {
                             self.error(
+                                ErrorCode::E0104,
                                 format!("expected `bool` in logical operation, found `{rhs}`"),
                                 right.span.clone(),
                             );
@@ -1313,7 +1365,11 @@ impl Checker {
                 match op {
                     UnaryOp::Neg => {
                         if !ty.is_numeric() {
-                            self.error(format!("cannot negate `{ty}`"), inner.span.clone());
+                            self.error(
+                                ErrorCode::E0105,
+                                format!("cannot negate `{ty}`"),
+                                inner.span.clone(),
+                            );
                             Ty::Error
                         } else {
                             ty
@@ -1322,6 +1378,7 @@ impl Checker {
                     UnaryOp::Not => {
                         if ty != Ty::Bool {
                             self.error(
+                                ErrorCode::E0106,
                                 format!("cannot apply `!` to `{ty}`, expected `bool`"),
                                 inner.span.clone(),
                             );
@@ -1339,6 +1396,7 @@ impl Checker {
                     if name == "print" {
                         if args.len() > 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("print() takes at most 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1351,6 +1409,7 @@ impl Checker {
                     if name == "panic" {
                         if args.len() > 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("panic() takes at most 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1363,11 +1422,13 @@ impl Checker {
                     if name == "assert" {
                         if args.is_empty() {
                             self.error(
+                                ErrorCode::E0513,
                                 "assert() requires at least one argument".to_string(),
                                 callee.span.clone(),
                             );
                         } else if args.len() > 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("assert() takes at most 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1376,6 +1437,7 @@ impl Checker {
                             let cond_ty = self.check_expr(&args[0]);
                             if !cond_ty.is_error() && cond_ty != Ty::Bool {
                                 self.error(
+                                    ErrorCode::E0133,
                                     format!("assert() condition must be `bool`, found `{cond_ty}`"),
                                     args[0].span.clone(),
                                 );
@@ -1394,6 +1456,7 @@ impl Checker {
                     if name == "assert_eq" || name == "assert_ne" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("{name}() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1406,7 +1469,7 @@ impl Checker {
                                 && !types_compatible(&left_ty, &right_ty)
                                 && left_ty != right_ty
                             {
-                                self.error(
+                                self.error(ErrorCode::E0100,
                                     format!("{name}() arguments must be the same type: left is `{left_ty}`, right is `{right_ty}`"),
                                     callee.span.clone(),
                                 );
@@ -1420,6 +1483,7 @@ impl Checker {
                     if name == "len" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("len() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1432,6 +1496,7 @@ impl Checker {
                             _ if arg_ty.is_error() => return Ty::Error,
                             _ => {
                                 self.error(
+                                    ErrorCode::E0133,
                                     format!("len() expects array or string, found `{arg_ty}`"),
                                     args[0].span.clone(),
                                 );
@@ -1443,6 +1508,7 @@ impl Checker {
                     if name == "abs" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("abs() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1451,6 +1517,7 @@ impl Checker {
                         let arg_ty = self.check_expr(&args[0]);
                         if !arg_ty.is_error() && !arg_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("abs() expects integer, found `{arg_ty}`"),
                                 args[0].span.clone(),
                             );
@@ -1460,6 +1527,7 @@ impl Checker {
                     if name == "min" || name == "max" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("{}() takes exactly 2 arguments, got {}", name, args.len()),
                                 callee.span.clone(),
                             );
@@ -1469,12 +1537,14 @@ impl Checker {
                         let b_ty = self.check_expr(&args[1]);
                         if !a_ty.is_error() && !a_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("{}() expects integers, found `{a_ty}`", name),
                                 args[0].span.clone(),
                             );
                         }
                         if !b_ty.is_error() && !b_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("{}() expects integers, found `{b_ty}`", name),
                                 args[1].span.clone(),
                             );
@@ -1484,6 +1554,7 @@ impl Checker {
                     if name == "to_str" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("to_str() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1497,6 +1568,7 @@ impl Checker {
                     if name == "split" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("split() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1506,12 +1578,14 @@ impl Checker {
                         let sep_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("split() first argument must be str, found `{s_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
                         if !sep_ty.is_error() && sep_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("split() second argument must be str, found `{sep_ty}`"),
                                 args[1].span.clone(),
                             );
@@ -1521,6 +1595,7 @@ impl Checker {
                     if name == "trim" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("trim() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1529,6 +1604,7 @@ impl Checker {
                         let s_ty = self.check_expr(&args[0]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("trim() expects str, found `{s_ty}`"),
                                 args[0].span.clone(),
                             );
@@ -1538,6 +1614,7 @@ impl Checker {
                     if name == "upper" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("upper() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1546,6 +1623,7 @@ impl Checker {
                         let s_ty = self.check_expr(&args[0]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("upper() expects str, found `{s_ty}`"),
                                 args[0].span.clone(),
                             );
@@ -1555,6 +1633,7 @@ impl Checker {
                     if name == "lower" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("lower() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1563,6 +1642,7 @@ impl Checker {
                         let s_ty = self.check_expr(&args[0]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("lower() expects str, found `{s_ty}`"),
                                 args[0].span.clone(),
                             );
@@ -1572,6 +1652,7 @@ impl Checker {
                     if name == "starts_with" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!(
                                     "starts_with() takes exactly 2 arguments, got {}",
                                     args.len()
@@ -1584,18 +1665,20 @@ impl Checker {
                         let prefix_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("starts_with() first argument must be str, found `{s_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
                         if !prefix_ty.is_error() && prefix_ty != Ty::Str {
-                            self.error(format!("starts_with() second argument must be str, found `{prefix_ty}`"), args[1].span.clone());
+                            self.error(ErrorCode::E0133, format!("starts_with() second argument must be str, found `{prefix_ty}`"), args[1].span.clone());
                         }
                         return Ty::Bool;
                     }
                     if name == "ends_with" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!(
                                     "ends_with() takes exactly 2 arguments, got {}",
                                     args.len()
@@ -1608,12 +1691,14 @@ impl Checker {
                         let suffix_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("ends_with() first argument must be str, found `{s_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
                         if !suffix_ty.is_error() && suffix_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!(
                                     "ends_with() second argument must be str, found `{suffix_ty}`"
                                 ),
@@ -1625,6 +1710,7 @@ impl Checker {
                     if name == "replace" {
                         if args.len() != 3 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("replace() takes exactly 3 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1635,18 +1721,21 @@ impl Checker {
                         let to_ty = self.check_expr(&args[2]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("replace() first argument must be str, found `{s_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
                         if !from_ty.is_error() && from_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("replace() second argument must be str, found `{from_ty}`"),
                                 args[1].span.clone(),
                             );
                         }
                         if !to_ty.is_error() && to_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("replace() third argument must be str, found `{to_ty}`"),
                                 args[2].span.clone(),
                             );
@@ -1656,6 +1745,7 @@ impl Checker {
                     if name == "char_at" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("char_at() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1665,12 +1755,14 @@ impl Checker {
                         let idx_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("char_at() first argument must be str, found `{s_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
                         if !idx_ty.is_error() && !idx_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0133,
                                 format!(
                                     "char_at() second argument must be integer, found `{idx_ty}`"
                                 ),
@@ -1683,6 +1775,7 @@ impl Checker {
                     if name == "contains" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("contains() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1692,12 +1785,14 @@ impl Checker {
                         let sub_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("contains() first argument must be str, found `{s_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
                         if !sub_ty.is_error() && sub_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("contains() second argument must be str, found `{sub_ty}`"),
                                 args[1].span.clone(),
                             );
@@ -1707,6 +1802,7 @@ impl Checker {
                     if name == "index_of" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("index_of() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1716,12 +1812,14 @@ impl Checker {
                         let sub_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("index_of() first argument must be str, found `{s_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
                         if !sub_ty.is_error() && sub_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("index_of() second argument must be str, found `{sub_ty}`"),
                                 args[1].span.clone(),
                             );
@@ -1731,6 +1829,7 @@ impl Checker {
                     if name == "join" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("join() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1740,12 +1839,14 @@ impl Checker {
                         let sep_ty = self.check_expr(&args[1]);
                         if !arr_ty.is_error() && arr_ty != Ty::Array(Box::new(Ty::Str)) {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("join() first argument must be [str], found `{arr_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
                         if !sep_ty.is_error() && sep_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("join() second argument must be str, found `{sep_ty}`"),
                                 args[1].span.clone(),
                             );
@@ -1755,6 +1856,7 @@ impl Checker {
                     if name == "repeat" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("repeat() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1764,12 +1866,14 @@ impl Checker {
                         let n_ty = self.check_expr(&args[1]);
                         if !s_ty.is_error() && s_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("repeat() first argument must be str, found `{s_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
                         if !n_ty.is_error() && !n_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("repeat() second argument must be integer, found `{n_ty}`"),
                                 args[1].span.clone(),
                             );
@@ -1781,6 +1885,7 @@ impl Checker {
                     if name == "read_line" {
                         if !args.is_empty() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("read_line() takes 0 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1791,6 +1896,7 @@ impl Checker {
                     if name == "read_file" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("read_file() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1799,6 +1905,7 @@ impl Checker {
                         let path_ty = self.check_expr(&args[0]);
                         if !path_ty.is_error() && path_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("read_file() expects str, found `{path_ty}`"),
                                 args[0].span.clone(),
                             );
@@ -1808,6 +1915,7 @@ impl Checker {
                     if name == "write_file" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!(
                                     "write_file() takes exactly 2 arguments, got {}",
                                     args.len()
@@ -1820,6 +1928,7 @@ impl Checker {
                         let content_ty = self.check_expr(&args[1]);
                         if !path_ty.is_error() && path_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!(
                                     "write_file() first argument must be str, found `{path_ty}`"
                                 ),
@@ -1827,7 +1936,7 @@ impl Checker {
                             );
                         }
                         if !content_ty.is_error() && content_ty != Ty::Str {
-                            self.error(format!("write_file() second argument must be str, found `{content_ty}`"), args[1].span.clone());
+                            self.error(ErrorCode::E0133, format!("write_file() second argument must be str, found `{content_ty}`"), args[1].span.clone());
                         }
                         return Ty::Unit;
                     }
@@ -1836,6 +1945,7 @@ impl Checker {
                     if name == "pow" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("pow() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1845,12 +1955,14 @@ impl Checker {
                         let exp_ty = self.check_expr(&args[1]);
                         if !base_ty.is_error() && !base_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("pow() first argument must be integer, found `{base_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
                         if !exp_ty.is_error() && !exp_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("pow() second argument must be integer, found `{exp_ty}`"),
                                 args[1].span.clone(),
                             );
@@ -1860,6 +1972,7 @@ impl Checker {
                     if name == "sqrt" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("sqrt() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1868,6 +1981,7 @@ impl Checker {
                         let x_ty = self.check_expr(&args[0]);
                         if !x_ty.is_error() && x_ty != Ty::F64 && x_ty != Ty::F32 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("sqrt() expects float, found `{x_ty}`"),
                                 args[0].span.clone(),
                             );
@@ -1879,6 +1993,7 @@ impl Checker {
                     if name == "sleep" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("sleep() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1887,6 +2002,7 @@ impl Checker {
                         let ms_ty = self.check_expr(&args[0]);
                         if !ms_ty.is_error() && !ms_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("sleep() expects integer (milliseconds), found `{ms_ty}`"),
                                 args[0].span.clone(),
                             );
@@ -1899,6 +2015,7 @@ impl Checker {
                     if name == "http_get" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("http_get() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1907,6 +2024,7 @@ impl Checker {
                         let url_ty = self.check_expr(&args[0]);
                         if !url_ty.is_error() && url_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("http_get() expects str, found `{url_ty}`"),
                                 args[0].span.clone(),
                             );
@@ -1917,6 +2035,7 @@ impl Checker {
                     if name == "http_post" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!(
                                     "http_post() takes exactly 2 arguments, got {}",
                                     args.len()
@@ -1929,12 +2048,14 @@ impl Checker {
                         let body_ty = self.check_expr(&args[1]);
                         if !url_ty.is_error() && url_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("http_post() first argument must be str, found `{url_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
                         if !body_ty.is_error() && body_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!(
                                     "http_post() second argument must be str, found `{body_ty}`"
                                 ),
@@ -1949,6 +2070,7 @@ impl Checker {
                     if name == "http_server" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!(
                                     "http_server() takes exactly 1 argument, got {}",
                                     args.len()
@@ -1960,6 +2082,7 @@ impl Checker {
                         let port_ty = self.check_expr(&args[0]);
                         if !port_ty.is_error() && !port_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("http_server() expects integer port, found `{port_ty}`"),
                                 args[0].span.clone(),
                             );
@@ -1970,6 +2093,7 @@ impl Checker {
                     if name == "route" {
                         if args.len() != 4 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("route() takes exactly 4 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -1982,13 +2106,14 @@ impl Checker {
                         self.closure_param_hint = Some(vec![Ty::Str]);
                         let handler_ty = self.check_expr(&args[3]);
                         if !server_ty.is_error() && !server_ty.is_integer() {
-                            self.error(format!("route() first argument must be server id (i64), found `{server_ty}`"), args[0].span.clone());
+                            self.error(ErrorCode::E0133, format!("route() first argument must be server id (i64), found `{server_ty}`"), args[0].span.clone());
                         }
                         if !method_ty.is_error() && method_ty != Ty::Str {
-                            self.error(format!("route() second argument must be str (HTTP method), found `{method_ty}`"), args[1].span.clone());
+                            self.error(ErrorCode::E0133, format!("route() second argument must be str (HTTP method), found `{method_ty}`"), args[1].span.clone());
                         }
                         if !path_ty.is_error() && path_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!(
                                     "route() third argument must be str (path), found `{path_ty}`"
                                 ),
@@ -1998,9 +2123,10 @@ impl Checker {
                         match &handler_ty {
                             Ty::Fn(params, ret) => {
                                 if params.len() != 1 {
-                                    self.error(format!("route() handler must take 1 parameter (request), takes {}", params.len()), args[3].span.clone());
+                                    self.error(ErrorCode::E0133, format!("route() handler must take 1 parameter (request), takes {}", params.len()), args[3].span.clone());
                                 } else if !params[0].is_error() && params[0] != Ty::Str {
                                     self.error(
+                                        ErrorCode::E0133,
                                         format!(
                                             "route() handler parameter must be str, found `{}`",
                                             params[0]
@@ -2010,6 +2136,7 @@ impl Checker {
                                 }
                                 if !ret.is_error() && **ret != Ty::Str {
                                     self.error(
+                                        ErrorCode::E0100,
                                         format!(
                                             "route() handler must return str, returns `{}`",
                                             ret
@@ -2020,7 +2147,7 @@ impl Checker {
                             }
                             _ if handler_ty.is_error() => {}
                             _ => {
-                                self.error(format!("route() fourth argument must be a function, found `{handler_ty}`"), args[3].span.clone());
+                                self.error(ErrorCode::E0133, format!("route() fourth argument must be a function, found `{handler_ty}`"), args[3].span.clone());
                             }
                         }
                         return Ty::Unit;
@@ -2029,6 +2156,7 @@ impl Checker {
                     if name == "http_listen" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!(
                                     "http_listen() takes exactly 1 argument, got {}",
                                     args.len()
@@ -2040,6 +2168,7 @@ impl Checker {
                         let server_ty = self.check_expr(&args[0]);
                         if !server_ty.is_error() && !server_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!(
                                     "http_listen() expects server id (i64), found `{server_ty}`"
                                 ),
@@ -2052,6 +2181,7 @@ impl Checker {
                     if name == "respond" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("respond() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2060,10 +2190,11 @@ impl Checker {
                         let status_ty = self.check_expr(&args[0]);
                         let body_ty = self.check_expr(&args[1]);
                         if !status_ty.is_error() && !status_ty.is_integer() {
-                            self.error(format!("respond() first argument must be integer status code, found `{status_ty}`"), args[0].span.clone());
+                            self.error(ErrorCode::E0133, format!("respond() first argument must be integer status code, found `{status_ty}`"), args[0].span.clone());
                         }
                         if !body_ty.is_error() && body_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("respond() second argument must be str, found `{body_ty}`"),
                                 args[1].span.clone(),
                             );
@@ -2074,6 +2205,7 @@ impl Checker {
                     if name == "request_body" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!(
                                     "request_body() takes exactly 1 argument, got {}",
                                     args.len()
@@ -2085,6 +2217,7 @@ impl Checker {
                         let req_ty = self.check_expr(&args[0]);
                         if !req_ty.is_error() && req_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("request_body() expects str, found `{req_ty}`"),
                                 args[0].span.clone(),
                             );
@@ -2097,6 +2230,7 @@ impl Checker {
                     if name == "json_get" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("json_get() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2106,12 +2240,14 @@ impl Checker {
                         let key_ty = self.check_expr(&args[1]);
                         if !json_ty.is_error() && json_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("json_get() first argument must be str, found `{json_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("json_get() second argument must be str, found `{key_ty}`"),
                                 args[1].span.clone(),
                             );
@@ -2122,6 +2258,7 @@ impl Checker {
                     if name == "json_stringify" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!(
                                     "json_stringify() takes exactly 2 arguments, got {}",
                                     args.len()
@@ -2134,6 +2271,7 @@ impl Checker {
                         let value_ty = self.check_expr(&args[1]);
                         if !key_ty.is_error() && key_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!(
                                     "json_stringify() first argument must be str, found `{key_ty}`"
                                 ),
@@ -2141,7 +2279,7 @@ impl Checker {
                             );
                         }
                         if !value_ty.is_error() && value_ty != Ty::Str {
-                            self.error(format!("json_stringify() second argument must be str, found `{value_ty}`"), args[1].span.clone());
+                            self.error(ErrorCode::E0133, format!("json_stringify() second argument must be str, found `{value_ty}`"), args[1].span.clone());
                         }
                         return Ty::Str;
                     }
@@ -2149,6 +2287,7 @@ impl Checker {
                     if name == "to_json" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("to_json() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2161,6 +2300,7 @@ impl Checker {
                     if name == "to_json_array" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!(
                                     "to_json_array() takes exactly 1 argument, got {}",
                                     args.len()
@@ -2172,6 +2312,7 @@ impl Checker {
                         let val_ty = self.check_expr(&args[0]);
                         if !val_ty.is_error() && !matches!(val_ty, Ty::Array(_)) {
                             self.error(
+                                ErrorCode::E0100,
                                 format!(
                                     "to_json_array() argument must be an array, found `{val_ty}`"
                                 ),
@@ -2186,6 +2327,7 @@ impl Checker {
                     if name == "channel" {
                         if !args.is_empty() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("channel() takes no arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2197,6 +2339,7 @@ impl Checker {
                     if name == "send" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("send() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2205,10 +2348,11 @@ impl Checker {
                         let ch_ty = self.check_expr(&args[0]);
                         let val_ty = self.check_expr(&args[1]);
                         if !ch_ty.is_error() && !ch_ty.is_integer() {
-                            self.error(format!("send() first argument must be a channel (integer), found `{ch_ty}`"), args[0].span.clone());
+                            self.error(ErrorCode::E0133, format!("send() first argument must be a channel (integer), found `{ch_ty}`"), args[0].span.clone());
                         }
                         if !val_ty.is_error() && !val_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0133,
                                 format!("send() second argument must be integer, found `{val_ty}`"),
                                 args[1].span.clone(),
                             );
@@ -2219,6 +2363,7 @@ impl Checker {
                     if name == "recv" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("recv() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2227,6 +2372,7 @@ impl Checker {
                         let ch_ty = self.check_expr(&args[0]);
                         if !ch_ty.is_error() && !ch_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0133,
                                 format!(
                                     "recv() argument must be a channel (integer), found `{ch_ty}`"
                                 ),
@@ -2241,6 +2387,7 @@ impl Checker {
                     if name == "mutex" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("mutex() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2249,6 +2396,7 @@ impl Checker {
                         let val_ty = self.check_expr(&args[0]);
                         if !val_ty.is_error() && !val_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("mutex() argument must be integer, found `{val_ty}`"),
                                 args[0].span.clone(),
                             );
@@ -2259,6 +2407,7 @@ impl Checker {
                     if name == "mutex_get" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("mutex_get() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2266,7 +2415,7 @@ impl Checker {
                         }
                         let m_ty = self.check_expr(&args[0]);
                         if !m_ty.is_error() && !m_ty.is_integer() {
-                            self.error(format!("mutex_get() argument must be a mutex (integer), found `{m_ty}`"), args[0].span.clone());
+                            self.error(ErrorCode::E0133, format!("mutex_get() argument must be a mutex (integer), found `{m_ty}`"), args[0].span.clone());
                         }
                         return Ty::I64;
                     }
@@ -2274,6 +2423,7 @@ impl Checker {
                     if name == "mutex_set" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!(
                                     "mutex_set() takes exactly 2 arguments, got {}",
                                     args.len()
@@ -2285,10 +2435,11 @@ impl Checker {
                         let m_ty = self.check_expr(&args[0]);
                         let val_ty = self.check_expr(&args[1]);
                         if !m_ty.is_error() && !m_ty.is_integer() {
-                            self.error(format!("mutex_set() first argument must be a mutex (integer), found `{m_ty}`"), args[0].span.clone());
+                            self.error(ErrorCode::E0133, format!("mutex_set() first argument must be a mutex (integer), found `{m_ty}`"), args[0].span.clone());
                         }
                         if !val_ty.is_error() && !val_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0133,
                                 format!(
                                     "mutex_set() second argument must be integer, found `{val_ty}`"
                                 ),
@@ -2302,6 +2453,7 @@ impl Checker {
                     if name == "clone" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("clone() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2311,7 +2463,7 @@ impl Checker {
                         if let Ty::Struct(ref struct_name) = arg_ty {
                             if let Some(info) = self.structs.get(struct_name) {
                                 if !info.derives.contains(&"Clone".to_string()) {
-                                    self.error(
+                                    self.error(ErrorCode::E0100,
                                         format!("cannot clone struct `{struct_name}` without `@derive(Clone)`"),
                                         callee.span.clone(),
                                     );
@@ -2320,6 +2472,7 @@ impl Checker {
                             }
                         } else if !arg_ty.is_error() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("clone() expects a struct argument, found `{arg_ty}`"),
                                 args[0].span.clone(),
                             );
@@ -2333,6 +2486,7 @@ impl Checker {
                     if name == "hashmap" {
                         if !args.is_empty() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("hashmap() takes no arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2344,6 +2498,7 @@ impl Checker {
                     if name == "hashmap_set" {
                         if args.len() != 3 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!(
                                     "hashmap_set() takes exactly 3 arguments, got {}",
                                     args.len()
@@ -2356,10 +2511,11 @@ impl Checker {
                         let key_ty = self.check_expr(&args[1]);
                         let val_ty = self.check_expr(&args[2]);
                         if !map_ty.is_error() && !map_ty.is_integer() {
-                            self.error(format!("hashmap_set() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                            self.error(ErrorCode::E0133, format!("hashmap_set() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!(
                                     "hashmap_set() second argument must be str, found `{key_ty}`"
                                 ),
@@ -2368,6 +2524,7 @@ impl Checker {
                         }
                         if !val_ty.is_error() && val_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!(
                                     "hashmap_set() third argument must be str, found `{val_ty}`"
                                 ),
@@ -2380,6 +2537,7 @@ impl Checker {
                     if name == "hashmap_get" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!(
                                     "hashmap_get() takes exactly 2 arguments, got {}",
                                     args.len()
@@ -2391,10 +2549,11 @@ impl Checker {
                         let map_ty = self.check_expr(&args[0]);
                         let key_ty = self.check_expr(&args[1]);
                         if !map_ty.is_error() && !map_ty.is_integer() {
-                            self.error(format!("hashmap_get() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                            self.error(ErrorCode::E0133, format!("hashmap_get() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!(
                                     "hashmap_get() second argument must be str, found `{key_ty}`"
                                 ),
@@ -2407,6 +2566,7 @@ impl Checker {
                     if name == "hashmap_has" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!(
                                     "hashmap_has() takes exactly 2 arguments, got {}",
                                     args.len()
@@ -2418,10 +2578,11 @@ impl Checker {
                         let map_ty = self.check_expr(&args[0]);
                         let key_ty = self.check_expr(&args[1]);
                         if !map_ty.is_error() && !map_ty.is_integer() {
-                            self.error(format!("hashmap_has() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                            self.error(ErrorCode::E0133, format!("hashmap_has() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
                             self.error(
+                                ErrorCode::E0133,
                                 format!(
                                     "hashmap_has() second argument must be str, found `{key_ty}`"
                                 ),
@@ -2434,6 +2595,7 @@ impl Checker {
                     if name == "hashmap_len" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!(
                                     "hashmap_len() takes exactly 1 argument, got {}",
                                     args.len()
@@ -2444,7 +2606,7 @@ impl Checker {
                         }
                         let map_ty = self.check_expr(&args[0]);
                         if !map_ty.is_error() && !map_ty.is_integer() {
-                            self.error(format!("hashmap_len() argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                            self.error(ErrorCode::E0133, format!("hashmap_len() argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         return Ty::I64;
                     }
@@ -2452,6 +2614,7 @@ impl Checker {
                     if name == "hashmap_keys" {
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!(
                                     "hashmap_keys() takes exactly 1 argument, got {}",
                                     args.len()
@@ -2462,7 +2625,7 @@ impl Checker {
                         }
                         let map_ty = self.check_expr(&args[0]);
                         if !map_ty.is_error() && !map_ty.is_integer() {
-                            self.error(format!("hashmap_keys() argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                            self.error(ErrorCode::E0133, format!("hashmap_keys() argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         return Ty::Array(Box::new(Ty::Str));
                     }
@@ -2470,6 +2633,7 @@ impl Checker {
                     if name == "hashmap_remove" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!(
                                     "hashmap_remove() takes exactly 2 arguments, got {}",
                                     args.len()
@@ -2481,10 +2645,10 @@ impl Checker {
                         let map_ty = self.check_expr(&args[0]);
                         let key_ty = self.check_expr(&args[1]);
                         if !map_ty.is_error() && !map_ty.is_integer() {
-                            self.error(format!("hashmap_remove() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                            self.error(ErrorCode::E0133, format!("hashmap_remove() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
-                            self.error(format!("hashmap_remove() second argument must be str, found `{key_ty}`"), args[1].span.clone());
+                            self.error(ErrorCode::E0133, format!("hashmap_remove() second argument must be str, found `{key_ty}`"), args[1].span.clone());
                         }
                         return Ty::Unit;
                     }
@@ -2494,6 +2658,7 @@ impl Checker {
                     if name == "deref" {
                         if !self.in_unsafe_context {
                             self.error(
+                                ErrorCode::E0100,
                                 "`deref()` can only be called inside an `@unsafe` function"
                                     .to_string(),
                                 callee.span.clone(),
@@ -2501,6 +2666,7 @@ impl Checker {
                         }
                         if args.len() != 1 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("deref() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2509,6 +2675,7 @@ impl Checker {
                         let addr_ty = self.check_expr(&args[0]);
                         if !addr_ty.is_error() && !addr_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("deref() argument must be i64, found `{addr_ty}`"),
                                 args[0].span.clone(),
                             );
@@ -2519,6 +2686,7 @@ impl Checker {
                     if name == "store" {
                         if !self.in_unsafe_context {
                             self.error(
+                                ErrorCode::E0100,
                                 "`store()` can only be called inside an `@unsafe` function"
                                     .to_string(),
                                 callee.span.clone(),
@@ -2526,6 +2694,7 @@ impl Checker {
                         }
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("store() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2535,12 +2704,14 @@ impl Checker {
                         let val_ty = self.check_expr(&args[1]);
                         if !addr_ty.is_error() && !addr_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("store() first argument must be i64, found `{addr_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
                         if !val_ty.is_error() && !val_ty.is_integer() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!("store() second argument must be i64, found `{val_ty}`"),
                                 args[1].span.clone(),
                             );
@@ -2552,6 +2723,7 @@ impl Checker {
                     if name == "map" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("map() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2567,6 +2739,7 @@ impl Checker {
                             _ if arr_ty.is_error() => Ty::Error,
                             _ => {
                                 self.error(
+                                    ErrorCode::E0133,
                                     format!(
                                         "map() first argument must be an array, found `{arr_ty}`"
                                     ),
@@ -2579,6 +2752,7 @@ impl Checker {
                             Ty::Fn(params, ret) => {
                                 if params.len() != 1 {
                                     self.error(
+                                        ErrorCode::E0133,
                                         format!(
                                             "map() callback must take 1 parameter, takes {}",
                                             params.len()
@@ -2589,7 +2763,7 @@ impl Checker {
                                     && !params[0].is_error()
                                     && elem_ty != params[0]
                                 {
-                                    self.error(
+                                    self.error(ErrorCode::E0100,
                                         format!("map() callback parameter type `{}` doesn't match array element type `{}`", params[0], elem_ty),
                                         args[1].span.clone(),
                                     );
@@ -2599,6 +2773,7 @@ impl Checker {
                             _ if fn_ty.is_error() => return Ty::Error,
                             _ => {
                                 self.error(
+                                    ErrorCode::E0133,
                                     format!(
                                         "map() second argument must be a function, found `{fn_ty}`"
                                     ),
@@ -2613,6 +2788,7 @@ impl Checker {
                     if name == "filter" {
                         if args.len() != 2 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("filter() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2627,7 +2803,7 @@ impl Checker {
                             Ty::Array(inner) => *inner.clone(),
                             _ if arr_ty.is_error() => Ty::Error,
                             _ => {
-                                self.error(
+                                self.error(ErrorCode::E0133,
                                     format!("filter() first argument must be an array, found `{arr_ty}`"),
                                     args[0].span.clone(),
                                 );
@@ -2638,6 +2814,7 @@ impl Checker {
                             Ty::Fn(params, ret) => {
                                 if params.len() != 1 {
                                     self.error(
+                                        ErrorCode::E0133,
                                         format!(
                                             "filter() callback must take 1 parameter, takes {}",
                                             params.len()
@@ -2648,13 +2825,14 @@ impl Checker {
                                     && !params[0].is_error()
                                     && elem_ty != params[0]
                                 {
-                                    self.error(
+                                    self.error(ErrorCode::E0100,
                                         format!("filter() callback parameter type `{}` doesn't match array element type `{}`", params[0], elem_ty),
                                         args[1].span.clone(),
                                     );
                                 }
                                 if **ret != Ty::Bool && !ret.is_error() {
                                     self.error(
+                                        ErrorCode::E0133,
                                         format!(
                                             "filter() callback must return `bool`, returns `{}`",
                                             ret
@@ -2666,7 +2844,7 @@ impl Checker {
                             }
                             _ if fn_ty.is_error() => return Ty::Error,
                             _ => {
-                                self.error(
+                                self.error(ErrorCode::E0133,
                                     format!("filter() second argument must be a function, found `{fn_ty}`"),
                                     args[1].span.clone(),
                                 );
@@ -2679,6 +2857,7 @@ impl Checker {
                     if name == "reduce" {
                         if args.len() != 3 {
                             self.error(
+                                ErrorCode::E0513,
                                 format!("reduce() takes exactly 3 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
@@ -2698,7 +2877,7 @@ impl Checker {
                             Ty::Array(inner) => *inner.clone(),
                             _ if arr_ty.is_error() => Ty::Error,
                             _ => {
-                                self.error(
+                                self.error(ErrorCode::E0133,
                                     format!("reduce() first argument must be an array, found `{arr_ty}`"),
                                     args[0].span.clone(),
                                 );
@@ -2709,6 +2888,7 @@ impl Checker {
                             Ty::Fn(params, ret) => {
                                 if params.len() != 2 {
                                     self.error(
+                                        ErrorCode::E0133,
                                         format!(
                                             "reduce() callback must take 2 parameters, takes {}",
                                             params.len()
@@ -2720,7 +2900,7 @@ impl Checker {
                                         && !params[0].is_error()
                                         && init_ty != params[0]
                                     {
-                                        self.error(
+                                        self.error(ErrorCode::E0133,
                                             format!("reduce() callback first parameter type `{}` doesn't match initial value type `{}`", params[0], init_ty),
                                             args[2].span.clone(),
                                         );
@@ -2729,7 +2909,7 @@ impl Checker {
                                         && !params[1].is_error()
                                         && elem_ty != params[1]
                                     {
-                                        self.error(
+                                        self.error(ErrorCode::E0133,
                                             format!("reduce() callback second parameter type `{}` doesn't match array element type `{}`", params[1], elem_ty),
                                             args[2].span.clone(),
                                         );
@@ -2739,7 +2919,7 @@ impl Checker {
                             }
                             _ if fn_ty.is_error() => return Ty::Error,
                             _ => {
-                                self.error(
+                                self.error(ErrorCode::E0133,
                                     format!("reduce() third argument must be a function, found `{fn_ty}`"),
                                     args[2].span.clone(),
                                 );
@@ -2753,6 +2933,7 @@ impl Checker {
                         if let Ty::Fn(ref param_tys, ref ret_ty) = info.ty {
                             if args.len() != param_tys.len() {
                                 self.error(
+                                    ErrorCode::E0100,
                                     format!(
                                         "closure expects {} argument(s) but {} were given",
                                         param_tys.len(),
@@ -2769,6 +2950,7 @@ impl Checker {
                                     && arg_ty != param_tys[i]
                                 {
                                     self.error(
+                                        ErrorCode::E0100,
                                         format!(
                                             "argument {} expects `{}`, found `{arg_ty}`",
                                             i + 1,
@@ -2788,6 +2970,7 @@ impl Checker {
                         // Calling an @unsafe function from a safe context is an error
                         if sig.is_unsafe && !self.in_unsafe_context {
                             self.error(
+                                ErrorCode::E0100,
                                 format!(
                                     "cannot call `@unsafe` function `{name}` from a safe context"
                                 ),
@@ -2796,6 +2979,7 @@ impl Checker {
                         }
                         if args.len() != sig.params.len() {
                             self.error(
+                                ErrorCode::E0100,
                                 format!(
                                     "function `{name}` expects {} argument(s) but {} were given",
                                     sig.params.len(),
@@ -2822,7 +3006,7 @@ impl Checker {
                                         && !existing.is_error()
                                         && arg_ty != *existing
                                     {
-                                        self.error(
+                                        self.error(ErrorCode::E0100,
                                             format!(
                                                 "type parameter `{tp_name}` inferred as `{existing}` but argument has type `{arg_ty}`"
                                             ),
@@ -2855,7 +3039,7 @@ impl Checker {
                                         }
                                     );
                                 if !is_int_literal_coercion {
-                                    self.error(
+                                    self.error(ErrorCode::E0100,
                                         format!(
                                             "argument `{param_name}` expects `{concrete_param_ty}`, found `{arg_ty}`"
                                         ),
@@ -2879,7 +3063,7 @@ impl Checker {
                                             .is_some_and(|impls| impls.contains(bound))
                                     });
                                     if !has_impl && !concrete_ty.is_error() {
-                                        self.error(
+                                        self.error(ErrorCode::E0100,
                                             format!(
                                                 "type `{concrete_ty}` does not implement trait `{bound}`"
                                             ),
@@ -2902,7 +3086,7 @@ impl Checker {
                                         let expected_args = field_tys.len();
                                         let actual_args = args.len() - 1; // subtract the enum type name
                                         if actual_args != expected_args {
-                                            self.error(
+                                            self.error(ErrorCode::E0100,
                                                 format!(
                                                     "variant `{name}` of enum `{first_name}` expects {} argument(s) but {} were given",
                                                     expected_args, actual_args
@@ -2920,7 +3104,7 @@ impl Checker {
                                                 && !field_tys[i].is_error()
                                                 && arg_ty != field_tys[i]
                                             {
-                                                self.error(
+                                                self.error(ErrorCode::E0100,
                                                     format!(
                                                         "variant `{name}` field {} expects `{}`, found `{arg_ty}`",
                                                         i + 1, field_tys[i]
@@ -2949,7 +3133,7 @@ impl Checker {
                                 {
                                     // Check argument count (all args including self)
                                     if args.len() != method_sig.params.len() {
-                                        self.error(
+                                        self.error(ErrorCode::E0100,
                                             format!(
                                                 "method `{name}` on `{type_name}` expects {} argument(s) but {} were given",
                                                 method_sig.params.len() - 1,
@@ -2968,7 +3152,7 @@ impl Checker {
                                             && !param_ty.is_error()
                                             && arg_ty != *param_ty
                                         {
-                                            self.error(
+                                            self.error(ErrorCode::E0100,
                                                 format!("argument `{param_name}` expects `{param_ty}`, found `{arg_ty}`"),
                                                 arg.span.clone(),
                                             );
@@ -2978,7 +3162,11 @@ impl Checker {
                                 }
                             }
                         }
-                        self.error(format!("undefined function `{name}`"), callee.span.clone());
+                        self.error(
+                            ErrorCode::E0301,
+                            format!("undefined function `{name}`"),
+                            callee.span.clone(),
+                        );
                         Ty::Error
                     }
                 } else if let Expr::FieldAccess { object, field } = &callee.node {
@@ -2993,7 +3181,7 @@ impl Checker {
                         {
                             let expected_args = method_sig.params.len() - 1;
                             if args.len() != expected_args {
-                                self.error(
+                                self.error(ErrorCode::E0100,
                                     format!(
                                         "method `{field}` on `{type_name}` expects {} argument(s) but {} were given",
                                         expected_args, args.len()
@@ -3007,7 +3195,7 @@ impl Checker {
                                 let (ref param_name, ref param_ty) = method_sig.params[i + 1];
                                 if !arg_ty.is_error() && !param_ty.is_error() && arg_ty != *param_ty
                                 {
-                                    self.error(
+                                    self.error(ErrorCode::E0100,
                                         format!("argument `{param_name}` expects `{param_ty}`, found `{arg_ty}`"),
                                         arg.span.clone(),
                                     );
@@ -3016,6 +3204,7 @@ impl Checker {
                             method_sig.ret
                         } else {
                             self.error(
+                                ErrorCode::E0317,
                                 format!("no method `{field}` found on type `{type_name}`"),
                                 callee.span.clone(),
                             );
@@ -3025,6 +3214,7 @@ impl Checker {
                         Ty::Error
                     } else {
                         self.error(
+                            ErrorCode::E0134,
                             format!("cannot call method `{field}` on type `{obj_ty}`"),
                             callee.span.clone(),
                         );
@@ -3032,6 +3222,7 @@ impl Checker {
                     }
                 } else {
                     self.error(
+                        ErrorCode::E0512,
                         "only named function calls are supported".to_string(),
                         callee.span.clone(),
                     );
@@ -3049,6 +3240,7 @@ impl Checker {
                     // Allow integer conditions (truthy)
                     if !cond_ty.is_integer() {
                         self.error(
+                            ErrorCode::E0116,
                             format!("if condition must be `bool`, found `{cond_ty}`"),
                             condition.span.clone(),
                         );
@@ -3066,7 +3258,7 @@ impl Checker {
                     {
                         // Only warn if both are non-unit (meaning it's used as an expression)
                         if then_ty != Ty::Unit && else_ty != Ty::Unit {
-                            self.error(
+                            self.error(ErrorCode::E0107,
                                 format!(
                                     "if/else branches have different types: `{then_ty}` and `{else_ty}`"
                                 ),
@@ -3103,12 +3295,14 @@ impl Checker {
                 if let Some(info) = self.lookup_var(target).cloned() {
                     if !info.mutable {
                         self.error(
+                            ErrorCode::E0501,
                             format!("cannot assign to immutable variable `{target}`"),
                             expr.span.clone(),
                         );
                     }
                     if !val_ty.is_error() && !info.ty.is_error() && val_ty != info.ty {
                         self.error(
+                            ErrorCode::E0111,
                             format!(
                                 "cannot assign `{val_ty}` to variable `{target}` of type `{}`",
                                 info.ty
@@ -3117,7 +3311,11 @@ impl Checker {
                         );
                     }
                 } else {
-                    self.error(format!("undefined variable `{target}`"), expr.span.clone());
+                    self.error(
+                        ErrorCode::E0300,
+                        format!("undefined variable `{target}`"),
+                        expr.span.clone(),
+                    );
                 }
 
                 Ty::Unit
@@ -3134,6 +3332,7 @@ impl Checker {
                     BinOp::Mod => "%",
                     _ => {
                         self.error(
+                            ErrorCode::E0137,
                             "unsupported compound assignment operator".to_string(),
                             expr.span.clone(),
                         );
@@ -3144,12 +3343,13 @@ impl Checker {
                 if let Some(info) = self.lookup_var(target).cloned() {
                     if !info.mutable {
                         self.error(
+                            ErrorCode::E0501,
                             format!("cannot assign to immutable variable `{target}`"),
                             expr.span.clone(),
                         );
                     }
                     if !val_ty.is_error() && !info.ty.is_error() && val_ty != info.ty {
-                        self.error(
+                        self.error(ErrorCode::E0130,
                             format!(
                                 "cannot apply `{op_str}=` with `{val_ty}` to variable `{target}` of type `{}`",
                                 info.ty
@@ -3159,12 +3359,17 @@ impl Checker {
                     }
                     if !info.ty.is_numeric() && !info.ty.is_error() {
                         self.error(
+                            ErrorCode::E0300,
                             format!("cannot perform arithmetic on `{}`", info.ty),
                             expr.span.clone(),
                         );
                     }
                 } else {
-                    self.error(format!("undefined variable `{target}`"), expr.span.clone());
+                    self.error(
+                        ErrorCode::E0300,
+                        format!("undefined variable `{target}`"),
+                        expr.span.clone(),
+                    );
                 }
 
                 Ty::Unit
@@ -3182,7 +3387,7 @@ impl Checker {
                 if let Some(root_name) = Self::root_var_name(object) {
                     if let Some(info) = self.lookup_var(&root_name) {
                         if !info.mutable {
-                            self.error(
+                            self.error(ErrorCode::E0502,
                                 format!("cannot assign to field `{field}` of immutable variable `{root_name}` (declare with `let mut` to make mutable)"),
                                 expr.span.clone(),
                             );
@@ -3202,7 +3407,7 @@ impl Checker {
                                 && !field_ty.is_error()
                                 && val_ty != *field_ty
                             {
-                                self.error(
+                                self.error(ErrorCode::E0112,
                                     format!(
                                         "cannot assign `{val_ty}` to field `{field}` of type `{field_ty}`"
                                     ),
@@ -3211,6 +3416,7 @@ impl Checker {
                             }
                         } else {
                             self.error(
+                                ErrorCode::E0315,
                                 format!("struct `{struct_name}` has no field `{field}`"),
                                 expr.span.clone(),
                             );
@@ -3218,6 +3424,7 @@ impl Checker {
                     }
                 } else if !obj_ty.is_error() {
                     self.error(
+                        ErrorCode::E0135,
                         format!("cannot assign to field `{field}` on non-struct type `{obj_ty}`"),
                         object.span.clone(),
                     );
@@ -3239,7 +3446,7 @@ impl Checker {
                 if let Some(root_name) = Self::root_var_name(object) {
                     if let Some(info) = self.lookup_var(&root_name) {
                         if !info.mutable {
-                            self.error(
+                            self.error(ErrorCode::E0503,
                                 format!("cannot assign to index of immutable variable `{root_name}` (declare with `let mut` to make mutable)"),
                                 expr.span.clone(),
                             );
@@ -3250,6 +3457,7 @@ impl Checker {
                 // Check index is integer
                 if !idx_ty.is_error() && !idx_ty.is_integer() {
                     self.error(
+                        ErrorCode::E0123,
                         format!("array index must be an integer, found `{idx_ty}`"),
                         index.span.clone(),
                     );
@@ -3260,6 +3468,7 @@ impl Checker {
                     Ty::Array(inner) => {
                         if !val_ty.is_error() && !inner.is_error() && val_ty != **inner {
                             self.error(
+                                ErrorCode::E0113,
                                 format!("cannot assign `{val_ty}` to array of `{inner}`"),
                                 value.span.clone(),
                             );
@@ -3268,6 +3477,7 @@ impl Checker {
                     Ty::Error => {}
                     _ => {
                         self.error(
+                            ErrorCode::E0124,
                             format!("cannot index-assign into `{obj_ty}`"),
                             object.span.clone(),
                         );
@@ -3281,6 +3491,7 @@ impl Checker {
                 let cond_ty = self.check_expr(condition);
                 if !cond_ty.is_error() && cond_ty != Ty::Bool && !cond_ty.is_integer() {
                     self.error(
+                        ErrorCode::E0117,
                         format!("while condition must be `bool`, found `{cond_ty}`"),
                         condition.span.clone(),
                     );
@@ -3322,7 +3533,7 @@ impl Checker {
                         match &self.current_return_type {
                             Ty::Result(_, _) => {}
                             _ => {
-                                self.error(
+                                self.error(ErrorCode::E0121,
                                     "`?` operator can only be used in a function that returns a Result type".to_string(),
                                     expr.span.clone(),
                                 );
@@ -3332,6 +3543,7 @@ impl Checker {
                     }
                     _ => {
                         self.error(
+                            ErrorCode::E0120,
                             format!("`?` operator requires a Result type, found `{inner_ty}`"),
                             inner.span.clone(),
                         );
@@ -3345,12 +3557,14 @@ impl Checker {
                 let end_ty = self.check_expr(end);
                 if !start_ty.is_error() && !start_ty.is_integer() {
                     self.error(
+                        ErrorCode::E0122,
                         format!("range start must be an integer, found `{start_ty}`"),
                         start.span.clone(),
                     );
                 }
                 if !end_ty.is_error() && !end_ty.is_integer() {
                     self.error(
+                        ErrorCode::E0122,
                         format!("range end must be an integer, found `{end_ty}`"),
                         end.span.clone(),
                     );
@@ -3395,6 +3609,7 @@ impl Checker {
             Expr::ArrayLit(elements) => {
                 if elements.is_empty() {
                     self.error(
+                        ErrorCode::E0115,
                         "cannot infer type of empty array".to_string(),
                         expr.span.clone(),
                     );
@@ -3404,7 +3619,7 @@ impl Checker {
                 for elem in &elements[1..] {
                     let elem_ty = self.check_expr(elem);
                     if !elem_ty.is_error() && !first_ty.is_error() && elem_ty != first_ty {
-                        self.error(
+                        self.error(ErrorCode::E0114,
                             format!("array elements must all have the same type, expected `{first_ty}` but found `{elem_ty}`"),
                             elem.span.clone(),
                         );
@@ -3418,6 +3633,7 @@ impl Checker {
                 let idx_ty = self.check_expr(index);
                 if !idx_ty.is_error() && !idx_ty.is_integer() {
                     self.error(
+                        ErrorCode::E0123,
                         format!("array index must be an integer, found `{idx_ty}`"),
                         index.span.clone(),
                     );
@@ -3426,7 +3642,11 @@ impl Checker {
                     Ty::Array(inner) => *inner.clone(),
                     Ty::Error => Ty::Error,
                     _ => {
-                        self.error(format!("cannot index into `{obj_ty}`"), object.span.clone());
+                        self.error(
+                            ErrorCode::E0124,
+                            format!("cannot index into `{obj_ty}`"),
+                            object.span.clone(),
+                        );
                         Ty::Error
                     }
                 }
@@ -3436,7 +3656,7 @@ impl Checker {
                 // Check if this is an agent instantiation: AgentName {}
                 if self.agents.contains_key(name) {
                     if !fields.is_empty() {
-                        self.error(
+                        self.error(ErrorCode::E0511,
                             format!("agent `{name}` does not accept field initializers; use `{name} {{}}` to instantiate"),
                             expr.span.clone(),
                         );
@@ -3445,7 +3665,11 @@ impl Checker {
                 }
 
                 let Some(struct_info) = self.structs.get(name).cloned() else {
-                    self.error(format!("undefined struct `{name}`"), expr.span.clone());
+                    self.error(
+                        ErrorCode::E0302,
+                        format!("undefined struct `{name}`"),
+                        expr.span.clone(),
+                    );
                     // Still check field value expressions
                     for (_, value) in fields {
                         self.check_expr(value);
@@ -3472,7 +3696,7 @@ impl Checker {
                             if !val_ty.is_error() {
                                 if let Some(prev) = tp_inferred.get(tp_name) {
                                     if prev != &val_ty {
-                                        self.error(
+                                        self.error(ErrorCode::E0131,
                                             format!(
                                                 "type parameter `{tp_name}` in struct `{name}` inferred as `{prev}` but field `{field_name}` has type `{val_ty}`"
                                             ),
@@ -3487,7 +3711,7 @@ impl Checker {
                             && !expected_ty.is_error()
                             && &val_ty != *expected_ty
                         {
-                            self.error(
+                            self.error(ErrorCode::E0100,
                                 format!(
                                     "field `{field_name}` of struct `{name}` expects `{}`, found `{val_ty}`",
                                     expected_ty
@@ -3498,6 +3722,7 @@ impl Checker {
                         provided.insert(field_name.as_str());
                     } else {
                         self.error(
+                            ErrorCode::E0315,
                             format!("struct `{name}` has no field `{field_name}`"),
                             value.span.clone(),
                         );
@@ -3508,6 +3733,7 @@ impl Checker {
                 for (field_name, _) in &struct_info.fields {
                     if !provided.contains(field_name.as_str()) {
                         self.error(
+                            ErrorCode::E0318,
                             format!("missing field `{field_name}` in struct `{name}`"),
                             expr.span.clone(),
                         );
@@ -3523,12 +3749,13 @@ impl Checker {
                     if let Some(info) = self.enums.get(name).cloned() {
                         if !info.has_variant(field) {
                             self.error(
+                                ErrorCode::E0316,
                                 format!("enum `{name}` has no variant `{field}`"),
                                 expr.span.clone(),
                             );
                         } else if let Some(fields) = info.variant_fields(field) {
                             if !fields.is_empty() {
-                                self.error(
+                                self.error(ErrorCode::E0100,
                                     format!("variant `{field}` of enum `{name}` requires {} argument(s)", fields.len()),
                                     expr.span.clone(),
                                 );
@@ -3548,6 +3775,7 @@ impl Checker {
                                 field_ty.clone()
                             } else {
                                 self.error(
+                                    ErrorCode::E0315,
                                     format!("struct `{struct_name}` has no field `{field}`"),
                                     expr.span.clone(),
                                 );
@@ -3555,6 +3783,7 @@ impl Checker {
                             }
                         } else {
                             self.error(
+                                ErrorCode::E0302,
                                 format!("undefined struct `{struct_name}`"),
                                 expr.span.clone(),
                             );
@@ -3566,7 +3795,7 @@ impl Checker {
                         "system" => Ty::Str,
                         "tools" => Ty::Array(Box::new(Ty::Str)),
                         _ => {
-                            self.error(
+                            self.error(ErrorCode::E0315,
                                     format!("agent `{agent_name}` has no field `{field}`; available fields: model, system, tools"),
                                     expr.span.clone(),
                                 );
@@ -3576,6 +3805,7 @@ impl Checker {
                     Ty::Error => Ty::Error,
                     _ => {
                         self.error(
+                            ErrorCode::E0135,
                             format!("cannot access field `{field}` on type `{obj_ty}`"),
                             object.span.clone(),
                         );
@@ -3588,13 +3818,18 @@ impl Checker {
                 if let Some(info) = self.enums.get(enum_name) {
                     if !info.has_variant(variant) {
                         self.error(
+                            ErrorCode::E0316,
                             format!("enum `{enum_name}` has no variant `{variant}`"),
                             expr.span.clone(),
                         );
                     }
                     Ty::Enum(enum_name.clone())
                 } else {
-                    self.error(format!("undefined enum `{enum_name}`"), expr.span.clone());
+                    self.error(
+                        ErrorCode::E0303,
+                        format!("undefined enum `{enum_name}`"),
+                        expr.span.clone(),
+                    );
                     Ty::Error
                 }
             }
@@ -3604,6 +3839,7 @@ impl Checker {
 
                 if arms.is_empty() {
                     self.error(
+                        ErrorCode::E0201,
                         "match expression has no arms".to_string(),
                         expr.span.clone(),
                     );
@@ -3677,6 +3913,7 @@ impl Checker {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
                                     self.error(
+                                        ErrorCode::E0202,
                                         format!("match guard must be bool, got `{guard_ty}`"),
                                         guard.span.clone(),
                                     );
@@ -3705,6 +3942,7 @@ impl Checker {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
                                     self.error(
+                                        ErrorCode::E0202,
                                         format!("match guard must be bool, got `{guard_ty}`"),
                                         guard.span.clone(),
                                     );
@@ -3733,6 +3971,7 @@ impl Checker {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
                                     self.error(
+                                        ErrorCode::E0202,
                                         format!("match guard must be bool, got `{guard_ty}`"),
                                         guard.span.clone(),
                                     );
@@ -3747,6 +3986,7 @@ impl Checker {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
                                     self.error(
+                                        ErrorCode::E0202,
                                         format!("match guard must be bool, got `{guard_ty}`"),
                                         guard.span.clone(),
                                     );
@@ -3778,6 +4018,7 @@ impl Checker {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
                                     self.error(
+                                        ErrorCode::E0202,
                                         format!("match guard must be bool, got `{guard_ty}`"),
                                         guard.span.clone(),
                                     );
@@ -3802,6 +4043,7 @@ impl Checker {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
                                     self.error(
+                                        ErrorCode::E0202,
                                         format!("match guard must be bool, got `{guard_ty}`"),
                                         guard.span.clone(),
                                     );
@@ -3817,6 +4059,7 @@ impl Checker {
                                 let guard_ty = self.check_expr(guard);
                                 if guard_ty != Ty::Bool && !guard_ty.is_error() {
                                     self.error(
+                                        ErrorCode::E0202,
                                         format!("match guard must be bool, got `{guard_ty}`"),
                                         guard.span.clone(),
                                     );
@@ -3829,6 +4072,7 @@ impl Checker {
                     if let Some(ref expected) = result_ty {
                         if !body_ty.is_error() && !expected.is_error() && body_ty != *expected {
                             self.error(
+                                ErrorCode::E0108,
                                 format!(
                                     "match arms have different types: `{expected}` and `{body_ty}`"
                                 ),
@@ -3854,6 +4098,7 @@ impl Checker {
                                     let missing_str: Vec<&str> =
                                         missing.iter().map(|s| s.as_str()).collect();
                                     self.error(
+                                        ErrorCode::E0200,
                                         format!(
                                             "match is not exhaustive; missing variants: {}",
                                             missing_str.join(", ")
@@ -3875,6 +4120,7 @@ impl Checker {
                                     missing.push("false");
                                 }
                                 self.error(
+                                    ErrorCode::E0200,
                                     format!(
                                         "match is not exhaustive; missing variants: {}",
                                         missing.join(", ")
@@ -3895,6 +4141,7 @@ impl Checker {
                                     missing.push("err");
                                 }
                                 self.error(
+                                    ErrorCode::E0200,
                                     format!(
                                         "match is not exhaustive; missing variants: {}",
                                         missing.join(", ")
@@ -3915,6 +4162,7 @@ impl Checker {
                                     missing.push("none");
                                 }
                                 self.error(
+                                    ErrorCode::E0200,
                                     format!(
                                         "match is not exhaustive; missing variants: {}",
                                         missing.join(", ")
@@ -3926,6 +4174,7 @@ impl Checker {
                         _ => {
                             // For integers, strings, etc., a wildcard is required
                             self.error(
+                                ErrorCode::E0200,
                                 "match is not exhaustive; consider adding a wildcard `_` arm"
                                     .to_string(),
                                 expr.span.clone(),
@@ -3961,6 +4210,7 @@ impl Checker {
                                 hints[i].clone()
                             } else {
                                 self.error(
+                                    ErrorCode::E0126,
                                     format!(
                                         "cannot infer type of closure parameter `{}`",
                                         param.name
@@ -3970,7 +4220,7 @@ impl Checker {
                                 Ty::Error
                             }
                         } else {
-                            self.error(
+                            self.error(ErrorCode::E0126,
                                 format!("cannot infer type of closure parameter `{}` -- add a type annotation", param.name),
                                 param.ty.span.clone(),
                             );
@@ -3985,6 +4235,7 @@ impl Checker {
                             Some(ty) => ty,
                             None => {
                                 self.error(
+                                    ErrorCode::E0305,
                                     format!("unknown type in closure parameter `{}`", param.name),
                                     param.ty.span.clone(),
                                 );
@@ -4010,6 +4261,7 @@ impl Checker {
                         Some(ty) => {
                             if !body_ty.is_error() && !ty.is_error() && body_ty != ty {
                                 self.error(
+                                    ErrorCode::E0125,
                                     format!(
                                         "closure body returns `{body_ty}` but return type is `{ty}`"
                                     ),
@@ -4019,7 +4271,11 @@ impl Checker {
                             ty
                         }
                         None => {
-                            self.error("unknown closure return type".to_string(), rt.span.clone());
+                            self.error(
+                                ErrorCode::E0127,
+                                "unknown closure return type".to_string(),
+                                rt.span.clone(),
+                            );
                             body_ty
                         }
                     }
@@ -4055,6 +4311,7 @@ impl Checker {
             Expr::Break => {
                 if self.loop_depth == 0 {
                     self.error(
+                        ErrorCode::E0507,
                         "`break` can only be used inside a loop".to_string(),
                         expr.span.clone(),
                     );
@@ -4065,6 +4322,7 @@ impl Checker {
             Expr::Continue => {
                 if self.loop_depth == 0 {
                     self.error(
+                        ErrorCode::E0508,
                         "`continue` can only be used inside a loop".to_string(),
                         expr.span.clone(),
                     );
@@ -4083,7 +4341,7 @@ impl Checker {
                 match &val_ty {
                     Ty::Optional(inner) => {
                         if !inner.is_error() && !def_ty.is_error() && **inner != def_ty {
-                            self.error(
+                            self.error(ErrorCode::E0118,
                                 format!(
                                     "`??` operator: optional inner type `{}` doesn't match default type `{def_ty}`",
                                     inner
@@ -4098,7 +4356,7 @@ impl Checker {
                         }
                     }
                     _ => {
-                        self.error(
+                        self.error(ErrorCode::E0119,
                             format!("`??` operator requires an optional type on the left, found `{val_ty}`"),
                             value.span.clone(),
                         );
@@ -4120,6 +4378,7 @@ impl Checker {
                     if let Some(info) = self.enums.get(enum_name) {
                         if !info.has_variant(name) {
                             self.error(
+                                ErrorCode::E0316,
                                 format!("enum `{enum_name}` has no variant `{name}`"),
                                 pattern.span.clone(),
                             );
@@ -4131,6 +4390,7 @@ impl Checker {
             Pattern::IntLit(_) => {
                 if !subject_ty.is_error() && !subject_ty.is_integer() {
                     self.error(
+                        ErrorCode::E0132,
                         format!("integer pattern cannot match `{subject_ty}`"),
                         pattern.span.clone(),
                     );
@@ -4139,6 +4399,7 @@ impl Checker {
             Pattern::BoolLit(_) => {
                 if !subject_ty.is_error() && *subject_ty != Ty::Bool {
                     self.error(
+                        ErrorCode::E0132,
                         format!("boolean pattern cannot match `{subject_ty}`"),
                         pattern.span.clone(),
                     );
@@ -4147,6 +4408,7 @@ impl Checker {
             Pattern::StringLit(_) => {
                 if !subject_ty.is_error() && *subject_ty != Ty::Str {
                     self.error(
+                        ErrorCode::E0132,
                         format!("string pattern cannot match `{subject_ty}`"),
                         pattern.span.clone(),
                     );
@@ -4155,6 +4417,7 @@ impl Checker {
             Pattern::Ok(_) => {
                 if !subject_ty.is_error() && !matches!(subject_ty, Ty::Result(_, _)) {
                     self.error(
+                        ErrorCode::E0132,
                         format!("ok pattern cannot match `{subject_ty}`"),
                         pattern.span.clone(),
                     );
@@ -4163,6 +4426,7 @@ impl Checker {
             Pattern::Err(_) => {
                 if !subject_ty.is_error() && !matches!(subject_ty, Ty::Result(_, _)) {
                     self.error(
+                        ErrorCode::E0132,
                         format!("err pattern cannot match `{subject_ty}`"),
                         pattern.span.clone(),
                     );
@@ -4171,6 +4435,7 @@ impl Checker {
             Pattern::Some(_) => {
                 if !subject_ty.is_error() && !matches!(subject_ty, Ty::Optional(_)) {
                     self.error(
+                        ErrorCode::E0132,
                         format!("some pattern cannot match `{subject_ty}`"),
                         pattern.span.clone(),
                     );
@@ -4179,6 +4444,7 @@ impl Checker {
             Pattern::None => {
                 if !subject_ty.is_error() && !matches!(subject_ty, Ty::Optional(_)) {
                     self.error(
+                        ErrorCode::E0132,
                         format!("none pattern cannot match `{subject_ty}`"),
                         pattern.span.clone(),
                     );
@@ -4189,7 +4455,7 @@ impl Checker {
                     if let Some(info) = self.enums.get(enum_name) {
                         if let Some(field_tys) = info.variant_fields(variant) {
                             if bindings.len() != field_tys.len() {
-                                self.error(
+                                self.error(ErrorCode::E0100,
                                     format!(
                                         "variant `{variant}` has {} field(s) but pattern has {} binding(s)",
                                         field_tys.len(), bindings.len()
@@ -4199,6 +4465,7 @@ impl Checker {
                             }
                         } else {
                             self.error(
+                                ErrorCode::E0316,
                                 format!("enum `{enum_name}` has no variant `{variant}`"),
                                 pattern.span.clone(),
                             );
@@ -4206,6 +4473,7 @@ impl Checker {
                     }
                 } else if !subject_ty.is_error() {
                     self.error(
+                        ErrorCode::E0132,
                         format!("variant destructure pattern cannot match `{subject_ty}`"),
                         pattern.span.clone(),
                     );
@@ -4238,7 +4506,7 @@ impl Checker {
                                         }
                                     );
                                 if !is_int_literal_coercion {
-                                    self.error(
+                                    self.error(ErrorCode::E0110,
                                         format!(
                                             "type annotation `{t}` doesn't match value type `{val_ty}`"
                                         ),
@@ -4250,7 +4518,11 @@ impl Checker {
                         }
                         None => {
                             if let TypeExpr::Named(name) = &ty_expr.node {
-                                self.error(format!("unknown type `{name}`"), ty_expr.span.clone());
+                                self.error(
+                                    ErrorCode::E0305,
+                                    format!("unknown type `{name}`"),
+                                    ty_expr.span.clone(),
+                                );
                             }
                             val_ty.clone()
                         }
@@ -4284,6 +4556,7 @@ impl Checker {
                     && ret_ty != self.current_return_type
                 {
                     self.error(
+                        ErrorCode::E0109,
                         format!(
                             "return type `{ret_ty}` doesn't match function return type `{}`",
                             self.current_return_type

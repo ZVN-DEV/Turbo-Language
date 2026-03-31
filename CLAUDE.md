@@ -53,7 +53,7 @@ Codegen (turbo-codegen-cranelift)  →  JIT execution  or  AOT .o file
 | Crate | Path | Purpose |
 |-------|------|---------|
 | `turbo-lexer` | `crates/turbo-lexer/` | Logos-based tokenizer. Defines `Token` enum and `Spanned<Token>`. |
-| `turbo-ast` | `crates/turbo-ast/` | AST node definitions: `Module`, `Item`, `Expr`, `Stmt`, `TypeExpr`, `Pattern`. |
+| `turbo-ast` | `crates/turbo-ast/` | AST node definitions (`Module`, `Item`, `Expr`, `Stmt`, `TypeExpr`, `Pattern`) and `ErrorCode` enum. |
 | `turbo-parser` | `crates/turbo-parser/` | Recursive descent parser. Entry: `parse(tokens) -> (Module, Vec<ParseError>)`. |
 | `turbo-sema` | `crates/turbo-sema/` | Semantic analysis and type checking. Entry: `check(module) -> Vec<SemaError>`. |
 | `turbo-codegen-cranelift` | `crates/turbo-codegen-cranelift/` | Cranelift JIT + AOT backend. Entries: `jit_run()`, `aot_compile()`. |
@@ -74,18 +74,23 @@ Codegen (turbo-codegen-cranelift)  →  JIT execution  or  AOT .o file
 - `Stmt` — `Let { mutable, name, ty, value }`, `Expr(...)`, `Return(...)`, `Defer(...)`.
 - `TypeExpr` — type syntax: `Named`, `Unit`, `Array`, `FnType`, `Result`, `Optional`, `Future`, `Inferred`.
 
+**turbo-ast**:
+- `ErrorCode` — unique error code enum (E0001-E0513). Defined in `turbo-ast/src/errors.rs`. Used by all error types. See `docs/errors.md` for the full table.
+
 **turbo-sema**:
 - `Ty` — internal type representation: `I32`, `I64`, `U32`, `U64`, `F32`, `F64`, `Bool`, `Str`, `Unit`, `Array(Box<Ty>)`, `Struct(String)`, `Enum(String)`, `Fn(Vec<Ty>, Box<Ty>)`, `Result`, `Optional`, `Future`, `TypeParam`, `Agent`, `Error`.
-- `SemaError` — `{ message: String, span: Span }`.
+- `SemaError` — `{ code: ErrorCode, message: String, span: Span }`.
 
 **turbo-codegen-cranelift**:
 - `TurboTy` — codegen-level type tag (distinct from `Ty` because Cranelift IR types alone can't distinguish e.g. `str` from `i64` on ARM64).
-- `CodegenError` — `{ message: String }`.
+- `CodegenError` — `{ code: ErrorCode, message: String }`.
 
 ## Patterns
 
 ### Error handling
-- All error types carry a `Span` (except `CodegenError`). The CLI uses `ariadne` to render them as pretty diagnostics.
+- Every diagnostic carries an `ErrorCode` (e.g. `E0100`) for searchable, unique identification. Codes are defined in `turbo-ast/src/errors.rs`. Full reference: `docs/errors.md`.
+- `turbo explain E0100` prints the description for any error code.
+- All error types carry a `Span` (except `CodegenError`). The CLI uses `ariadne` to render them as pretty diagnostics with the format `error[E0100]: message`.
 - The parser collects errors into `Vec<ParseError>` and continues parsing (error recovery).
 - Sema uses `Ty::Error` as a poison type to avoid cascading errors — if an expression has type `Ty::Error`, further checks on it are skipped.
 

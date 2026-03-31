@@ -6,6 +6,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- Production error codes (E0001-E0513) for all compiler diagnostics, Rust E0308-style
+  - `ErrorCode` enum in `turbo-ast/src/errors.rs` with `as_str()`, `description()`, `Display`
+  - All `SemaError`, `ParseError`, and `CodegenError` types now carry an `ErrorCode`
+  - CLI displays errors as `error[E0100]: message` via ariadne
+  - New `turbo explain <code>` CLI subcommand prints the error description
+  - Error code reference: `docs/errors.md`
 - Gold standard audit: CI workflow, SECURITY.md, CLAUDE.md, allocation safety, strip binary
 - CONTRIBUTING.md and CHANGELOG.md documentation
 - Replace last `panic!` in sema with proper error diagnostic

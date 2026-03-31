@@ -1,3 +1,6 @@
+pub mod errors;
+pub use errors::ErrorCode;
+
 /// A span in source code: byte offset range [start, end)
 pub type Span = std::ops::Range<usize>;
 

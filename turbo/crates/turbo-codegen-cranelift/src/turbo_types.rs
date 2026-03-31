@@ -8,6 +8,7 @@ use turbo_ast::*;
 
 #[derive(Debug)]
 pub struct CodegenError {
+    pub code: ErrorCode,
     pub message: String,
 }
 

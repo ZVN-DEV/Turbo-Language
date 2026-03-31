@@ -146,6 +146,7 @@ pub(crate) fn compile_assert<M: Module>(
 ) -> Result<MaybeTyped, CodegenError> {
     if args.is_empty() {
         return Err(CodegenError {
+            code: ErrorCode::E0400,
             message: "assert() requires at least one argument".to_string(),
         });
     }
@@ -186,6 +187,7 @@ pub(crate) fn compile_assert_eq<M: Module>(
     if args.len() != 2 {
         let name = if is_ne { "assert_ne" } else { "assert_eq" };
         return Err(CodegenError {
+            code: ErrorCode::E0400,
             message: format!("{name}() requires exactly 2 arguments"),
         });
     }
@@ -267,6 +269,7 @@ pub(crate) fn compile_len<M: Module>(
 ) -> Result<MaybeTyped, CodegenError> {
     if args.is_empty() {
         return Err(CodegenError {
+            code: ErrorCode::E0400,
             message: "len() requires exactly 1 argument".to_string(),
         });
     }
@@ -726,6 +729,7 @@ pub(crate) fn compile_struct_to_json<M: Module>(
         .struct_fields
         .get(struct_name)
         .ok_or_else(|| CodegenError {
+            code: ErrorCode::E0400,
             message: format!("undefined struct: {struct_name}"),
         })?
         .clone();
@@ -822,6 +826,7 @@ pub(crate) fn compile_builtin_to_json_array<M: Module>(
         TurboTy::Array(inner) => *inner.clone(),
         _ => {
             return Err(CodegenError {
+                code: ErrorCode::E0400,
                 message: "to_json_array() argument must be an array".to_string(),
             })
         }
@@ -831,6 +836,7 @@ pub(crate) fn compile_builtin_to_json_array<M: Module>(
         TurboTy::Struct(name) => name.clone(),
         _ => {
             return Err(CodegenError {
+                code: ErrorCode::E0400,
                 message: "to_json_array() requires an array of structs".to_string(),
             })
         }
@@ -925,6 +931,7 @@ pub(crate) fn compile_builtin_to_json_array<M: Module>(
         .struct_fields
         .get(&struct_name)
         .ok_or_else(|| CodegenError {
+            code: ErrorCode::E0400,
             message: format!("undefined struct: {struct_name}"),
         })?
         .clone();
@@ -1514,6 +1521,7 @@ pub(crate) fn compile_struct_eq<M: Module>(
         .struct_fields
         .get(struct_name)
         .ok_or_else(|| CodegenError {
+            code: ErrorCode::E0400,
             message: format!("undefined struct: {struct_name}"),
         })?
         .clone();
@@ -1615,6 +1623,7 @@ pub(crate) fn compile_clone<M: Module>(
         TurboTy::Struct(name) => name.clone(),
         _ => {
             return Err(CodegenError {
+                code: ErrorCode::E0400,
                 message: "clone() expects a struct argument".to_string(),
             })
         }
@@ -1624,6 +1633,7 @@ pub(crate) fn compile_clone<M: Module>(
         .struct_fields
         .get(&struct_name)
         .ok_or_else(|| CodegenError {
+            code: ErrorCode::E0400,
             message: format!("undefined struct: {struct_name}"),
         })?
         .clone();

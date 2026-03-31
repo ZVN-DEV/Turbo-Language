@@ -9,6 +9,7 @@ const MAX_NESTING_DEPTH: usize = 256;
 /// A parse error with location info
 #[derive(Debug, Clone)]
 pub struct ParseError {
+    pub code: ErrorCode,
     pub message: String,
     pub span: Span,
 }
@@ -49,6 +50,7 @@ impl Parser {
         if self.depth > MAX_NESTING_DEPTH {
             let span = self.peek_span();
             return Err(ParseError {
+                code: ErrorCode::E0003,
                 message: format!("maximum nesting depth ({MAX_NESTING_DEPTH}) exceeded"),
                 span,
             });
@@ -96,12 +98,14 @@ impl Parser {
             }
             let span = self.peek_span();
             Err(ParseError {
+                code: ErrorCode::E0001,
                 message: format!("expected `{expected}`, found `{tok}`"),
                 span,
             })
         } else {
             let span = self.peek_span();
             Err(ParseError {
+                code: ErrorCode::E0001,
                 message: format!("expected `{expected}`, found end of file"),
                 span,
             })
@@ -121,6 +125,7 @@ impl Parser {
             .map(|t| format!("`{t}`"))
             .unwrap_or("end of file".to_string());
         Err(ParseError {
+            code: ErrorCode::E0001,
             message: format!("expected identifier, found {found}"),
             span,
         })
@@ -236,6 +241,7 @@ impl Parser {
                             } else {
                                 let span = self.peek_span();
                                 return Err(ParseError {
+                                    code: ErrorCode::E0001,
                                     message: "expected string literal for `model`".to_string(),
                                     span,
                                 });
@@ -259,6 +265,7 @@ impl Parser {
                             } else {
                                 let span = self.peek_span();
                                 return Err(ParseError {
+                                    code: ErrorCode::E0001,
                                     message: "expected string literal for `system`".to_string(),
                                     span,
                                 });
@@ -266,6 +273,7 @@ impl Parser {
                         }
                         _ => {
                             return Err(ParseError {
+                                code: ErrorCode::E0001,
                                 message: format!("unknown agent field `{key}`"),
                                 span: key_span,
                             });
@@ -345,6 +353,7 @@ impl Parser {
                         Ok(Spanned::new(Item::Function(f), start..end))
                     }
                     _ => Err(ParseError {
+                        code: ErrorCode::E0001,
                         message: format!("unknown attribute `@{attr_name}`"),
                         span: attr_span,
                     }),
@@ -357,6 +366,7 @@ impl Parser {
                     .map(|t| format!("`{t}`"))
                     .unwrap_or("end of file".to_string());
                 Err(ParseError {
+                    code: ErrorCode::E0001,
                     message: format!("expected `fn`, `tool`, `agent`, `async fn`, `struct`, `type`, `impl`, `trait`, `import`, `const`, `@derive`, `@test`, or `@unsafe`, found {found}"),
                     span,
                 })
@@ -529,6 +539,7 @@ impl Parser {
             }
             _ => {
                 return Err(ParseError {
+                    code: ErrorCode::E0001,
                     message: "expected path string after `from`".to_string(),
                     span: self.peek_span(),
                 });
@@ -975,6 +986,7 @@ impl Parser {
                 }
                 _ => {
                     return Err(ParseError {
+                        code: ErrorCode::E0001,
                         message: "pipe operator `|>` requires a function name or function call on the right side".to_string(),
                         span: rhs.span,
                     });
@@ -1413,6 +1425,7 @@ impl Parser {
                         .map(|t| format!("`{t}`"))
                         .unwrap_or("end of file".to_string());
                     Err(ParseError {
+                        code: ErrorCode::E0001,
                         message: format!("expected expression, found {found}"),
                         span,
                     })
@@ -1425,6 +1438,7 @@ impl Parser {
                     .map(|t| format!("`{t}`"))
                     .unwrap_or("end of file".to_string());
                 Err(ParseError {
+                    code: ErrorCode::E0001,
                     message: format!("expected expression, found {found}"),
                     span,
                 })
@@ -1717,6 +1731,7 @@ impl Parser {
                     .map(|t| format!("`{t}`"))
                     .unwrap_or("end of file".to_string());
                 Err(ParseError {
+                    code: ErrorCode::E0001,
                     message: format!("expected pattern, found {found}"),
                     span,
                 })
@@ -1801,6 +1816,7 @@ fn split_interpolation_parts(s: &str, span: &Span) -> Result<Vec<InterpolPart>, 
             }
             if depth != 0 {
                 return Err(ParseError {
+                    code: ErrorCode::E0001,
                     message: "unterminated interpolation expression in string".to_string(),
                     span: span.clone(),
                 });
@@ -1808,17 +1824,20 @@ fn split_interpolation_parts(s: &str, span: &Span) -> Result<Vec<InterpolPart>, 
             let (tokens, lex_errors) = turbo_lexer::tokenize(&expr_str);
             if !lex_errors.is_empty() {
                 return Err(ParseError {
+                    code: ErrorCode::E0001,
                     message: format!("lex error in interpolation expression: `{}`", expr_str),
                     span: span.clone(),
                 });
             }
             let mut sub_parser = Parser::new(tokens);
             let expr = sub_parser.parse_expr().map_err(|e| ParseError {
+                code: ErrorCode::E0001,
                 message: format!("error in interpolation expression: {}", e.message),
                 span: span.clone(),
             })?;
             if !sub_parser.at_end() {
                 return Err(ParseError {
+                    code: ErrorCode::E0001,
                     message: format!(
                         "unexpected tokens after interpolation expression: `{}`",
                         expr_str

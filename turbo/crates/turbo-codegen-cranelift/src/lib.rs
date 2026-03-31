@@ -85,6 +85,7 @@ impl<'a, M: Module> Ctx<'a, M> {
     pub(crate) fn create_string(&mut self, s: &str) -> Result<Value, CodegenError> {
         if s.contains('\0') {
             return Err(CodegenError {
+                code: ErrorCode::E0403,
                 message: "string literal contains null byte, which is not supported".to_string(),
             });
         }
@@ -96,6 +97,7 @@ impl<'a, M: Module> Ctx<'a, M> {
             .module
             .declare_data(&name, Linkage::Local, false, false)
             .map_err(|e| CodegenError {
+                code: ErrorCode::E0405,
                 message: e.to_string(),
             })?;
 
@@ -107,6 +109,7 @@ impl<'a, M: Module> Ctx<'a, M> {
         self.module
             .define_data(data_id, self.data_desc)
             .map_err(|e| CodegenError {
+                code: ErrorCode::E0405,
                 message: e.to_string(),
             })?;
 
@@ -147,11 +150,13 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     flag_builder.set("enable_alias_analysis", "true").unwrap();
 
     let isa_builder = cranelift_native::builder().map_err(|e| CodegenError {
+        code: ErrorCode::E0405,
         message: e.to_string(),
     })?;
     let isa = isa_builder
         .finish(settings::Flags::new(flag_builder))
         .map_err(|e| CodegenError {
+            code: ErrorCode::E0405,
             message: e.to_string(),
         })?;
 
@@ -250,10 +255,12 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
 
     module.finalize_definitions().map_err(|e| CodegenError {
+        code: ErrorCode::E0406,
         message: e.to_string(),
     })?;
 
     let main_id = user_fns.get("main").ok_or_else(|| CodegenError {
+        code: ErrorCode::E0405,
         message: "no `main` function found".to_string(),
     })?;
     let main_ptr = module.get_finalized_function(*main_id);
@@ -275,11 +282,13 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     flag_builder.set("enable_alias_analysis", "true").unwrap();
 
     let isa_builder = cranelift_native::builder().map_err(|e| CodegenError {
+        code: ErrorCode::E0405,
         message: e.to_string(),
     })?;
     let isa = isa_builder
         .finish(settings::Flags::new(flag_builder))
         .map_err(|e| CodegenError {
+            code: ErrorCode::E0405,
             message: e.to_string(),
         })?;
 
@@ -363,10 +372,12 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
 
     module.finalize_definitions().map_err(|e| CodegenError {
+        code: ErrorCode::E0405,
         message: e.to_string(),
     })?;
 
     let func_id = user_fns.get(fn_name).ok_or_else(|| CodegenError {
+        code: ErrorCode::E0405,
         message: format!("no function `{fn_name}` found"),
     })?;
     let func_ptr = module.get_finalized_function(*func_id);
@@ -391,11 +402,13 @@ pub fn aot_compile(
     }
 
     let isa_builder = cranelift_native::builder().map_err(|e| CodegenError {
+        code: ErrorCode::E0405,
         message: e.to_string(),
     })?;
     let isa = isa_builder
         .finish(settings::Flags::new(flag_builder))
         .map_err(|e| CodegenError {
+            code: ErrorCode::E0405,
             message: e.to_string(),
         })?;
 
@@ -407,6 +420,7 @@ pub fn aot_compile(
         cranelift_module::default_libcall_names(),
     )
     .map_err(|e| CodegenError {
+        code: ErrorCode::E0405,
         message: e.to_string(),
     })?;
 
@@ -415,12 +429,14 @@ pub fn aot_compile(
 
     let product = module.finish();
     let obj_bytes = product.emit().map_err(|e| CodegenError {
+        code: ErrorCode::E0404,
         message: format!("failed to emit object: {e}"),
     })?;
 
     // Write object file and runtime to temp, then link with cc
     let tmp_dir = std::env::temp_dir().join(format!("turbo_aot_{}", std::process::id()));
     std::fs::create_dir_all(&tmp_dir).map_err(|e| CodegenError {
+        code: ErrorCode::E0404,
         message: format!("failed to create temp dir: {e}"),
     })?;
 
@@ -428,9 +444,11 @@ pub fn aot_compile(
     let rt_path = tmp_dir.join("turbo_rt.c");
 
     std::fs::write(&obj_path, &obj_bytes).map_err(|e| CodegenError {
+        code: ErrorCode::E0400,
         message: format!("failed to write object file: {e}"),
     })?;
     std::fs::write(&rt_path, RUNTIME_C).map_err(|e| CodegenError {
+        code: ErrorCode::E0400,
         message: format!("failed to write runtime: {e}"),
     })?;
 
@@ -442,12 +460,14 @@ pub fn aot_compile(
         .arg(output_path)
         .output()
         .map_err(|e| CodegenError {
+            code: ErrorCode::E0404,
             message: format!("failed to run linker: {e}"),
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(CodegenError {
+            code: ErrorCode::E0404,
             message: format!("linker failed: {stderr}"),
         });
     }
@@ -1662,6 +1682,7 @@ fn compile_module<M: Module>(
         let id = module
             .declare_function(sym_name, linkage, &sig)
             .map_err(|e| CodegenError {
+                code: ErrorCode::E0405,
                 message: e.to_string(),
             })?;
         user_fns.insert(f.name.clone(), id);
@@ -1715,6 +1736,7 @@ fn compile_module<M: Module>(
             let id = module
                 .declare_function(&mangled, Linkage::Local, &sig)
                 .map_err(|e| CodegenError {
+                    code: ErrorCode::E0405,
                     message: e.to_string(),
                 })?;
             user_fns.insert(mangled.clone(), id);
@@ -1767,6 +1789,7 @@ fn compile_module<M: Module>(
                     let id = module
                         .declare_function(&mangled, Linkage::Local, &sig)
                         .map_err(|e| CodegenError {
+                            code: ErrorCode::E0400,
                             message: e.to_string(),
                         })?;
                     user_fns.insert(mangled.clone(), id);
@@ -1793,6 +1816,7 @@ fn compile_module<M: Module>(
                 let id = module
                     .declare_function(&mangled, Linkage::Local, &sig)
                     .map_err(|e| CodegenError {
+                        code: ErrorCode::E0405,
                         message: e.to_string(),
                     })?;
                 user_fns.insert(mangled.clone(), id);
@@ -1842,6 +1866,7 @@ fn compile_module<M: Module>(
         let id = module
             .declare_function(&closure.name, Linkage::Local, &sig)
             .map_err(|e| CodegenError {
+                code: ErrorCode::E0405,
                 message: e.to_string(),
             })?;
         user_fns.insert(closure.name.clone(), id);
@@ -1870,6 +1895,7 @@ fn compile_module<M: Module>(
         let id = module
             .declare_function(&site.thunk_name, Linkage::Local, &sig)
             .map_err(|e| CodegenError {
+                code: ErrorCode::E0405,
                 message: e.to_string(),
             })?;
         user_fns.insert(site.thunk_name.clone(), id);
@@ -2005,6 +2031,7 @@ fn compile_module<M: Module>(
         module
             .define_function(func_id, &mut cl_ctx)
             .map_err(|e| CodegenError {
+                code: ErrorCode::E0405,
                 message: e.to_string(),
             })?;
         module.clear_context(&mut cl_ctx);
@@ -2126,6 +2153,7 @@ fn compile_module<M: Module>(
             module
                 .define_function(func_id, &mut cl_ctx)
                 .map_err(|e| CodegenError {
+                    code: ErrorCode::E0405,
                     message: e.to_string(),
                 })?;
             module.clear_context(&mut cl_ctx);
@@ -2244,6 +2272,7 @@ fn compile_module<M: Module>(
         module
             .define_function(func_id, &mut cl_ctx)
             .map_err(|e| CodegenError {
+                code: ErrorCode::E0405,
                 message: e.to_string(),
             })?;
         module.clear_context(&mut cl_ctx);
@@ -2386,6 +2415,7 @@ fn compile_module<M: Module>(
         module
             .define_function(func_id, &mut cl_ctx)
             .map_err(|e| CodegenError {
+                code: ErrorCode::E0405,
                 message: e.to_string(),
             })?;
         module.clear_context(&mut cl_ctx);
@@ -2538,6 +2568,7 @@ fn compile_module<M: Module>(
         module
             .define_function(func_id, &mut cl_ctx)
             .map_err(|e| CodegenError {
+                code: ErrorCode::E0405,
                 message: e.to_string(),
             })?;
         module.clear_context(&mut cl_ctx);
@@ -2622,6 +2653,7 @@ fn compile_module<M: Module>(
         module
             .define_function(func_id, &mut cl_ctx)
             .map_err(|e| CodegenError {
+                code: ErrorCode::E0405,
                 message: e.to_string(),
             })?;
         module.clear_context(&mut cl_ctx);
@@ -2649,6 +2681,7 @@ fn declare_rt_fn<M: Module>(
     let id = module
         .declare_function(name, Linkage::Import, &sig)
         .map_err(|e| CodegenError {
+            code: ErrorCode::E0405,
             message: e.to_string(),
         })?;
     rt_fns.insert(name.to_string(), id);
@@ -2713,6 +2746,7 @@ fn resolve_cl_type_inner(
             }
         }
         TypeExpr::Unit => Err(CodegenError {
+            code: ErrorCode::E0400,
             message: "unit type has no runtime representation".to_string(),
         }),
         TypeExpr::Array(_) => Ok(ptr_type), // Arrays are represented as pointers at runtime
@@ -2764,6 +2798,7 @@ pub(crate) fn compile_expr<M: Module>(
                 return compile_expr(cx, &const_expr);
             }
             let (var, _cl_ty, turbo_ty) = cx.vars.get(name).ok_or_else(|| CodegenError {
+                code: ErrorCode::E0401,
                 message: format!("undefined variable: {name}"),
             })?;
             let turbo_ty = turbo_ty.clone();
@@ -2896,6 +2931,7 @@ pub(crate) fn compile_expr<M: Module>(
         Expr::Assign { target, value } => {
             let (val, tty) = compile_expr(cx, value)?.unwrap();
             let (var, _, _) = cx.vars.get(target).ok_or_else(|| CodegenError {
+                code: ErrorCode::E0401,
                 message: format!("undefined variable: {target}"),
             })?;
             let var = *var;
@@ -2910,6 +2946,7 @@ pub(crate) fn compile_expr<M: Module>(
         Expr::CompoundAssign { target, op, value } => {
             let (rhs, _) = compile_expr(cx, value)?.unwrap();
             let (var, _, _) = cx.vars.get(target).ok_or_else(|| CodegenError {
+                code: ErrorCode::E0401,
                 message: format!("undefined variable: {target}"),
             })?;
             let var = *var;
@@ -2931,6 +2968,7 @@ pub(crate) fn compile_expr<M: Module>(
                 TurboTy::Struct(name) => name.clone(),
                 _ => {
                     return Err(CodegenError {
+                        code: ErrorCode::E0400,
                         message: "field assignment on non-struct type".to_string(),
                     })
                 }
@@ -2940,6 +2978,7 @@ pub(crate) fn compile_expr<M: Module>(
                 .struct_fields
                 .get(&struct_name)
                 .ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
                     message: format!("undefined struct: {struct_name}"),
                 })?
                 .clone();
@@ -2948,6 +2987,7 @@ pub(crate) fn compile_expr<M: Module>(
                 .iter()
                 .position(|(n, _)| n == field)
                 .ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
                     message: format!("struct `{struct_name}` has no field `{field}`"),
                 })?;
 
@@ -3059,6 +3099,7 @@ pub(crate) fn compile_expr<M: Module>(
                             *cx.user_fns
                                 .get(callee_name.as_str())
                                 .ok_or_else(|| CodegenError {
+                                    code: ErrorCode::E0402,
                                     message: format!("spawn: unknown function `{}`", callee_name),
                                 })?;
                         let target_fref =
@@ -3105,6 +3146,7 @@ pub(crate) fn compile_expr<M: Module>(
                             *cx.user_fns
                                 .get(thunk_name.as_str())
                                 .ok_or_else(|| CodegenError {
+                                    code: ErrorCode::E0405,
                                     message: format!("spawn: thunk `{}` not found", thunk_name),
                                 })?;
                         let thunk_fref = cx.module.declare_func_in_func(thunk_fid, cx.builder.func);
@@ -3168,6 +3210,7 @@ pub(crate) fn compile_expr<M: Module>(
         } => compile_for_in(cx, var_name, iterable, body),
 
         Expr::Range { .. } => Err(CodegenError {
+            code: ErrorCode::E0400,
             message: "range expressions can only be used in for-in loops".to_string(),
         }),
 
@@ -3291,6 +3334,7 @@ pub(crate) fn compile_expr<M: Module>(
                 .struct_fields
                 .get(name)
                 .ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
                     message: format!("undefined struct: {name}"),
                 })?
                 .clone();
@@ -3313,6 +3357,7 @@ pub(crate) fn compile_expr<M: Module>(
                     .iter()
                     .position(|(n, _)| n == field_name)
                     .ok_or_else(|| CodegenError {
+                        code: ErrorCode::E0400,
                         message: format!("struct `{name}` has no field `{field_name}`"),
                     })?;
 
@@ -3353,6 +3398,7 @@ pub(crate) fn compile_expr<M: Module>(
                             .iter()
                             .position(|v| v == field)
                             .ok_or_else(|| CodegenError {
+                                code: ErrorCode::E0400,
                                 message: format!("enum `{name}` has no variant `{field}`"),
                             })?;
 
@@ -3387,6 +3433,7 @@ pub(crate) fn compile_expr<M: Module>(
                     "tools" => (16i32, TurboTy::Array(Box::new(TurboTy::Str))),
                     _ => {
                         return Err(CodegenError {
+                            code: ErrorCode::E0400,
                             message: format!("agent has no field `{field}`"),
                         })
                     }
@@ -3402,6 +3449,7 @@ pub(crate) fn compile_expr<M: Module>(
                 TurboTy::Struct(name) => name.clone(),
                 _ => {
                     return Err(CodegenError {
+                        code: ErrorCode::E0400,
                         message: "field access on non-struct type".to_string(),
                     })
                 }
@@ -3411,6 +3459,7 @@ pub(crate) fn compile_expr<M: Module>(
                 .struct_fields
                 .get(&struct_name)
                 .ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
                     message: format!("undefined struct: {struct_name}"),
                 })?
                 .clone();
@@ -3419,6 +3468,7 @@ pub(crate) fn compile_expr<M: Module>(
                 .iter()
                 .position(|(n, _)| n == field)
                 .ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
                     message: format!("struct `{struct_name}` has no field `{field}`"),
                 })?;
 
@@ -3470,12 +3520,14 @@ pub(crate) fn compile_expr<M: Module>(
                 cx.enum_variants
                     .get(enum_name.as_str())
                     .ok_or_else(|| CodegenError {
+                        code: ErrorCode::E0400,
                         message: format!("undefined enum: {enum_name}"),
                     })?;
             let index = variants
                 .iter()
                 .position(|v| v == variant)
                 .ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
                     message: format!("enum `{enum_name}` has no variant `{variant}`"),
                 })?;
 
@@ -3508,6 +3560,7 @@ pub(crate) fn compile_expr<M: Module>(
                 .closure_fns
                 .get(&span_start)
                 .ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
                     message: "internal error: closure not found in pre-compiled map".to_string(),
                 })?;
             let closure_ty = closure_ty.clone();
@@ -3516,6 +3569,7 @@ pub(crate) fn compile_expr<M: Module>(
                 .user_fns
                 .get(closure_name.as_str())
                 .ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
                     message: format!(
                         "internal error: closure function {} not found",
                         closure_name
@@ -3557,6 +3611,7 @@ pub(crate) fn compile_expr<M: Module>(
                 for (cap_idx, (cap_name, _cap_tty)) in captures.iter().enumerate() {
                     let (var, _cl_ty, _turbo_ty) =
                         cx.vars.get(cap_name).ok_or_else(|| CodegenError {
+                            code: ErrorCode::E0400,
                             message: format!(
                                 "internal error: capture variable {} not found",
                                 cap_name
@@ -3835,6 +3890,7 @@ fn compile_binop<M: Module>(
             BinOp::GreaterEq => cx.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lhs, rhs),
             _ => {
                 return Err(CodegenError {
+                    code: ErrorCode::E0403,
                     message: format!("unsupported float op: {op:?}"),
                 })
             }
@@ -4032,12 +4088,14 @@ fn compile_call<M: Module>(
             }
         }
         return Err(CodegenError {
+            code: ErrorCode::E0400,
             message: format!("no method `{field}` found"),
         });
     }
 
     let Expr::Ident(name) = &callee.node else {
         return Err(CodegenError {
+            code: ErrorCode::E0400,
             message: "indirect function calls not yet supported".to_string(),
         });
     };
@@ -4262,6 +4320,7 @@ fn compile_call<M: Module>(
             }
 
             let func_id = *cx.user_fns.get(name.as_str()).ok_or_else(|| CodegenError {
+                code: ErrorCode::E0402,
                 message: format!("undefined function: {name}"),
             })?;
 
@@ -4969,6 +5028,7 @@ mod tests {
     #[test]
     fn test_codegen_error_display() {
         let err = CodegenError {
+            code: ErrorCode::E0400,
             message: "something broke".to_string(),
         };
         assert_eq!(format!("{}", err), "codegen error: something broke");
@@ -5814,6 +5874,7 @@ mod tests {
     #[test]
     fn test_codegen_error_is_std_error() {
         let err = CodegenError {
+            code: ErrorCode::E0400,
             message: "test".to_string(),
         };
         // Verify it implements std::error::Error
