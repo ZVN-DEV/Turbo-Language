@@ -11,7 +11,7 @@ A compiled, type-safe programming language with familiar syntax, native performa
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 
-[Website](https://website-beta-six-82.vercel.app) &middot; [Documentation](https://website-beta-six-82.vercel.app/docs) &middot; [Examples](#examples) &middot; [Contributing](CONTRIBUTING.md)
+[Website](https://turbolang.dev) &middot; [Documentation](https://turbolang.dev/docs) &middot; [Examples](#examples) &middot; [Contributing](CONTRIBUTING.md)
 
 </div>
 
