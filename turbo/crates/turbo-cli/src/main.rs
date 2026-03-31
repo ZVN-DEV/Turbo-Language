@@ -69,6 +69,20 @@ enum Commands {
     Install,
     /// Start the Language Server Protocol server
     Lsp,
+    /// Run @test functions in a Turbo source file
+    Test {
+        /// Path to the .tb source file (or directory)
+        file: Option<PathBuf>,
+    },
+    /// [internal] Run a single test function by name (used by test runner)
+    #[command(hide = true)]
+    TestRunFn {
+        /// Path to the .tb source file
+        file: PathBuf,
+        /// Name of the function to run
+        #[arg(long)]
+        func: String,
+    },
 }
 
 fn main() {
@@ -90,6 +104,8 @@ fn main() {
         Commands::Doc { file } => doc_file(&file),
         Commands::Install => install_deps(),
         Commands::Lsp => start_lsp(),
+        Commands::Test { file } => test_file(file),
+        Commands::TestRunFn { file, func } => test_run_fn(&file, &func),
     }
 }
 
@@ -465,6 +481,268 @@ fn run_file(path: &std::path::Path, verbose: bool) {
             std::process::exit(1);
         }
     }
+}
+
+fn test_file(file: Option<PathBuf>) {
+    // Collect test files: either a specific file, or all *_test.tb / test_*.tb in tests/
+    let files: Vec<PathBuf> = if let Some(f) = file {
+        if f.is_dir() {
+            collect_test_files(&f)
+        } else {
+            vec![f]
+        }
+    } else {
+        // Look for tests/ directory
+        let tests_dir = Path::new("tests");
+        if tests_dir.is_dir() {
+            collect_test_files(tests_dir)
+        } else {
+            eprintln!("\x1b[1;31merror\x1b[0m: no file specified and no `tests/` directory found");
+            eprintln!("  Usage: turbo test <file.tb>");
+            std::process::exit(1);
+        }
+    };
+
+    if files.is_empty() {
+        eprintln!("No test files found.");
+        std::process::exit(0);
+    }
+
+    let turbo_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("turbo"));
+
+    let mut total_passed = 0u32;
+    let mut total_failed = 0u32;
+
+    for path in &files {
+        let source = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}", path.display());
+                std::process::exit(1);
+            }
+        };
+
+        let filename = path.file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<unknown>".to_string());
+
+        // Lex
+        let (tokens, lex_errors) = turbo_lexer::tokenize(&source);
+        if !lex_errors.is_empty() {
+            for span in &lex_errors {
+                let snippet = &source[span.clone()];
+                report_error(
+                    &source,
+                    &filename,
+                    &format!("unexpected character `{snippet}`"),
+                    span,
+                    Some("remove this character or check for typos"),
+                );
+            }
+            std::process::exit(1);
+        }
+
+        // Parse
+        let (mut module, parse_errors) = turbo_parser::parse(tokens);
+        if !parse_errors.is_empty() {
+            for err in &parse_errors {
+                report_error(
+                    &source,
+                    &filename,
+                    &err.message,
+                    &err.span,
+                    None,
+                );
+            }
+            std::process::exit(1);
+        }
+
+        // Resolve imports
+        let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        let canonical_self = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let mut loading = HashSet::new();
+        loading.insert(canonical_self);
+        if let Err(e) = resolve_imports(&mut module, base_dir, &mut loading) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+
+        // Collect @test function names
+        let test_names: Vec<String> = module.items.iter()
+            .filter_map(|item| {
+                if let Item::Function(f) = &item.node {
+                    if f.is_test { Some(f.name.clone()) } else { None }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if test_names.is_empty() {
+            continue; // No tests in this file
+        }
+
+        // Semantic analysis in test mode (main not required)
+        let sema_errors = turbo_sema::check_test(&module);
+        if !sema_errors.is_empty() {
+            for err in &sema_errors {
+                let help = sema_help(&err.message);
+                report_error(
+                    &source,
+                    &filename,
+                    &err.message,
+                    &err.span,
+                    help.as_deref(),
+                );
+            }
+            std::process::exit(1);
+        }
+
+        // Run each test in its own subprocess
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        for name in &test_names {
+            let output = std::process::Command::new(&turbo_exe)
+                .arg("test-run-fn")
+                .arg(&canonical_path)
+                .arg("--func")
+                .arg(name)
+                .output();
+
+            match output {
+                Ok(result) => {
+                    if result.status.success() {
+                        eprintln!("  \x1b[32mPASS\x1b[0m  {name}");
+                        total_passed += 1;
+                    } else {
+                        // Print captured stderr (assertion failure messages)
+                        let stderr = String::from_utf8_lossy(&result.stderr);
+                        for line in stderr.lines() {
+                            if !line.is_empty() {
+                                eprintln!("        {line}");
+                            }
+                        }
+                        eprintln!("  \x1b[31mFAIL\x1b[0m  {name}");
+                        total_failed += 1;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  \x1b[31mFAIL\x1b[0m  {name} (failed to spawn: {e})");
+                    total_failed += 1;
+                }
+            }
+        }
+    }
+
+    // Print summary
+    eprintln!("{total_passed} passed, {total_failed} failed");
+
+    if total_failed > 0 {
+        std::process::exit(1);
+    }
+}
+
+/// Internal: compile a file and run a single named function via JIT.
+/// Used by `turbo test` to run each @test in its own subprocess.
+fn test_run_fn(path: &std::path::Path, fn_name: &str) {
+    let source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}", path.display());
+            std::process::exit(1);
+        }
+    };
+
+    let filename = path.file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| "<unknown>".to_string());
+
+    // Lex
+    let (tokens, lex_errors) = turbo_lexer::tokenize(&source);
+    if !lex_errors.is_empty() {
+        for span in &lex_errors {
+            let snippet = &source[span.clone()];
+            report_error(
+                &source,
+                &filename,
+                &format!("unexpected character `{snippet}`"),
+                span,
+                Some("remove this character or check for typos"),
+            );
+        }
+        std::process::exit(1);
+    }
+
+    // Parse
+    let (mut module, parse_errors) = turbo_parser::parse(tokens);
+    if !parse_errors.is_empty() {
+        for err in &parse_errors {
+            report_error(
+                &source,
+                &filename,
+                &err.message,
+                &err.span,
+                None,
+            );
+        }
+        std::process::exit(1);
+    }
+
+    // Resolve imports
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let canonical_self = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut loading = HashSet::new();
+    loading.insert(canonical_self);
+    if let Err(e) = resolve_imports(&mut module, base_dir, &mut loading) {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+
+    // Semantic analysis in test mode
+    let sema_errors = turbo_sema::check_test(&module);
+    if !sema_errors.is_empty() {
+        for err in &sema_errors {
+            eprintln!("error: {}", err.message);
+        }
+        std::process::exit(1);
+    }
+
+    // Compile and run
+    match turbo_codegen_cranelift::jit_run_function(&module, fn_name) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("\x1b[1;31merror\x1b[0m: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Collect test files from a directory: files matching *_test.tb or test_*.tb
+fn collect_test_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map(|e| e == "tb").unwrap_or(false) {
+                let stem = path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                if stem.ends_with("_test") || stem.starts_with("test_") {
+                    files.push(path);
+                }
+            }
+        }
+    }
+    // Also recurse into subdirectories
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                files.extend(collect_test_files(&path));
+            }
+        }
+    }
+    files.sort();
+    files
 }
 
 fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose: bool) {
