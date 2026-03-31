@@ -1,8 +1,10 @@
 use std::io::{self, BufRead, Write};
 
 pub fn run_repl() {
-    println!("Turbo v0.1.0 \u{2014} Interactive Mode");
-    println!("Type expressions or statements. Use :quit to exit.\n");
+    let version = env!("CARGO_PKG_VERSION");
+    println!("\x1b[1;36mTurbo v{version}\x1b[0m \x1b[90m\u{2014} Interactive Mode\x1b[0m");
+    println!("\x1b[90mType expressions or statements. Use :help for commands, :quit to exit.\x1b[0m");
+    println!();
 
     let stdin = io::stdin();
     let mut accumulated_items: Vec<String> = Vec::new(); // fn definitions, structs, etc.
@@ -28,10 +30,15 @@ pub fn run_repl() {
             break;
         }
         if line == ":help" || line == ":h" {
-            println!("Commands:");
-            println!("  :quit    Exit the REPL");
-            println!("  :clear   Clear accumulated state");
-            println!("  :help    Show this help");
+            println!("\x1b[1mREPL Commands:\x1b[0m");
+            println!("  \x1b[33m:help\x1b[0m    Show this help");
+            println!("  \x1b[33m:clear\x1b[0m   Clear accumulated state");
+            println!("  \x1b[33m:quit\x1b[0m    Exit the REPL");
+            println!();
+            println!("\x1b[1mUsage:\x1b[0m");
+            println!("  Define functions, structs, enums, and other items directly.");
+            println!("  Evaluate expressions by typing them at the prompt.");
+            println!("  Use \x1b[36mlet x = ...\x1b[0m to bind variables across lines.");
             continue;
         }
         if line == ":clear" {

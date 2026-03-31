@@ -9,7 +9,11 @@ mod playground;
 mod repl;
 
 #[derive(Parser)]
-#[command(name = "turbo", version, about = "The Turbo programming language compiler")]
+#[command(
+    name = "turbo",
+    version = env!("CARGO_PKG_VERSION"),
+    about = "The Turbo programming language compiler"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -211,6 +215,13 @@ fn init_project(name: &str) {
     std::fs::write(
         dir.join("tests/main_test.tb"),
         "fn main() {\n    assert(1 + 1 == 2, \"basic math works\")\n    print(\"All tests passed!\")\n}\n",
+    )
+    .unwrap();
+
+    // .gitignore
+    std::fs::write(
+        dir.join(".gitignore"),
+        "turbo_modules/\ntarget/\n*.o\n",
     )
     .unwrap();
 
@@ -750,6 +761,193 @@ fn test_file(file: Option<PathBuf>) {
     if total_failed > 0 {
         std::process::exit(1);
     }
+}
+
+/// Run benchmark files and report timing.
+/// If a file is given, benchmark that file. Otherwise, look for bench_*.tb
+/// files in a `benchmarks/` directory.
+fn bench_file(file: Option<PathBuf>, iterations: u32) {
+    let files: Vec<PathBuf> = if let Some(f) = file {
+        if f.is_dir() {
+            collect_bench_files(&f)
+        } else {
+            vec![f]
+        }
+    } else {
+        let bench_dir = Path::new("benchmarks");
+        if bench_dir.is_dir() {
+            collect_bench_files(bench_dir)
+        } else {
+            eprintln!("\x1b[1;31merror\x1b[0m: no file specified and no `benchmarks/` directory found");
+            eprintln!("  Usage: turbo bench <file.tb>");
+            std::process::exit(1);
+        }
+    };
+
+    if files.is_empty() {
+        eprintln!("No benchmark files found.");
+        std::process::exit(0);
+    }
+
+    let turbo_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("turbo"));
+
+    eprintln!("\x1b[1mTurbo Benchmark Suite\x1b[0m");
+    eprintln!("\x1b[90m=====================\x1b[0m");
+    eprintln!("\x1b[90mIterations: {iterations}\x1b[0m");
+    eprintln!();
+
+    let mut total = 0u32;
+    let mut passed = 0u32;
+
+    for path in &files {
+        let name = path.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<unknown>".to_string());
+
+        total += 1;
+        eprintln!("\x1b[1;36m--- {name} ---\x1b[0m");
+
+        // Show expected output from comment if present
+        let source = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("  \x1b[31merror\x1b[0m: could not read `{}`: {e}", path.display());
+                continue;
+            }
+        };
+        let expected: Option<String> = source.lines()
+            .find(|l| l.starts_with("// Expected output:"))
+            .map(|l| l.trim_start_matches("// Expected output:").trim().to_string());
+        if let Some(ref exp) = expected {
+            eprintln!("  \x1b[90mexpected: {exp}\x1b[0m");
+        }
+
+        // JIT mode: run N iterations, report median
+        let mut jit_times = Vec::new();
+        let mut jit_output = String::new();
+        for _ in 0..iterations {
+            let start = std::time::Instant::now();
+            let output = std::process::Command::new(&turbo_exe)
+                .arg("run")
+                .arg(path)
+                .output();
+            let elapsed = start.elapsed();
+            match output {
+                Ok(result) => {
+                    jit_times.push(elapsed);
+                    if jit_output.is_empty() {
+                        jit_output = String::from_utf8_lossy(&result.stdout).trim().to_string();
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  \x1b[31merror\x1b[0m: failed to run JIT: {e}");
+                    break;
+                }
+            }
+        }
+
+        if !jit_times.is_empty() {
+            jit_times.sort();
+            let median = jit_times[jit_times.len() / 2];
+            eprintln!(
+                "  \x1b[33mJIT:\x1b[0m  {} \x1b[90m({:.3}s median, {} runs)\x1b[0m",
+                jit_output,
+                median.as_secs_f64(),
+                jit_times.len()
+            );
+        }
+
+        // AOT mode: build then run N iterations, report median
+        let tmp_bin = std::env::temp_dir().join(format!("turbo_bench_{name}"));
+        let build_result = std::process::Command::new(&turbo_exe)
+            .arg("build")
+            .arg(path)
+            .arg("-o")
+            .arg(&tmp_bin)
+            .output();
+
+        match build_result {
+            Ok(result) if result.status.success() => {
+                let mut aot_times = Vec::new();
+                let mut aot_output = String::new();
+                for _ in 0..iterations {
+                    let start = std::time::Instant::now();
+                    let output = std::process::Command::new(&tmp_bin).output();
+                    let elapsed = start.elapsed();
+                    match output {
+                        Ok(result) => {
+                            aot_times.push(elapsed);
+                            if aot_output.is_empty() {
+                                aot_output = String::from_utf8_lossy(&result.stdout).trim().to_string();
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("  \x1b[31merror\x1b[0m: failed to run AOT binary: {e}");
+                            break;
+                        }
+                    }
+                }
+
+                if !aot_times.is_empty() {
+                    aot_times.sort();
+                    let median = aot_times[aot_times.len() / 2];
+                    eprintln!(
+                        "  \x1b[33mAOT:\x1b[0m  {} \x1b[90m({:.3}s median, {} runs)\x1b[0m",
+                        aot_output,
+                        median.as_secs_f64(),
+                        aot_times.len()
+                    );
+                }
+
+                // Check if outputs match
+                if !jit_output.is_empty() && !aot_output.is_empty() {
+                    if jit_output == aot_output {
+                        eprintln!("  \x1b[32moutputs match\x1b[0m");
+                        passed += 1;
+                    } else {
+                        eprintln!("  \x1b[31moutputs differ!\x1b[0m");
+                        eprintln!("    JIT: {jit_output}");
+                        eprintln!("    AOT: {aot_output}");
+                    }
+                } else if !jit_output.is_empty() {
+                    passed += 1;
+                }
+
+                // Cleanup temp binary
+                std::fs::remove_file(&tmp_bin).ok();
+            }
+            _ => {
+                eprintln!("  \x1b[90m(AOT build failed, skipping)\x1b[0m");
+                if !jit_output.is_empty() {
+                    passed += 1;
+                }
+            }
+        }
+
+        eprintln!();
+    }
+
+    eprintln!("\x1b[1mResults: {passed}/{total} benchmarks passed (JIT/AOT output match)\x1b[0m");
+}
+
+/// Collect benchmark files from a directory: files matching bench_*.tb
+fn collect_bench_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map(|e| e == "tb").unwrap_or(false) {
+                let stem = path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                if stem.starts_with("bench_") {
+                    files.push(path);
+                }
+            }
+        }
+    }
+    files.sort();
+    files
 }
 
 /// Internal: compile a file and run a single named function via JIT.
