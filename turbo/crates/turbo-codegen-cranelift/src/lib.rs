@@ -2075,6 +2075,64 @@ fn compile_module<M: Module>(
         }
     }
 
+    // Declare default trait methods for impl blocks that don't override them
+    // Collect (type_name, method_sig) pairs for default methods that need compilation
+    let mut default_method_impls: Vec<(String, &turbo_ast::TraitMethodSig)> = Vec::new();
+    for item in &ast_module.items {
+        let Item::Impl(imp) = &item.node else { continue };
+        let Some(trait_name) = &imp.trait_name else { continue };
+        let Some(trait_def) = trait_defs.get(trait_name.as_str()) else { continue };
+        let impl_method_names: Vec<String> = imp.methods.iter().map(|m| m.node.name.clone()).collect();
+        for trait_method in &trait_def.methods {
+            if trait_method.default_body.is_some() && !impl_method_names.contains(&trait_method.name) {
+                let mangled = format!("{}__{}", imp.type_name, trait_method.name);
+                if !user_fns.contains_key(&mangled) {
+                    let mut sig = module.make_signature();
+                    sig.call_conv = CallConv::Fast;
+                    for param in &trait_method.params {
+                        if param.name == "self" {
+                            sig.params.push(AbiParam::new(ptr_type));
+                        } else {
+                            sig.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?));
+                        }
+                    }
+                    let ret_turbo = if let Some(ret_ty) = &trait_method.return_type {
+                        let cl = resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?;
+                        sig.returns.push(AbiParam::new(cl));
+                        turbo_ty_from_type_expr(&ret_ty.node, &enum_variants)
+                    } else {
+                        TurboTy::Unit
+                    };
+                    let id = module.declare_function(&mangled, Linkage::Local, &sig)
+                        .map_err(|e| CodegenError { message: e.to_string() })?;
+                    user_fns.insert(mangled.clone(), id);
+                    fn_ret_types.insert(mangled, ret_turbo);
+                    default_method_impls.push((imp.type_name.clone(), trait_method));
+                }
+            }
+        }
+    }
+
+    // Declare @derive(Display) auto-generated to_string methods
+    let mut derive_display_structs: Vec<String> = Vec::new();
+    for item in &ast_module.items {
+        let Item::Struct(s) = &item.node else { continue };
+        if s.derives.contains(&"Display".to_string()) {
+            let mangled = format!("{}__{}", s.name, "to_string");
+            if !user_fns.contains_key(&mangled) {
+                let mut sig = module.make_signature();
+                sig.call_conv = CallConv::Fast;
+                sig.params.push(AbiParam::new(ptr_type)); // self
+                sig.returns.push(AbiParam::new(ptr_type)); // returns str
+                let id = module.declare_function(&mangled, Linkage::Local, &sig)
+                    .map_err(|e| CodegenError { message: e.to_string() })?;
+                user_fns.insert(mangled.clone(), id);
+                fn_ret_types.insert(mangled, TurboTy::Str);
+                derive_display_structs.push(s.name.clone());
+            }
+        }
+    }
+
     // Extract and compile closures
     let extracted_closures = extract_all_closures(ast_module);
     let mut closure_fns_map: HashMap<usize, (String, TurboTy, Vec<String>)> = HashMap::new();
@@ -2328,6 +2386,230 @@ fn compile_module<M: Module>(
                 .map_err(|e| CodegenError { message: e.to_string() })?;
             module.clear_context(&mut cl_ctx);
         }
+    }
+
+    // Define default trait method bodies
+    for (type_name, trait_method) in &default_method_impls {
+        let mangled = format!("{}__{}", type_name, trait_method.name);
+        let func_id = user_fns[&mangled];
+        let default_body = trait_method.default_body.as_ref().unwrap();
+
+        cl_ctx.func.signature = module.make_signature();
+        cl_ctx.func.signature.call_conv = CallConv::Fast;
+
+        for param in &trait_method.params {
+            if param.name == "self" {
+                cl_ctx.func.signature.params.push(AbiParam::new(ptr_type));
+            } else {
+                cl_ctx.func.signature.params.push(AbiParam::new(resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?));
+            }
+        }
+        if let Some(ret_ty) = &trait_method.return_type {
+            cl_ctx.func.signature.returns.push(AbiParam::new(resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?));
+        }
+
+        let mut fn_ctx = FunctionBuilderContext::new();
+        {
+            let builder = FunctionBuilder::new(&mut cl_ctx.func, &mut fn_ctx);
+            let mut cx = Ctx {
+                builder,
+                module,
+                user_fns: &user_fns,
+                fn_ret_types: &fn_ret_types,
+                fn_asts: &fn_asts,
+                fn_type_params: &fn_type_params,
+                rt_fns: &rt_fns,
+                vars: HashMap::new(),
+                next_var: 0,
+                data_desc: &mut data_desc,
+                string_counter: &mut string_counter,
+                ptr_type,
+                struct_fields: &struct_fields,
+                enum_variants: &enum_variants,
+                enum_variant_fields: &enum_variant_fields,
+                enum_max_slots: &enum_max_slots,
+                closure_fns: &closure_fns_map,
+                trait_impls: &trait_impls,
+                inline_depth: 0,
+                closure_captures: &mut closure_captures_map,
+                generic_struct_field_overrides: HashMap::new(),
+                last_struct_lit_concrete_fields: None,
+                agent_defs: &agent_defs,
+                spawn_thunks: &spawn_thunk_map,
+                constants: &constants_map,
+                struct_derives: &struct_derives,
+            };
+
+            let entry = cx.builder.create_block();
+            cx.builder.append_block_params_for_function_params(entry);
+            cx.builder.switch_to_block(entry);
+            cx.builder.seal_block(entry);
+            cx.builder.ensure_inserted_block();
+
+            // Define parameters as variables
+            for (i, param) in trait_method.params.iter().enumerate() {
+                let (cl_ty, turbo_ty) = if param.name == "self" {
+                    (ptr_type, TurboTy::Struct(type_name.clone()))
+                } else {
+                    let cl_ty = resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &[])?;
+                    let turbo_ty = turbo_ty_from_type_expr(&param.ty.node, &enum_variants);
+                    (cl_ty, turbo_ty)
+                };
+                let var = cx.fresh_var(cl_ty, turbo_ty.clone());
+                let val = cx.builder.block_params(entry)[i];
+                cx.builder.def_var(var, val);
+                cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
+            }
+
+            let result = compile_expr(&mut cx, default_body)?;
+
+            if !cx.builder.is_unreachable() {
+                if trait_method.return_type.is_some() {
+                    if let Some((val, _)) = result {
+                        cx.builder.ins().return_(&[val]);
+                    } else {
+                        cx.builder.ins().trap(TrapCode::unwrap_user(1));
+                    }
+                } else {
+                    cx.builder.ins().return_(&[]);
+                }
+            }
+
+            cx.builder.finalize();
+        }
+
+        module.define_function(func_id, &mut cl_ctx)
+            .map_err(|e| CodegenError { message: e.to_string() })?;
+        module.clear_context(&mut cl_ctx);
+    }
+
+    // Define @derive(Display) auto-generated to_string methods
+    for struct_name in &derive_display_structs {
+        let mangled = format!("{}__{}", struct_name, "to_string");
+        let func_id = user_fns[&mangled];
+
+        cl_ctx.func.signature = module.make_signature();
+        cl_ctx.func.signature.call_conv = CallConv::Fast;
+        cl_ctx.func.signature.params.push(AbiParam::new(ptr_type)); // self
+        cl_ctx.func.signature.returns.push(AbiParam::new(ptr_type)); // returns str
+
+        let mut fn_ctx = FunctionBuilderContext::new();
+        {
+            let builder = FunctionBuilder::new(&mut cl_ctx.func, &mut fn_ctx);
+            let mut cx = Ctx {
+                builder,
+                module,
+                user_fns: &user_fns,
+                fn_ret_types: &fn_ret_types,
+                fn_asts: &fn_asts,
+                fn_type_params: &fn_type_params,
+                rt_fns: &rt_fns,
+                vars: HashMap::new(),
+                next_var: 0,
+                data_desc: &mut data_desc,
+                string_counter: &mut string_counter,
+                ptr_type,
+                struct_fields: &struct_fields,
+                enum_variants: &enum_variants,
+                enum_variant_fields: &enum_variant_fields,
+                enum_max_slots: &enum_max_slots,
+                closure_fns: &closure_fns_map,
+                trait_impls: &trait_impls,
+                inline_depth: 0,
+                closure_captures: &mut closure_captures_map,
+                generic_struct_field_overrides: HashMap::new(),
+                last_struct_lit_concrete_fields: None,
+                agent_defs: &agent_defs,
+                spawn_thunks: &spawn_thunk_map,
+                constants: &constants_map,
+                struct_derives: &struct_derives,
+            };
+
+            let entry = cx.builder.create_block();
+            cx.builder.append_block_params_for_function_params(entry);
+            cx.builder.switch_to_block(entry);
+            cx.builder.seal_block(entry);
+            cx.builder.ensure_inserted_block();
+
+            // Self is the first param
+            let self_val = cx.builder.block_params(entry)[0];
+
+            // Build "StructName { field1: val1, field2: val2 }" string
+            let fields = struct_fields.get(struct_name.as_str()).cloned().unwrap_or_default();
+
+            // Start with "StructName { "
+            let mut result = cx.create_string(&format!("{} {{ ", struct_name))?;
+
+            let concat_fid = cx.rt_fns["rt_str_concat"];
+
+            for (i, (field_name, field_ty)) in fields.iter().enumerate() {
+                // Add "field_name: "
+                let prefix = if i > 0 {
+                    format!(", {}: ", field_name)
+                } else {
+                    format!("{}: ", field_name)
+                };
+                let prefix_str = cx.create_string(&prefix)?;
+                let concat_ref = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
+                let call = cx.builder.ins().call(concat_ref, &[result, prefix_str]);
+                result = cx.builder.inst_results(call)[0];
+
+                // Load field value from struct
+                let offset = (i * 8) as i32;
+                let raw_val = cx.builder.ins().load(types::I64, MemFlags::new(), self_val, offset);
+
+                // Convert field value to string based on type
+                let field_str = match field_ty {
+                    TurboTy::Int => {
+                        let fid = cx.rt_fns["rt_i64_to_str"];
+                        let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                        let call = cx.builder.ins().call(fref, &[raw_val]);
+                        cx.builder.inst_results(call)[0]
+                    }
+                    TurboTy::Str => {
+                        // raw_val is already a pointer to a string
+                        raw_val
+                    }
+                    TurboTy::Bool => {
+                        let bool_val = cx.builder.ins().ireduce(types::I8, raw_val);
+                        let fid = cx.rt_fns["rt_bool_to_str"];
+                        let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                        let call = cx.builder.ins().call(fref, &[bool_val]);
+                        cx.builder.inst_results(call)[0]
+                    }
+                    TurboTy::Float => {
+                        let float_val = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val);
+                        let fid = cx.rt_fns["rt_f64_to_str"];
+                        let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                        let call = cx.builder.ins().call(fref, &[float_val]);
+                        cx.builder.inst_results(call)[0]
+                    }
+                    _ => {
+                        // For other types, just show a placeholder
+                        cx.create_string("...")?
+                    }
+                };
+
+                // Concat field value string
+                let concat_ref = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
+                let call = cx.builder.ins().call(concat_ref, &[result, field_str]);
+                result = cx.builder.inst_results(call)[0];
+            }
+
+            // Add closing " }"
+            let suffix = cx.create_string(" }")?;
+            let concat_ref = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
+            let call = cx.builder.ins().call(concat_ref, &[result, suffix]);
+            result = cx.builder.inst_results(call)[0];
+
+            cx.builder.ins().return_(&[result]);
+
+            cx.builder.finalize();
+        }
+
+        module.define_function(func_id, &mut cl_ctx)
+            .map_err(|e| CodegenError { message: e.to_string() })?;
+        module.clear_context(&mut cl_ctx);
     }
 
     // Compile closure function bodies (after function bodies, so capture info is available)

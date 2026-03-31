@@ -1,0 +1,18 @@
+trait Greetable {
+    fn name(self) -> str
+
+    fn greet(self) -> str {
+        "Hello, {self.name()}!"
+    }
+}
+
+struct User { username: str }
+
+impl Greetable for User {
+    fn name(self) -> str { self.username }
+}
+
+fn main() {
+    let u = User { username: "Alice" }
+    print(u.greet())
+}
