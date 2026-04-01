@@ -125,7 +125,7 @@ let upper = cleaned |> upper`}</code>
               ["web-api", "Production bookmarking API with JWT auth, WebSocket, rate limiting", "Planned"],
               ["desktop-app", "Native markdown editor with AI writing assistant", "Planned"],
               ["realtime-system", "Trading order matching engine with zero-alloc hot paths", "Planned"],
-              ["edge-wasm", "Edge image processing compiled to WebAssembly", "Planned"],
+              ["edge-functions", "Edge image processing with native compilation", "Planned"],
             ].map(([name, desc, status]) => (
               <tr key={name} className="border-b border-[#1a1a2e]">
                 <td className="px-4 py-2">

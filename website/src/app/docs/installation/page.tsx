@@ -48,6 +48,30 @@ cargo build --release
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
+        Option 3: Build with LLVM Backend (Optional)
+      </h2>
+      <p className="mb-4">
+        Turbo includes an optional LLVM backend in addition to the default
+        Cranelift backend. This requires LLVM 18 to be installed on your system.
+      </p>
+      <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
+        <code>{`# Install LLVM 18 (macOS)
+brew install llvm@18
+
+# Build Turbo with LLVM support enabled
+cd turbo-lang/turbo
+cargo build --release --features llvm
+
+# Use the LLVM backend with the --llvm flag
+./target/release/turbo build --llvm hello.tb`}</code>
+      </pre>
+      <p className="text-sm text-gray-500 mb-6">
+        The LLVM backend is fully functional (116/116 tests pass) but requires
+        LLVM 18 as an external dependency. Cranelift is the default and requires
+        no extra setup.
+      </p>
+
+      <h2 className="text-2xl font-bold text-white mt-10 mb-4">
         Add to PATH
       </h2>
       <p className="mb-4">

@@ -21,11 +21,11 @@ export default function DocsPage() {
         What is Turbo?
       </h2>
       <p className="mb-4">
-        Turbo compiles directly to machine code using Cranelift. No interpreter,
-        no VM, no garbage collector. Programs start instantly and run at native
-        speed. It features strong static typing with type inference, generics,
-        traits, and algebraic data types -- all while keeping a clean,
-        approachable syntax.
+        Turbo compiles directly to machine code using Cranelift (default) or LLVM
+        (optional). No interpreter, no VM, no garbage collector. Programs start
+        instantly and run at native speed. It features strong static typing with
+        type inference, generics, traits, and algebraic data types -- all while
+        keeping a clean, approachable syntax.
       </p>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
@@ -110,9 +110,10 @@ fn main() {
           </thead>
           <tbody>
             {[
-              ["C (gcc -O2)", "170ms", "33 KB"],
               ["Rust (rustc -O)", "180ms", "441 KB"],
-              ["Turbo (Cranelift)", "220ms", "55 KB"],
+              ["Turbo (Cranelift)", "250ms", "55 KB"],
+              ["C (cc -O2)", "290ms", "33 KB"],
+              ["Turbo (LLVM)", "290ms", "55 KB"],
               ["Node.js", "580ms", "N/A"],
               ["Python", "13.1s", "N/A"],
             ].map(([lang, time, size]) => (
