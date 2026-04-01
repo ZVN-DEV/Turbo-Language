@@ -12,6 +12,7 @@ turbo-lexer = { path = "../turbo-lexer" }
 turbo-ast = { path = "../turbo-ast" }
 turbo-parser = { path = "../turbo-parser" }
 turbo-codegen-cranelift = { path = "../turbo-codegen-cranelift" }
+turbo-codegen-llvm = { path = "../turbo-codegen-llvm" }
 turbo-sema = { path = "../turbo-sema" }
 clap = { workspace = true }
 ariadne = { workspace = true }

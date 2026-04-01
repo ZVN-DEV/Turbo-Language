@@ -42,6 +42,10 @@ enum Commands {
         /// Show verbose output
         #[arg(long, short)]
         verbose: bool,
+
+        /// Use LLVM backend instead of Cranelift
+        #[arg(long)]
+        llvm: bool,
     },
     /// Initialize a new Turbo project
     Init {
@@ -117,9 +121,10 @@ fn main() {
             file,
             output,
             verbose,
+            llvm,
         } => {
             let path = resolve_entry_file(file);
-            build_file(&path, output.as_deref(), verbose);
+            build_file(&path, output.as_deref(), verbose, llvm);
         }
         Commands::Init { name } => init_project(&name),
         Commands::Repl => repl::run_repl(),
@@ -1191,7 +1196,7 @@ fn collect_test_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose: bool) {
+fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose: bool, use_llvm: bool) {
     check_file_size(path);
 
     let source = match std::fs::read_to_string(path) {
@@ -1312,12 +1317,19 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
 
     // Compile to native binary
     let codegen_start = std::time::Instant::now();
-    match turbo_codegen_cranelift::aot_compile(&module, output_path, true) {
+    let backend_name = if use_llvm { "LLVM" } else { "Cranelift" };
+    let codegen_result: Result<(), String> = if use_llvm {
+        turbo_codegen_llvm::aot_compile(&module, output_path).map_err(|e| e.to_string())
+    } else {
+        turbo_codegen_cranelift::aot_compile(&module, output_path, true).map_err(|e| e.to_string())
+    };
+    match codegen_result {
         Ok(()) => {
             let codegen_time = codegen_start.elapsed();
             eprintln!(
-                "\x1b[32m\u{2713}\x1b[0m Compiled to {}",
-                output_path.display()
+                "\x1b[32m\u{2713}\x1b[0m Compiled to {} ({})",
+                output_path.display(),
+                backend_name
             );
             if verbose {
                 eprintln!("\n--- Timing ---");
