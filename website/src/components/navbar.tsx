@@ -25,7 +25,7 @@ export default function Navbar() {
             Examples
           </Link>
           <a
-            href="https://github.com/ZVN-DEV/Turbo-Language"
+            href="https://github.com/ZVN-DEV/turbo-lang"
             target="_blank"
             rel="noopener noreferrer"
             className="text-sm text-gray-400 hover:text-white transition-colors font-[family-name:var(--font-geist-sans)] flex items-center gap-1.5"

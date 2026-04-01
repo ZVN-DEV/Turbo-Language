@@ -74,7 +74,7 @@ export default function Footer() {
             <ul className="space-y-2">
               <li>
                 <a
-                  href="https://github.com/ZVN-DEV/Turbo-Language"
+                  href="https://github.com/ZVN-DEV/turbo-lang"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
@@ -84,7 +84,7 @@ export default function Footer() {
               </li>
               <li>
                 <a
-                  href="https://github.com/ZVN-DEV/Turbo-Language/issues"
+                  href="https://github.com/ZVN-DEV/turbo-lang/issues"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-sm text-gray-500 hover:text-gray-300 transition-colors"

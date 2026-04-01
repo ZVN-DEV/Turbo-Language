@@ -43,8 +43,8 @@ export default function DocsPage() {
           pattern matching, Result/Optional types
         </li>
         <li>
-          <strong className="text-white">Async runtime</strong> -- async/await,
-          spawn, channels, mutex
+          <strong className="text-white">Thread-based concurrency</strong> -- spawn,
+          await, channels, mutex
         </li>
         <li>
           <strong className="text-white">AI agent primitives</strong> --{" "}
@@ -57,7 +57,7 @@ export default function DocsPage() {
           test runner, formatter, REPL, LSP, package manager
         </li>
         <li>
-          <strong className="text-white">Tiny binaries</strong> -- ~35 KB for a
+          <strong className="text-white">Tiny binaries</strong> -- ~55 KB for a
           hello world, no runtime dependencies
         </li>
       </ul>
@@ -110,10 +110,9 @@ fn main() {
           </thead>
           <tbody>
             {[
-              ["Turbo (LLVM)", "160ms", "35 KB"],
-              ["C (cc -O2)", "170ms", "33 KB"],
+              ["C (gcc -O2)", "170ms", "33 KB"],
               ["Rust (rustc -O)", "180ms", "441 KB"],
-              ["Turbo (Cranelift)", "220ms", "35 KB"],
+              ["Turbo (Cranelift)", "220ms", "55 KB"],
               ["Node.js", "580ms", "N/A"],
               ["Python", "13.1s", "N/A"],
             ].map(([lang, time, size]) => (

@@ -21,9 +21,14 @@ turbo build        # Build only`}</code>
 
       {/* Simple Script */}
       <div className="border border-[#1a1a2e] rounded-lg p-6 mb-6">
-        <h3 className="text-xl font-bold text-white mb-2">
-          simple-script -- Text Statistics Analyzer
-        </h3>
+        <div className="flex items-center gap-3 mb-2">
+          <h3 className="text-xl font-bold text-white">
+            simple-script -- Text Statistics Analyzer
+          </h3>
+          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-[#00ff88]/10 text-[#00ff88] border border-[#00ff88]/30">
+            Available
+          </span>
+        </div>
         <p className="text-gray-400 text-sm mb-4">Starter</p>
         <p className="mb-4">
           A text analysis tool that demonstrates Turbo&apos;s core features:
@@ -52,9 +57,14 @@ let upper = cleaned |> upper`}</code>
 
       {/* Speed Server */}
       <div className="border border-[#1a1a2e] rounded-lg p-6 mb-6">
-        <h3 className="text-xl font-bold text-white mb-2">
-          speed-server -- HTTP Speed Server
-        </h3>
+        <div className="flex items-center gap-3 mb-2">
+          <h3 className="text-xl font-bold text-white">
+            speed-server -- HTTP Speed Server
+          </h3>
+          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/30">
+            Planned
+          </span>
+        </div>
         <p className="text-gray-400 text-sm mb-4">Intermediate</p>
         <p className="mb-4">
           A high-performance HTTP server showcasing async I/O, concurrent request
@@ -71,9 +81,14 @@ let upper = cleaned |> upper`}</code>
 
       {/* Web Dashboard */}
       <div className="border border-[#1a1a2e] rounded-lg p-6 mb-6">
-        <h3 className="text-xl font-bold text-white mb-2">
-          web-dashboard -- Analytics Dashboard
-        </h3>
+        <div className="flex items-center gap-3 mb-2">
+          <h3 className="text-xl font-bold text-white">
+            web-dashboard -- Analytics Dashboard
+          </h3>
+          <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-[#00ff88]/10 text-[#00ff88] border border-[#00ff88]/30">
+            Available
+          </span>
+        </div>
         <p className="text-gray-400 text-sm mb-4">Intermediate</p>
         <p className="mb-4">
           A data analytics dashboard demonstrating structs, enums, pattern
@@ -93,7 +108,7 @@ let upper = cleaned |> upper`}</code>
         More Examples
       </h2>
       <p className="mb-4">
-        The repository includes additional advanced examples:
+        The repository includes additional advanced examples. These are aspirational designs showing where Turbo is headed:
       </p>
       <div className="overflow-x-auto mb-8">
         <table className="w-full text-sm text-left border border-[#1a1a2e] rounded-lg overflow-hidden">
@@ -101,21 +116,27 @@ let upper = cleaned |> upper`}</code>
             <tr>
               <th className="px-4 py-2 border-b border-[#1a1a2e]">Example</th>
               <th className="px-4 py-2 border-b border-[#1a1a2e]">Description</th>
+              <th className="px-4 py-2 border-b border-[#1a1a2e]">Status</th>
             </tr>
           </thead>
           <tbody>
             {[
-              ["task-agent", "REST API with AI agent for task management"],
-              ["web-api", "Production bookmarking API with JWT auth, WebSocket, rate limiting"],
-              ["desktop-app", "Native markdown editor with AI writing assistant"],
-              ["realtime-system", "Trading order matching engine with zero-alloc hot paths"],
-              ["edge-wasm", "Edge image processing compiled to WebAssembly"],
-            ].map(([name, desc]) => (
+              ["task-agent", "REST API with AI agent for task management", "Planned"],
+              ["web-api", "Production bookmarking API with JWT auth, WebSocket, rate limiting", "Planned"],
+              ["desktop-app", "Native markdown editor with AI writing assistant", "Planned"],
+              ["realtime-system", "Trading order matching engine with zero-alloc hot paths", "Planned"],
+              ["edge-wasm", "Edge image processing compiled to WebAssembly", "Planned"],
+            ].map(([name, desc, status]) => (
               <tr key={name} className="border-b border-[#1a1a2e]">
                 <td className="px-4 py-2">
                   <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)]">{name}</code>
                 </td>
                 <td className="px-4 py-2">{desc}</td>
+                <td className="px-4 py-2">
+                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-yellow-500/10 text-yellow-400 border border-yellow-500/30">
+                    {status}
+                  </span>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -126,7 +147,7 @@ let upper = cleaned |> upper`}</code>
         <p className="text-gray-300 mb-0">
           All examples are available in the{" "}
           <a
-            href="https://github.com/ZVN-DEV/Turbo-Language/tree/main/examples"
+            href="https://github.com/ZVN-DEV/turbo-lang/tree/main/examples"
             target="_blank"
             rel="noopener noreferrer"
             className="text-[#00ff88] hover:underline"

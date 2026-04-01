@@ -9,18 +9,17 @@ export default function AgentsPage() {
         configure agents, and build AI-powered applications natively.
       </p>
 
-      <div className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-6 mb-8">
-        <p className="text-gray-300 mb-0">
-          Turbo is the first compiled language with{" "}
-          <code className="text-[#00ff88] bg-[#0a0a0a] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
-            agent
-          </code>{" "}
+      <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-4 mb-8">
+        <p className="text-yellow-300 font-medium mb-2">Experimental Syntax</p>
+        <p className="text-gray-300 mb-0 text-sm">
+          The{" "}
+          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">agent</code>{" "}
           and{" "}
-          <code className="text-[#00ff88] bg-[#0a0a0a] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
-            tool fn
-          </code>{" "}
-          as language-level keywords. No frameworks, no SDKs -- agents are part
-          of the type system.
+          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">tool fn</code>{" "}
+          keywords are parsed and type-checked by the compiler, but they do not perform LLM calls,
+          generate JSON schemas, or invoke tools at runtime. Agent definitions store metadata
+          (model, system prompt, tool list) that you can access as fields. Full AI integration --
+          including actual LLM communication and tool dispatch -- is planned for a future release.
         </p>
       </div>
 
@@ -137,7 +136,7 @@ fn main() {
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        Why Language-Level Agents?
+        What Works Today
       </h2>
       <ul className="list-disc list-inside space-y-2 mb-6">
         <li>
@@ -148,18 +147,29 @@ fn main() {
           </code>
         </li>
         <li>
-          <strong className="text-white">Auto-generated schemas</strong> -- Tool
-          function signatures are automatically converted to JSON schemas for LLM
-          calling
-        </li>
-        <li>
           <strong className="text-white">Static validation</strong> -- Agent
-          configurations are checked at compile time, not runtime
+          configurations (model, system prompt, tool list) are checked at compile time
         </li>
         <li>
-          <strong className="text-white">No SDK dependency</strong> -- Agents are
-          a language primitive, not a library import
+          <strong className="text-white">Metadata access</strong> -- Agent fields
+          (model, system, tools) are accessible at runtime as struct-like fields
         </li>
+        <li>
+          <strong className="text-white">Tool functions are real functions</strong> -- {" "}
+          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
+            tool fn
+          </code>{" "}
+          functions can be called directly like any other function
+        </li>
+      </ul>
+      <h2 className="text-2xl font-bold text-white mt-10 mb-4">
+        Planned for Future Releases
+      </h2>
+      <ul className="list-disc list-inside space-y-2 mb-6">
+        <li>LLM API communication (sending prompts, receiving responses)</li>
+        <li>Auto-generated JSON schemas from tool function signatures</li>
+        <li>Tool dispatch and orchestration at runtime</li>
+        <li>Streaming responses and multi-turn conversations</li>
       </ul>
 
       <div className="flex gap-4 mt-10">

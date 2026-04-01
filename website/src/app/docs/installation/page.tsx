@@ -38,8 +38,8 @@ brew install turbo-lang`}</code>
       </h2>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
         <code>{`# Clone the repository
-git clone https://github.com/ZVN-DEV/Turbo-Language.git
-cd Turbo-Language/turbo
+git clone https://github.com/ZVN-DEV/turbo-lang.git
+cd turbo-lang/turbo
 
 # Build in release mode
 cargo build --release
@@ -56,7 +56,7 @@ cargo build --release
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
         <code>{`# Add to ~/.bashrc, ~/.zshrc, or equivalent
-export PATH="$HOME/Turbo-Language/turbo/target/release:$PATH"`}</code>
+export PATH="$HOME/turbo-lang/turbo/target/release:$PATH"`}</code>
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
@@ -68,22 +68,6 @@ export PATH="$HOME/Turbo-Language/turbo/target/release:$PATH"`}</code>
       <p className="mb-6">
         You should see the current version number printed to the terminal.
       </p>
-
-      <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        LLVM Backend (Optional)
-      </h2>
-      <p className="mb-4">
-        For maximum performance, install LLVM 18 and rebuild with LLVM support:
-      </p>
-      <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`# macOS
-brew install llvm@18
-
-# Build with LLVM support
-LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --release
-
-# Now you can use: turbo build --llvm myapp.tb`}</code>
-      </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
         Editor Support

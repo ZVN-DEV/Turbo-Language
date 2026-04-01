@@ -9,30 +9,30 @@ const heroCode = `fn fib(n: i64) -> i64 {
 
 fn main() {
     let result = fib(40)
-    print("fib(40) = " + str(result))
+    print("fib(40) = " + to_str(result))
 }`;
 
 const exampleTabs = [
   {
     label: "Pattern Matching",
     filename: "shapes.tb",
-    code: `enum Shape {
-    Circle { radius: f64 }
-    Rect { width: f64, height: f64 }
-    Triangle { base: f64, height: f64 }
+    code: `type Shape {
+    Circle(f64),
+    Rectangle(f64, f64),
+    Triangle(f64, f64),
 }
 
-fn area(s: Shape) -> f64 {
-    match s {
-        Shape::Circle { radius } => 3.14159 * radius * radius
-        Shape::Rect { width, height } => width * height
-        Shape::Triangle { base, height } => 0.5 * base * height
+fn area(shape: Shape) -> f64 {
+    match shape {
+        Circle(r) => 3.14159 * r * r,
+        Rectangle(w, h) => w * h,
+        Triangle(b, h) => 0.5 * b * h,
     }
 }
 
 fn main() {
-    let c = Shape::Circle { radius: 5.0 }
-    print("Area: " + str(area(c)))
+    let s = Shape.Circle(5.0)
+    print("Area: " + to_str(area(s)))
 }`,
   },
   {
@@ -51,13 +51,14 @@ fn main() {
     // Await both results
     let users = await a
     let posts = await b
-    print("Got " + str(len(users)) + " bytes")
+    print("Got " + to_str(len(users)) + " bytes")
 }`,
   },
   {
     label: "AI Agent",
     filename: "assistant.tb",
-    code: `agent WeatherBot {
+    code: `// Agent syntax is experimental
+agent WeatherBot {
     model: "gpt-4"
     system: "You are a helpful weather assistant."
 
@@ -70,7 +71,7 @@ fn main() {
 
     tool fn get_forecast(city: str, days: i64) -> str {
         let resp = await http_get(
-            "https://wttr.in/" + city + "?format=v2&days=" + str(days)
+            "https://wttr.in/" + city + "?format=v2&days=" + to_str(days)
         )
         resp.body
     }
@@ -79,10 +80,9 @@ fn main() {
 ];
 
 const benchmarks = [
-  { label: "Turbo (LLVM)", ms: 160, size: "35 KB", highlight: true },
   { label: "C (cc -O2)", ms: 170, size: "33 KB", highlight: false },
   { label: "Rust (rustc -O)", ms: 180, size: "441 KB", highlight: false },
-  { label: "Turbo (Cranelift)", ms: 220, size: "35 KB", highlight: true },
+  { label: "Turbo (Cranelift)", ms: 220, size: "55 KB", highlight: true },
   { label: "Node.js", ms: 580, size: "--", highlight: false },
   { label: "Python", ms: 13100, size: "--", highlight: false },
 ];
@@ -171,7 +171,7 @@ const features = [
   {
     title: "Zero GC",
     description:
-      "No garbage collector pauses. Deterministic memory management with ~35 KB binaries. Deploy anywhere with no runtime.",
+      "No garbage collector pauses. Deterministic memory management with ~55 KB binaries. Deploy anywhere with no runtime.",
     icon: (
       <svg
         className="w-6 h-6"
@@ -260,7 +260,7 @@ export default function Home() {
                   </svg>
                 </Link>
                 <a
-                  href="https://github.com/ZVN-DEV/Turbo-Language"
+                  href="https://github.com/ZVN-DEV/turbo-lang"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 border border-[#1a1a2e] text-gray-300 px-6 py-3 rounded-lg hover:border-[#00ff88] hover:text-[#00ff88] transition-colors text-sm"
@@ -409,18 +409,18 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto">
-            <div className="rounded-xl border border-[#1a1a2e] bg-[#111118] p-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto w-full">
+            <div className="rounded-xl border border-[#1a1a2e] bg-[#111118] p-6 min-w-0">
               <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
                 From Source
               </h3>
-              <pre className="text-sm font-[family-name:var(--font-geist-mono)] text-gray-300 leading-relaxed">
+              <pre className="text-sm font-[family-name:var(--font-geist-mono)] text-gray-300 leading-relaxed overflow-x-auto">
                 <code>
                   <span className="text-gray-500">$</span>{" "}
                   <span className="text-[#00ff88]">git clone</span>{" "}
-                  https://github.com/ZVN-DEV/Turbo-Language.git{"\n"}
+                  https://github.com/ZVN-DEV/turbo-lang.git{"\n"}
                   <span className="text-gray-500">$</span>{" "}
-                  <span className="text-[#00ff88]">cd</span> Turbo-Language{"\n"}
+                  <span className="text-[#00ff88]">cd</span> turbo-lang{"\n"}
                   <span className="text-gray-500">$</span>{" "}
                   <span className="text-[#00ff88]">cargo build</span> --release
                   --manifest-path turbo/Cargo.toml{"\n"}
@@ -431,11 +431,11 @@ export default function Home() {
               </pre>
             </div>
 
-            <div className="rounded-xl border border-[#1a1a2e] bg-[#111118] p-6">
+            <div className="rounded-xl border border-[#1a1a2e] bg-[#111118] p-6 min-w-0">
               <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
                 Homebrew
               </h3>
-              <pre className="text-sm font-[family-name:var(--font-geist-mono)] text-gray-300 leading-relaxed">
+              <pre className="text-sm font-[family-name:var(--font-geist-mono)] text-gray-300 leading-relaxed overflow-x-auto">
                 <code>
                   <span className="text-gray-500">$</span>{" "}
                   <span className="text-[#00ff88]">brew tap</span>{" "}

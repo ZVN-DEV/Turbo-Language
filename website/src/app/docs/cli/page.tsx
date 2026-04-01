@@ -23,7 +23,6 @@ export default function CliPage() {
             {[
               ["turbo run <file.tb>", "Compile and run via JIT (Cranelift)"],
               ["turbo build <file.tb>", "Compile to a native binary (AOT)"],
-              ["turbo build --llvm <file.tb>", "Compile with LLVM optimizations"],
               ["turbo test <file.tb>", "Run @test functions"],
               ["turbo bench <file.tb>", "Benchmark with timing"],
               ["turbo init <name>", "Create a new project"],
@@ -71,16 +70,13 @@ $ turbo run --verbose hello.tb`}</code>
         runtime and has no external dependencies.
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`# Default (Cranelift backend)
+        <code>{`# Compile to native binary (Cranelift backend)
 $ turbo build hello.tb
 $ ./hello
 
 # With custom output name
 $ turbo build hello.tb --output my-app
-$ ./my-app
-
-# With LLVM optimizations (requires LLVM 18)
-$ turbo build --llvm hello.tb`}</code>
+$ ./my-app`}</code>
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
@@ -184,7 +180,7 @@ E0200: Match expression is not exhaustive
               ["Strings", "len, split, trim, upper, lower, replace, contains, starts_with, ends_with, join, repeat, to_str"],
               ["Arrays", "len, push, map, filter, reduce, sort"],
               ["Hashmaps", "hashmap, hashmap_set, hashmap_get, hashmap_has, hashmap_len, hashmap_keys, hashmap_remove"],
-              ["Math", "math_sqrt, math_abs, math_pow, math_min, math_max, math_floor, math_ceil"],
+              ["Math", "sqrt, abs, pow, min, max"],
               ["Async", "spawn, channel, send, recv, mutex, mutex_get, mutex_set, sleep"],
               ["Conversion", "to_str, clone"],
             ].map(([category, fns]) => (
