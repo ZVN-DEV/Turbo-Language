@@ -15,7 +15,7 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionTy
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
 };
-use inkwell::{AddressSpace, IntPredicate, FloatPredicate, OptimizationLevel};
+use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -66,10 +66,7 @@ type MaybeTyped<'ctx> = Option<Typed<'ctx>>;
 
 // ── Type conversion helpers ─────────────────────────────────────────
 
-fn turbo_ty_from_type_expr(
-    te: &TypeExpr,
-    enum_variants: &HashMap<String, Vec<String>>,
-) -> TurboTy {
+fn turbo_ty_from_type_expr(te: &TypeExpr, enum_variants: &HashMap<String, Vec<String>>) -> TurboTy {
     turbo_ty_from_type_expr_with_params(te, enum_variants, &[])
 }
 
@@ -98,9 +95,10 @@ fn turbo_ty_from_type_expr_with_params(
             }
         }
         TypeExpr::Unit => TurboTy::Unit,
-        TypeExpr::Array(inner) => {
-            TurboTy::Array(Box::new(turbo_ty_from_type_expr(&inner.node, enum_variants)))
-        }
+        TypeExpr::Array(inner) => TurboTy::Array(Box::new(turbo_ty_from_type_expr(
+            &inner.node,
+            enum_variants,
+        ))),
         TypeExpr::FnType { params, ret } => {
             let param_tys: Vec<TurboTy> = params
                 .iter()
@@ -114,25 +112,21 @@ fn turbo_ty_from_type_expr_with_params(
             let err_tty = turbo_ty_from_type_expr(&err_type.node, enum_variants);
             TurboTy::Result(Box::new(ok_tty), Box::new(err_tty))
         }
-        TypeExpr::Optional(inner) => {
-            TurboTy::Optional(Box::new(turbo_ty_from_type_expr(&inner.node, enum_variants)))
-        }
-        TypeExpr::Future(inner) => {
-            TurboTy::Future(Box::new(turbo_ty_from_type_expr_with_params(
-                &inner.node,
-                enum_variants,
-                type_params,
-            )))
-        }
+        TypeExpr::Optional(inner) => TurboTy::Optional(Box::new(turbo_ty_from_type_expr(
+            &inner.node,
+            enum_variants,
+        ))),
+        TypeExpr::Future(inner) => TurboTy::Future(Box::new(turbo_ty_from_type_expr_with_params(
+            &inner.node,
+            enum_variants,
+            type_params,
+        ))),
         _ => TurboTy::Int,
     }
 }
 
 /// Convert a TurboTy to an LLVM BasicTypeEnum.
-fn turbo_ty_to_llvm<'ctx>(
-    tty: &TurboTy,
-    context: &'ctx Context,
-) -> BasicTypeEnum<'ctx> {
+fn turbo_ty_to_llvm<'ctx>(tty: &TurboTy, context: &'ctx Context) -> BasicTypeEnum<'ctx> {
     match tty {
         TurboTy::Int => context.i64_type().into(),
         TurboTy::Float => context.f64_type().into(),
@@ -224,7 +218,10 @@ struct Ctx<'a, 'ctx> {
     /// Module-level constants
     constants: &'a HashMap<String, Spanned<Expr>>,
     /// Loop stack for break/continue: (header_block, exit_block)
-    loop_stack: Vec<(inkwell::basic_block::BasicBlock<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)>,
+    loop_stack: Vec<(
+        inkwell::basic_block::BasicBlock<'ctx>,
+        inkwell::basic_block::BasicBlock<'ctx>,
+    )>,
     /// Closure functions: span_start -> (fn_name, TurboTy::Fn, free_var_names)
     closure_fns: &'a HashMap<usize, (String, TurboTy, Vec<String>)>,
     /// Spawn thunks: span_start -> thunk_fn_name
@@ -287,20 +284,14 @@ impl<'a, 'ctx> Ctx<'a, 'ctx> {
     }
 
     /// Create an alloca in the entry block of the current function.
-    fn create_entry_block_alloca(
-        &self,
-        ty: BasicTypeEnum<'ctx>,
-        name: &str,
-    ) -> PointerValue<'ctx> {
+    fn create_entry_block_alloca(&self, ty: BasicTypeEnum<'ctx>, name: &str) -> PointerValue<'ctx> {
         let entry = self.current_fn.get_first_basic_block().unwrap();
         let builder = self.context.create_builder();
         match entry.get_first_instruction() {
             Some(first_instr) => builder.position_before(&first_instr),
             None => builder.position_at_end(entry),
         }
-        builder
-            .build_alloca(ty, name)
-            .expect("build_alloca failed")
+        builder.build_alloca(ty, name).expect("build_alloca failed")
     }
 }
 
@@ -335,7 +326,9 @@ fn infer_capture_type_from_body(body: &Expr, var_name: &str) -> TurboTy {
             for part in parts {
                 if let InterpolPart::Expr(e) = part {
                     let t = infer_capture_type_from_body(&e.node, var_name);
-                    if t != TurboTy::Int { return t; }
+                    if t != TurboTy::Int {
+                        return t;
+                    }
                 }
             }
             TurboTy::Int
@@ -345,15 +338,21 @@ fn infer_capture_type_from_body(body: &Expr, var_name: &str) -> TurboTy {
                 match &stmt.node {
                     Stmt::Let { value, .. } => {
                         let t = infer_capture_type_from_body(&value.node, var_name);
-                        if t != TurboTy::Int { return t; }
+                        if t != TurboTy::Int {
+                            return t;
+                        }
                     }
                     Stmt::Expr(e) => {
                         let t = infer_capture_type_from_body(&e.node, var_name);
-                        if t != TurboTy::Int { return t; }
+                        if t != TurboTy::Int {
+                            return t;
+                        }
                     }
                     Stmt::Return(Some(e)) => {
                         let t = infer_capture_type_from_body(&e.node, var_name);
-                        if t != TurboTy::Int { return t; }
+                        if t != TurboTy::Int {
+                            return t;
+                        }
                     }
                     _ => {}
                 }
@@ -367,20 +366,32 @@ fn infer_capture_type_from_body(body: &Expr, var_name: &str) -> TurboTy {
             // If passed to rt_str_concat or similar, it's a string
             for arg in args {
                 let t = infer_capture_type_from_body(&arg.node, var_name);
-                if t != TurboTy::Int { return t; }
+                if t != TurboTy::Int {
+                    return t;
+                }
             }
             infer_capture_type_from_body(&callee.node, var_name)
         }
         Expr::BinaryOp { left, right, .. } => {
             let t = infer_capture_type_from_body(&left.node, var_name);
-            if t != TurboTy::Int { return t; }
+            if t != TurboTy::Int {
+                return t;
+            }
             infer_capture_type_from_body(&right.node, var_name)
         }
-        Expr::If { condition, then_branch, else_branch } => {
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             let t = infer_capture_type_from_body(&condition.node, var_name);
-            if t != TurboTy::Int { return t; }
+            if t != TurboTy::Int {
+                return t;
+            }
             let t = infer_capture_type_from_body(&then_branch.node, var_name);
-            if t != TurboTy::Int { return t; }
+            if t != TurboTy::Int {
+                return t;
+            }
             if let Some(e) = else_branch {
                 return infer_capture_type_from_body(&e.node, var_name);
             }
@@ -409,7 +420,9 @@ fn collect_free_vars_llvm(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<S
         Expr::UnaryOp { expr: e, .. } => collect_free_vars_llvm(&e.node, bound, free),
         Expr::Call { callee, args } => {
             collect_free_vars_llvm(&callee.node, bound, free);
-            for arg in args { collect_free_vars_llvm(&arg.node, bound, free); }
+            for arg in args {
+                collect_free_vars_llvm(&arg.node, bound, free);
+            }
         }
         Expr::Block { stmts, tail_expr } => {
             let prev_len = bound.len();
@@ -425,19 +438,31 @@ fn collect_free_vars_llvm(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<S
                     Stmt::Return(None) => {}
                 }
             }
-            if let Some(tail) = tail_expr { collect_free_vars_llvm(&tail.node, bound, free); }
+            if let Some(tail) = tail_expr {
+                collect_free_vars_llvm(&tail.node, bound, free);
+            }
             bound.truncate(prev_len);
         }
-        Expr::If { condition, then_branch, else_branch } => {
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             collect_free_vars_llvm(&condition.node, bound, free);
             collect_free_vars_llvm(&then_branch.node, bound, free);
-            if let Some(e) = else_branch { collect_free_vars_llvm(&e.node, bound, free); }
+            if let Some(e) = else_branch {
+                collect_free_vars_llvm(&e.node, bound, free);
+            }
         }
         Expr::While { condition, body } => {
             collect_free_vars_llvm(&condition.node, bound, free);
             collect_free_vars_llvm(&body.node, bound, free);
         }
-        Expr::ForIn { var_name, iterable, body } => {
+        Expr::ForIn {
+            var_name,
+            iterable,
+            body,
+        } => {
             collect_free_vars_llvm(&iterable.node, bound, free);
             let prev = bound.len();
             bound.push(var_name.clone());
@@ -445,14 +470,20 @@ fn collect_free_vars_llvm(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<S
             bound.truncate(prev);
         }
         Expr::Assign { target, value } | Expr::CompoundAssign { target, value, .. } => {
-            if !bound.contains(target) && !free.contains(target) { free.push(target.clone()); }
+            if !bound.contains(target) && !free.contains(target) {
+                free.push(target.clone());
+            }
             collect_free_vars_llvm(&value.node, bound, free);
         }
         Expr::FieldAssign { object, value, .. } => {
             collect_free_vars_llvm(&object.node, bound, free);
             collect_free_vars_llvm(&value.node, bound, free);
         }
-        Expr::IndexAssign { object, index, value } => {
+        Expr::IndexAssign {
+            object,
+            index,
+            value,
+        } => {
             collect_free_vars_llvm(&object.node, bound, free);
             collect_free_vars_llvm(&index.node, bound, free);
             collect_free_vars_llvm(&value.node, bound, free);
@@ -463,26 +494,38 @@ fn collect_free_vars_llvm(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<S
             collect_free_vars_llvm(&index.node, bound, free);
         }
         Expr::ArrayLit(elems) => {
-            for e in elems { collect_free_vars_llvm(&e.node, bound, free); }
+            for e in elems {
+                collect_free_vars_llvm(&e.node, bound, free);
+            }
         }
         Expr::StructLit { fields, .. } => {
-            for (_, e) in fields { collect_free_vars_llvm(&e.node, bound, free); }
+            for (_, e) in fields {
+                collect_free_vars_llvm(&e.node, bound, free);
+            }
         }
         Expr::Match { subject, arms } => {
             collect_free_vars_llvm(&subject.node, bound, free);
             for arm in arms {
-                if let Some(ref g) = arm.guard { collect_free_vars_llvm(&g.node, bound, free); }
+                if let Some(ref g) = arm.guard {
+                    collect_free_vars_llvm(&g.node, bound, free);
+                }
                 collect_free_vars_llvm(&arm.body.node, bound, free);
             }
         }
         Expr::Closure { params, body, .. } => {
             let prev = bound.len();
-            for p in params { bound.push(p.name.clone()); }
+            for p in params {
+                bound.push(p.name.clone());
+            }
             collect_free_vars_llvm(&body.node, bound, free);
             bound.truncate(prev);
         }
-        Expr::OkExpr(v) | Expr::ErrExpr(v) | Expr::SomeExpr(v)
-        | Expr::Await(v) | Expr::Spawn(v) | Expr::Try(v) => {
+        Expr::OkExpr(v)
+        | Expr::ErrExpr(v)
+        | Expr::SomeExpr(v)
+        | Expr::Await(v)
+        | Expr::Spawn(v)
+        | Expr::Try(v) => {
             collect_free_vars_llvm(&v.node, bound, free);
         }
         Expr::NullCoalesce { value, default } => {
@@ -491,7 +534,9 @@ fn collect_free_vars_llvm(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<S
         }
         Expr::Interpolation(parts) => {
             for part in parts {
-                if let InterpolPart::Expr(e) = part { collect_free_vars_llvm(&e.node, bound, free); }
+                if let InterpolPart::Expr(e) = part {
+                    collect_free_vars_llvm(&e.node, bound, free);
+                }
             }
         }
         Expr::Range { start, end } => {
@@ -508,16 +553,21 @@ fn extract_closures_from_expr_llvm<'a>(
     counter: &mut usize,
 ) {
     match &expr.node {
-        Expr::Closure { params, return_type, body } => {
+        Expr::Closure {
+            params,
+            return_type,
+            body,
+        } => {
             let name = format!("__closure_{}", *counter);
             *counter += 1;
             let mut bound: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
             let mut free_vars = Vec::new();
             collect_free_vars_llvm(&body.node, &mut bound, &mut free_vars);
             // Infer capture types from body usage: scan for string interpolation/concat
-            let capture_types: Vec<TurboTy> = free_vars.iter().map(|var_name| {
-                infer_capture_type_from_body(&body.node, var_name)
-            }).collect();
+            let capture_types: Vec<TurboTy> = free_vars
+                .iter()
+                .map(|var_name| infer_capture_type_from_body(&body.node, var_name))
+                .collect();
             out.push(ExtractedClosure {
                 span_start: expr.span.start,
                 name,
@@ -541,14 +591,27 @@ fn extract_closures_from_expr_llvm<'a>(
                     _ => {}
                 }
             }
-            if let Some(tail) = tail_expr { extract_closures_from_expr_llvm(tail, out, counter); }
+            if let Some(tail) = tail_expr {
+                extract_closures_from_expr_llvm(tail, out, counter);
+            }
         }
-        Expr::If { condition, then_branch, else_branch } => {
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             extract_closures_from_expr_llvm(condition, out, counter);
             extract_closures_from_expr_llvm(then_branch, out, counter);
-            if let Some(e) = else_branch { extract_closures_from_expr_llvm(e, out, counter); }
+            if let Some(e) = else_branch {
+                extract_closures_from_expr_llvm(e, out, counter);
+            }
         }
-        Expr::While { condition, body } | Expr::ForIn { iterable: condition, body, .. } => {
+        Expr::While { condition, body }
+        | Expr::ForIn {
+            iterable: condition,
+            body,
+            ..
+        } => {
             extract_closures_from_expr_llvm(condition, out, counter);
             extract_closures_from_expr_llvm(body, out, counter);
         }
@@ -559,7 +622,9 @@ fn extract_closures_from_expr_llvm<'a>(
         Expr::UnaryOp { expr: e, .. } => extract_closures_from_expr_llvm(e, out, counter),
         Expr::Call { callee, args } => {
             extract_closures_from_expr_llvm(callee, out, counter);
-            for arg in args { extract_closures_from_expr_llvm(arg, out, counter); }
+            for arg in args {
+                extract_closures_from_expr_llvm(arg, out, counter);
+            }
         }
         Expr::Assign { value, .. } | Expr::CompoundAssign { value, .. } => {
             extract_closures_from_expr_llvm(value, out, counter);
@@ -568,13 +633,21 @@ fn extract_closures_from_expr_llvm<'a>(
             extract_closures_from_expr_llvm(object, out, counter);
             extract_closures_from_expr_llvm(value, out, counter);
         }
-        Expr::IndexAssign { object, index, value } => {
+        Expr::IndexAssign {
+            object,
+            index,
+            value,
+        } => {
             extract_closures_from_expr_llvm(object, out, counter);
             extract_closures_from_expr_llvm(index, out, counter);
             extract_closures_from_expr_llvm(value, out, counter);
         }
-        Expr::OkExpr(v) | Expr::ErrExpr(v) | Expr::SomeExpr(v)
-        | Expr::Await(v) | Expr::Spawn(v) | Expr::Try(v) => {
+        Expr::OkExpr(v)
+        | Expr::ErrExpr(v)
+        | Expr::SomeExpr(v)
+        | Expr::Await(v)
+        | Expr::Spawn(v)
+        | Expr::Try(v) => {
             extract_closures_from_expr_llvm(v, out, counter);
         }
         Expr::NullCoalesce { value, default } => {
@@ -583,19 +656,27 @@ fn extract_closures_from_expr_llvm<'a>(
         }
         Expr::Interpolation(parts) => {
             for part in parts {
-                if let InterpolPart::Expr(e) = part { extract_closures_from_expr_llvm(e, out, counter); }
+                if let InterpolPart::Expr(e) = part {
+                    extract_closures_from_expr_llvm(e, out, counter);
+                }
             }
         }
         Expr::ArrayLit(elems) => {
-            for e in elems { extract_closures_from_expr_llvm(e, out, counter); }
+            for e in elems {
+                extract_closures_from_expr_llvm(e, out, counter);
+            }
         }
         Expr::StructLit { fields, .. } => {
-            for (_, e) in fields { extract_closures_from_expr_llvm(e, out, counter); }
+            for (_, e) in fields {
+                extract_closures_from_expr_llvm(e, out, counter);
+            }
         }
         Expr::Match { subject, arms } => {
             extract_closures_from_expr_llvm(subject, out, counter);
             for arm in arms {
-                if let Some(ref g) = arm.guard { extract_closures_from_expr_llvm(g, out, counter); }
+                if let Some(ref g) = arm.guard {
+                    extract_closures_from_expr_llvm(g, out, counter);
+                }
                 extract_closures_from_expr_llvm(&arm.body, out, counter);
             }
         }
@@ -608,7 +689,9 @@ fn extract_all_closures_llvm(ast_module: &turbo_ast::Module) -> Vec<ExtractedClo
     let mut counter = 0;
     for item in &ast_module.items {
         match &item.node {
-            Item::Function(f) => extract_closures_from_expr_llvm(&f.body, &mut closures, &mut counter),
+            Item::Function(f) => {
+                extract_closures_from_expr_llvm(&f.body, &mut closures, &mut counter)
+            }
             Item::Impl(imp) => {
                 for method in &imp.methods {
                     extract_closures_from_expr_llvm(&method.node.body, &mut closures, &mut counter);
@@ -645,7 +728,9 @@ fn extract_spawn_sites_from_expr_llvm(
                         num_args: args.len(),
                     });
                     *counter += 1;
-                    for arg in args { extract_spawn_sites_from_expr_llvm(arg, out, counter); }
+                    for arg in args {
+                        extract_spawn_sites_from_expr_llvm(arg, out, counter);
+                    }
                     return;
                 }
             }
@@ -663,14 +748,27 @@ fn extract_spawn_sites_from_expr_llvm(
                     _ => {}
                 }
             }
-            if let Some(tail) = tail_expr { extract_spawn_sites_from_expr_llvm(tail, out, counter); }
+            if let Some(tail) = tail_expr {
+                extract_spawn_sites_from_expr_llvm(tail, out, counter);
+            }
         }
-        Expr::If { condition, then_branch, else_branch } => {
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
             extract_spawn_sites_from_expr_llvm(condition, out, counter);
             extract_spawn_sites_from_expr_llvm(then_branch, out, counter);
-            if let Some(e) = else_branch { extract_spawn_sites_from_expr_llvm(e, out, counter); }
+            if let Some(e) = else_branch {
+                extract_spawn_sites_from_expr_llvm(e, out, counter);
+            }
         }
-        Expr::While { condition, body } | Expr::ForIn { iterable: condition, body, .. } => {
+        Expr::While { condition, body }
+        | Expr::ForIn {
+            iterable: condition,
+            body,
+            ..
+        } => {
             extract_spawn_sites_from_expr_llvm(condition, out, counter);
             extract_spawn_sites_from_expr_llvm(body, out, counter);
         }
@@ -681,13 +779,14 @@ fn extract_spawn_sites_from_expr_llvm(
         Expr::UnaryOp { expr: e, .. } => extract_spawn_sites_from_expr_llvm(e, out, counter),
         Expr::Call { callee, args } => {
             extract_spawn_sites_from_expr_llvm(callee, out, counter);
-            for arg in args { extract_spawn_sites_from_expr_llvm(arg, out, counter); }
+            for arg in args {
+                extract_spawn_sites_from_expr_llvm(arg, out, counter);
+            }
         }
         Expr::Assign { value, .. } | Expr::CompoundAssign { value, .. } => {
             extract_spawn_sites_from_expr_llvm(value, out, counter);
         }
-        Expr::OkExpr(v) | Expr::ErrExpr(v) | Expr::SomeExpr(v)
-        | Expr::Await(v) | Expr::Try(v) => {
+        Expr::OkExpr(v) | Expr::ErrExpr(v) | Expr::SomeExpr(v) | Expr::Await(v) | Expr::Try(v) => {
             extract_spawn_sites_from_expr_llvm(v, out, counter);
         }
         Expr::NullCoalesce { value, default } => {
@@ -695,7 +794,9 @@ fn extract_spawn_sites_from_expr_llvm(
             extract_spawn_sites_from_expr_llvm(default, out, counter);
         }
         Expr::ArrayLit(elems) => {
-            for e in elems { extract_spawn_sites_from_expr_llvm(e, out, counter); }
+            for e in elems {
+                extract_spawn_sites_from_expr_llvm(e, out, counter);
+            }
         }
         Expr::Match { subject, arms } => {
             extract_spawn_sites_from_expr_llvm(subject, out, counter);
@@ -712,7 +813,9 @@ fn extract_all_spawn_sites_llvm(ast_module: &turbo_ast::Module) -> Vec<SpawnSite
     let mut counter = 0;
     for item in &ast_module.items {
         match &item.node {
-            Item::Function(f) => extract_spawn_sites_from_expr_llvm(&f.body, &mut sites, &mut counter),
+            Item::Function(f) => {
+                extract_spawn_sites_from_expr_llvm(&f.body, &mut sites, &mut counter)
+            }
             Item::Impl(imp) => {
                 for method in &imp.methods {
                     extract_spawn_sites_from_expr_llvm(&method.node.body, &mut sites, &mut counter);
@@ -726,10 +829,7 @@ fn extract_all_spawn_sites_llvm(ast_module: &turbo_ast::Module) -> Vec<SpawnSite
 
 // ── Public entry point ──────────────────────────────────────────────
 
-pub fn aot_compile(
-    ast_module: &turbo_ast::Module,
-    output_path: &Path,
-) -> Result<(), CodegenError> {
+pub fn aot_compile(ast_module: &turbo_ast::Module, output_path: &Path) -> Result<(), CodegenError> {
     let context = Context::create();
     let module = context.create_module("turbo_module");
     let builder = context.create_builder();
@@ -946,7 +1046,9 @@ fn compile_module<'ctx>(
                 let field_tys: Vec<TurboTy> = v
                     .fields
                     .iter()
-                    .map(|f| turbo_ty_from_type_expr_with_params(&f.node, &enum_variants, &tp_names))
+                    .map(|f| {
+                        turbo_ty_from_type_expr_with_params(&f.node, &enum_variants, &tp_names)
+                    })
                     .collect();
                 if !field_tys.is_empty() {
                     max_fields = max_fields.max(field_tys.len());
@@ -1027,7 +1129,11 @@ fn compile_module<'ctx>(
             agent_names.insert(agent.name.clone());
             agent_defs.insert(
                 agent.name.clone(),
-                (agent.model.clone(), agent.tools.clone(), agent.system_prompt.clone()),
+                (
+                    agent.model.clone(),
+                    agent.tools.clone(),
+                    agent.system_prompt.clone(),
+                ),
             );
             if !struct_fields.contains_key(&agent.name) {
                 struct_fields.insert(
@@ -1071,7 +1177,14 @@ fn compile_module<'ctx>(
             .params
             .iter()
             .map(|p| {
-                resolve_llvm_type_ctx(&p.ty.node, context, &enum_variants, &enum_max_slots, &tp_names).into()
+                resolve_llvm_type_ctx(
+                    &p.ty.node,
+                    context,
+                    &enum_variants,
+                    &enum_max_slots,
+                    &tp_names,
+                )
+                .into()
             })
             .collect();
 
@@ -1118,7 +1231,14 @@ fn compile_module<'ctx>(
                     if p.name == "self" {
                         ptr_type.into()
                     } else {
-                        resolve_llvm_type_ctx(&p.ty.node, context, &enum_variants, &enum_max_slots, &[]).into()
+                        resolve_llvm_type_ctx(
+                            &p.ty.node,
+                            context,
+                            &enum_variants,
+                            &enum_max_slots,
+                            &[],
+                        )
+                        .into()
                     }
                 })
                 .collect();
@@ -1145,25 +1265,54 @@ fn compile_module<'ctx>(
     // Declare default trait methods (methods defined in trait body that aren't overridden by impl)
     let mut trait_defs: HashMap<String, &turbo_ast::TraitDef> = HashMap::new();
     for item in &ast_module.items {
-        if let Item::Trait(t) = &item.node { trait_defs.insert(t.name.clone(), t); }
+        if let Item::Trait(t) = &item.node {
+            trait_defs.insert(t.name.clone(), t);
+        }
     }
     for item in &ast_module.items {
         if let Item::Impl(imp) = &item.node {
-            let trait_name = match &imp.trait_name { Some(t) => t.clone(), None => continue };
-            let trait_def = match trait_defs.get(&trait_name) { Some(t) => *t, None => continue };
+            let trait_name = match &imp.trait_name {
+                Some(t) => t.clone(),
+                None => continue,
+            };
+            let trait_def = match trait_defs.get(&trait_name) {
+                Some(t) => *t,
+                None => continue,
+            };
             let implemented: std::collections::HashSet<String> =
                 imp.methods.iter().map(|m| m.node.name.clone()).collect();
             for trait_method in &trait_def.methods {
-                if implemented.contains(&trait_method.name) { continue; }
-                let body_expr = match &trait_method.default_body { Some(b) => b, None => continue };
+                if implemented.contains(&trait_method.name) {
+                    continue;
+                }
+                let body_expr = match &trait_method.default_body {
+                    Some(b) => b,
+                    None => continue,
+                };
                 let mangled = format!("{}__{}", imp.type_name, trait_method.name);
-                let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = trait_method.params.iter()
-                    .map(|p| if p.name == "self" { ptr_type.into() }
-                         else { resolve_llvm_type_ctx(&p.ty.node, context, &enum_variants, &enum_max_slots, &[]).into() })
+                let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = trait_method
+                    .params
+                    .iter()
+                    .map(|p| {
+                        if p.name == "self" {
+                            ptr_type.into()
+                        } else {
+                            resolve_llvm_type_ctx(
+                                &p.ty.node,
+                                context,
+                                &enum_variants,
+                                &enum_max_slots,
+                                &[],
+                            )
+                            .into()
+                        }
+                    })
                     .collect();
                 let ret_turbo = if let Some(ref rt) = trait_method.return_type {
                     turbo_ty_from_type_expr(&rt.node, &enum_variants)
-                } else { TurboTy::Unit };
+                } else {
+                    TurboTy::Unit
+                };
                 let fn_llvm = if ret_turbo == TurboTy::Unit {
                     void_type.fn_type(&param_types, false)
                 } else {
@@ -1227,7 +1376,9 @@ fn compile_module<'ctx>(
         }
         let ret_turbo = if let Some(ref rt) = cl.return_type {
             turbo_ty_from_type_expr(&rt.node, &enum_variants)
-        } else { TurboTy::Int };
+        } else {
+            TurboTy::Int
+        };
         let fn_llvm = if ret_turbo == TurboTy::Unit {
             void_type.fn_type(&param_tys, false)
         } else {
@@ -1237,8 +1388,17 @@ fn compile_module<'ctx>(
         let func = module.add_function(&cl.name, fn_llvm, None);
         user_fns.insert(cl.name.clone(), func);
         let closure_turbo_ty = TurboTy::Fn(turbo_param_tys, Box::new(ret_turbo));
-        fn_ret_types.insert(cl.name.clone(), match &closure_turbo_ty { TurboTy::Fn(_, r) => *r.clone(), _ => TurboTy::Int });
-        closure_fns.insert(cl.span_start, (cl.name.clone(), closure_turbo_ty, cl.free_vars.clone()));
+        fn_ret_types.insert(
+            cl.name.clone(),
+            match &closure_turbo_ty {
+                TurboTy::Fn(_, r) => *r.clone(),
+                _ => TurboTy::Int,
+            },
+        );
+        closure_fns.insert(
+            cl.span_start,
+            (cl.name.clone(), closure_turbo_ty, cl.free_vars.clone()),
+        );
     }
 
     // Declare spawn thunks
@@ -1268,7 +1428,13 @@ fn compile_module<'ctx>(
 
         // Create allocas for parameters
         for (i, param) in f.params.iter().enumerate() {
-            let llvm_ty = resolve_llvm_type_ctx(&param.ty.node, context, &enum_variants, &enum_max_slots, &tp_names);
+            let llvm_ty = resolve_llvm_type_ctx(
+                &param.ty.node,
+                context,
+                &enum_variants,
+                &enum_max_slots,
+                &tp_names,
+            );
             let turbo_ty =
                 turbo_ty_from_type_expr_with_params(&param.ty.node, &enum_variants, &tp_names);
             let alloca = builder
@@ -1386,7 +1552,13 @@ fn compile_module<'ctx>(
                         TurboTy::Struct(imp.type_name.clone()),
                     )
                 } else {
-                    let llvm_ty = resolve_llvm_type_ctx(&param.ty.node, context, &enum_variants, &enum_max_slots, &[]);
+                    let llvm_ty = resolve_llvm_type_ctx(
+                        &param.ty.node,
+                        context,
+                        &enum_variants,
+                        &enum_max_slots,
+                        &[],
+                    );
                     let turbo_ty = turbo_ty_from_type_expr(&param.ty.node, &enum_variants);
                     (llvm_ty, turbo_ty)
                 };
@@ -1424,15 +1596,29 @@ fn compile_module<'ctx>(
     // Define default trait method bodies
     for item in &ast_module.items {
         if let Item::Impl(imp) = &item.node {
-            let trait_name = match &imp.trait_name { Some(t) => t.clone(), None => continue };
-            let trait_def = match trait_defs.get(&trait_name) { Some(t) => *t, None => continue };
+            let trait_name = match &imp.trait_name {
+                Some(t) => t.clone(),
+                None => continue,
+            };
+            let trait_def = match trait_defs.get(&trait_name) {
+                Some(t) => *t,
+                None => continue,
+            };
             let implemented: std::collections::HashSet<String> =
                 imp.methods.iter().map(|m| m.node.name.clone()).collect();
             for trait_method in &trait_def.methods {
-                if implemented.contains(&trait_method.name) { continue; }
-                let body_expr = match &trait_method.default_body { Some(b) => b, None => continue };
+                if implemented.contains(&trait_method.name) {
+                    continue;
+                }
+                let body_expr = match &trait_method.default_body {
+                    Some(b) => b,
+                    None => continue,
+                };
                 let mangled = format!("{}__{}", imp.type_name, trait_method.name);
-                let func = match user_fns.get(&mangled) { Some(f) => *f, None => continue };
+                let func = match user_fns.get(&mangled) {
+                    Some(f) => *f,
+                    None => continue,
+                };
 
                 let entry = context.append_basic_block(func, "entry");
                 builder.position_at_end(entry);
@@ -1440,14 +1626,27 @@ fn compile_module<'ctx>(
                 let mut vars: HashMap<String, (PointerValue<'ctx>, TurboTy)> = HashMap::new();
                 for (i, param) in trait_method.params.iter().enumerate() {
                     let (llvm_ty, turbo_ty) = if param.name == "self" {
-                        (ptr_type.as_basic_type_enum(), TurboTy::Struct(imp.type_name.clone()))
+                        (
+                            ptr_type.as_basic_type_enum(),
+                            TurboTy::Struct(imp.type_name.clone()),
+                        )
                     } else {
-                        let lt = resolve_llvm_type_ctx(&param.ty.node, context, &enum_variants, &enum_max_slots, &[]);
+                        let lt = resolve_llvm_type_ctx(
+                            &param.ty.node,
+                            context,
+                            &enum_variants,
+                            &enum_max_slots,
+                            &[],
+                        );
                         let tt = turbo_ty_from_type_expr(&param.ty.node, &enum_variants);
                         (lt, tt)
                     };
-                    let alloca = builder.build_alloca(llvm_ty, &param.name).expect("alloca failed");
-                    builder.build_store(alloca, func.get_nth_param(i as u32).unwrap()).expect("store failed");
+                    let alloca = builder
+                        .build_alloca(llvm_ty, &param.name)
+                        .expect("alloca failed");
+                    builder
+                        .build_store(alloca, func.get_nth_param(i as u32).unwrap())
+                        .expect("store failed");
                     vars.insert(param.name.clone(), (alloca, turbo_ty));
                 }
 
@@ -1477,26 +1676,39 @@ fn compile_module<'ctx>(
             match derive_name.as_str() {
                 "Display" => {
                     let mangled = format!("{struct_name}__to_string");
-                    let func = match user_fns.get(&mangled) { Some(f) => *f, None => continue };
+                    let func = match user_fns.get(&mangled) {
+                        Some(f) => *f,
+                        None => continue,
+                    };
                     // Already declared. Define: concatenate all fields as "StructName { f1: v1, f2: v2 }"
                     let entry = context.append_basic_block(func, "entry");
                     builder.position_at_end(entry);
                     let vars: HashMap<String, (PointerValue<'ctx>, TurboTy)> = {
                         let mut m = HashMap::new();
                         let self_alloca = builder.build_alloca(ptr_type, "self").expect("alloca");
-                        builder.build_store(self_alloca, func.get_nth_param(0).unwrap()).expect("store");
-                        m.insert("self".to_string(), (self_alloca, TurboTy::Struct(struct_name.clone())));
+                        builder
+                            .build_store(self_alloca, func.get_nth_param(0).unwrap())
+                            .expect("store");
+                        m.insert(
+                            "self".to_string(),
+                            (self_alloca, TurboTy::Struct(struct_name.clone())),
+                        );
                         m
                     };
                     let mut cx = make_ctx_global!(vars, func);
 
                     // Build display string: "StructName { field1: val1, field2: val2 }"
                     let mut parts: Vec<BasicValueEnum<'ctx>> = Vec::new();
-                    let prefix = cx.create_string(&format!("{struct_name} {{ ")).expect("str");
+                    let prefix = cx
+                        .create_string(&format!("{struct_name} {{ "))
+                        .expect("str");
                     parts.push(prefix.into());
 
-                    let self_ptr = cx.builder.build_load(ptr_type, cx.vars["self"].0, "self_ptr")
-                        .expect("load self").into_pointer_value();
+                    let self_ptr = cx
+                        .builder
+                        .build_load(ptr_type, cx.vars["self"].0, "self_ptr")
+                        .expect("load self")
+                        .into_pointer_value();
 
                     for (fi, (fname, ftty)) in fields.iter().enumerate() {
                         if fi > 0 {
@@ -1508,13 +1720,22 @@ fn compile_module<'ctx>(
 
                         let offset = fi as u64 * 8;
                         let field_ptr = unsafe {
-                            cx.builder.build_gep(i8_type, self_ptr,
-                                &[i64_type.const_int(offset, false)], "fp")
+                            cx.builder
+                                .build_gep(
+                                    i8_type,
+                                    self_ptr,
+                                    &[i64_type.const_int(offset, false)],
+                                    "fp",
+                                )
                                 .expect("gep")
                         };
-                        let raw = cx.builder.build_load(i64_type, field_ptr, "fv").expect("load");
+                        let raw = cx
+                            .builder
+                            .build_load(i64_type, field_ptr, "fv")
+                            .expect("load");
                         let fval = narrow_from_storage(&cx, raw.into(), ftty);
-                        let fstr = convert_to_str(&mut cx, fval, ftty).unwrap_or_else(|_| raw.into());
+                        let fstr =
+                            convert_to_str(&mut cx, fval, ftty).unwrap_or_else(|_| raw.into());
                         parts.push(fstr);
                     }
 
@@ -1522,15 +1743,21 @@ fn compile_module<'ctx>(
                     parts.push(suffix.into());
 
                     // Concatenate all parts
-                    let mut result_str: BasicValueEnum<'ctx> = cx.create_string("").expect("str").into();
+                    let mut result_str: BasicValueEnum<'ctx> =
+                        cx.create_string("").expect("str").into();
                     for part in parts {
-                        result_str = cx.rt_call("rt_str_concat", &[result_str.into(), part.into()]).unwrap();
+                        result_str = cx
+                            .rt_call("rt_str_concat", &[result_str.into(), part.into()])
+                            .unwrap();
                     }
                     cx.builder.build_return(Some(&result_str)).expect("return");
                 }
                 "Eq" => {
                     let mangled = format!("{struct_name}__eq");
-                    let func = match user_fns.get(&mangled) { Some(f) => *f, None => continue };
+                    let func = match user_fns.get(&mangled) {
+                        Some(f) => *f,
+                        None => continue,
+                    };
                     let entry = context.append_basic_block(func, "entry");
                     builder.position_at_end(entry);
                     // eq(self, other) -> bool: compare each field
@@ -1539,33 +1766,70 @@ fn compile_module<'ctx>(
 
                     // Compare all fields; return false at first mismatch
                     let merge_block = context.append_basic_block(func, "eq_merge");
-                    let mut phi_sources: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> = Vec::new();
+                    let mut phi_sources: Vec<(
+                        BasicValueEnum<'ctx>,
+                        inkwell::basic_block::BasicBlock<'ctx>,
+                    )> = Vec::new();
 
                     let mut cur_block = entry;
                     for (fi, (_, ftty)) in fields.iter().enumerate() {
                         let offset = fi as u64 * 8;
-                        let fp1 = unsafe { builder.build_gep(i8_type, self_ptr,
-                            &[i64_type.const_int(offset, false)], "fp1").expect("gep") };
-                        let fp2 = unsafe { builder.build_gep(i8_type, other_ptr,
-                            &[i64_type.const_int(offset, false)], "fp2").expect("gep") };
-                        let v1 = builder.build_load(i64_type, fp1, "v1").expect("load").into_int_value();
-                        let v2 = builder.build_load(i64_type, fp2, "v2").expect("load").into_int_value();
+                        let fp1 = unsafe {
+                            builder
+                                .build_gep(
+                                    i8_type,
+                                    self_ptr,
+                                    &[i64_type.const_int(offset, false)],
+                                    "fp1",
+                                )
+                                .expect("gep")
+                        };
+                        let fp2 = unsafe {
+                            builder
+                                .build_gep(
+                                    i8_type,
+                                    other_ptr,
+                                    &[i64_type.const_int(offset, false)],
+                                    "fp2",
+                                )
+                                .expect("gep")
+                        };
+                        let v1 = builder
+                            .build_load(i64_type, fp1, "v1")
+                            .expect("load")
+                            .into_int_value();
+                        let v2 = builder
+                            .build_load(i64_type, fp2, "v2")
+                            .expect("load")
+                            .into_int_value();
 
                         let cmp = if *ftty == TurboTy::Str {
                             let pv1 = builder.build_int_to_ptr(v1, ptr_type, "p1").expect("itp");
                             let pv2 = builder.build_int_to_ptr(v2, ptr_type, "p2").expect("itp");
-                            let eq = builder.build_direct_call(rt_fns["rt_str_eq"], &[pv1.into(), pv2.into()], "seq").expect("call");
+                            let eq = builder
+                                .build_direct_call(
+                                    rt_fns["rt_str_eq"],
+                                    &[pv1.into(), pv2.into()],
+                                    "seq",
+                                )
+                                .expect("call");
                             let eq_i = eq.try_as_basic_value().left().unwrap().into_int_value();
                             let zero = i8_type.const_int(0, false);
-                            builder.build_int_compare(IntPredicate::NE, eq_i, zero, "cmp").expect("cmp")
+                            builder
+                                .build_int_compare(IntPredicate::NE, eq_i, zero, "cmp")
+                                .expect("cmp")
                         } else {
-                            builder.build_int_compare(IntPredicate::EQ, v1, v2, "cmp").expect("cmp")
+                            builder
+                                .build_int_compare(IntPredicate::EQ, v1, v2, "cmp")
+                                .expect("cmp")
                         };
 
                         let next_block = context.append_basic_block(func, "eq_next");
                         let false_val = i8_type.const_int(0, false);
                         phi_sources.push((false_val.into(), cur_block));
-                        builder.build_conditional_branch(cmp, next_block, merge_block).expect("br");
+                        builder
+                            .build_conditional_branch(cmp, next_block, merge_block)
+                            .expect("br");
                         builder.position_at_end(next_block);
                         cur_block = next_block;
                     }
@@ -1577,29 +1841,60 @@ fn compile_module<'ctx>(
                     for (val, block) in &phi_sources {
                         phi.add_incoming(&[(val, *block)]);
                     }
-                    builder.build_return(Some(&phi.as_basic_value())).expect("return");
+                    builder
+                        .build_return(Some(&phi.as_basic_value()))
+                        .expect("return");
                 }
                 "Clone" => {
                     let mangled = format!("{struct_name}__clone");
-                    let func = match user_fns.get(&mangled) { Some(f) => *f, None => continue };
+                    let func = match user_fns.get(&mangled) {
+                        Some(f) => *f,
+                        None => continue,
+                    };
                     let entry = context.append_basic_block(func, "entry");
                     builder.position_at_end(entry);
                     // clone(self) -> Self: alloc new struct, copy all fields
                     let self_ptr = func.get_nth_param(0).unwrap().into_pointer_value();
                     let nf = fields.len() as u64;
-                    let new_ptr = builder.build_direct_call(rt_fns["rt_struct_alloc"],
-                        &[i64_type.const_int(nf, false).into()], "clone_ptr")
-                        .expect("call").try_as_basic_value().left().unwrap().into_pointer_value();
+                    let new_ptr = builder
+                        .build_direct_call(
+                            rt_fns["rt_struct_alloc"],
+                            &[i64_type.const_int(nf, false).into()],
+                            "clone_ptr",
+                        )
+                        .expect("call")
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap()
+                        .into_pointer_value();
                     for fi in 0..fields.len() {
                         let offset = fi as u64 * 8;
-                        let sp = unsafe { builder.build_gep(i8_type, self_ptr,
-                            &[i64_type.const_int(offset, false)], "sp").expect("gep") };
-                        let dp = unsafe { builder.build_gep(i8_type, new_ptr,
-                            &[i64_type.const_int(offset, false)], "dp").expect("gep") };
+                        let sp = unsafe {
+                            builder
+                                .build_gep(
+                                    i8_type,
+                                    self_ptr,
+                                    &[i64_type.const_int(offset, false)],
+                                    "sp",
+                                )
+                                .expect("gep")
+                        };
+                        let dp = unsafe {
+                            builder
+                                .build_gep(
+                                    i8_type,
+                                    new_ptr,
+                                    &[i64_type.const_int(offset, false)],
+                                    "dp",
+                                )
+                                .expect("gep")
+                        };
                         let val = builder.build_load(i64_type, sp, "val").expect("load");
                         builder.build_store(dp, val).expect("store");
                     }
-                    builder.build_return(Some(&BasicValueEnum::PointerValue(new_ptr))).expect("return");
+                    builder
+                        .build_return(Some(&BasicValueEnum::PointerValue(new_ptr)))
+                        .expect("return");
                 }
                 _ => {}
             }
@@ -1608,7 +1903,10 @@ fn compile_module<'ctx>(
 
     // Define closure bodies
     for cl in &all_closures {
-        let func = match user_fns.get(&cl.name) { Some(f) => *f, None => continue };
+        let func = match user_fns.get(&cl.name) {
+            Some(f) => *f,
+            None => continue,
+        };
         let entry = context.append_basic_block(func, "entry");
         builder.position_at_end(entry);
 
@@ -1632,26 +1930,43 @@ fn compile_module<'ctx>(
         // For now, load each captured var from env struct at compile time
         // The free_vars list tells us which outer vars are captured
         for (cap_idx, cap_name) in cl.free_vars.iter().enumerate() {
-            let cap_tty = cl.capture_types.get(cap_idx).cloned().unwrap_or(TurboTy::Int);
+            let cap_tty = cl
+                .capture_types
+                .get(cap_idx)
+                .cloned()
+                .unwrap_or(TurboTy::Int);
             let offset = cap_idx as u64 * 8;
             let field_ptr = unsafe {
-                builder.build_gep(i8_type, env_ptr_val,
-                    &[i64_type.const_int(offset, false)], "cap_ptr")
+                builder
+                    .build_gep(
+                        i8_type,
+                        env_ptr_val,
+                        &[i64_type.const_int(offset, false)],
+                        "cap_ptr",
+                    )
                     .expect("gep")
             };
-            let raw = builder.build_load(i64_type, field_ptr, cap_name).expect("load");
+            let raw = builder
+                .build_load(i64_type, field_ptr, cap_name)
+                .expect("load");
             // If the captured variable is a string (ptr), convert i64 → ptr
             if matches!(cap_tty, TurboTy::Str | TurboTy::Array(_)) {
-                let ptr_val = builder.build_int_to_ptr(
-                    raw.into_int_value(),
-                    ptr_type,
-                    &format!("cap_ptr_{cap_name}"),
-                ).expect("itp");
-                let alloca = builder.build_alloca(ptr_type, &format!("cap_{cap_name}")).expect("alloca");
+                let ptr_val = builder
+                    .build_int_to_ptr(
+                        raw.into_int_value(),
+                        ptr_type,
+                        &format!("cap_ptr_{cap_name}"),
+                    )
+                    .expect("itp");
+                let alloca = builder
+                    .build_alloca(ptr_type, &format!("cap_{cap_name}"))
+                    .expect("alloca");
                 builder.build_store(alloca, ptr_val).expect("store");
                 vars.insert(cap_name.clone(), (alloca, cap_tty));
             } else {
-                let alloca = builder.build_alloca(i64_type, &format!("cap_{cap_name}")).expect("alloca");
+                let alloca = builder
+                    .build_alloca(i64_type, &format!("cap_{cap_name}"))
+                    .expect("alloca");
                 builder.build_store(alloca, raw).expect("store");
                 vars.insert(cap_name.clone(), (alloca, cap_tty));
             }
@@ -1663,7 +1978,9 @@ fn compile_module<'ctx>(
         if cur.get_terminator().is_none() {
             let ret_turbo = if let Some(ref rt) = cl.return_type {
                 turbo_ty_from_type_expr(&rt.node, &enum_variants)
-            } else { TurboTy::Int }; // Default to Int to match function declaration
+            } else {
+                TurboTy::Int
+            }; // Default to Int to match function declaration
             if ret_turbo != TurboTy::Unit {
                 if let Some((val, _)) = result {
                     builder.build_return(Some(&val)).expect("return");
@@ -1685,24 +2002,41 @@ fn compile_module<'ctx>(
 
     // Define spawn thunk bodies
     for site in &all_spawn_sites {
-        let func = match user_fns.get(&site.thunk_name) { Some(f) => *f, None => continue };
+        let func = match user_fns.get(&site.thunk_name) {
+            Some(f) => *f,
+            None => continue,
+        };
         let entry = context.append_basic_block(func, "entry");
         builder.position_at_end(entry);
         // args_ptr points to [fn_ptr, arg0, arg1, ...]
         let args_ptr = func.get_nth_param(0).unwrap().into_pointer_value();
 
         // Load fn_ptr from offset 0
-        let fn_ptr_i64 = builder.build_load(i64_type, args_ptr, "fn_ptr_i64").expect("load");
-        let fn_ptr = builder.build_int_to_ptr(fn_ptr_i64.into_int_value(), ptr_type, "fn_ptr").expect("itp");
+        let fn_ptr_i64 = builder
+            .build_load(i64_type, args_ptr, "fn_ptr_i64")
+            .expect("load");
+        let fn_ptr = builder
+            .build_int_to_ptr(fn_ptr_i64.into_int_value(), ptr_type, "fn_ptr")
+            .expect("itp");
 
         // Load each arg from offsets 8, 16, ...
         let target_fn = user_fns.get(&site.callee_name);
         let mut arg_vals: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
         for i in 0..site.num_args {
             let offset = (i + 1) as u64 * 8;
-            let ap = unsafe { builder.build_gep(i8_type, args_ptr,
-                &[i64_type.const_int(offset, false)], "ap").expect("gep") };
-            let av = builder.build_load(i64_type, ap, &format!("arg{i}")).expect("load");
+            let ap = unsafe {
+                builder
+                    .build_gep(
+                        i8_type,
+                        args_ptr,
+                        &[i64_type.const_int(offset, false)],
+                        "ap",
+                    )
+                    .expect("gep")
+            };
+            let av = builder
+                .build_load(i64_type, ap, &format!("arg{i}"))
+                .expect("load");
 
             // If we know the target function's parameter types, coerce appropriately
             let val: BasicValueEnum = if let Some(tf) = target_fn {
@@ -1710,29 +2044,40 @@ fn compile_module<'ctx>(
                 if i < param_types.len() {
                     let av_val = av.into_int_value();
                     match param_types[i] {
-                        BasicTypeEnum::IntType(it) if it.get_bit_width() < 64 => {
-                            builder.build_int_truncate(av_val, it, "trunc").expect("trunc").into()
-                        }
-                        BasicTypeEnum::FloatType(ft) => {
-                            builder.build_bit_cast(av.into_int_value(), ft, "f2i").expect("bc").into()
-                        }
-                        BasicTypeEnum::PointerType(_) => {
-                            builder.build_int_to_ptr(av_val, ptr_type, "itp").expect("itp").into()
-                        }
-                        _ => av.into()
+                        BasicTypeEnum::IntType(it) if it.get_bit_width() < 64 => builder
+                            .build_int_truncate(av_val, it, "trunc")
+                            .expect("trunc")
+                            .into(),
+                        BasicTypeEnum::FloatType(ft) => builder
+                            .build_bit_cast(av.into_int_value(), ft, "f2i")
+                            .expect("bc")
+                            .into(),
+                        BasicTypeEnum::PointerType(_) => builder
+                            .build_int_to_ptr(av_val, ptr_type, "itp")
+                            .expect("itp")
+                            .into(),
+                        _ => av.into(),
                     }
-                } else { av.into() }
-            } else { av.into() };
+                } else {
+                    av.into()
+                }
+            } else {
+                av.into()
+            };
             arg_vals.push(val.into());
         }
 
         // Call the target function via fn_ptr and return the result
         let result = if let Some(tf) = target_fn {
-            let call = builder.build_direct_call(*tf, &arg_vals, "spawn_result").expect("call");
+            let call = builder
+                .build_direct_call(*tf, &arg_vals, "spawn_result")
+                .expect("call");
             call.try_as_basic_value().left()
         } else {
             let fn_type = i64_type.fn_type(&vec![i64_type.into(); site.num_args], false);
-            let call = builder.build_indirect_call(fn_type, fn_ptr, &arg_vals, "spawn_result").expect("indirect_call");
+            let call = builder
+                .build_indirect_call(fn_type, fn_ptr, &arg_vals, "spawn_result")
+                .expect("indirect_call");
             call.try_as_basic_value().left()
         };
         if let Some(val) = result {
@@ -1740,20 +2085,28 @@ fn compile_module<'ctx>(
             let ret_val: BasicValueEnum = match val {
                 BasicValueEnum::IntValue(iv) => {
                     if iv.get_type().get_bit_width() < 64 {
-                        builder.build_int_s_extend(iv, i64_type, "widen").expect("ext").into()
-                    } else { iv.into() }
+                        builder
+                            .build_int_s_extend(iv, i64_type, "widen")
+                            .expect("ext")
+                            .into()
+                    } else {
+                        iv.into()
+                    }
                 }
                 BasicValueEnum::FloatValue(fv) => {
                     builder.build_bit_cast(fv, i64_type, "f2i").expect("bc")
                 }
-                BasicValueEnum::PointerValue(pv) => {
-                    builder.build_ptr_to_int(pv, i64_type, "p2i").expect("pti").into()
-                }
+                BasicValueEnum::PointerValue(pv) => builder
+                    .build_ptr_to_int(pv, i64_type, "p2i")
+                    .expect("pti")
+                    .into(),
                 other => other,
             };
             builder.build_return(Some(&ret_val)).expect("return");
         } else {
-            builder.build_return(Some(&i64_type.const_int(0, false))).expect("return");
+            builder
+                .build_return(Some(&i64_type.const_int(0, false)))
+                .expect("return");
         }
     }
 
@@ -1769,10 +2122,7 @@ fn compile_module<'ctx>(
 // ── Helpers ─────────────────────────────────────────────────────────
 
 /// Look up a variant name across all enums and return its tag index.
-fn lookup_variant_tag(
-    enum_variants: &HashMap<String, Vec<String>>,
-    name: &str,
-) -> Option<usize> {
+fn lookup_variant_tag(enum_variants: &HashMap<String, Vec<String>>, name: &str) -> Option<usize> {
     for variants in enum_variants.values() {
         if let Some(idx) = variants.iter().position(|v| v == name) {
             return Some(idx);
@@ -1842,16 +2192,13 @@ fn compile_expr<'a, 'ctx>(
             if lhs_tty == TurboTy::Str && rhs_tty == TurboTy::Str {
                 match op {
                     BinOp::Add => {
-                        let result = cx.rt_call(
-                            "rt_str_concat",
-                            &[lhs.into(), rhs.into()],
-                        ).unwrap();
+                        let result = cx
+                            .rt_call("rt_str_concat", &[lhs.into(), rhs.into()])
+                            .unwrap();
                         return Ok(Some((result, TurboTy::Str)));
                     }
                     BinOp::Eq | BinOp::NotEq => {
-                        let result = cx
-                            .rt_call("rt_str_eq", &[lhs.into(), rhs.into()])
-                            .unwrap();
+                        let result = cx.rt_call("rt_str_eq", &[lhs.into(), rhs.into()]).unwrap();
                         let result_int = result.into_int_value();
                         if *op == BinOp::NotEq {
                             let one = cx.context.i8_type().const_int(1, false);
@@ -1872,21 +2219,41 @@ fn compile_expr<'a, 'ctx>(
                 if *op == BinOp::Eq || *op == BinOp::NotEq {
                     let eq_fn_name = format!("{sname}__eq");
                     if let Some(&eq_fn) = cx.user_fns.get(&eq_fn_name) {
-                        let result = cx.builder.build_direct_call(eq_fn, &[lhs.into(), rhs.into()], "struct_eq")
-                            .expect("build_direct_call").try_as_basic_value().left().unwrap();
+                        let result = cx
+                            .builder
+                            .build_direct_call(eq_fn, &[lhs.into(), rhs.into()], "struct_eq")
+                            .expect("build_direct_call")
+                            .try_as_basic_value()
+                            .left()
+                            .unwrap();
                         if *op == BinOp::NotEq {
                             let one = cx.context.i8_type().const_int(1, false);
-                            let flipped = cx.builder.build_xor(result.into_int_value(), one, "neq")
+                            let flipped = cx
+                                .builder
+                                .build_xor(result.into_int_value(), one, "neq")
                                 .expect("xor");
                             return Ok(Some((flipped.into(), TurboTy::Bool)));
                         }
                         return Ok(Some((result, TurboTy::Bool)));
                     }
                     // Fallback: pointer comparison
-                    let lp = cx.builder.build_ptr_to_int(lhs.into_pointer_value(), cx.context.i64_type(), "lp").expect("p2i");
-                    let rp = cx.builder.build_ptr_to_int(rhs.into_pointer_value(), cx.context.i64_type(), "rp").expect("p2i");
-                    let pred = if *op == BinOp::Eq { IntPredicate::EQ } else { IntPredicate::NE };
-                    let cmp = cx.builder.build_int_compare(pred, lp, rp, "ptr_eq").expect("cmp");
+                    let lp = cx
+                        .builder
+                        .build_ptr_to_int(lhs.into_pointer_value(), cx.context.i64_type(), "lp")
+                        .expect("p2i");
+                    let rp = cx
+                        .builder
+                        .build_ptr_to_int(rhs.into_pointer_value(), cx.context.i64_type(), "rp")
+                        .expect("p2i");
+                    let pred = if *op == BinOp::Eq {
+                        IntPredicate::EQ
+                    } else {
+                        IntPredicate::NE
+                    };
+                    let cmp = cx
+                        .builder
+                        .build_int_compare(pred, lp, rp, "ptr_eq")
+                        .expect("cmp");
                     return Ok(Some((cmp.into(), TurboTy::Bool)));
                 }
             }
@@ -2103,10 +2470,7 @@ fn compile_expr<'a, 'ctx>(
 
             let store_val = widen_for_storage(cx, val);
             let new_arr = cx
-                .rt_call(
-                    "rt_array_set",
-                    &[arr.into(), idx.into(), store_val.into()],
-                )
+                .rt_call("rt_array_set", &[arr.into(), idx.into(), store_val.into()])
                 .unwrap();
 
             // Update the variable to point to the (possibly new) array
@@ -2132,9 +2496,7 @@ fn compile_expr<'a, 'ctx>(
         Expr::ArrayLit(elems) => {
             let len = elems.len() as u64;
             let len_val = cx.context.i64_type().const_int(len, false);
-            let arr = cx
-                .rt_call("rt_array_alloc", &[len_val.into()])
-                .unwrap();
+            let arr = cx.rt_call("rt_array_alloc", &[len_val.into()]).unwrap();
 
             let mut elem_tty = TurboTy::Int;
             for (i, elem) in elems.iter().enumerate() {
@@ -2182,30 +2544,54 @@ fn compile_expr<'a, 'ctx>(
 
                 // Slot 0: model string
                 let model_ptr = cx.create_string(&model)?;
-                let model_i64 = cx.builder.build_ptr_to_int(model_ptr, i64_type, "model_i64").expect("pti");
+                let model_i64 = cx
+                    .builder
+                    .build_ptr_to_int(model_ptr, i64_type, "model_i64")
+                    .expect("pti");
                 cx.builder.build_store(ptr, model_i64).expect("store");
 
                 // Slot 1: system prompt string
                 let system_str = system_prompt.as_deref().unwrap_or("");
                 let system_ptr = cx.create_string(system_str)?;
-                let system_i64 = cx.builder.build_ptr_to_int(system_ptr, i64_type, "sys_i64").expect("pti");
+                let system_i64 = cx
+                    .builder
+                    .build_ptr_to_int(system_ptr, i64_type, "sys_i64")
+                    .expect("pti");
                 let sys_field = unsafe {
-                    cx.builder.build_gep(i8_type, ptr, &[i64_type.const_int(8, false)], "sys_ptr").expect("gep")
+                    cx.builder
+                        .build_gep(i8_type, ptr, &[i64_type.const_int(8, false)], "sys_ptr")
+                        .expect("gep")
                 };
-                cx.builder.build_store(sys_field, system_i64).expect("store");
+                cx.builder
+                    .build_store(sys_field, system_i64)
+                    .expect("store");
 
                 // Slot 2: tools array
                 let tools_len = i64_type.const_int(tools.len() as u64, false);
-                let arr_ptr = cx.rt_call("rt_array_alloc", &[tools_len.into()]).unwrap().into_pointer_value();
+                let arr_ptr = cx
+                    .rt_call("rt_array_alloc", &[tools_len.into()])
+                    .unwrap()
+                    .into_pointer_value();
                 for (i, tool_name) in tools.iter().enumerate() {
                     let tool_str = cx.create_string(tool_name)?;
                     let idx = i64_type.const_int(i as u64, false);
-                    let tool_i64 = cx.builder.build_ptr_to_int(tool_str, i64_type, "tool_i64").expect("pti");
-                    cx.rt_call("rt_array_set", &[arr_ptr.into(), idx.into(), tool_i64.into()]);
+                    let tool_i64 = cx
+                        .builder
+                        .build_ptr_to_int(tool_str, i64_type, "tool_i64")
+                        .expect("pti");
+                    cx.rt_call(
+                        "rt_array_set",
+                        &[arr_ptr.into(), idx.into(), tool_i64.into()],
+                    );
                 }
-                let arr_i64 = cx.builder.build_ptr_to_int(arr_ptr, i64_type, "arr_i64").expect("pti");
+                let arr_i64 = cx
+                    .builder
+                    .build_ptr_to_int(arr_ptr, i64_type, "arr_i64")
+                    .expect("pti");
                 let tools_field = unsafe {
-                    cx.builder.build_gep(i8_type, ptr, &[i64_type.const_int(16, false)], "tools_ptr").expect("gep")
+                    cx.builder
+                        .build_gep(i8_type, ptr, &[i64_type.const_int(16, false)], "tools_ptr")
+                        .expect("gep")
                 };
                 cx.builder.build_store(tools_field, arr_i64).expect("store");
 
@@ -2266,7 +2652,8 @@ fn compile_expr<'a, 'ctx>(
             // Store concrete field types for generic struct tracking
             // Use a temp key "__last_struct_lit" that Let binding will pick up
             if !concrete_fields.is_empty() {
-                cx.concrete_struct_fields.insert("__last_struct_lit".to_string(), concrete_fields);
+                cx.concrete_struct_fields
+                    .insert("__last_struct_lit".to_string(), concrete_fields);
             }
             Ok(Some((ptr.into(), result_tty)))
         }
@@ -2275,38 +2662,31 @@ fn compile_expr<'a, 'ctx>(
             // Check if this is an enum variant access: EnumName.VariantName
             if let Expr::Ident(ref name) = object.node {
                 if let Some(variants) = cx.enum_variants.get(name.as_str()) {
-                    let index = variants
-                        .iter()
-                        .position(|v| v == field)
-                        .ok_or_else(|| CodegenError {
-                            code: ErrorCode::E0400,
-                            message: format!("enum `{name}` has no variant `{field}`"),
-                        })?;
+                    let index =
+                        variants
+                            .iter()
+                            .position(|v| v == field)
+                            .ok_or_else(|| CodegenError {
+                                code: ErrorCode::E0400,
+                                message: format!("enum `{name}` has no variant `{field}`"),
+                            })?;
 
                     if let Some(&max_slots) = cx.enum_max_slots.get(name.as_str()) {
                         // Data-carrying enum: allocate tagged union
                         let total_slots = 1 + max_slots;
-                        let num_fields_val = cx
-                            .context
-                            .i64_type()
-                            .const_int(total_slots as u64, false);
+                        let num_fields_val =
+                            cx.context.i64_type().const_int(total_slots as u64, false);
                         let ptr = cx
                             .rt_call("rt_struct_alloc", &[num_fields_val.into()])
                             .unwrap()
                             .into_pointer_value();
-                        let tag_val = cx
-                            .context
-                            .i64_type()
-                            .const_int(index as u64, false);
+                        let tag_val = cx.context.i64_type().const_int(index as u64, false);
                         cx.builder
                             .build_store(ptr, tag_val)
                             .expect("build_store failed");
                         return Ok(Some((ptr.into(), TurboTy::Enum(name.clone()))));
                     } else {
-                        let val = cx
-                            .context
-                            .i64_type()
-                            .const_int(index as u64, false);
+                        let val = cx.context.i64_type().const_int(index as u64, false);
                         return Ok(Some((val.into(), TurboTy::Enum(name.clone()))));
                     }
                 }
@@ -2392,8 +2772,12 @@ fn compile_expr<'a, 'ctx>(
 
             // Check if we have concrete field types (from generic struct instantiation)
             let concrete_tty = if let Expr::Ident(ref var_name) = object.node {
-                cx.concrete_struct_fields.get(var_name)
-                    .and_then(|fields| fields.iter().find(|(n, _)| n == field).map(|(_, t)| t.clone()))
+                cx.concrete_struct_fields.get(var_name).and_then(|fields| {
+                    fields
+                        .iter()
+                        .find(|(n, _)| n == field)
+                        .map(|(_, t)| t.clone())
+                })
             } else {
                 None
             };
@@ -2423,21 +2807,22 @@ fn compile_expr<'a, 'ctx>(
         }
 
         Expr::EnumVariant { enum_name, variant } => {
-            let variants = cx.enum_variants.get(enum_name).ok_or_else(|| CodegenError {
-                code: ErrorCode::E0400,
-                message: format!("undefined enum: {enum_name}"),
-            })?;
-            let variant_index = variants
-                .iter()
-                .position(|v| v == variant)
+            let variants = cx
+                .enum_variants
+                .get(enum_name)
                 .ok_or_else(|| CodegenError {
                     code: ErrorCode::E0400,
-                    message: format!("enum `{enum_name}` has no variant `{variant}`"),
+                    message: format!("undefined enum: {enum_name}"),
                 })?;
-            let val = cx
-                .context
-                .i64_type()
-                .const_int(variant_index as u64, false);
+            let variant_index =
+                variants
+                    .iter()
+                    .position(|v| v == variant)
+                    .ok_or_else(|| CodegenError {
+                        code: ErrorCode::E0400,
+                        message: format!("enum `{enum_name}` has no variant `{variant}`"),
+                    })?;
+            let val = cx.context.i64_type().const_int(variant_index as u64, false);
             Ok(Some((val.into(), TurboTy::Enum(enum_name.clone()))))
         }
 
@@ -2474,9 +2859,7 @@ fn compile_expr<'a, 'ctx>(
             let (end_val, _) = compile_expr(cx, end)?.unwrap();
             // Store as array [start, end]
             let len_val = cx.context.i64_type().const_int(2, false);
-            let arr = cx
-                .rt_call("rt_array_alloc", &[len_val.into()])
-                .unwrap();
+            let arr = cx.rt_call("rt_array_alloc", &[len_val.into()]).unwrap();
             let idx0 = cx.context.i64_type().const_int(0, false);
             let idx1 = cx.context.i64_type().const_int(1, false);
             cx.rt_call("rt_array_set", &[arr.into(), idx0.into(), start_val.into()]);
@@ -2487,27 +2870,27 @@ fn compile_expr<'a, 'ctx>(
         Expr::OkExpr(inner) => {
             let (val, _) = compile_expr(cx, inner)?.unwrap();
             let val_i64 = widen_for_storage(cx, val);
-            let result = cx
-                .rt_call("rt_result_ok", &[val_i64.into()])
-                .unwrap();
-            Ok(Some((result, TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Str)))))
+            let result = cx.rt_call("rt_result_ok", &[val_i64.into()]).unwrap();
+            Ok(Some((
+                result,
+                TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Str)),
+            )))
         }
 
         Expr::ErrExpr(inner) => {
             let (val, _) = compile_expr(cx, inner)?.unwrap();
             let val_i64 = widen_for_storage(cx, val);
-            let result = cx
-                .rt_call("rt_result_err", &[val_i64.into()])
-                .unwrap();
-            Ok(Some((result, TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Str)))))
+            let result = cx.rt_call("rt_result_err", &[val_i64.into()]).unwrap();
+            Ok(Some((
+                result,
+                TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Str)),
+            )))
         }
 
         Expr::SomeExpr(inner) => {
             let (val, _) = compile_expr(cx, inner)?.unwrap();
             let val_i64 = widen_for_storage(cx, val);
-            let result = cx
-                .rt_call("rt_option_some", &[val_i64.into()])
-                .unwrap();
+            let result = cx.rt_call("rt_option_some", &[val_i64.into()]).unwrap();
             Ok(Some((result, TurboTy::Optional(Box::new(TurboTy::Int)))))
         }
 
@@ -2553,9 +2936,7 @@ fn compile_expr<'a, 'ctx>(
 
             // Some case: unwrap
             cx.builder.position_at_end(else_block);
-            let unwrapped = cx
-                .rt_call("rt_option_value", &[val.into()])
-                .unwrap();
+            let unwrapped = cx.rt_call("rt_option_value", &[val.into()]).unwrap();
             let inner_tty = match &val_tty {
                 TurboTy::Optional(inner) => *inner.clone(),
                 _ => TurboTy::Int,
@@ -2571,10 +2952,7 @@ fn compile_expr<'a, 'ctx>(
                 .builder
                 .build_phi(default_val.get_type(), "coalesce")
                 .expect("build_phi failed");
-            phi.add_incoming(&[
-                (&default_val, then_end_block),
-                (&unwrapped, else_end_block),
-            ]);
+            phi.add_incoming(&[(&default_val, then_end_block), (&unwrapped, else_end_block)]);
 
             Ok(Some((phi.as_basic_value(), default_tty)))
         }
@@ -2596,7 +2974,10 @@ fn compile_expr<'a, 'ctx>(
                 .get(closure_name.as_str())
                 .ok_or_else(|| CodegenError {
                     code: ErrorCode::E0400,
-                    message: format!("internal error: closure function {} not found", closure_name),
+                    message: format!(
+                        "internal error: closure function {} not found",
+                        closure_name
+                    ),
                 })?;
 
             // Get the function pointer as an i64 (pointer-sized integer)
@@ -2606,7 +2987,8 @@ fn compile_expr<'a, 'ctx>(
             let mut bound_params: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
             let mut all_free: Vec<String> = Vec::new();
             collect_free_vars_llvm(&expr.node, &mut bound_params, &mut all_free);
-            let capture_names: Vec<String> = free_vars.iter()
+            let capture_names: Vec<String> = free_vars
+                .iter()
                 .filter(|n| cx.vars.contains_key(*n))
                 .cloned()
                 .collect();
@@ -2635,16 +3017,27 @@ fn compile_expr<'a, 'ctx>(
                         .clone();
                     let val = cx
                         .builder
-                        .build_load(turbo_ty_to_llvm_ctx(&cap_tty, cx.context, cx.enum_max_slots), alloca, cap_name)
+                        .build_load(
+                            turbo_ty_to_llvm_ctx(&cap_tty, cx.context, cx.enum_max_slots),
+                            alloca,
+                            cap_name,
+                        )
                         .expect("build_load failed");
                     let val_i64 = widen_for_storage(cx, val);
                     let offset = (cap_idx as u64) * 8;
                     let field_ptr = unsafe {
                         cx.builder
-                            .build_gep(i8_type, env_ptr, &[i64_type.const_int(offset, false)], "cap_ptr")
+                            .build_gep(
+                                i8_type,
+                                env_ptr,
+                                &[i64_type.const_int(offset, false)],
+                                "cap_ptr",
+                            )
                             .expect("build_gep failed")
                     };
-                    cx.builder.build_store(field_ptr, val_i64).expect("build_store failed");
+                    cx.builder
+                        .build_store(field_ptr, val_i64)
+                        .expect("build_store failed");
                 }
                 env_ptr.into()
             } else {
@@ -2660,7 +3053,8 @@ fn compile_expr<'a, 'ctx>(
                 .into_pointer_value();
 
             // Store fn_ptr at slot 0 (as i64)
-            let fn_ptr_i64 = cx.builder
+            let fn_ptr_i64 = cx
+                .builder
                 .build_ptr_to_int(fn_ptr, i64_type, "fn_ptr_i64")
                 .expect("build_ptr_to_int failed");
             cx.builder
@@ -2670,16 +3064,25 @@ fn compile_expr<'a, 'ctx>(
             // Store env_ptr at slot 1 (offset 8)
             let env_slot = unsafe {
                 cx.builder
-                    .build_gep(i8_type, closure_ptr, &[i64_type.const_int(8, false)], "env_slot")
+                    .build_gep(
+                        i8_type,
+                        closure_ptr,
+                        &[i64_type.const_int(8, false)],
+                        "env_slot",
+                    )
                     .expect("build_gep failed")
             };
             let env_i64: BasicValueEnum = match env_ptr {
-                BasicValueEnum::PointerValue(pv) => {
-                    cx.builder.build_ptr_to_int(pv, i64_type, "env_i64").expect("pti").into()
-                }
+                BasicValueEnum::PointerValue(pv) => cx
+                    .builder
+                    .build_ptr_to_int(pv, i64_type, "env_i64")
+                    .expect("pti")
+                    .into(),
                 other => other,
             };
-            cx.builder.build_store(env_slot, env_i64).expect("build_store failed");
+            cx.builder
+                .build_store(env_slot, env_i64)
+                .expect("build_store failed");
 
             Ok(Some((closure_ptr.into(), closure_ty)))
         }
@@ -2689,9 +3092,7 @@ fn compile_expr<'a, 'ctx>(
             if let Some((val, tty)) = result {
                 match tty {
                     TurboTy::Future(inner_tty) => {
-                        let joined = cx
-                            .rt_call("rt_await_handle", &[val.into()])
-                            .unwrap();
+                        let joined = cx.rt_call("rt_await_handle", &[val.into()]).unwrap();
                         let narrowed = narrow_from_storage(cx, joined, &inner_tty);
                         Ok(Some((narrowed, *inner_tty)))
                     }
@@ -2713,13 +3114,13 @@ fn compile_expr<'a, 'ctx>(
                             .cloned()
                             .unwrap_or(TurboTy::Unit);
 
-                        let target_func = *cx
-                            .user_fns
-                            .get(callee_name.as_str())
-                            .ok_or_else(|| CodegenError {
-                                code: ErrorCode::E0402,
-                                message: format!("spawn: unknown function `{}`", callee_name),
-                            })?;
+                        let target_func =
+                            *cx.user_fns
+                                .get(callee_name.as_str())
+                                .ok_or_else(|| CodegenError {
+                                    code: ErrorCode::E0402,
+                                    message: format!("spawn: unknown function `{}`", callee_name),
+                                })?;
                         let target_fn_ptr = target_func.as_global_value().as_pointer_value();
 
                         // Compile all arguments
@@ -2743,7 +3144,8 @@ fn compile_expr<'a, 'ctx>(
                             .into_pointer_value();
 
                         // Store fn_ptr at offset 0
-                        let fn_ptr_i64 = cx.builder
+                        let fn_ptr_i64 = cx
+                            .builder
                             .build_ptr_to_int(target_fn_ptr, i64_type, "spawn_fn_i64")
                             .expect("pti");
                         cx.builder.build_store(args_ptr, fn_ptr_i64).expect("store");
@@ -2753,30 +3155,38 @@ fn compile_expr<'a, 'ctx>(
                             let offset = ((i + 1) * 8) as u64;
                             let slot = unsafe {
                                 cx.builder
-                                    .build_gep(i8_type, args_ptr,
-                                        &[i64_type.const_int(offset, false)], "arg_slot")
+                                    .build_gep(
+                                        i8_type,
+                                        args_ptr,
+                                        &[i64_type.const_int(offset, false)],
+                                        "arg_slot",
+                                    )
                                     .expect("gep")
                             };
                             cx.builder.build_store(slot, *val).expect("store");
                         }
 
                         // Get the thunk function address
-                        let thunk_func = *cx
-                            .user_fns
-                            .get(thunk_name.as_str())
-                            .ok_or_else(|| CodegenError {
-                                code: ErrorCode::E0405,
-                                message: format!("spawn: thunk `{}` not found", thunk_name),
-                            })?;
+                        let thunk_func =
+                            *cx.user_fns
+                                .get(thunk_name.as_str())
+                                .ok_or_else(|| CodegenError {
+                                    code: ErrorCode::E0405,
+                                    message: format!("spawn: thunk `{}` not found", thunk_name),
+                                })?;
                         let thunk_fn_ptr = thunk_func.as_global_value().as_pointer_value();
-                        let thunk_fn_i64 = cx.builder
+                        let thunk_fn_i64 = cx
+                            .builder
                             .build_ptr_to_int(thunk_fn_ptr, i64_type, "thunk_fn_i64")
                             .expect("pti");
 
                         // rt_spawn_with_args(thunk_ptr: ptr, args_ptr: ptr) -> ptr (handle)
                         // Store thunk ptr as pointer value directly
                         let handle = cx
-                            .rt_call("rt_spawn_with_args", &[thunk_fn_ptr.into(), args_ptr.into()])
+                            .rt_call(
+                                "rt_spawn_with_args",
+                                &[thunk_fn_ptr.into(), args_ptr.into()],
+                            )
                             .unwrap();
 
                         return Ok(Some((handle, TurboTy::Future(Box::new(inner_ret_tty)))));
@@ -2800,12 +3210,8 @@ fn compile_expr<'a, 'ctx>(
                 .build_int_compare(IntPredicate::EQ, tag, one, "is_err")
                 .expect("build_int_compare failed");
 
-            let err_block = cx
-                .context
-                .append_basic_block(cx.current_fn, "try_err");
-            let ok_block = cx
-                .context
-                .append_basic_block(cx.current_fn, "try_ok");
+            let err_block = cx.context.append_basic_block(cx.current_fn, "try_err");
+            let ok_block = cx.context.append_basic_block(cx.current_fn, "try_ok");
 
             cx.builder
                 .build_conditional_branch(is_err, err_block, ok_block)
@@ -2813,21 +3219,15 @@ fn compile_expr<'a, 'ctx>(
 
             // Error path: propagate
             cx.builder.position_at_end(err_block);
-            let err_val = cx
-                .rt_call("rt_result_value", &[val.into()])
-                .unwrap();
-            let err_result = cx
-                .rt_call("rt_result_err", &[err_val.into()])
-                .unwrap();
+            let err_val = cx.rt_call("rt_result_value", &[val.into()]).unwrap();
+            let err_result = cx.rt_call("rt_result_err", &[err_val.into()]).unwrap();
             cx.builder
                 .build_return(Some(&err_result))
                 .expect("build_return failed");
 
             // Ok path: unwrap
             cx.builder.position_at_end(ok_block);
-            let ok_val = cx
-                .rt_call("rt_result_value", &[val.into()])
-                .unwrap();
+            let ok_val = cx.rt_call("rt_result_value", &[val.into()]).unwrap();
             let inner_tty = match &val_tty {
                 TurboTy::Result(ok, _) => *ok.clone(),
                 _ => TurboTy::Int,
@@ -2842,9 +3242,7 @@ fn compile_expr<'a, 'ctx>(
                     .build_unconditional_branch(*exit_block)
                     .expect("build_unconditional_branch failed");
                 // Create unreachable block for subsequent code
-                let dead_block = cx
-                    .context
-                    .append_basic_block(cx.current_fn, "after_break");
+                let dead_block = cx.context.append_basic_block(cx.current_fn, "after_break");
                 cx.builder.position_at_end(dead_block);
             }
             Ok(None)
@@ -2889,7 +3287,10 @@ fn compile_stmt<'a, 'ctx>(
                 if let Some(v) = val {
                     let needs_retain = matches!(
                         &turbo_ty,
-                        TurboTy::Array(_) | TurboTy::Struct(_) | TurboTy::Result(_, _) | TurboTy::Optional(_)
+                        TurboTy::Array(_)
+                            | TurboTy::Struct(_)
+                            | TurboTy::Result(_, _)
+                            | TurboTy::Optional(_)
                     );
                     if needs_retain && v.is_pointer_value() {
                         cx.rt_call("rt_retain", &[v.into()]);
@@ -2927,9 +3328,7 @@ fn compile_stmt<'a, 'ctx>(
                 cx.builder.build_return(None).expect("build_return failed");
             }
             // Create dead block for subsequent code
-            let dead_block = cx
-                .context
-                .append_basic_block(cx.current_fn, "after_return");
+            let dead_block = cx.context.append_basic_block(cx.current_fn, "after_return");
             cx.builder.position_at_end(dead_block);
             Ok(())
         }
@@ -3125,10 +3524,7 @@ fn compile_binop<'a, 'ctx>(
 }
 
 /// If a value is i1 (LLVM comparison result), widen it to i8 (Turbo Bool type).
-fn widen_i1_to_i8<'a, 'ctx>(
-    cx: &Ctx<'a, 'ctx>,
-    val: BasicValueEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
+fn widen_i1_to_i8<'a, 'ctx>(cx: &Ctx<'a, 'ctx>, val: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
     if let BasicValueEnum::IntValue(iv) = val {
         if iv.get_type().get_bit_width() == 1 {
             return cx
@@ -3148,12 +3544,8 @@ fn emit_div_zero_check<'a, 'ctx>(cx: &mut Ctx<'a, 'ctx>, divisor: IntValue<'ctx>
         .build_int_compare(IntPredicate::EQ, divisor, zero, "divzero")
         .expect("build_int_compare failed");
 
-    let trap_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "div_trap");
-    let ok_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "div_ok");
+    let trap_block = cx.context.append_basic_block(cx.current_fn, "div_trap");
+    let ok_block = cx.context.append_basic_block(cx.current_fn, "div_ok");
 
     cx.builder
         .build_conditional_branch(is_zero, trap_block, ok_block)
@@ -3179,12 +3571,8 @@ fn compile_short_circuit<'a, 'ctx>(
     let (lhs, _) = compile_expr(cx, left)?.unwrap();
     let lhs_bool = cx.to_bool(lhs);
 
-    let eval_rhs_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "sc_rhs");
-    let merge_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "sc_merge");
+    let eval_rhs_block = cx.context.append_basic_block(cx.current_fn, "sc_rhs");
+    let merge_block = cx.context.append_basic_block(cx.current_fn, "sc_merge");
 
     let current_block = cx.builder.get_insert_block().unwrap();
 
@@ -3231,7 +3619,11 @@ fn compile_short_circuit<'a, 'ctx>(
     // Widen i1 back to i8 for consistent Bool representation
     let result = cx
         .builder
-        .build_int_z_extend(phi.as_basic_value().into_int_value(), cx.context.i8_type(), "sc_zext")
+        .build_int_z_extend(
+            phi.as_basic_value().into_int_value(),
+            cx.context.i8_type(),
+            "sc_zext",
+        )
         .expect("build_int_z_extend failed");
     Ok(Some((result.into(), TurboTy::Bool)))
 }
@@ -3247,15 +3639,9 @@ fn compile_if<'a, 'ctx>(
     let (cond, _) = compile_expr(cx, condition)?.unwrap();
     let cond_bool = cx.to_bool(cond);
 
-    let then_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "then");
-    let else_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "else");
-    let merge_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "ifmerge");
+    let then_block = cx.context.append_basic_block(cx.current_fn, "then");
+    let else_block = cx.context.append_basic_block(cx.current_fn, "else");
+    let merge_block = cx.context.append_basic_block(cx.current_fn, "ifmerge");
 
     cx.builder
         .build_conditional_branch(cond_bool, then_block, else_block)
@@ -3296,10 +3682,7 @@ fn compile_if<'a, 'ctx>(
                 .builder
                 .build_phi(then_val.get_type(), "ifphi")
                 .expect("build_phi failed");
-            phi.add_incoming(&[
-                (&then_val, then_end_block),
-                (&else_val, else_end_block),
-            ]);
+            phi.add_incoming(&[(&then_val, then_end_block), (&else_val, else_end_block)]);
             Ok(Some((phi.as_basic_value(), then_tty)))
         } else if then_needs_jump {
             // Only then branch reaches merge
@@ -3323,15 +3706,9 @@ fn compile_while<'a, 'ctx>(
     condition: &Spanned<Expr>,
     body: &Spanned<Expr>,
 ) -> Result<MaybeTyped<'ctx>, CodegenError> {
-    let header_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "while_header");
-    let body_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "while_body");
-    let exit_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "while_exit");
+    let header_block = cx.context.append_basic_block(cx.current_fn, "while_header");
+    let body_block = cx.context.append_basic_block(cx.current_fn, "while_body");
+    let exit_block = cx.context.append_basic_block(cx.current_fn, "while_exit");
 
     cx.builder
         .build_unconditional_branch(header_block)
@@ -3388,21 +3765,14 @@ fn compile_for_in_range<'a, 'ctx>(
     cx.builder
         .build_store(alloca, range_start)
         .expect("build_store failed");
-    cx.vars
-        .insert(var_name.to_string(), (alloca, TurboTy::Int));
+    cx.vars.insert(var_name.to_string(), (alloca, TurboTy::Int));
 
-    let header_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "forin_header");
-    let body_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "forin_body");
+    let header_block = cx.context.append_basic_block(cx.current_fn, "forin_header");
+    let body_block = cx.context.append_basic_block(cx.current_fn, "forin_body");
     let continue_block = cx
         .context
         .append_basic_block(cx.current_fn, "forin_continue");
-    let exit_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "forin_exit");
+    let exit_block = cx.context.append_basic_block(cx.current_fn, "forin_exit");
 
     cx.builder
         .build_unconditional_branch(header_block)
@@ -3573,9 +3943,7 @@ fn compile_match<'a, 'ctx>(
 ) -> Result<MaybeTyped<'ctx>, CodegenError> {
     let (subject_val, subject_tty) = compile_expr(cx, subject)?.unwrap();
 
-    let merge_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "match_merge");
+    let merge_block = cx.context.append_basic_block(cx.current_fn, "match_merge");
 
     let mut arm_blocks: Vec<inkwell::basic_block::BasicBlock<'ctx>> = Vec::new();
     for i in 0..arms.len() {
@@ -3754,24 +4122,14 @@ fn compile_match<'a, 'ctx>(
                                     .into_int_value();
                                 Some(
                                     cx.builder
-                                        .build_int_compare(
-                                            IntPredicate::EQ,
-                                            tag,
-                                            tag_val,
-                                            "var_eq",
-                                        )
+                                        .build_int_compare(IntPredicate::EQ, tag, tag_val, "var_eq")
                                         .expect("build_int_compare failed"),
                                 )
                             } else {
                                 let tag = subject_val.into_int_value();
                                 Some(
                                     cx.builder
-                                        .build_int_compare(
-                                            IntPredicate::EQ,
-                                            tag,
-                                            tag_val,
-                                            "var_eq",
-                                        )
+                                        .build_int_compare(IntPredicate::EQ, tag, tag_val, "var_eq")
                                         .expect("build_int_compare failed"),
                                 )
                             }
@@ -3791,8 +4149,11 @@ fn compile_match<'a, 'ctx>(
         if let Some(cond) = matches {
             if arm.guard.is_some() {
                 // Pattern matched — jump to a guard-check block
-                let guard_block = cx.context.append_basic_block(cx.current_fn, &format!("match_guard_{i}"));
-                cx.builder.build_conditional_branch(cond, guard_block, next_block)
+                let guard_block = cx
+                    .context
+                    .append_basic_block(cx.current_fn, &format!("match_guard_{i}"));
+                cx.builder
+                    .build_conditional_branch(cond, guard_block, next_block)
                     .expect("build_conditional_branch failed");
                 cx.builder.position_at_end(guard_block);
             } else {
@@ -3804,8 +4165,12 @@ fn compile_match<'a, 'ctx>(
             // Wildcard or Ident: always matches
             if arm.guard.is_some() {
                 // Need a guard block for wildcard + guard
-                let guard_block = cx.context.append_basic_block(cx.current_fn, &format!("match_guard_{i}"));
-                cx.builder.build_unconditional_branch(guard_block).expect("br");
+                let guard_block = cx
+                    .context
+                    .append_basic_block(cx.current_fn, &format!("match_guard_{i}"));
+                cx.builder
+                    .build_unconditional_branch(guard_block)
+                    .expect("br");
                 cx.builder.position_at_end(guard_block);
             } else {
                 cx.builder
@@ -3822,7 +4187,9 @@ fn compile_match<'a, 'ctx>(
             // (For simplicity, bind subject for ident patterns)
             let saved_guard_vars = cx.vars.clone();
             match &arm.pattern.node {
-                Pattern::Ident(name) if name != "_" && lookup_variant_tag(cx.enum_variants, name).is_none() => {
+                Pattern::Ident(name)
+                    if name != "_" && lookup_variant_tag(cx.enum_variants, name).is_none() =>
+                {
                     let llvm_ty = subject_val.get_type();
                     let alloca = cx.create_entry_block_alloca(llvm_ty, name);
                     cx.builder.build_store(alloca, subject_val).expect("store");
@@ -3833,17 +4200,26 @@ fn compile_match<'a, 'ctx>(
                         if cx.enum_max_slots.contains_key(enum_name) {
                             let ptr = subject_val.into_pointer_value();
                             for (j, bname) in bindings.iter().enumerate() {
-                                if bname == "_" { continue; }
+                                if bname == "_" {
+                                    continue;
+                                }
                                 let offset = ((j + 1) * 8) as u64;
                                 let field_ptr = unsafe {
-                                    cx.builder.build_gep(
-                                        cx.context.i8_type(), ptr,
-                                        &[cx.context.i64_type().const_int(offset, false)],
-                                        "guard_bind_ptr",
-                                    ).expect("gep")
+                                    cx.builder
+                                        .build_gep(
+                                            cx.context.i8_type(),
+                                            ptr,
+                                            &[cx.context.i64_type().const_int(offset, false)],
+                                            "guard_bind_ptr",
+                                        )
+                                        .expect("gep")
                                 };
-                                let val = cx.builder.build_load(cx.context.i64_type(), field_ptr, "guard_bind_val").expect("load");
-                                let field_tty = cx.enum_variant_fields
+                                let val = cx
+                                    .builder
+                                    .build_load(cx.context.i64_type(), field_ptr, "guard_bind_val")
+                                    .expect("load");
+                                let field_tty = cx
+                                    .enum_variant_fields
                                     .get(&(enum_name.clone(), variant.clone()))
                                     .and_then(|fs| fs.get(j))
                                     .cloned()
@@ -3865,10 +4241,12 @@ fn compile_match<'a, 'ctx>(
                 guard_bool
             } else {
                 let zero = guard_bool.get_type().const_int(0, false);
-                cx.builder.build_int_compare(IntPredicate::NE, guard_bool, zero, "guard_cond")
+                cx.builder
+                    .build_int_compare(IntPredicate::NE, guard_bool, zero, "guard_cond")
                     .expect("icmp")
             };
-            cx.builder.build_conditional_branch(guard_cond, arm_block, next_block)
+            cx.builder
+                .build_conditional_branch(guard_cond, arm_block, next_block)
                 .expect("cond_br");
             cx.vars = saved_guard_vars;
         }
@@ -3879,15 +4257,16 @@ fn compile_match<'a, 'ctx>(
         // Bind pattern variables
         let saved_vars = cx.vars.clone();
         match &arm.pattern.node {
-            Pattern::Ident(name) if name != "_" && lookup_variant_tag(cx.enum_variants, name).is_none() => {
+            Pattern::Ident(name)
+                if name != "_" && lookup_variant_tag(cx.enum_variants, name).is_none() =>
+            {
                 // Catch-all bind: bind subject to name
                 let llvm_ty = subject_val.get_type();
                 let alloca = cx.create_entry_block_alloca(llvm_ty, name);
                 cx.builder
                     .build_store(alloca, subject_val)
                     .expect("build_store failed");
-                cx.vars
-                    .insert(name.clone(), (alloca, subject_tty.clone()));
+                cx.vars.insert(name.clone(), (alloca, subject_tty.clone()));
             }
             Pattern::Ok(name) | Pattern::Some(name) => {
                 let is_ok = matches!(arm.pattern.node, Pattern::Ok(_));
@@ -3897,9 +4276,11 @@ fn compile_match<'a, 'ctx>(
                     _ => TurboTy::Int,
                 };
                 let inner_raw = if is_ok {
-                    cx.rt_call("rt_result_value", &[subject_val.into()]).unwrap()
+                    cx.rt_call("rt_result_value", &[subject_val.into()])
+                        .unwrap()
                 } else {
-                    cx.rt_call("rt_option_value", &[subject_val.into()]).unwrap()
+                    cx.rt_call("rt_option_value", &[subject_val.into()])
+                        .unwrap()
                 };
                 // inner_raw is i64; narrow to the inner type for storage
                 let inner_narrowed = narrow_from_storage(cx, inner_raw, &inner_tty);
@@ -3957,15 +4338,12 @@ fn compile_match<'a, 'ctx>(
                                 .and_then(|tys| tys.get(j).cloned())
                                 .unwrap_or(TurboTy::Int);
                             let field_val = narrow_from_storage(cx, field_val, &field_tty);
-                            let alloca = cx.create_entry_block_alloca(
-                                field_val.get_type(),
-                                binding_name,
-                            );
+                            let alloca =
+                                cx.create_entry_block_alloca(field_val.get_type(), binding_name);
                             cx.builder
                                 .build_store(alloca, field_val)
                                 .expect("build_store failed");
-                            cx.vars
-                                .insert(binding_name.clone(), (alloca, field_tty));
+                            cx.vars.insert(binding_name.clone(), (alloca, field_tty));
                         }
                     }
                 }
@@ -4093,7 +4471,12 @@ fn compile_call<'a, 'ctx>(
             // Load env_ptr (as i64) from offset 8, convert to pointer
             let env_slot = unsafe {
                 cx.builder
-                    .build_gep(i8_type, closure_ptr, &[i64_type.const_int(8, false)], "env_slot")
+                    .build_gep(
+                        i8_type,
+                        closure_ptr,
+                        &[i64_type.const_int(8, false)],
+                        "env_slot",
+                    )
                     .expect("gep")
             };
             let env_ptr_i64 = cx
@@ -4109,9 +4492,8 @@ fn compile_call<'a, 'ctx>(
             // Build LLVM function type: (ptr, ...params) -> ret
             let mut llvm_param_types: Vec<BasicMetadataTypeEnum<'ctx>> = vec![ptr_type.into()]; // env_ptr
             for pt in &param_tys {
-                llvm_param_types.push(
-                    turbo_ty_to_llvm_ctx(pt, cx.context, cx.enum_max_slots).into()
-                );
+                llvm_param_types
+                    .push(turbo_ty_to_llvm_ctx(pt, cx.context, cx.enum_max_slots).into());
             }
             let fn_type = if ret_ty == TurboTy::Unit {
                 cx.context.void_type().fn_type(&llvm_param_types, false)
@@ -4125,7 +4507,8 @@ fn compile_call<'a, 'ctx>(
             for (i, arg) in args.iter().enumerate() {
                 if let Some((val, _)) = compile_expr(cx, arg)? {
                     if i < param_tys.len() {
-                        let expected = turbo_ty_to_llvm_ctx(&param_tys[i], cx.context, cx.enum_max_slots);
+                        let expected =
+                            turbo_ty_to_llvm_ctx(&param_tys[i], cx.context, cx.enum_max_slots);
                         let val = coerce_arg(cx, val, expected);
                         arg_vals.push(val.into());
                     } else {
@@ -4165,7 +4548,12 @@ fn compile_call<'a, 'ctx>(
         "max" => compile_min_max(cx, args, false),
         "to_str" => compile_to_str_builtin(cx, args),
         // Stdlib
-        "split" => compile_stdlib_2arg_rt(cx, args, "rt_str_split", TurboTy::Array(Box::new(TurboTy::Str))),
+        "split" => compile_stdlib_2arg_rt(
+            cx,
+            args,
+            "rt_str_split",
+            TurboTy::Array(Box::new(TurboTy::Str)),
+        ),
         "trim" => compile_stdlib_1arg_rt(cx, args, "rt_str_trim", TurboTy::Str),
         "upper" => compile_stdlib_1arg_rt(cx, args, "rt_str_upper", TurboTy::Str),
         "lower" => compile_stdlib_1arg_rt(cx, args, "rt_str_lower", TurboTy::Str),
@@ -4206,9 +4594,7 @@ fn compile_call<'a, 'ctx>(
             if args.len() >= 2 {
                 let (a, _) = compile_expr(cx, &args[0])?.unwrap();
                 let (b, _) = compile_expr(cx, &args[1])?.unwrap();
-                let result = cx
-                    .rt_call("rt_pow", &[a.into(), b.into()])
-                    .unwrap();
+                let result = cx.rt_call("rt_pow", &[a.into(), b.into()]).unwrap();
                 Ok(Some((result, TurboTy::Int)))
             } else {
                 Ok(None)
@@ -4261,9 +4647,7 @@ fn compile_call<'a, 'ctx>(
             if !args.is_empty() {
                 let (val, _) = compile_expr(cx, &args[0])?.unwrap();
                 let val_i64 = widen_for_storage(cx, val);
-                let result = cx
-                    .rt_call("rt_mutex_create", &[val_i64.into()])
-                    .unwrap();
+                let result = cx.rt_call("rt_mutex_create", &[val_i64.into()]).unwrap();
                 Ok(Some((result, TurboTy::Struct("Mutex".to_string()))))
             } else {
                 Ok(None)
@@ -4305,7 +4689,12 @@ fn compile_call<'a, 'ctx>(
         "hashmap_get" => compile_stdlib_2arg_rt(cx, args, "rt_hashmap_get", TurboTy::Str),
         "hashmap_has" => compile_stdlib_2arg_rt(cx, args, "rt_hashmap_has", TurboTy::Bool),
         "hashmap_len" => compile_stdlib_1arg_rt(cx, args, "rt_hashmap_len", TurboTy::Int),
-        "hashmap_keys" => compile_stdlib_1arg_rt(cx, args, "rt_hashmap_keys", TurboTy::Array(Box::new(TurboTy::Str))),
+        "hashmap_keys" => compile_stdlib_1arg_rt(
+            cx,
+            args,
+            "rt_hashmap_keys",
+            TurboTy::Array(Box::new(TurboTy::Str)),
+        ),
         "hashmap_remove" => {
             if args.len() >= 2 {
                 let (m, _) = compile_expr(cx, &args[0])?.unwrap();
@@ -4324,7 +4713,9 @@ fn compile_call<'a, 'ctx>(
                 if let TurboTy::Struct(ref sname) = tty {
                     let clone_fn_name = format!("{sname}__clone");
                     if let Some(&clone_fn) = cx.user_fns.get(&clone_fn_name) {
-                        let call = cx.builder.build_direct_call(clone_fn, &[val.into()], "")
+                        let call = cx
+                            .builder
+                            .build_direct_call(clone_fn, &[val.into()], "")
                             .expect("build_direct_call");
                         return match call.try_as_basic_value().left() {
                             Some(v) => Ok(Some((v, tty))),
@@ -4343,12 +4734,18 @@ fn compile_call<'a, 'ctx>(
                 let (val, _) = compile_expr(cx, &args[0])?.unwrap();
                 // deref: load i64 from pointer
                 let i64_type = cx.context.i64_type();
-                let ptr = cx.builder.build_int_to_ptr(
-                    val.into_int_value(),
-                    cx.context.ptr_type(AddressSpace::default()),
-                    "deref_ptr",
-                ).expect("itp");
-                let loaded = cx.builder.build_load(i64_type, ptr, "deref_val").expect("load");
+                let ptr = cx
+                    .builder
+                    .build_int_to_ptr(
+                        val.into_int_value(),
+                        cx.context.ptr_type(AddressSpace::default()),
+                        "deref_ptr",
+                    )
+                    .expect("itp");
+                let loaded = cx
+                    .builder
+                    .build_load(i64_type, ptr, "deref_val")
+                    .expect("load");
                 Ok(Some((loaded, TurboTy::Int)))
             } else {
                 Ok(None)
@@ -4358,11 +4755,14 @@ fn compile_call<'a, 'ctx>(
             if args.len() >= 2 {
                 let (ptr_val, _) = compile_expr(cx, &args[0])?.unwrap();
                 let (val, _) = compile_expr(cx, &args[1])?.unwrap();
-                let ptr = cx.builder.build_int_to_ptr(
-                    ptr_val.into_int_value(),
-                    cx.context.ptr_type(AddressSpace::default()),
-                    "store_ptr",
-                ).expect("itp");
+                let ptr = cx
+                    .builder
+                    .build_int_to_ptr(
+                        ptr_val.into_int_value(),
+                        cx.context.ptr_type(AddressSpace::default()),
+                        "store_ptr",
+                    )
+                    .expect("itp");
                 cx.builder.build_store(ptr, val).expect("store");
             }
             Ok(None)
@@ -4372,12 +4772,16 @@ fn compile_call<'a, 'ctx>(
             if args.len() >= 2 {
                 let (a, _) = compile_expr(cx, &args[0])?.unwrap();
                 let (b, _) = compile_expr(cx, &args[1])?.unwrap();
-                let result = cx.rt_call("rt_json_stringify", &[a.into(), b.into()]).unwrap();
+                let result = cx
+                    .rt_call("rt_json_stringify", &[a.into(), b.into()])
+                    .unwrap();
                 Ok(Some((result, TurboTy::Str)))
             } else if args.len() == 1 {
                 let (a, _) = compile_expr(cx, &args[0])?.unwrap();
                 let null_ptr = cx.context.ptr_type(AddressSpace::default()).const_null();
-                let result = cx.rt_call("rt_json_stringify", &[a.into(), null_ptr.into()]).unwrap();
+                let result = cx
+                    .rt_call("rt_json_stringify", &[a.into(), null_ptr.into()])
+                    .unwrap();
                 Ok(Some((result, TurboTy::Str)))
             } else {
                 Ok(None)
@@ -4434,20 +4838,16 @@ fn compile_call<'a, 'ctx>(
 
                             if let Some(&max_slots) = cx.enum_max_slots.get(enum_name.as_str()) {
                                 let total_slots = 1 + max_slots;
-                                let num_fields_val = cx
-                                    .context
-                                    .i64_type()
-                                    .const_int(total_slots as u64, false);
+                                let num_fields_val =
+                                    cx.context.i64_type().const_int(total_slots as u64, false);
                                 let ptr = cx
                                     .rt_call("rt_struct_alloc", &[num_fields_val.into()])
                                     .unwrap()
                                     .into_pointer_value();
 
                                 // Store tag at offset 0
-                                let tag_val = cx
-                                    .context
-                                    .i64_type()
-                                    .const_int(variant_index as u64, false);
+                                let tag_val =
+                                    cx.context.i64_type().const_int(variant_index as u64, false);
                                 cx.builder
                                     .build_store(ptr, tag_val)
                                     .expect("build_store failed");
@@ -4461,9 +4861,7 @@ fn compile_call<'a, 'ctx>(
                                             .build_gep(
                                                 cx.context.i8_type(),
                                                 ptr,
-                                                &[cx.context
-                                                    .i64_type()
-                                                    .const_int(offset, false)],
+                                                &[cx.context.i64_type().const_int(offset, false)],
                                                 "var_field_ptr",
                                             )
                                             .expect("build_gep failed")
@@ -4476,10 +4874,8 @@ fn compile_call<'a, 'ctx>(
 
                                 return Ok(Some((ptr.into(), TurboTy::Enum(enum_name.clone()))));
                             } else {
-                                let val = cx
-                                    .context
-                                    .i64_type()
-                                    .const_int(variant_index as u64, false);
+                                let val =
+                                    cx.context.i64_type().const_int(variant_index as u64, false);
                                 return Ok(Some((val.into(), TurboTy::Enum(enum_name.clone()))));
                             }
                         }
@@ -4622,30 +5018,55 @@ fn compile_builtin_map_llvm<'a, 'ctx>(
     let closure_ptr = closure_ptr_val.into_pointer_value();
 
     // Load fn_ptr (as i64) from offset 0
-    let fn_ptr_i64 = cx.builder.build_load(i64_type, closure_ptr, "map_fn_i64")
-        .expect("load").into_int_value();
-    let fn_ptr = cx.builder.build_int_to_ptr(fn_ptr_i64, ptr_type, "map_fn_ptr").expect("itp");
+    let fn_ptr_i64 = cx
+        .builder
+        .build_load(i64_type, closure_ptr, "map_fn_i64")
+        .expect("load")
+        .into_int_value();
+    let fn_ptr = cx
+        .builder
+        .build_int_to_ptr(fn_ptr_i64, ptr_type, "map_fn_ptr")
+        .expect("itp");
 
     // Load env_ptr (as i64) from offset 8
     let env_slot = unsafe {
-        cx.builder.build_gep(i8_type, closure_ptr, &[i64_type.const_int(8, false)], "env_slot")
+        cx.builder
+            .build_gep(
+                i8_type,
+                closure_ptr,
+                &[i64_type.const_int(8, false)],
+                "env_slot",
+            )
             .expect("gep")
     };
-    let env_ptr_i64 = cx.builder.build_load(i64_type, env_slot, "map_env_i64")
-        .expect("load").into_int_value();
-    let env_ptr = cx.builder.build_int_to_ptr(env_ptr_i64, ptr_type, "map_env_ptr").expect("itp");
+    let env_ptr_i64 = cx
+        .builder
+        .build_load(i64_type, env_slot, "map_env_i64")
+        .expect("load")
+        .into_int_value();
+    let env_ptr = cx
+        .builder
+        .build_int_to_ptr(env_ptr_i64, ptr_type, "map_env_ptr")
+        .expect("itp");
 
     // Get array length
-    let arr_len = cx.rt_call("rt_array_len", &[arr_ptr.into()]).unwrap().into_int_value();
+    let arr_len = cx
+        .rt_call("rt_array_len", &[arr_ptr.into()])
+        .unwrap()
+        .into_int_value();
 
     // Allocate result array
-    let result_ptr = cx.rt_call("rt_array_alloc", &[arr_len.into()])
-        .unwrap().into_pointer_value();
+    let result_ptr = cx
+        .rt_call("rt_array_alloc", &[arr_len.into()])
+        .unwrap()
+        .into_pointer_value();
 
     // Build function type for indirect call: (ptr, elem) -> ret
     let param_llvm = turbo_ty_to_llvm_ctx(&param_tty, cx.context, cx.enum_max_slots);
     let fn_type = if ret_tty == TurboTy::Unit {
-        cx.context.void_type().fn_type(&[ptr_type.into(), param_llvm.into()], false)
+        cx.context
+            .void_type()
+            .fn_type(&[ptr_type.into(), param_llvm.into()], false)
     } else {
         let ret_llvm = turbo_ty_to_llvm_ctx(&ret_tty, cx.context, cx.enum_max_slots);
         ret_llvm.fn_type(&[ptr_type.into(), param_llvm.into()], false)
@@ -4658,48 +5079,98 @@ fn compile_builtin_map_llvm<'a, 'ctx>(
     let exit_block = cx.context.append_basic_block(current_fn, "map_exit");
 
     // Allocate loop index on the stack
-    let idx_alloca = cx.builder.build_alloca(i64_type, "map_idx").expect("alloca");
-    cx.builder.build_store(idx_alloca, i64_type.const_int(0, false)).expect("store");
+    let idx_alloca = cx
+        .builder
+        .build_alloca(i64_type, "map_idx")
+        .expect("alloca");
+    cx.builder
+        .build_store(idx_alloca, i64_type.const_int(0, false))
+        .expect("store");
 
-    cx.builder.build_unconditional_branch(header_block).expect("br");
+    cx.builder
+        .build_unconditional_branch(header_block)
+        .expect("br");
     cx.builder.position_at_end(header_block);
 
-    let idx = cx.builder.build_load(i64_type, idx_alloca, "idx").expect("load").into_int_value();
-    let cond = cx.builder.build_int_compare(IntPredicate::SLT, idx, arr_len, "cond").expect("cmp");
-    cx.builder.build_conditional_branch(cond, body_block, exit_block).expect("br");
+    let idx = cx
+        .builder
+        .build_load(i64_type, idx_alloca, "idx")
+        .expect("load")
+        .into_int_value();
+    let cond = cx
+        .builder
+        .build_int_compare(IntPredicate::SLT, idx, arr_len, "cond")
+        .expect("cmp");
+    cx.builder
+        .build_conditional_branch(cond, body_block, exit_block)
+        .expect("br");
 
     cx.builder.position_at_end(body_block);
-    let idx2 = cx.builder.build_load(i64_type, idx_alloca, "idx2").expect("load").into_int_value();
+    let idx2 = cx
+        .builder
+        .build_load(i64_type, idx_alloca, "idx2")
+        .expect("load")
+        .into_int_value();
 
     // Get element (as i64)
-    let raw_elem = cx.rt_call("rt_array_get", &[arr_ptr.into(), idx2.into()])
-        .unwrap().into_int_value();
+    let raw_elem = cx
+        .rt_call("rt_array_get", &[arr_ptr.into(), idx2.into()])
+        .unwrap()
+        .into_int_value();
     // Narrow to param type
     let typed_elem: BasicValueEnum = match &param_tty {
-        TurboTy::Bool => cx.builder.build_int_truncate(raw_elem, cx.context.bool_type(), "trunc")
-            .expect("trunc").into(),
-        TurboTy::Float => cx.builder.build_bit_cast(raw_elem, cx.context.f64_type(), "f2i")
-            .expect("bc").into(),
+        TurboTy::Bool => cx
+            .builder
+            .build_int_truncate(raw_elem, cx.context.bool_type(), "trunc")
+            .expect("trunc")
+            .into(),
+        TurboTy::Float => cx
+            .builder
+            .build_bit_cast(raw_elem, cx.context.f64_type(), "f2i")
+            .expect("bc")
+            .into(),
         _ => raw_elem.into(),
     };
 
     // Call closure
-    let mapped_val = cx.builder
-        .build_indirect_call(fn_type, fn_ptr, &[env_ptr.into(), typed_elem.into()], "mapped")
+    let mapped_val = cx
+        .builder
+        .build_indirect_call(
+            fn_type,
+            fn_ptr,
+            &[env_ptr.into(), typed_elem.into()],
+            "mapped",
+        )
         .expect("indirect_call");
 
     // Store result
     if let Some(mapped_basic) = mapped_val.try_as_basic_value().left() {
         let store_val = widen_for_storage(cx, mapped_basic);
-        let idx3 = cx.builder.build_load(i64_type, idx_alloca, "idx3").expect("load").into_int_value();
-        cx.rt_call("rt_array_set", &[result_ptr.into(), idx3.into(), store_val.into()]);
+        let idx3 = cx
+            .builder
+            .build_load(i64_type, idx_alloca, "idx3")
+            .expect("load")
+            .into_int_value();
+        cx.rt_call(
+            "rt_array_set",
+            &[result_ptr.into(), idx3.into(), store_val.into()],
+        );
     }
 
-    let idx4 = cx.builder.build_load(i64_type, idx_alloca, "idx4").expect("load").into_int_value();
+    let idx4 = cx
+        .builder
+        .build_load(i64_type, idx_alloca, "idx4")
+        .expect("load")
+        .into_int_value();
     let one = i64_type.const_int(1, false);
-    let next_idx = cx.builder.build_int_add(idx4, one, "next_idx").expect("add");
+    let next_idx = cx
+        .builder
+        .build_int_add(idx4, one, "next_idx")
+        .expect("add");
     cx.builder.build_store(idx_alloca, next_idx).expect("store");
-    cx.builder.build_unconditional_branch(header_block).expect("br");
+    cx.builder
+        .build_unconditional_branch(header_block)
+        .expect("br");
 
     cx.builder.position_at_end(exit_block);
 
@@ -4731,20 +5202,43 @@ fn compile_builtin_filter_llvm<'a, 'ctx>(
     let i64_type = cx.context.i64_type();
 
     let closure_ptr = closure_ptr_val.into_pointer_value();
-    let fn_ptr_i64 = cx.builder.build_load(i64_type, closure_ptr, "filt_fn_i64")
-        .expect("load").into_int_value();
-    let fn_ptr = cx.builder.build_int_to_ptr(fn_ptr_i64, ptr_type, "filt_fn_ptr").expect("itp");
+    let fn_ptr_i64 = cx
+        .builder
+        .build_load(i64_type, closure_ptr, "filt_fn_i64")
+        .expect("load")
+        .into_int_value();
+    let fn_ptr = cx
+        .builder
+        .build_int_to_ptr(fn_ptr_i64, ptr_type, "filt_fn_ptr")
+        .expect("itp");
     let env_slot = unsafe {
-        cx.builder.build_gep(i8_type, closure_ptr, &[i64_type.const_int(8, false)], "env_slot")
+        cx.builder
+            .build_gep(
+                i8_type,
+                closure_ptr,
+                &[i64_type.const_int(8, false)],
+                "env_slot",
+            )
             .expect("gep")
     };
-    let env_ptr_i64 = cx.builder.build_load(i64_type, env_slot, "filt_env_i64")
-        .expect("load").into_int_value();
-    let env_ptr = cx.builder.build_int_to_ptr(env_ptr_i64, ptr_type, "filt_env_ptr").expect("itp");
+    let env_ptr_i64 = cx
+        .builder
+        .build_load(i64_type, env_slot, "filt_env_i64")
+        .expect("load")
+        .into_int_value();
+    let env_ptr = cx
+        .builder
+        .build_int_to_ptr(env_ptr_i64, ptr_type, "filt_env_ptr")
+        .expect("itp");
 
-    let arr_len = cx.rt_call("rt_array_len", &[arr_ptr.into()]).unwrap().into_int_value();
-    let result_ptr = cx.rt_call("rt_array_alloc", &[arr_len.into()])
-        .unwrap().into_pointer_value();
+    let arr_len = cx
+        .rt_call("rt_array_len", &[arr_ptr.into()])
+        .unwrap()
+        .into_int_value();
+    let result_ptr = cx
+        .rt_call("rt_array_alloc", &[arr_len.into()])
+        .unwrap()
+        .into_pointer_value();
 
     let param_llvm = turbo_ty_to_llvm_ctx(&param_tty, cx.context, cx.enum_max_slots);
     let bool_type = cx.context.bool_type();
@@ -4757,62 +5251,134 @@ fn compile_builtin_filter_llvm<'a, 'ctx>(
     let inc_block = cx.context.append_basic_block(current_fn, "filt_inc");
     let exit_block = cx.context.append_basic_block(current_fn, "filt_exit");
 
-    let idx_alloca = cx.builder.build_alloca(i64_type, "filt_idx").expect("alloca");
-    let out_idx_alloca = cx.builder.build_alloca(i64_type, "filt_out_idx").expect("alloca");
-    cx.builder.build_store(idx_alloca, i64_type.const_int(0, false)).expect("store");
-    cx.builder.build_store(out_idx_alloca, i64_type.const_int(0, false)).expect("store");
+    let idx_alloca = cx
+        .builder
+        .build_alloca(i64_type, "filt_idx")
+        .expect("alloca");
+    let out_idx_alloca = cx
+        .builder
+        .build_alloca(i64_type, "filt_out_idx")
+        .expect("alloca");
+    cx.builder
+        .build_store(idx_alloca, i64_type.const_int(0, false))
+        .expect("store");
+    cx.builder
+        .build_store(out_idx_alloca, i64_type.const_int(0, false))
+        .expect("store");
 
-    cx.builder.build_unconditional_branch(header_block).expect("br");
+    cx.builder
+        .build_unconditional_branch(header_block)
+        .expect("br");
     cx.builder.position_at_end(header_block);
-    let idx = cx.builder.build_load(i64_type, idx_alloca, "idx").expect("load").into_int_value();
-    let cond = cx.builder.build_int_compare(IntPredicate::SLT, idx, arr_len, "cond").expect("cmp");
-    cx.builder.build_conditional_branch(cond, body_block, exit_block).expect("br");
+    let idx = cx
+        .builder
+        .build_load(i64_type, idx_alloca, "idx")
+        .expect("load")
+        .into_int_value();
+    let cond = cx
+        .builder
+        .build_int_compare(IntPredicate::SLT, idx, arr_len, "cond")
+        .expect("cmp");
+    cx.builder
+        .build_conditional_branch(cond, body_block, exit_block)
+        .expect("br");
 
     cx.builder.position_at_end(body_block);
-    let idx2 = cx.builder.build_load(i64_type, idx_alloca, "idx2").expect("load").into_int_value();
-    let raw_elem = cx.rt_call("rt_array_get", &[arr_ptr.into(), idx2.into()])
-        .unwrap().into_int_value();
+    let idx2 = cx
+        .builder
+        .build_load(i64_type, idx_alloca, "idx2")
+        .expect("load")
+        .into_int_value();
+    let raw_elem = cx
+        .rt_call("rt_array_get", &[arr_ptr.into(), idx2.into()])
+        .unwrap()
+        .into_int_value();
     let typed_elem: BasicValueEnum = match &param_tty {
-        TurboTy::Bool => cx.builder.build_int_truncate(raw_elem, bool_type, "trunc")
-            .expect("trunc").into(),
-        TurboTy::Float => cx.builder.build_bit_cast(raw_elem, cx.context.f64_type(), "bc")
-            .expect("bc").into(),
+        TurboTy::Bool => cx
+            .builder
+            .build_int_truncate(raw_elem, bool_type, "trunc")
+            .expect("trunc")
+            .into(),
+        TurboTy::Float => cx
+            .builder
+            .build_bit_cast(raw_elem, cx.context.f64_type(), "bc")
+            .expect("bc")
+            .into(),
         _ => raw_elem.into(),
     };
-    let pred_val = cx.builder
-        .build_indirect_call(fn_type, fn_ptr, &[env_ptr.into(), typed_elem.into()], "pred")
+    let pred_val = cx
+        .builder
+        .build_indirect_call(
+            fn_type,
+            fn_ptr,
+            &[env_ptr.into(), typed_elem.into()],
+            "pred",
+        )
         .expect("indirect_call");
     let keep = match pred_val.try_as_basic_value().left() {
         Some(BasicValueEnum::IntValue(v)) => v,
         _ => i64_type.const_int(0, false),
     };
     let zero8 = cx.context.bool_type().const_int(0, false);
-    let keep_bool = cx.builder.build_int_compare(IntPredicate::NE, keep, zero8, "keep")
+    let keep_bool = cx
+        .builder
+        .build_int_compare(IntPredicate::NE, keep, zero8, "keep")
         .expect("cmp");
-    cx.builder.build_conditional_branch(keep_bool, store_block, inc_block).expect("br");
+    cx.builder
+        .build_conditional_branch(keep_bool, store_block, inc_block)
+        .expect("br");
 
     cx.builder.position_at_end(store_block);
-    let raw_elem2 = cx.rt_call("rt_array_get", &[arr_ptr.into(), idx2.into()])
-        .unwrap().into_int_value();
-    let out_idx = cx.builder.build_load(i64_type, out_idx_alloca, "out_idx").expect("load").into_int_value();
-    cx.rt_call("rt_array_set", &[result_ptr.into(), out_idx.into(), raw_elem2.into()]);
+    let raw_elem2 = cx
+        .rt_call("rt_array_get", &[arr_ptr.into(), idx2.into()])
+        .unwrap()
+        .into_int_value();
+    let out_idx = cx
+        .builder
+        .build_load(i64_type, out_idx_alloca, "out_idx")
+        .expect("load")
+        .into_int_value();
+    cx.rt_call(
+        "rt_array_set",
+        &[result_ptr.into(), out_idx.into(), raw_elem2.into()],
+    );
     let one = i64_type.const_int(1, false);
-    let next_out = cx.builder.build_int_add(out_idx, one, "next_out").expect("add");
-    cx.builder.build_store(out_idx_alloca, next_out).expect("store");
-    cx.builder.build_unconditional_branch(inc_block).expect("br");
+    let next_out = cx
+        .builder
+        .build_int_add(out_idx, one, "next_out")
+        .expect("add");
+    cx.builder
+        .build_store(out_idx_alloca, next_out)
+        .expect("store");
+    cx.builder
+        .build_unconditional_branch(inc_block)
+        .expect("br");
 
     cx.builder.position_at_end(inc_block);
-    let idx3 = cx.builder.build_load(i64_type, idx_alloca, "idx3").expect("load").into_int_value();
+    let idx3 = cx
+        .builder
+        .build_load(i64_type, idx_alloca, "idx3")
+        .expect("load")
+        .into_int_value();
     let one2 = i64_type.const_int(1, false);
-    let next_idx = cx.builder.build_int_add(idx3, one2, "next_idx").expect("add");
+    let next_idx = cx
+        .builder
+        .build_int_add(idx3, one2, "next_idx")
+        .expect("add");
     cx.builder.build_store(idx_alloca, next_idx).expect("store");
-    cx.builder.build_unconditional_branch(header_block).expect("br");
+    cx.builder
+        .build_unconditional_branch(header_block)
+        .expect("br");
 
     cx.builder.position_at_end(exit_block);
     // Update result array length to actual number of kept elements
-    let final_out_idx = cx.builder.build_load(i64_type, out_idx_alloca, "final_out")
+    let final_out_idx = cx
+        .builder
+        .build_load(i64_type, out_idx_alloca, "final_out")
         .expect("load");
-    cx.builder.build_store(result_ptr, final_out_idx).expect("store");
+    cx.builder
+        .build_store(result_ptr, final_out_idx)
+        .expect("store");
 
     Ok(Some((result_ptr.into(), arr_tty)))
 }
@@ -4839,18 +5405,39 @@ fn compile_builtin_reduce_llvm<'a, 'ctx>(
     let i64_type = cx.context.i64_type();
 
     let closure_ptr = closure_ptr_val.into_pointer_value();
-    let fn_ptr_i64 = cx.builder.build_load(i64_type, closure_ptr, "red_fn_i64")
-        .expect("load").into_int_value();
-    let fn_ptr = cx.builder.build_int_to_ptr(fn_ptr_i64, ptr_type, "red_fn_ptr").expect("itp");
+    let fn_ptr_i64 = cx
+        .builder
+        .build_load(i64_type, closure_ptr, "red_fn_i64")
+        .expect("load")
+        .into_int_value();
+    let fn_ptr = cx
+        .builder
+        .build_int_to_ptr(fn_ptr_i64, ptr_type, "red_fn_ptr")
+        .expect("itp");
     let env_slot = unsafe {
-        cx.builder.build_gep(i8_type, closure_ptr, &[i64_type.const_int(8, false)], "env_slot")
+        cx.builder
+            .build_gep(
+                i8_type,
+                closure_ptr,
+                &[i64_type.const_int(8, false)],
+                "env_slot",
+            )
             .expect("gep")
     };
-    let env_ptr_i64 = cx.builder.build_load(i64_type, env_slot, "red_env_i64")
-        .expect("load").into_int_value();
-    let env_ptr = cx.builder.build_int_to_ptr(env_ptr_i64, ptr_type, "red_env_ptr").expect("itp");
+    let env_ptr_i64 = cx
+        .builder
+        .build_load(i64_type, env_slot, "red_env_i64")
+        .expect("load")
+        .into_int_value();
+    let env_ptr = cx
+        .builder
+        .build_int_to_ptr(env_ptr_i64, ptr_type, "red_env_ptr")
+        .expect("itp");
 
-    let arr_len = cx.rt_call("rt_array_len", &[arr_ptr.into()]).unwrap().into_int_value();
+    let arr_len = cx
+        .rt_call("rt_array_len", &[arr_ptr.into()])
+        .unwrap()
+        .into_int_value();
 
     // Accumulator stored on stack (as i64)
     let acc_alloca = cx.builder.build_alloca(i64_type, "acc").expect("alloca");
@@ -4867,52 +5454,109 @@ fn compile_builtin_reduce_llvm<'a, 'ctx>(
     let body_block = cx.context.append_basic_block(current_fn, "red_body");
     let exit_block = cx.context.append_basic_block(current_fn, "red_exit");
 
-    let idx_alloca = cx.builder.build_alloca(i64_type, "red_idx").expect("alloca");
-    cx.builder.build_store(idx_alloca, i64_type.const_int(0, false)).expect("store");
+    let idx_alloca = cx
+        .builder
+        .build_alloca(i64_type, "red_idx")
+        .expect("alloca");
+    cx.builder
+        .build_store(idx_alloca, i64_type.const_int(0, false))
+        .expect("store");
 
-    cx.builder.build_unconditional_branch(header_block).expect("br");
+    cx.builder
+        .build_unconditional_branch(header_block)
+        .expect("br");
     cx.builder.position_at_end(header_block);
-    let idx = cx.builder.build_load(i64_type, idx_alloca, "idx").expect("load").into_int_value();
-    let cond = cx.builder.build_int_compare(IntPredicate::SLT, idx, arr_len, "cond").expect("cmp");
-    cx.builder.build_conditional_branch(cond, body_block, exit_block).expect("br");
+    let idx = cx
+        .builder
+        .build_load(i64_type, idx_alloca, "idx")
+        .expect("load")
+        .into_int_value();
+    let cond = cx
+        .builder
+        .build_int_compare(IntPredicate::SLT, idx, arr_len, "cond")
+        .expect("cmp");
+    cx.builder
+        .build_conditional_branch(cond, body_block, exit_block)
+        .expect("br");
 
     cx.builder.position_at_end(body_block);
-    let idx2 = cx.builder.build_load(i64_type, idx_alloca, "idx2").expect("load").into_int_value();
-    let raw_elem = cx.rt_call("rt_array_get", &[arr_ptr.into(), idx2.into()])
-        .unwrap().into_int_value();
-    let acc_i64 = cx.builder.build_load(i64_type, acc_alloca, "acc_i64").expect("load").into_int_value();
+    let idx2 = cx
+        .builder
+        .build_load(i64_type, idx_alloca, "idx2")
+        .expect("load")
+        .into_int_value();
+    let raw_elem = cx
+        .rt_call("rt_array_get", &[arr_ptr.into(), idx2.into()])
+        .unwrap()
+        .into_int_value();
+    let acc_i64 = cx
+        .builder
+        .build_load(i64_type, acc_alloca, "acc_i64")
+        .expect("load")
+        .into_int_value();
 
     // Narrow both for the call
     let typed_elem: BasicValueEnum = match &elem_tty {
-        TurboTy::Float => cx.builder.build_bit_cast(raw_elem, cx.context.f64_type(), "bc").expect("bc").into(),
+        TurboTy::Float => cx
+            .builder
+            .build_bit_cast(raw_elem, cx.context.f64_type(), "bc")
+            .expect("bc")
+            .into(),
         _ => raw_elem.into(),
     };
     let typed_acc: BasicValueEnum = match &init_tty {
-        TurboTy::Float => cx.builder.build_bit_cast(acc_i64, cx.context.f64_type(), "bc_acc").expect("bc").into(),
+        TurboTy::Float => cx
+            .builder
+            .build_bit_cast(acc_i64, cx.context.f64_type(), "bc_acc")
+            .expect("bc")
+            .into(),
         _ => acc_i64.into(),
     };
 
-    let new_acc = cx.builder
-        .build_indirect_call(fn_type, fn_ptr,
-            &[env_ptr.into(), typed_acc.into(), typed_elem.into()], "new_acc")
+    let new_acc = cx
+        .builder
+        .build_indirect_call(
+            fn_type,
+            fn_ptr,
+            &[env_ptr.into(), typed_acc.into(), typed_elem.into()],
+            "new_acc",
+        )
         .expect("indirect_call");
 
     if let Some(new_acc_val) = new_acc.try_as_basic_value().left() {
         let new_acc_i64 = widen_for_storage(cx, new_acc_val);
-        cx.builder.build_store(acc_alloca, new_acc_i64).expect("store");
+        cx.builder
+            .build_store(acc_alloca, new_acc_i64)
+            .expect("store");
     }
 
     let one = i64_type.const_int(1, false);
-    let idx3 = cx.builder.build_load(i64_type, idx_alloca, "idx3").expect("load").into_int_value();
-    let next_idx = cx.builder.build_int_add(idx3, one, "next_idx").expect("add");
+    let idx3 = cx
+        .builder
+        .build_load(i64_type, idx_alloca, "idx3")
+        .expect("load")
+        .into_int_value();
+    let next_idx = cx
+        .builder
+        .build_int_add(idx3, one, "next_idx")
+        .expect("add");
     cx.builder.build_store(idx_alloca, next_idx).expect("store");
-    cx.builder.build_unconditional_branch(header_block).expect("br");
+    cx.builder
+        .build_unconditional_branch(header_block)
+        .expect("br");
 
     cx.builder.position_at_end(exit_block);
-    let final_acc_i64 = cx.builder.build_load(i64_type, acc_alloca, "final_acc").expect("load").into_int_value();
+    let final_acc_i64 = cx
+        .builder
+        .build_load(i64_type, acc_alloca, "final_acc")
+        .expect("load")
+        .into_int_value();
     let final_acc: BasicValueEnum = match &init_tty {
-        TurboTy::Float => cx.builder.build_bit_cast(final_acc_i64, cx.context.f64_type(), "bc_final")
-            .expect("bc").into(),
+        TurboTy::Float => cx
+            .builder
+            .build_bit_cast(final_acc_i64, cx.context.f64_type(), "bc_final")
+            .expect("bc")
+            .into(),
         _ => final_acc_i64.into(),
     };
 
@@ -4927,11 +5571,14 @@ fn compile_struct_to_json_llvm<'a, 'ctx>(
     struct_ptr: BasicValueEnum<'ctx>,
     struct_name: &str,
 ) -> Result<MaybeTyped<'ctx>, CodegenError> {
-    let struct_layout = cx.struct_fields.get(struct_name)
+    let struct_layout = cx
+        .struct_fields
+        .get(struct_name)
         .ok_or_else(|| CodegenError {
             code: ErrorCode::E0400,
             message: format!("undefined struct: {struct_name}"),
-        })?.clone();
+        })?
+        .clone();
 
     let i8_type = cx.context.i8_type();
     let i64_type = cx.context.i64_type();
@@ -4947,56 +5594,77 @@ fn compile_struct_to_json_llvm<'a, 'ctx>(
             format!("\"{}\":", field_name)
         };
         let prefix_ptr = cx.create_string(&prefix)?;
-        result = cx.rt_call("rt_str_concat", &[result.into(), prefix_ptr.into()]).unwrap();
+        result = cx
+            .rt_call("rt_str_concat", &[result.into(), prefix_ptr.into()])
+            .unwrap();
 
         // Load field value
         let offset = (i * 8) as u64;
-        let field_ptr = if offset == 0 { ptr } else {
+        let field_ptr = if offset == 0 {
+            ptr
+        } else {
             unsafe {
-                cx.builder.build_gep(i8_type, ptr,
-                    &[i64_type.const_int(offset, false)], "json_field_ptr").expect("gep")
+                cx.builder
+                    .build_gep(
+                        i8_type,
+                        ptr,
+                        &[i64_type.const_int(offset, false)],
+                        "json_field_ptr",
+                    )
+                    .expect("gep")
             }
         };
-        let raw_val = cx.builder.build_load(i64_type, field_ptr, "json_field_val").expect("load");
+        let raw_val = cx
+            .builder
+            .build_load(i64_type, field_ptr, "json_field_val")
+            .expect("load");
 
         // Convert field to JSON string representation
         let field_str = match field_ty {
             TurboTy::Str => {
-                let str_ptr = cx.builder.build_int_to_ptr(
-                    raw_val.into_int_value(),
-                    cx.context.ptr_type(AddressSpace::default()),
-                    "str_ptr",
-                ).expect("itp");
+                let str_ptr = cx
+                    .builder
+                    .build_int_to_ptr(
+                        raw_val.into_int_value(),
+                        cx.context.ptr_type(AddressSpace::default()),
+                        "str_ptr",
+                    )
+                    .expect("itp");
                 let quote = cx.create_string("\"")?;
-                let tmp = cx.rt_call("rt_str_concat", &[quote.into(), str_ptr.into()]).unwrap();
+                let tmp = cx
+                    .rt_call("rt_str_concat", &[quote.into(), str_ptr.into()])
+                    .unwrap();
                 let quote2 = cx.create_string("\"")?;
-                cx.rt_call("rt_str_concat", &[tmp.into(), quote2.into()]).unwrap()
+                cx.rt_call("rt_str_concat", &[tmp.into(), quote2.into()])
+                    .unwrap()
             }
-            TurboTy::Int => {
-                cx.rt_call("rt_i64_to_str", &[raw_val.into()]).unwrap()
-            }
+            TurboTy::Int => cx.rt_call("rt_i64_to_str", &[raw_val.into()]).unwrap(),
             TurboTy::Bool => {
-                let bool_val = cx.builder.build_int_truncate(
-                    raw_val.into_int_value(), cx.context.i8_type(), "trunc"
-                ).expect("trunc");
+                let bool_val = cx
+                    .builder
+                    .build_int_truncate(raw_val.into_int_value(), cx.context.i8_type(), "trunc")
+                    .expect("trunc");
                 cx.rt_call("rt_bool_to_str", &[bool_val.into()]).unwrap()
             }
             TurboTy::Float => {
-                let fval = cx.builder.build_bit_cast(
-                    raw_val.into_int_value(), cx.context.f64_type(), "i2f"
-                ).expect("bc");
+                let fval = cx
+                    .builder
+                    .build_bit_cast(raw_val.into_int_value(), cx.context.f64_type(), "i2f")
+                    .expect("bc");
                 cx.rt_call("rt_f64_to_str", &[fval.into()]).unwrap()
             }
-            _ => {
-                cx.rt_call("rt_i64_to_str", &[raw_val.into()]).unwrap()
-            }
+            _ => cx.rt_call("rt_i64_to_str", &[raw_val.into()]).unwrap(),
         };
 
-        result = cx.rt_call("rt_str_concat", &[result.into(), field_str.into()]).unwrap();
+        result = cx
+            .rt_call("rt_str_concat", &[result.into(), field_str.into()])
+            .unwrap();
     }
 
     let suffix = cx.create_string("}")?;
-    result = cx.rt_call("rt_str_concat", &[result.into(), suffix.into()]).unwrap();
+    result = cx
+        .rt_call("rt_str_concat", &[result.into(), suffix.into()])
+        .unwrap();
 
     Ok(Some((result, TurboTy::Str)))
 }
@@ -5008,7 +5676,10 @@ fn compile_array_to_json_llvm<'a, 'ctx>(
     struct_name: &str,
 ) -> Result<MaybeTyped<'ctx>, CodegenError> {
     let i64_type = cx.context.i64_type();
-    let arr_len = cx.rt_call("rt_array_len", &[arr_val.into()]).unwrap().into_int_value();
+    let arr_len = cx
+        .rt_call("rt_array_len", &[arr_val.into()])
+        .unwrap()
+        .into_int_value();
 
     let mut result: BasicValueEnum = cx.create_string("[")?.into();
 
@@ -5017,44 +5688,87 @@ fn compile_array_to_json_llvm<'a, 'ctx>(
     let body = cx.context.append_basic_block(current_fn, "json_arr_body");
     let exit = cx.context.append_basic_block(current_fn, "json_arr_exit");
 
-    let idx_alloca = cx.builder.build_alloca(i64_type, "json_idx").expect("alloca");
-    let result_alloca = cx.builder.build_alloca(
-        cx.context.ptr_type(AddressSpace::default()), "json_result"
-    ).expect("alloca");
-    cx.builder.build_store(idx_alloca, i64_type.const_int(0, false)).expect("store");
-    cx.builder.build_store(result_alloca, result.into_pointer_value()).expect("store");
+    let idx_alloca = cx
+        .builder
+        .build_alloca(i64_type, "json_idx")
+        .expect("alloca");
+    let result_alloca = cx
+        .builder
+        .build_alloca(cx.context.ptr_type(AddressSpace::default()), "json_result")
+        .expect("alloca");
+    cx.builder
+        .build_store(idx_alloca, i64_type.const_int(0, false))
+        .expect("store");
+    cx.builder
+        .build_store(result_alloca, result.into_pointer_value())
+        .expect("store");
     cx.builder.build_unconditional_branch(header).expect("br");
 
     cx.builder.position_at_end(header);
-    let idx = cx.builder.build_load(i64_type, idx_alloca, "idx").expect("load").into_int_value();
-    let cond = cx.builder.build_int_compare(IntPredicate::SLT, idx, arr_len, "cond").expect("cmp");
-    cx.builder.build_conditional_branch(cond, body, exit).expect("br");
+    let idx = cx
+        .builder
+        .build_load(i64_type, idx_alloca, "idx")
+        .expect("load")
+        .into_int_value();
+    let cond = cx
+        .builder
+        .build_int_compare(IntPredicate::SLT, idx, arr_len, "cond")
+        .expect("cmp");
+    cx.builder
+        .build_conditional_branch(cond, body, exit)
+        .expect("br");
 
     cx.builder.position_at_end(body);
-    let idx2 = cx.builder.build_load(i64_type, idx_alloca, "idx2").expect("load").into_int_value();
-    let cur_result = cx.builder.build_load(
-        cx.context.ptr_type(AddressSpace::default()), result_alloca, "cur"
-    ).expect("load");
+    let idx2 = cx
+        .builder
+        .build_load(i64_type, idx_alloca, "idx2")
+        .expect("load")
+        .into_int_value();
+    let cur_result = cx
+        .builder
+        .build_load(
+            cx.context.ptr_type(AddressSpace::default()),
+            result_alloca,
+            "cur",
+        )
+        .expect("load");
 
     // Add comma if not first
     let zero = i64_type.const_int(0, false);
-    let is_first = cx.builder.build_int_compare(IntPredicate::EQ, idx2, zero, "is_first").expect("cmp");
+    let is_first = cx
+        .builder
+        .build_int_compare(IntPredicate::EQ, idx2, zero, "is_first")
+        .expect("cmp");
     let comma_ptr = cx.create_string(",")?;
     let empty_ptr = cx.create_string("")?;
-    let sep = cx.builder.build_select(is_first, empty_ptr, comma_ptr, "sep").expect("select");
-    let with_sep = cx.rt_call("rt_str_concat", &[cur_result.into(), sep.into()]).unwrap();
+    let sep = cx
+        .builder
+        .build_select(is_first, empty_ptr, comma_ptr, "sep")
+        .expect("select");
+    let with_sep = cx
+        .rt_call("rt_str_concat", &[cur_result.into(), sep.into()])
+        .unwrap();
 
     // Get element and serialize
-    let elem = cx.rt_call("rt_array_get", &[arr_val.into(), idx2.into()]).unwrap();
-    let elem_ptr = cx.builder.build_int_to_ptr(
-        elem.into_int_value(),
-        cx.context.ptr_type(AddressSpace::default()),
-        "elem_ptr",
-    ).expect("itp");
+    let elem = cx
+        .rt_call("rt_array_get", &[arr_val.into(), idx2.into()])
+        .unwrap();
+    let elem_ptr = cx
+        .builder
+        .build_int_to_ptr(
+            elem.into_int_value(),
+            cx.context.ptr_type(AddressSpace::default()),
+            "elem_ptr",
+        )
+        .expect("itp");
     let sname = struct_name.to_string();
     let (elem_json, _) = compile_struct_to_json_llvm(cx, elem_ptr.into(), &sname)?.unwrap();
-    let new_result = cx.rt_call("rt_str_concat", &[with_sep.into(), elem_json.into()]).unwrap();
-    cx.builder.build_store(result_alloca, new_result.into_pointer_value()).expect("store");
+    let new_result = cx
+        .rt_call("rt_str_concat", &[with_sep.into(), elem_json.into()])
+        .unwrap();
+    cx.builder
+        .build_store(result_alloca, new_result.into_pointer_value())
+        .expect("store");
 
     let one = i64_type.const_int(1, false);
     let next = cx.builder.build_int_add(idx2, one, "next").expect("add");
@@ -5062,11 +5776,18 @@ fn compile_array_to_json_llvm<'a, 'ctx>(
     cx.builder.build_unconditional_branch(header).expect("br");
 
     cx.builder.position_at_end(exit);
-    let final_result = cx.builder.build_load(
-        cx.context.ptr_type(AddressSpace::default()), result_alloca, "final"
-    ).expect("load");
+    let final_result = cx
+        .builder
+        .build_load(
+            cx.context.ptr_type(AddressSpace::default()),
+            result_alloca,
+            "final",
+        )
+        .expect("load");
     let suffix = cx.create_string("]")?;
-    let done = cx.rt_call("rt_str_concat", &[final_result.into(), suffix.into()]).unwrap();
+    let done = cx
+        .rt_call("rt_str_concat", &[final_result.into(), suffix.into()])
+        .unwrap();
 
     Ok(Some((done, TurboTy::Str)))
 }
@@ -5088,13 +5809,15 @@ fn compile_print<'a, 'ctx>(
                 // Generic functions return i64 even for Str; convert to ptr if needed
                 let ptr_val: BasicValueEnum = match v {
                     BasicValueEnum::PointerValue(_) => v,
-                    BasicValueEnum::IntValue(iv) => {
-                        cx.builder.build_int_to_ptr(
+                    BasicValueEnum::IntValue(iv) => cx
+                        .builder
+                        .build_int_to_ptr(
                             iv,
                             cx.context.ptr_type(AddressSpace::default()),
                             "str_ptr",
-                        ).expect("itp").into()
-                    }
+                        )
+                        .expect("itp")
+                        .into(),
                     _ => v,
                 };
                 cx.rt_call("rt_print_str", &[ptr_val.into()]);
@@ -5133,8 +5856,13 @@ fn compile_print<'a, 'ctx>(
                 let sname = sname.clone();
                 let to_str_fn = format!("{sname}__to_string");
                 if let Some(&ts_fn) = cx.user_fns.get(&to_str_fn) {
-                    let s = cx.builder.build_direct_call(ts_fn, &[v.into()], "to_str")
-                        .expect("call").try_as_basic_value().left().unwrap();
+                    let s = cx
+                        .builder
+                        .build_direct_call(ts_fn, &[v.into()], "to_str")
+                        .expect("call")
+                        .try_as_basic_value()
+                        .left()
+                        .unwrap();
                     cx.rt_call("rt_print_str", &[s.into()]);
                 } else {
                     // No Display, print struct name as placeholder
@@ -5152,13 +5880,17 @@ fn compile_print<'a, 'ctx>(
                 let iv = match v {
                     BasicValueEnum::IntValue(i) => {
                         if i.get_type().get_bit_width() < 64 {
-                            cx.builder.build_int_s_extend(i, cx.context.i64_type(), "ext")
+                            cx.builder
+                                .build_int_s_extend(i, cx.context.i64_type(), "ext")
                                 .expect("extend")
-                        } else { i }
+                        } else {
+                            i
+                        }
                     }
-                    BasicValueEnum::PointerValue(p) => {
-                        cx.builder.build_ptr_to_int(p, cx.context.i64_type(), "p2i").expect("p2i")
-                    }
+                    BasicValueEnum::PointerValue(p) => cx
+                        .builder
+                        .build_ptr_to_int(p, cx.context.i64_type(), "p2i")
+                        .expect("p2i"),
                     _ => cx.context.i64_type().const_int(0, false),
                 };
                 cx.rt_call("rt_print_i64", &[iv.into()]);
@@ -5176,9 +5908,10 @@ fn compile_print<'a, 'ctx>(
                 // For other types, print as integer (best-effort)
                 let iv = match v {
                     BasicValueEnum::IntValue(i) => i,
-                    BasicValueEnum::PointerValue(p) => {
-                        cx.builder.build_ptr_to_int(p, cx.context.i64_type(), "p2i").expect("p2i")
-                    }
+                    BasicValueEnum::PointerValue(p) => cx
+                        .builder
+                        .build_ptr_to_int(p, cx.context.i64_type(), "p2i")
+                        .expect("p2i"),
                     _ => cx.context.i64_type().const_int(0, false),
                 };
                 cx.rt_call("rt_print_i64", &[iv.into()]);
@@ -5202,9 +5935,7 @@ fn compile_panic<'a, 'ctx>(
     cx.builder
         .build_unreachable()
         .expect("build_unreachable failed");
-    let dead = cx
-        .context
-        .append_basic_block(cx.current_fn, "after_panic");
+    let dead = cx.context.append_basic_block(cx.current_fn, "after_panic");
     cx.builder.position_at_end(dead);
     Ok(None)
 }
@@ -5219,12 +5950,8 @@ fn compile_assert<'a, 'ctx>(
     let (cond, _) = compile_expr(cx, &args[0])?.unwrap();
     let cond_bool = cx.to_bool(cond);
 
-    let fail_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "assert_fail");
-    let ok_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "assert_ok");
+    let fail_block = cx.context.append_basic_block(cx.current_fn, "assert_fail");
+    let ok_block = cx.context.append_basic_block(cx.current_fn, "assert_ok");
 
     cx.builder
         .build_conditional_branch(cond_bool, ok_block, fail_block)
@@ -5259,10 +5986,14 @@ fn compile_assert_eq<'a, 'ctx>(
 
     let eq = if matches!(a_tty, TurboTy::Str) || a.is_pointer_value() && b.is_pointer_value() {
         // String comparison via rt_str_eq
-        let eq_val = cx.rt_call("rt_str_eq", &[a.into(), b.into()])
-            .unwrap().into_int_value();
+        let eq_val = cx
+            .rt_call("rt_str_eq", &[a.into(), b.into()])
+            .unwrap()
+            .into_int_value();
         let zero = cx.context.i8_type().const_int(0, false);
-        let cmp = cx.builder.build_int_compare(IntPredicate::NE, eq_val, zero, "str_eq")
+        let cmp = cx
+            .builder
+            .build_int_compare(IntPredicate::NE, eq_val, zero, "str_eq")
             .expect("icmp");
         if negate {
             cx.builder.build_not(cmp, "not_eq").expect("not")
@@ -5272,7 +6003,11 @@ fn compile_assert_eq<'a, 'ctx>(
     } else {
         let ai = a.into_int_value();
         let bi = b.into_int_value();
-        let pred = if negate { IntPredicate::NE } else { IntPredicate::EQ };
+        let pred = if negate {
+            IntPredicate::NE
+        } else {
+            IntPredicate::EQ
+        };
         cx.builder
             .build_int_compare(pred, ai, bi, "assert_eq")
             .expect("build_int_compare failed")
@@ -5281,9 +6016,7 @@ fn compile_assert_eq<'a, 'ctx>(
     let fail_block = cx
         .context
         .append_basic_block(cx.current_fn, "assert_eq_fail");
-    let ok_block = cx
-        .context
-        .append_basic_block(cx.current_fn, "assert_eq_ok");
+    let ok_block = cx.context.append_basic_block(cx.current_fn, "assert_eq_ok");
 
     cx.builder
         .build_conditional_branch(eq, ok_block, fail_block)
@@ -5339,7 +6072,12 @@ fn compile_abs<'a, 'ctx>(
                 .expect("build_int_compare failed");
             let result: BasicValueEnum = cx
                 .builder
-                .build_select(is_neg, BasicValueEnum::IntValue(neg), BasicValueEnum::IntValue(iv), "abs")
+                .build_select(
+                    is_neg,
+                    BasicValueEnum::IntValue(neg),
+                    BasicValueEnum::IntValue(iv),
+                    "abs",
+                )
                 .expect("build_select failed");
             Ok(Some((result, TurboTy::Int)))
         }
@@ -5357,7 +6095,12 @@ fn compile_abs<'a, 'ctx>(
                 .expect("build_float_compare failed");
             let result: BasicValueEnum = cx
                 .builder
-                .build_select(is_neg, BasicValueEnum::FloatValue(neg), BasicValueEnum::FloatValue(fv), "fabs")
+                .build_select(
+                    is_neg,
+                    BasicValueEnum::FloatValue(neg),
+                    BasicValueEnum::FloatValue(fv),
+                    "fabs",
+                )
                 .expect("build_select failed");
             Ok(Some((result, TurboTy::Float)))
         }
@@ -5390,7 +6133,12 @@ fn compile_min_max<'a, 'ctx>(
         .expect("build_int_compare failed");
     let result: BasicValueEnum = cx
         .builder
-        .build_select(cond, BasicValueEnum::IntValue(ai), BasicValueEnum::IntValue(bi), if is_min { "min" } else { "max" })
+        .build_select(
+            cond,
+            BasicValueEnum::IntValue(ai),
+            BasicValueEnum::IntValue(bi),
+            if is_min { "min" } else { "max" },
+        )
         .expect("build_select failed");
     Ok(Some((result, tty)))
 }
@@ -5486,8 +6234,13 @@ fn convert_to_str<'a, 'ctx>(
             let sname = sname.clone();
             let to_str_fn = format!("{sname}__to_string");
             if let Some(&ts_fn) = cx.user_fns.get(&to_str_fn) {
-                let s = cx.builder.build_direct_call(ts_fn, &[val.into()], "to_str")
-                    .expect("call").try_as_basic_value().left().unwrap();
+                let s = cx
+                    .builder
+                    .build_direct_call(ts_fn, &[val.into()], "to_str")
+                    .expect("call")
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap();
                 Ok(s)
             } else {
                 let ptr = cx.create_string(&format!("<{sname}>"))?;
@@ -5541,11 +6294,10 @@ fn int_to_ptr_if_needed<'a, 'ctx>(
 ) -> PointerValue<'ctx> {
     match val {
         BasicValueEnum::PointerValue(pv) => pv,
-        BasicValueEnum::IntValue(iv) => {
-            cx.builder
-                .build_int_to_ptr(iv, cx.context.ptr_type(AddressSpace::default()), "i2ptr")
-                .expect("int_to_ptr failed")
-        }
+        BasicValueEnum::IntValue(iv) => cx
+            .builder
+            .build_int_to_ptr(iv, cx.context.ptr_type(AddressSpace::default()), "i2ptr")
+            .expect("int_to_ptr failed"),
         _ => cx.context.ptr_type(AddressSpace::default()).const_null(),
     }
 }
@@ -5570,8 +6322,13 @@ fn narrow_from_storage<'a, 'ctx>(
                 .build_bit_cast(iv, cx.context.f64_type(), "i2f")
                 .expect("build_bitcast failed")
         }
-        TurboTy::Str | TurboTy::Array(_) | TurboTy::Struct(_)
-        | TurboTy::Result(_, _) | TurboTy::Optional(_) | TurboTy::Agent(_) | TurboTy::Future(_) => {
+        TurboTy::Str
+        | TurboTy::Array(_)
+        | TurboTy::Struct(_)
+        | TurboTy::Result(_, _)
+        | TurboTy::Optional(_)
+        | TurboTy::Agent(_)
+        | TurboTy::Future(_) => {
             // i64 -> ptr via inttoptr
             let iv = val.into_int_value();
             cx.builder

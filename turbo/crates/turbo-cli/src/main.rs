@@ -1196,7 +1196,12 @@ fn collect_test_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose: bool, use_llvm: bool) {
+fn build_file(
+    path: &std::path::Path,
+    output: Option<&std::path::Path>,
+    verbose: bool,
+    use_llvm: bool,
+) {
     check_file_size(path);
 
     let source = match std::fs::read_to_string(path) {
@@ -1320,9 +1325,13 @@ fn build_file(path: &std::path::Path, output: Option<&std::path::Path>, verbose:
     let backend_name = if use_llvm { "LLVM" } else { "Cranelift" };
     let codegen_result: Result<(), String> = if use_llvm {
         #[cfg(feature = "llvm")]
-        { turbo_codegen_llvm::aot_compile(&module, output_path).map_err(|e| e.to_string()) }
+        {
+            turbo_codegen_llvm::aot_compile(&module, output_path).map_err(|e| e.to_string())
+        }
         #[cfg(not(feature = "llvm"))]
-        { Err("LLVM backend not available — rebuild with --features llvm".to_string()) }
+        {
+            Err("LLVM backend not available — rebuild with --features llvm".to_string())
+        }
     } else {
         turbo_codegen_cranelift::aot_compile(&module, output_path, true).map_err(|e| e.to_string())
     };
