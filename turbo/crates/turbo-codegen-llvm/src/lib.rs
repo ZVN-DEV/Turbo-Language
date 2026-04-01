@@ -1241,8 +1241,8 @@ fn compile_module<'ctx>(
 
     // Declare spawn thunks
     for site in &all_spawn_sites {
-        // Thunk signature: fn(__spawn_thunk_N)(args_ptr: *) -> void
-        let fn_type = void_type.fn_type(&[ptr_type.into()], false);
+        // Thunk signature: fn(__spawn_thunk_N)(args_ptr: *) -> i64
+        let fn_type = i64_type.fn_type(&[ptr_type.into()], false);
         let func = module.add_function(&site.thunk_name, fn_type, None);
         user_fns.insert(site.thunk_name.clone(), func);
         fn_ret_types.insert(site.thunk_name.clone(), TurboTy::Unit);
@@ -1659,7 +1659,7 @@ fn compile_module<'ctx>(
         if cur.get_terminator().is_none() {
             let ret_turbo = if let Some(ref rt) = cl.return_type {
                 turbo_ty_from_type_expr(&rt.node, &enum_variants)
-            } else { TurboTy::Unit };
+            } else { TurboTy::Int }; // Default to Int to match function declaration
             if ret_turbo != TurboTy::Unit {
                 if let Some((val, _)) = result {
                     builder.build_return(Some(&val)).expect("return");
@@ -1722,15 +1722,35 @@ fn compile_module<'ctx>(
             arg_vals.push(val.into());
         }
 
-        // Call the target function via fn_ptr
-        if let Some(tf) = target_fn {
-            builder.build_direct_call(*tf, &arg_vals, "").expect("call");
+        // Call the target function via fn_ptr and return the result
+        let result = if let Some(tf) = target_fn {
+            let call = builder.build_direct_call(*tf, &arg_vals, "spawn_result").expect("call");
+            call.try_as_basic_value().left()
         } else {
-            // Indirect call
-            let fn_type = void_type.fn_type(&vec![i64_type.into(); site.num_args], false);
-            builder.build_indirect_call(fn_type, fn_ptr, &arg_vals, "").expect("indirect_call");
+            let fn_type = i64_type.fn_type(&vec![i64_type.into(); site.num_args], false);
+            let call = builder.build_indirect_call(fn_type, fn_ptr, &arg_vals, "spawn_result").expect("indirect_call");
+            call.try_as_basic_value().left()
+        };
+        if let Some(val) = result {
+            // Widen result to i64 for return
+            let ret_val: BasicValueEnum = match val {
+                BasicValueEnum::IntValue(iv) => {
+                    if iv.get_type().get_bit_width() < 64 {
+                        builder.build_int_s_extend(iv, i64_type, "widen").expect("ext").into()
+                    } else { iv.into() }
+                }
+                BasicValueEnum::FloatValue(fv) => {
+                    builder.build_bit_cast(fv, i64_type, "f2i").expect("bc")
+                }
+                BasicValueEnum::PointerValue(pv) => {
+                    builder.build_ptr_to_int(pv, i64_type, "p2i").expect("pti").into()
+                }
+                other => other,
+            };
+            builder.build_return(Some(&ret_val)).expect("return");
+        } else {
+            builder.build_return(Some(&i64_type.const_int(0, false))).expect("return");
         }
-        builder.build_return(None).expect("return");
     }
 
     // Verify the module
@@ -5021,16 +5041,29 @@ fn compile_assert_eq<'a, 'ctx>(
     if args.len() < 2 {
         return Ok(None);
     }
-    let (a, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (a, a_tty) = compile_expr(cx, &args[0])?.unwrap();
     let (b, _) = compile_expr(cx, &args[1])?.unwrap();
 
-    let ai = a.into_int_value();
-    let bi = b.into_int_value();
-    let pred = if negate { IntPredicate::NE } else { IntPredicate::EQ };
-    let eq = cx
-        .builder
-        .build_int_compare(pred, ai, bi, "assert_eq")
-        .expect("build_int_compare failed");
+    let eq = if matches!(a_tty, TurboTy::Str) || a.is_pointer_value() && b.is_pointer_value() {
+        // String comparison via rt_str_eq
+        let eq_val = cx.rt_call("rt_str_eq", &[a.into(), b.into()])
+            .unwrap().into_int_value();
+        let zero = cx.context.i8_type().const_int(0, false);
+        let cmp = cx.builder.build_int_compare(IntPredicate::NE, eq_val, zero, "str_eq")
+            .expect("icmp");
+        if negate {
+            cx.builder.build_not(cmp, "not_eq").expect("not")
+        } else {
+            cmp
+        }
+    } else {
+        let ai = a.into_int_value();
+        let bi = b.into_int_value();
+        let pred = if negate { IntPredicate::NE } else { IntPredicate::EQ };
+        cx.builder
+            .build_int_compare(pred, ai, bi, "assert_eq")
+            .expect("build_int_compare failed")
+    };
 
     let fail_block = cx
         .context

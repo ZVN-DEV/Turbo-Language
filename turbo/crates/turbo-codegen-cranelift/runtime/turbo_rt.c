@@ -46,7 +46,7 @@ void rt_print_i64(long long n) {
 }
 
 void rt_print_f64(double n) {
-    printf("%g\n", n);
+    printf("%.7g\n", n);
 }
 
 void rt_print_bool(char b) {
@@ -167,7 +167,7 @@ const char* rt_i64_to_str(long long n) {
 
 const char* rt_f64_to_str(double n) {
     char *buf = turbo_alloc(32);
-    snprintf(buf, 32, "%g", n);
+    snprintf(buf, 32, "%.7g", n);
     return buf;
 }
 
@@ -394,6 +394,56 @@ const char* rt_str_char_at(const char *s, long long index) {
     char *result = turbo_alloc(2);
     result[0] = s[(size_t)index];
     result[1] = '\0';
+    return result;
+}
+
+char rt_str_contains(const char *s, const char *sub) {
+    if (!s || !sub) return 0;
+    return strstr(s, sub) != NULL ? 1 : 0;
+}
+
+const char* rt_str_repeat(const char *s, long long count) {
+    if (!s || count <= 0) {
+        char *empty = (char *)turbo_alloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
+    size_t len = strlen(s);
+    size_t total = len * (size_t)count;
+    char *result = (char *)turbo_alloc(total + 1);
+    result[0] = '\0';
+    for (long long i = 0; i < count; i++) {
+        strcat(result, s);
+    }
+    return result;
+}
+
+long long rt_str_index_of(const char *s, const char *sub) {
+    if (!s || !sub) return -1;
+    const char *found = strstr(s, sub);
+    if (!found) return -1;
+    return (long long)(found - s);
+}
+
+const char* rt_str_join(const char *arr_ptr, const char *sep) {
+    /* arr_ptr is a Turbo array of strings. Layout: [len (8 bytes), elem0, elem1, ...] */
+    if (!arr_ptr) return "";
+    long long len = *(long long *)arr_ptr;
+    if (len <= 0) return "";
+    const char **elems = (const char **)(arr_ptr + 8);
+    /* Calculate total length */
+    size_t total = 0;
+    size_t sep_len = sep ? strlen(sep) : 0;
+    for (long long i = 0; i < len; i++) {
+        if (elems[i]) total += strlen(elems[i]);
+        if (i < len - 1) total += sep_len;
+    }
+    char *result = (char *)turbo_alloc(total + 1);
+    result[0] = '\0';
+    for (long long i = 0; i < len; i++) {
+        if (elems[i]) strcat(result, elems[i]);
+        if (i < len - 1 && sep) strcat(result, sep);
+    }
     return result;
 }
 
