@@ -4347,12 +4347,35 @@ fn compile_call<'a, 'ctx>(
                 Ok(None)
             }
         }
-        "to_json" | "to_json_array" => {
+        "to_json" => {
             if !args.is_empty() {
-                let (val, _) = compile_expr(cx, &args[0])?.unwrap();
-                let null_ptr = cx.context.ptr_type(AddressSpace::default()).const_null();
-                let result = cx.rt_call("rt_json_stringify", &[val.into(), null_ptr.into()]).unwrap();
-                Ok(Some((result, TurboTy::Str)))
+                let (val, tty) = compile_expr(cx, &args[0])?.unwrap();
+                if let TurboTy::Struct(ref sname) = tty {
+                    compile_struct_to_json_llvm(cx, val, sname)
+                } else {
+                    let str_val = convert_to_str(cx, val, &tty)?;
+                    Ok(Some((str_val, TurboTy::Str)))
+                }
+            } else {
+                Ok(None)
+            }
+        }
+        "to_json_array" => {
+            if !args.is_empty() {
+                let (arr_val, arr_tty) = compile_expr(cx, &args[0])?.unwrap();
+                let elem_sname = match &arr_tty {
+                    TurboTy::Array(inner) => match inner.as_ref() {
+                        TurboTy::Struct(s) => Some(s.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(sname) = elem_sname {
+                    compile_array_to_json_llvm(cx, arr_val, &sname)
+                } else {
+                    let str_val = convert_to_str(cx, arr_val, &arr_tty)?;
+                    Ok(Some((str_val, TurboTy::Str)))
+                }
             } else {
                 Ok(None)
             }
@@ -4750,6 +4773,10 @@ fn compile_builtin_filter_llvm<'a, 'ctx>(
     cx.builder.build_unconditional_branch(header_block).expect("br");
 
     cx.builder.position_at_end(exit_block);
+    // Update result array length to actual number of kept elements
+    let final_out_idx = cx.builder.build_load(i64_type, out_idx_alloca, "final_out")
+        .expect("load");
+    cx.builder.build_store(result_ptr, final_out_idx).expect("store");
 
     Ok(Some((result_ptr.into(), arr_tty)))
 }
@@ -4857,6 +4884,156 @@ fn compile_builtin_reduce_llvm<'a, 'ctx>(
 }
 
 // ── Built-in functions ──────────────────────────────────────────────
+
+/// Serialize a struct to JSON: {"field1":val1,"field2":val2}
+fn compile_struct_to_json_llvm<'a, 'ctx>(
+    cx: &mut Ctx<'a, 'ctx>,
+    struct_ptr: BasicValueEnum<'ctx>,
+    struct_name: &str,
+) -> Result<MaybeTyped<'ctx>, CodegenError> {
+    let struct_layout = cx.struct_fields.get(struct_name)
+        .ok_or_else(|| CodegenError {
+            code: ErrorCode::E0400,
+            message: format!("undefined struct: {struct_name}"),
+        })?.clone();
+
+    let i8_type = cx.context.i8_type();
+    let i64_type = cx.context.i64_type();
+    let ptr = struct_ptr.into_pointer_value();
+
+    let mut result: BasicValueEnum = cx.create_string("{")?.into();
+
+    for (i, (field_name, field_ty)) in struct_layout.iter().enumerate() {
+        // Add key prefix
+        let prefix = if i > 0 {
+            format!(",\"{}\":", field_name)
+        } else {
+            format!("\"{}\":", field_name)
+        };
+        let prefix_ptr = cx.create_string(&prefix)?;
+        result = cx.rt_call("rt_str_concat", &[result.into(), prefix_ptr.into()]).unwrap();
+
+        // Load field value
+        let offset = (i * 8) as u64;
+        let field_ptr = if offset == 0 { ptr } else {
+            unsafe {
+                cx.builder.build_gep(i8_type, ptr,
+                    &[i64_type.const_int(offset, false)], "json_field_ptr").expect("gep")
+            }
+        };
+        let raw_val = cx.builder.build_load(i64_type, field_ptr, "json_field_val").expect("load");
+
+        // Convert field to JSON string representation
+        let field_str = match field_ty {
+            TurboTy::Str => {
+                let str_ptr = cx.builder.build_int_to_ptr(
+                    raw_val.into_int_value(),
+                    cx.context.ptr_type(AddressSpace::default()),
+                    "str_ptr",
+                ).expect("itp");
+                let quote = cx.create_string("\"")?;
+                let tmp = cx.rt_call("rt_str_concat", &[quote.into(), str_ptr.into()]).unwrap();
+                let quote2 = cx.create_string("\"")?;
+                cx.rt_call("rt_str_concat", &[tmp.into(), quote2.into()]).unwrap()
+            }
+            TurboTy::Int => {
+                cx.rt_call("rt_i64_to_str", &[raw_val.into()]).unwrap()
+            }
+            TurboTy::Bool => {
+                let bool_val = cx.builder.build_int_truncate(
+                    raw_val.into_int_value(), cx.context.i8_type(), "trunc"
+                ).expect("trunc");
+                cx.rt_call("rt_bool_to_str", &[bool_val.into()]).unwrap()
+            }
+            TurboTy::Float => {
+                let fval = cx.builder.build_bit_cast(
+                    raw_val.into_int_value(), cx.context.f64_type(), "i2f"
+                ).expect("bc");
+                cx.rt_call("rt_f64_to_str", &[fval.into()]).unwrap()
+            }
+            _ => {
+                cx.rt_call("rt_i64_to_str", &[raw_val.into()]).unwrap()
+            }
+        };
+
+        result = cx.rt_call("rt_str_concat", &[result.into(), field_str.into()]).unwrap();
+    }
+
+    let suffix = cx.create_string("}")?;
+    result = cx.rt_call("rt_str_concat", &[result.into(), suffix.into()]).unwrap();
+
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// Serialize an array of structs to JSON: [item1,item2,...]
+fn compile_array_to_json_llvm<'a, 'ctx>(
+    cx: &mut Ctx<'a, 'ctx>,
+    arr_val: BasicValueEnum<'ctx>,
+    struct_name: &str,
+) -> Result<MaybeTyped<'ctx>, CodegenError> {
+    let i64_type = cx.context.i64_type();
+    let arr_len = cx.rt_call("rt_array_len", &[arr_val.into()]).unwrap().into_int_value();
+
+    let mut result: BasicValueEnum = cx.create_string("[")?.into();
+
+    let current_fn = cx.current_fn;
+    let header = cx.context.append_basic_block(current_fn, "json_arr_header");
+    let body = cx.context.append_basic_block(current_fn, "json_arr_body");
+    let exit = cx.context.append_basic_block(current_fn, "json_arr_exit");
+
+    let idx_alloca = cx.builder.build_alloca(i64_type, "json_idx").expect("alloca");
+    let result_alloca = cx.builder.build_alloca(
+        cx.context.ptr_type(AddressSpace::default()), "json_result"
+    ).expect("alloca");
+    cx.builder.build_store(idx_alloca, i64_type.const_int(0, false)).expect("store");
+    cx.builder.build_store(result_alloca, result.into_pointer_value()).expect("store");
+    cx.builder.build_unconditional_branch(header).expect("br");
+
+    cx.builder.position_at_end(header);
+    let idx = cx.builder.build_load(i64_type, idx_alloca, "idx").expect("load").into_int_value();
+    let cond = cx.builder.build_int_compare(IntPredicate::SLT, idx, arr_len, "cond").expect("cmp");
+    cx.builder.build_conditional_branch(cond, body, exit).expect("br");
+
+    cx.builder.position_at_end(body);
+    let idx2 = cx.builder.build_load(i64_type, idx_alloca, "idx2").expect("load").into_int_value();
+    let cur_result = cx.builder.build_load(
+        cx.context.ptr_type(AddressSpace::default()), result_alloca, "cur"
+    ).expect("load");
+
+    // Add comma if not first
+    let zero = i64_type.const_int(0, false);
+    let is_first = cx.builder.build_int_compare(IntPredicate::EQ, idx2, zero, "is_first").expect("cmp");
+    let comma_ptr = cx.create_string(",")?;
+    let empty_ptr = cx.create_string("")?;
+    let sep = cx.builder.build_select(is_first, empty_ptr, comma_ptr, "sep").expect("select");
+    let with_sep = cx.rt_call("rt_str_concat", &[cur_result.into(), sep.into()]).unwrap();
+
+    // Get element and serialize
+    let elem = cx.rt_call("rt_array_get", &[arr_val.into(), idx2.into()]).unwrap();
+    let elem_ptr = cx.builder.build_int_to_ptr(
+        elem.into_int_value(),
+        cx.context.ptr_type(AddressSpace::default()),
+        "elem_ptr",
+    ).expect("itp");
+    let sname = struct_name.to_string();
+    let (elem_json, _) = compile_struct_to_json_llvm(cx, elem_ptr.into(), &sname)?.unwrap();
+    let new_result = cx.rt_call("rt_str_concat", &[with_sep.into(), elem_json.into()]).unwrap();
+    cx.builder.build_store(result_alloca, new_result.into_pointer_value()).expect("store");
+
+    let one = i64_type.const_int(1, false);
+    let next = cx.builder.build_int_add(idx2, one, "next").expect("add");
+    cx.builder.build_store(idx_alloca, next).expect("store");
+    cx.builder.build_unconditional_branch(header).expect("br");
+
+    cx.builder.position_at_end(exit);
+    let final_result = cx.builder.build_load(
+        cx.context.ptr_type(AddressSpace::default()), result_alloca, "final"
+    ).expect("load");
+    let suffix = cx.create_string("]")?;
+    let done = cx.rt_call("rt_str_concat", &[final_result.into(), suffix.into()]).unwrap();
+
+    Ok(Some((done, TurboTy::Str)))
+}
 
 fn compile_print<'a, 'ctx>(
     cx: &mut Ctx<'a, 'ctx>,
