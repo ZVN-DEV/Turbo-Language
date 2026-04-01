@@ -235,6 +235,8 @@ struct Ctx<'a, 'ctx> {
     trait_impls: &'a HashMap<String, Vec<String>>,
     /// Agent names (to distinguish from regular structs)
     agent_names: &'a std::collections::HashSet<String>,
+    /// Agent definitions: name -> (model, tools, system_prompt)
+    agent_defs: &'a HashMap<String, (String, Vec<String>, Option<String>)>,
 }
 
 impl<'a, 'ctx> Ctx<'a, 'ctx> {
@@ -1017,9 +1019,14 @@ fn compile_module<'ctx>(
     // ── Build agent struct info ─────────────────────────────────────
     // Register agent names as structs so StructLit works for agent instantiation
     let mut agent_names = std::collections::HashSet::new();
+    let mut agent_defs: HashMap<String, (String, Vec<String>, Option<String>)> = HashMap::new();
     for item in &ast_module.items {
         if let Item::Agent(agent) = &item.node {
             agent_names.insert(agent.name.clone());
+            agent_defs.insert(
+                agent.name.clone(),
+                (agent.model.clone(), agent.tools.clone(), agent.system_prompt.clone()),
+            );
             if !struct_fields.contains_key(&agent.name) {
                 struct_fields.insert(
                     agent.name.clone(),
@@ -1297,6 +1304,7 @@ fn compile_module<'ctx>(
                     struct_derives: &struct_derives,
                     trait_impls: &trait_impls,
                     agent_names: &agent_names,
+                    agent_defs: &agent_defs,
                 }
             };
         }
@@ -1347,6 +1355,7 @@ fn compile_module<'ctx>(
                 struct_derives: &struct_derives,
                 trait_impls: &trait_impls,
                 agent_names: &agent_names,
+                agent_defs: &agent_defs,
             }
         };
     }
@@ -2136,6 +2145,49 @@ fn compile_expr<'a, 'ctx>(
         }
 
         Expr::StructLit { name, fields } => {
+            // Check if this is an agent instantiation
+            if let Some((model, tools, system_prompt)) = cx.agent_defs.get(name).cloned() {
+                let i64_type = cx.context.i64_type();
+                let ptr_type = cx.context.ptr_type(AddressSpace::default());
+                let i8_type = cx.context.i8_type();
+                let num_fields_val = i64_type.const_int(3, false);
+                let ptr = cx
+                    .rt_call("rt_struct_alloc", &[num_fields_val.into()])
+                    .unwrap()
+                    .into_pointer_value();
+
+                // Slot 0: model string
+                let model_ptr = cx.create_string(&model)?;
+                let model_i64 = cx.builder.build_ptr_to_int(model_ptr, i64_type, "model_i64").expect("pti");
+                cx.builder.build_store(ptr, model_i64).expect("store");
+
+                // Slot 1: system prompt string
+                let system_str = system_prompt.as_deref().unwrap_or("");
+                let system_ptr = cx.create_string(system_str)?;
+                let system_i64 = cx.builder.build_ptr_to_int(system_ptr, i64_type, "sys_i64").expect("pti");
+                let sys_field = unsafe {
+                    cx.builder.build_gep(i8_type, ptr, &[i64_type.const_int(8, false)], "sys_ptr").expect("gep")
+                };
+                cx.builder.build_store(sys_field, system_i64).expect("store");
+
+                // Slot 2: tools array
+                let tools_len = i64_type.const_int(tools.len() as u64, false);
+                let arr_ptr = cx.rt_call("rt_array_alloc", &[tools_len.into()]).unwrap().into_pointer_value();
+                for (i, tool_name) in tools.iter().enumerate() {
+                    let tool_str = cx.create_string(tool_name)?;
+                    let idx = i64_type.const_int(i as u64, false);
+                    let tool_i64 = cx.builder.build_ptr_to_int(tool_str, i64_type, "tool_i64").expect("pti");
+                    cx.rt_call("rt_array_set", &[arr_ptr.into(), idx.into(), tool_i64.into()]);
+                }
+                let arr_i64 = cx.builder.build_ptr_to_int(arr_ptr, i64_type, "arr_i64").expect("pti");
+                let tools_field = unsafe {
+                    cx.builder.build_gep(i8_type, ptr, &[i64_type.const_int(16, false)], "tools_ptr").expect("gep")
+                };
+                cx.builder.build_store(tools_field, arr_i64).expect("store");
+
+                return Ok(Some((ptr.into(), TurboTy::Agent(name.clone()))));
+            }
+
             let struct_layout = cx
                 .struct_fields
                 .get(name)
