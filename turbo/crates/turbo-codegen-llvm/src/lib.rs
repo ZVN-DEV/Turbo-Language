@@ -309,6 +309,81 @@ struct ExtractedClosure<'a> {
     return_type: &'a Option<Spanned<TypeExpr>>,
     body: &'a Spanned<Expr>,
     free_vars: Vec<String>,
+    /// Types of captured (free) variables, inferred from enclosing scope
+    capture_types: Vec<TurboTy>,
+}
+
+/// Infer the type of a captured variable from how it's used in the closure body.
+/// Checks if the variable appears in string interpolation (→ Str) or string concat (→ Str).
+fn infer_capture_type_from_body(body: &Expr, var_name: &str) -> TurboTy {
+    match body {
+        Expr::Interpolation(parts) => {
+            for part in parts {
+                if let InterpolPart::Expr(e) = part {
+                    if let Expr::Ident(name) = &e.node {
+                        if name == var_name {
+                            return TurboTy::Str;
+                        }
+                    }
+                }
+            }
+            // Recurse into sub-expressions
+            for part in parts {
+                if let InterpolPart::Expr(e) = part {
+                    let t = infer_capture_type_from_body(&e.node, var_name);
+                    if t != TurboTy::Int { return t; }
+                }
+            }
+            TurboTy::Int
+        }
+        Expr::Block { stmts, tail_expr } => {
+            for stmt in stmts {
+                match &stmt.node {
+                    Stmt::Let { value, .. } => {
+                        let t = infer_capture_type_from_body(&value.node, var_name);
+                        if t != TurboTy::Int { return t; }
+                    }
+                    Stmt::Expr(e) => {
+                        let t = infer_capture_type_from_body(&e.node, var_name);
+                        if t != TurboTy::Int { return t; }
+                    }
+                    Stmt::Return(Some(e)) => {
+                        let t = infer_capture_type_from_body(&e.node, var_name);
+                        if t != TurboTy::Int { return t; }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(tail) = tail_expr {
+                return infer_capture_type_from_body(&tail.node, var_name);
+            }
+            TurboTy::Int
+        }
+        Expr::Call { callee, args } => {
+            // If passed to rt_str_concat or similar, it's a string
+            for arg in args {
+                let t = infer_capture_type_from_body(&arg.node, var_name);
+                if t != TurboTy::Int { return t; }
+            }
+            infer_capture_type_from_body(&callee.node, var_name)
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            let t = infer_capture_type_from_body(&left.node, var_name);
+            if t != TurboTy::Int { return t; }
+            infer_capture_type_from_body(&right.node, var_name)
+        }
+        Expr::If { condition, then_branch, else_branch } => {
+            let t = infer_capture_type_from_body(&condition.node, var_name);
+            if t != TurboTy::Int { return t; }
+            let t = infer_capture_type_from_body(&then_branch.node, var_name);
+            if t != TurboTy::Int { return t; }
+            if let Some(e) = else_branch {
+                return infer_capture_type_from_body(&e.node, var_name);
+            }
+            TurboTy::Int
+        }
+        _ => TurboTy::Int,
+    }
 }
 
 fn collect_free_vars_llvm(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String>) {
@@ -435,6 +510,10 @@ fn extract_closures_from_expr_llvm<'a>(
             let mut bound: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
             let mut free_vars = Vec::new();
             collect_free_vars_llvm(&body.node, &mut bound, &mut free_vars);
+            // Infer capture types from body usage: scan for string interpolation/concat
+            let capture_types: Vec<TurboTy> = free_vars.iter().map(|var_name| {
+                infer_capture_type_from_body(&body.node, var_name)
+            }).collect();
             out.push(ExtractedClosure {
                 span_start: expr.span.start,
                 name,
@@ -442,6 +521,7 @@ fn extract_closures_from_expr_llvm<'a>(
                 return_type,
                 body,
                 free_vars,
+                capture_types,
             });
             extract_closures_from_expr_llvm(body, out, counter);
         }
@@ -1539,18 +1619,29 @@ fn compile_module<'ctx>(
         // For now, load each captured var from env struct at compile time
         // The free_vars list tells us which outer vars are captured
         for (cap_idx, cap_name) in cl.free_vars.iter().enumerate() {
+            let cap_tty = cl.capture_types.get(cap_idx).cloned().unwrap_or(TurboTy::Int);
             let offset = cap_idx as u64 * 8;
             let field_ptr = unsafe {
                 builder.build_gep(i8_type, env_ptr_val,
                     &[i64_type.const_int(offset, false)], "cap_ptr")
                     .expect("gep")
             };
-            // We don't know the type yet, load as i64 and store in vars as Int
-            // The capture type will be resolved at call site
             let raw = builder.build_load(i64_type, field_ptr, cap_name).expect("load");
-            let alloca = builder.build_alloca(i64_type, &format!("cap_{cap_name}")).expect("alloca");
-            builder.build_store(alloca, raw).expect("store");
-            vars.insert(cap_name.clone(), (alloca, TurboTy::Int)); // type will be inferred from usage
+            // If the captured variable is a string (ptr), convert i64 → ptr
+            if matches!(cap_tty, TurboTy::Str | TurboTy::Array(_)) {
+                let ptr_val = builder.build_int_to_ptr(
+                    raw.into_int_value(),
+                    ptr_type,
+                    &format!("cap_ptr_{cap_name}"),
+                ).expect("itp");
+                let alloca = builder.build_alloca(ptr_type, &format!("cap_{cap_name}")).expect("alloca");
+                builder.build_store(alloca, ptr_val).expect("store");
+                vars.insert(cap_name.clone(), (alloca, cap_tty));
+            } else {
+                let alloca = builder.build_alloca(i64_type, &format!("cap_{cap_name}")).expect("alloca");
+                builder.build_store(alloca, raw).expect("store");
+                vars.insert(cap_name.clone(), (alloca, cap_tty));
+            }
         }
 
         let mut cx = make_ctx_global!(vars, func);
