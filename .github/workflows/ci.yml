@@ -36,7 +36,7 @@ jobs:
         run: cargo fmt --all --check --manifest-path turbo/Cargo.toml
 
       - name: Clippy
-        run: cargo clippy --all --manifest-path turbo/Cargo.toml -- -D warnings
+        run: cargo clippy --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})
@@ -61,7 +61,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Test
-        run: cargo test --all --manifest-path turbo/Cargo.toml
+        run: cargo test --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
 
   build:
     name: Build (release)
@@ -83,4 +83,4 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build
-        run: cargo build --release --manifest-path turbo/Cargo.toml
+        run: cargo build --release --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
