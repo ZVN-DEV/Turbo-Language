@@ -237,6 +237,8 @@ struct Ctx<'a, 'ctx> {
     agent_names: &'a std::collections::HashSet<String>,
     /// Agent definitions: name -> (model, tools, system_prompt)
     agent_defs: &'a HashMap<String, (String, Vec<String>, Option<String>)>,
+    /// Concrete field types for generic struct instances: var_name -> [(field, type)]
+    concrete_struct_fields: HashMap<String, Vec<(String, TurboTy)>>,
 }
 
 impl<'a, 'ctx> Ctx<'a, 'ctx> {
@@ -1305,6 +1307,7 @@ fn compile_module<'ctx>(
                     trait_impls: &trait_impls,
                     agent_names: &agent_names,
                     agent_defs: &agent_defs,
+                    concrete_struct_fields: std::collections::HashMap::new(),
                 }
             };
         }
@@ -1356,6 +1359,7 @@ fn compile_module<'ctx>(
                 trait_impls: &trait_impls,
                 agent_names: &agent_names,
                 agent_defs: &agent_defs,
+                concrete_struct_fields: HashMap::new(),
             }
         };
     }
@@ -2224,8 +2228,10 @@ fn compile_expr<'a, 'ctx>(
                 .unwrap()
                 .into_pointer_value();
 
+            let mut concrete_fields: Vec<(String, TurboTy)> = Vec::new();
             for (field_name, field_expr) in fields {
-                let (val, _) = compile_expr(cx, field_expr)?.unwrap();
+                let (val, val_tty) = compile_expr(cx, field_expr)?.unwrap();
+                concrete_fields.push((field_name.clone(), val_tty));
                 let field_index = struct_layout
                     .iter()
                     .position(|(n, _)| n == field_name)
@@ -2257,6 +2263,11 @@ fn compile_expr<'a, 'ctx>(
             } else {
                 TurboTy::Struct(name.clone())
             };
+            // Store concrete field types for generic struct tracking
+            // Use a temp key "__last_struct_lit" that Let binding will pick up
+            if !concrete_fields.is_empty() {
+                cx.concrete_struct_fields.insert("__last_struct_lit".to_string(), concrete_fields);
+            }
             Ok(Some((ptr.into(), result_tty)))
         }
 
@@ -2379,7 +2390,15 @@ fn compile_expr<'a, 'ctx>(
                     message: format!("struct `{struct_name}` has no field `{field}`"),
                 })?;
 
-            let field_tty = field_tty.clone();
+            // Check if we have concrete field types (from generic struct instantiation)
+            let concrete_tty = if let Expr::Ident(ref var_name) = object.node {
+                cx.concrete_struct_fields.get(var_name)
+                    .and_then(|fields| fields.iter().find(|(n, _)| n == field).map(|(_, t)| t.clone()))
+            } else {
+                None
+            };
+            let field_tty = concrete_tty.unwrap_or_else(|| field_tty.clone());
+
             let offset = field_index as u64 * 8;
             let obj_ptr = obj.into_pointer_value();
 
@@ -2884,6 +2903,10 @@ fn compile_stmt<'a, 'ctx>(
                     .expect("build_store failed");
             }
             cx.vars.insert(name.clone(), (alloca, turbo_ty));
+            // Transfer concrete struct field types from StructLit
+            if let Some(fields) = cx.concrete_struct_fields.remove("__last_struct_lit") {
+                cx.concrete_struct_fields.insert(name.clone(), fields);
+            }
             Ok(())
         }
         Stmt::Expr(e) => {
