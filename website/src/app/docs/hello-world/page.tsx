@@ -41,12 +41,12 @@ export default function HelloWorldPage() {
       <p className="mb-4">
         Use{" "}
         <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
-          turbo run
+          turbolang run
         </code>{" "}
         to compile and execute in a single step using the JIT compiler:
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-2 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`$ turbo run hello.tb
+        <code>{`$ turbolang run hello.tb
 Hello, world!`}</code>
       </pre>
       <p className="text-sm text-gray-500 mb-6">
@@ -61,12 +61,12 @@ Hello, world!`}</code>
       <p className="mb-4">
         Use{" "}
         <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
-          turbo build
+          turbolang build
         </code>{" "}
         to compile to a standalone native executable:
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-2 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`$ turbo build hello.tb
+        <code>{`$ turbolang build hello.tb
 $ ./hello
 Hello, world!`}</code>
       </pre>
@@ -92,21 +92,21 @@ Hello, world!`}</code>
             <tr className="border-b border-[#1a1a2e]">
               <td className="px-4 py-2 text-white font-medium">JIT</td>
               <td className="px-4 py-2">
-                <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)] text-xs">turbo run</code>
+                <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)] text-xs">turbolang run</code>
               </td>
               <td className="px-4 py-2">Development, rapid iteration</td>
             </tr>
             <tr className="border-b border-[#1a1a2e]">
               <td className="px-4 py-2 text-white font-medium">AOT (Cranelift)</td>
               <td className="px-4 py-2">
-                <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)] text-xs">turbo build</code>
+                <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)] text-xs">turbolang build</code>
               </td>
               <td className="px-4 py-2">Production binaries (default)</td>
             </tr>
             <tr className="border-b border-[#1a1a2e]">
               <td className="px-4 py-2 text-white font-medium">AOT (LLVM)</td>
               <td className="px-4 py-2">
-                <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)] text-xs">turbo build --llvm</code>
+                <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)] text-xs">turbolang build --llvm</code>
               </td>
               <td className="px-4 py-2">Production binaries (requires LLVM 18)</td>
             </tr>

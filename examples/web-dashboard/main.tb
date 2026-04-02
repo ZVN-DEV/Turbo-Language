@@ -1,6 +1,6 @@
 // Interactive Benchmark Dashboard
 // A full-featured web dashboard served entirely from Turbo.
-// Run: turbo run examples/web-dashboard/main.tb
+// Run: turbolang run examples/web-dashboard/main.tb
 // Then visit: http://localhost:3000
 
 // --- Algorithms ---

@@ -14,9 +14,9 @@ export default function ExamplesPage() {
       </h2>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-8 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
         <code>{`cd examples/<example-name>
-turbo run          # Build and run
-turbo test         # Run all tests
-turbo build        # Build only`}</code>
+turbolang run          # Build and run
+turbolang test         # Run all tests
+turbolang build        # Build only`}</code>
       </pre>
 
       {/* Simple Script */}

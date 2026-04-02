@@ -14,6 +14,8 @@ cargo test --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.
 
 # Run a .tb source file via JIT
 cargo run --manifest-path turbo/Cargo.toml -- run turbo/tests/phase1/hello.tb
+# Or via the installed binary:
+# turbolang run turbo/tests/phase1/hello.tb
 
 # Run integration tests (requires release build)
 cd turbo && ./tests/run_tests.sh
@@ -89,7 +91,7 @@ Codegen (turbo-codegen-cranelift)  →  JIT execution  or  AOT .o file
 
 ### Error handling
 - Every diagnostic carries an `ErrorCode` (e.g. `E0100`) for searchable, unique identification. Codes are defined in `turbo-ast/src/errors.rs`. Full reference: `docs/errors.md`.
-- `turbo explain E0100` prints the description for any error code.
+- `turbolang explain E0100` prints the description for any error code.
 - All error types carry a `Span` (except `CodegenError`). The CLI uses `ariadne` to render them as pretty diagnostics with the format `error[E0100]: message`.
 - The parser collects errors into `Vec<ParseError>` and continues parsing (error recovery).
 - Sema uses `Ty::Error` as a poison type to avoid cascading errors — if an expression has type `Ty::Error`, further checks on it are skipped.
@@ -100,7 +102,7 @@ Codegen (turbo-codegen-cranelift)  →  JIT execution  or  AOT .o file
 
 ### Test structure
 - Integration tests live in `turbo/tests/phase1/` as pairs: `foo.tb` (source) + `foo.expected` (expected stdout).
-- `run_tests.sh` compiles each `.tb` via `turbo run`, captures stdout, and diffs against `.expected`.
+- `run_tests.sh` compiles each `.tb` via `turbolang run`, captures stdout, and diffs against `.expected`.
 - Expected-error tests: if the `.expected` file starts with `ERROR:`, the test runner checks that the compiler error output contains the pattern.
 - Unit tests use standard `#[cfg(test)]` modules inside each crate.
 

@@ -29,19 +29,19 @@ Rather than transpiling to JavaScript (as TypeScript, CoffeeScript, and others d
 - Rich debug info, source maps, full DWARF symbols
 - Hot reload support via file watching
 - The switch between Cranelift (dev) and LLVM (release) is **automatic** based on the command:
-  - `turbo run` / `turbo dev` / `turbo build` → Cranelift (fast compile, ~80% of release performance)
-  - `turbo build --release` → LLVM (full optimization, maximum runtime performance)
+  - `turbolang run` / `turbolang dev` / `turbolang build` → Cranelift (fast compile, ~80% of release performance)
+  - `turbolang build --release` → LLVM (full optimization, maximum runtime performance)
 - Inspired by Zig's fast compilation, Go's speed, Vite's dev server model, and Rust's ongoing cranelift integration
 
 ```
 # Typical dev workflow — all use Cranelift for sub-second builds
-turbo dev          # starts dev server with file watching (Cranelift)
-turbo run          # build and run (Cranelift)
-turbo build        # defaults to dev mode (Cranelift)
-turbo build --dev  # explicit dev mode (Cranelift)
+turbolang dev          # starts dev server with file watching (Cranelift)
+turbolang run          # build and run (Cranelift)
+turbolang build        # defaults to dev mode (Cranelift)
+turbolang build --dev  # explicit dev mode (Cranelift)
 
 # Release builds use LLVM — the switch is automatic
-turbo build --release   # full LLVM optimization pipeline
+turbolang build --release   # full LLVM optimization pipeline
 ```
 
 ### Release Mode -- Maximum Performance
@@ -54,10 +54,10 @@ turbo build --release   # full LLVM optimization pipeline
 - Build time: 10-60 seconds for medium projects
 
 ```
-turbo build --release                # full optimizations
-turbo build --release --lto          # with link-time optimization
-turbo build --release --pgo=train    # generate PGO profile data
-turbo build --release --pgo=use      # apply PGO profile data
+turbolang build --release                # full optimizations
+turbolang build --release --lto          # with link-time optimization
+turbolang build --release --pgo=train    # generate PGO profile data
+turbolang build --release --pgo=use      # apply PGO profile data
 ```
 
 ### WASM Mode
@@ -69,9 +69,9 @@ turbo build --release --pgo=use      # apply PGO profile data
 - WASI support for server-side WASM
 
 ```
-turbo build --target wasm               # standard WASM output
-turbo build --target wasm --opt-size    # size-optimized WASM
-turbo build --target wasm --npm         # npm-compatible package output
+turbolang build --target wasm               # standard WASM output
+turbolang build --target wasm --opt-size    # size-optimized WASM
+turbolang build --target wasm --npm         # npm-compatible package output
 ```
 
 ### Embedded Mode
@@ -83,9 +83,9 @@ turbo build --target wasm --npm         # npm-compatible package output
 - Cross-compilation built in
 
 ```
-turbo build --target thumbv7em-none-eabihf       # ARM Cortex-M4
-turbo build --target riscv32imc-unknown-none-elf  # RISC-V embedded
-turbo build --embedded --opt-size                  # minimal binary
+turbolang build --target thumbv7em-none-eabihf       # ARM Cortex-M4
+turbolang build --target riscv32imc-unknown-none-elf  # RISC-V embedded
+turbolang build --embedded --opt-size                  # minimal binary
 ```
 
 ---
@@ -218,7 +218,7 @@ The `@wasm_export` attribute marks a function for inclusion in the generated WAS
 
 - Like wasm-bindgen, auto-generate a JS glue layer
 - TypeScript `.d.ts` files generated from Turbo types
-- npm-compatible package output: `turbo build --target wasm --npm`
+- npm-compatible package output: `turbolang build --target wasm --npm`
 
 Example output structure for `--npm`:
 
@@ -292,10 +292,10 @@ The compilation cache is stored in `.turbo-cache/` at the project root and persi
 
 ```
 # Build for different targets
-turbo build --target x86_64-linux-gnu
-turbo build --target aarch64-apple-darwin
-turbo build --target wasm32-wasi
-turbo build --target thumbv7em-none-eabihf
+turbolang build --target x86_64-linux-gnu
+turbolang build --target aarch64-apple-darwin
+turbolang build --target wasm32-wasi
+turbolang build --target thumbv7em-none-eabihf
 
 # Zig-inspired: ship the cross-compilation toolchain
 # No need to install separate cross-compilers
@@ -344,7 +344,7 @@ riscv32imc-unknown-none-elf  # RISC-V 32-bit embedded
 
 Debug and diagnostic builds add runtime instrumentation to catch bugs that static analysis alone cannot find. All diagnostic modes are opt-in and produce clear, actionable reports.
 
-### Debug Builds (`turbo build --debug`)
+### Debug Builds (`turbolang build --debug`)
 
 - Full debug symbols for source-level debugging (DWARF on native, source maps on WASM)
 - Bounds checking on all array/slice accesses (panics with index and length on out-of-bounds)
@@ -354,8 +354,8 @@ Debug and diagnostic builds add runtime instrumentation to catch bugs that stati
 - Compatible with GDB, LLDB, and browser DevTools (for WASM targets)
 
 ```
-turbo build --debug                 # full debug instrumentation
-turbo build --debug --sanitize=address   # debug + address sanitizer
+turbolang build --debug                 # full debug instrumentation
+turbolang build --debug --sanitize=address   # debug + address sanitizer
 ```
 
 ### Address Sanitizer (ASan)
@@ -370,8 +370,8 @@ Detect memory safety violations at runtime with detailed diagnostics.
 - Reports include full stack traces with source locations
 
 ```
-turbo build --sanitize=address
-turbo run --sanitize=address ./my-app
+turbolang build --sanitize=address
+turbolang run --sanitize=address ./my-app
 ```
 
 Typical output on error:
@@ -397,8 +397,8 @@ Detect data races in concurrent code at runtime.
 - Catches races even when they don't cause visible bugs (yet)
 
 ```
-turbo build --sanitize=thread
-turbo test --sanitize=thread
+turbolang build --sanitize=thread
+turbolang test --sanitize=thread
 ```
 
 Typical output on error:
@@ -423,8 +423,8 @@ Detect memory leaks — allocations that are never freed.
 - Can be combined with ASan (enabled by default when ASan is active)
 
 ```
-turbo build --sanitize=leak
-turbo test --sanitize=leak
+turbolang build --sanitize=leak
+turbolang test --sanitize=leak
 ```
 
 - Minimal overhead — suitable for regular test runs
@@ -435,16 +435,16 @@ turbo test --sanitize=leak
 Generate code coverage reports to identify untested paths.
 
 - Statement, branch, and function coverage
-- `turbo build --coverage` instruments the binary for coverage collection
-- `turbo test --coverage-report` runs tests and generates the report
+- `turbolang build --coverage` instruments the binary for coverage collection
+- `turbolang test --coverage-report` runs tests and generates the report
 - Output formats: terminal summary, HTML (with source annotation), LCOV, Cobertura
 - Integrates with CI coverage services (Codecov, Coveralls)
 
 ```
-turbo build --coverage
-turbo test --coverage-report              # terminal summary + HTML
-turbo test --coverage-report=lcov         # LCOV format for CI upload
-turbo test --coverage-report --open       # generate HTML and open in browser
+turbolang build --coverage
+turbolang test --coverage-report              # terminal summary + HTML
+turbolang test --coverage-report=lcov         # LCOV format for CI upload
+turbolang test --coverage-report --open       # generate HTML and open in browser
 ```
 
 Terminal output example:
@@ -465,18 +465,18 @@ Coverage Report:
 coverage-threshold = 80   # fail if total coverage drops below 80%
 ```
 
-### Compile-Time Diagnostics (`turbo build --timings`)
+### Compile-Time Diagnostics (`turbolang build --timings`)
 
 Understand where compilation time is spent and identify bottlenecks.
 
-- `turbo build --timings` produces a per-module timing breakdown
+- `turbolang build --timings` produces a per-module timing breakdown
 - Shows time spent in each compiler phase: parsing, type checking, borrow checking, codegen
 - Identifies the slowest modules and the critical path through the dependency graph
 - HTML output with a waterfall chart showing parallel compilation
 
 ```
-turbo build --release --timings
-turbo build --timings --output html --open    # visual waterfall chart
+turbolang build --release --timings
+turbolang build --timings --output html --open    # visual waterfall chart
 ```
 
 Terminal output example:
@@ -522,7 +522,7 @@ Compilation Timings:
 
 ### Key Differentiators
 
-- **Dual backend strategy**: Cranelift for development (sub-second incremental builds), full LLVM for release. The switch is automatic — `turbo run` uses Cranelift, `turbo build --release` uses LLVM. This gives us Go-like iteration speed without sacrificing Rust-like release performance.
+- **Dual backend strategy**: Cranelift for development (sub-second incremental builds), full LLVM for release. The switch is automatic — `turbolang run` uses Cranelift, `turbolang build --release` uses LLVM. This gives us Go-like iteration speed without sacrificing Rust-like release performance.
 - **WASM as a first-class target**: Not an afterthought. The JS bridge layer is auto-generated and type-safe, with TypeScript definitions included.
 - **Built-in cross-compilation**: No external toolchain setup. Every installation can build for every supported target out of the box.
 - **Embedded support without compromise**: No-std, no-alloc builds are supported from day one, with the same language and the same toolchain.

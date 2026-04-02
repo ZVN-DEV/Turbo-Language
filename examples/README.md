@@ -1,6 +1,6 @@
 # Turbo Examples
 
-Three runnable example projects demonstrating real-world Turbo code. Each can be run directly with `turbo run`.
+Three runnable example projects demonstrating real-world Turbo code. Each can be run directly with `turbolang run`.
 
 ## Examples
 
@@ -15,7 +15,7 @@ Three runnable example projects demonstrating real-world Turbo code. Each can be
 A text statistics analyzer that counts words, calculates frequencies, and ranks results using pipes, HashMaps, and string interpolation. A great first example to understand Turbo's data processing capabilities.
 
 ```bash
-turbo run examples/simple-script/main.tb
+turbolang run examples/simple-script/main.tb
 ```
 
 ### speed-server
@@ -23,7 +23,7 @@ turbo run examples/simple-script/main.tb
 An HTTP server on port 8080 with endpoints for fibonacci, prime counting, sorting benchmarks, and health checks. Returns JSON responses. Demonstrates Turbo's async HTTP primitives.
 
 ```bash
-turbo run examples/speed-server/main.tb
+turbolang run examples/speed-server/main.tb
 # curl http://localhost:8080/api/fib
 ```
 
@@ -32,7 +32,7 @@ turbo run examples/speed-server/main.tb
 A full benchmark dashboard with a styled HTML UI served on port 3000. Run benchmarks from the browser and see results in real time.
 
 ```bash
-turbo run examples/web-dashboard/main.tb
+turbolang run examples/web-dashboard/main.tb
 # open http://localhost:3000
 ```
 
@@ -41,9 +41,9 @@ turbo run examples/web-dashboard/main.tb
 ## Running Examples
 
 ```bash
-turbo run examples/simple-script/main.tb
-turbo run examples/speed-server/main.tb
-turbo run examples/web-dashboard/main.tb
+turbolang run examples/simple-script/main.tb
+turbolang run examples/speed-server/main.tb
+turbolang run examples/web-dashboard/main.tb
 ```
 
 ---

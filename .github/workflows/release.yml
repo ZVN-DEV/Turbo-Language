@@ -16,13 +16,13 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: turbo
+            artifact: turbolang
           - os: macos-13
             target: x86_64-apple-darwin
-            artifact: turbo
+            artifact: turbolang
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: turbo
+            artifact: turbolang
 
     runs-on: ${{ matrix.os }}
 
@@ -50,23 +50,23 @@ jobs:
           cargo build --release --target ${{ matrix.target }}
 
       - name: Smoke test
-        run: ./turbo/target/${{ matrix.target }}/release/turbo --version
+        run: ./turbo/target/${{ matrix.target }}/release/turbolang --version
 
       - name: Smoke test - compile and run
         run: |
           echo 'fn main() { print("turbo works") }' > /tmp/test.tb
-          ./turbo/target/${{ matrix.target }}/release/turbo run /tmp/test.tb
+          ./turbo/target/${{ matrix.target }}/release/turbolang run /tmp/test.tb
 
       - name: Package
         run: |
           cd turbo/target/${{ matrix.target }}/release
-          tar czf turbo-${{ github.ref_name }}-${{ matrix.target }}.tar.gz turbo
+          tar czf turbolang-${{ github.ref_name }}-${{ matrix.target }}.tar.gz turbolang
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: turbo-${{ matrix.target }}
-          path: turbo/target/${{ matrix.target }}/release/turbo-*.tar.gz
+          name: turbolang-${{ matrix.target }}
+          path: turbo/target/${{ matrix.target }}/release/turbolang-*.tar.gz
 
   release:
     needs: build
@@ -79,9 +79,9 @@ jobs:
 
       - name: Generate checksums
         run: |
-          cd turbo-aarch64-apple-darwin && sha256sum *.tar.gz >> ../checksums.txt && cd ..
-          cd turbo-x86_64-apple-darwin && sha256sum *.tar.gz >> ../checksums.txt && cd ..
-          cd turbo-x86_64-unknown-linux-gnu && sha256sum *.tar.gz >> ../checksums.txt && cd ..
+          cd turbolang-aarch64-apple-darwin && sha256sum *.tar.gz >> ../checksums.txt && cd ..
+          cd turbolang-x86_64-apple-darwin && sha256sum *.tar.gz >> ../checksums.txt && cd ..
+          cd turbolang-x86_64-unknown-linux-gnu && sha256sum *.tar.gz >> ../checksums.txt && cd ..
           echo "Generated checksums:"
           cat checksums.txt
 
@@ -89,9 +89,9 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            turbo-aarch64-apple-darwin/*.tar.gz
-            turbo-x86_64-apple-darwin/*.tar.gz
-            turbo-x86_64-unknown-linux-gnu/*.tar.gz
+            turbolang-aarch64-apple-darwin/*.tar.gz
+            turbolang-x86_64-apple-darwin/*.tar.gz
+            turbolang-x86_64-unknown-linux-gnu/*.tar.gz
             checksums.txt
           draft: false
           prerelease: false

@@ -105,7 +105,7 @@ mod fast_math {
 Generate .d.ts files from Turbo's types:
 - Automatic for all `@wasm_export` functions
 - Full type fidelity (generics, unions, etc.)
-- npm package generation: `turbo build --target wasm --npm`
+- npm package generation: `turbolang build --target wasm --npm`
 
 ## Tier 3 — Future Aspirations
 

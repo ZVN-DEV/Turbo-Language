@@ -334,9 +334,9 @@ let uppercase_stream = token_stream("Hello")
 
 ```
 // Select runtime at build time
-// turbo build --runtime=default    (work-stealing)
-// turbo build --runtime=actor      (Erlang-style)
-// turbo build --runtime=minimal    (single-threaded)
+// turbolang build --runtime=default    (work-stealing)
+// turbolang build --runtime=actor      (Erlang-style)
+// turbolang build --runtime=minimal    (single-threaded)
 ```
 
 ## Cancellation

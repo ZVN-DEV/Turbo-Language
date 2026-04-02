@@ -105,7 +105,7 @@ fn run_code(source: &str) -> (String, String, bool) {
     }
 
     // Find our own binary
-    let exe = std::env::current_exe().unwrap_or_else(|_| "turbo".into());
+    let exe = std::env::current_exe().unwrap_or_else(|_| "turbolang".into());
 
     // Run with timeout
     let result = Command::new(&exe).arg("run").arg(&tmp).output();

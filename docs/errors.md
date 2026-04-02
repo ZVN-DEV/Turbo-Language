@@ -1,6 +1,6 @@
 # Turbo Compiler Error Codes
 
-Every compiler diagnostic includes a unique error code (e.g. `E0100`). Use `turbo explain E0100` to view the description from the command line.
+Every compiler diagnostic includes a unique error code (e.g. `E0100`). Use `turbolang explain E0100` to view the description from the command line.
 
 ## Parse Errors (E0001-E0099)
 

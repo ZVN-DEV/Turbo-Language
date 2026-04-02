@@ -10,7 +10,7 @@ mod repl;
 
 #[derive(Parser)]
 #[command(
-    name = "turbo",
+    name = "turbolang",
     version = env!("CARGO_PKG_VERSION"),
     about = "The Turbo programming language compiler"
 )]
@@ -98,7 +98,7 @@ enum Commands {
         #[arg(long, short = 'n', default_value = "3")]
         iterations: u32,
     },
-    /// Explain an error code (e.g. turbo explain E0100)
+    /// Explain an error code (e.g. turbolang explain E0100)
     Explain {
         /// Error code to explain (e.g. E0100)
         code: String,
@@ -204,8 +204,8 @@ fn resolve_entry_file(file: Option<PathBuf>) -> PathBuf {
     eprintln!(
         "\x1b[1;31merror\x1b[0m: no file specified and no `turbo.toml` found in current directory"
     );
-    eprintln!("  Usage: turbo run <file.tb>");
-    eprintln!("  Or run `turbo init <name>` to create a new project");
+    eprintln!("  Usage: turbolang run <file.tb>");
+    eprintln!("  Or run `turbolang init <name>` to create a new project");
     std::process::exit(1);
 }
 
@@ -258,7 +258,7 @@ fn init_project(name: &str) {
     std::fs::write(dir.join(".gitignore"), "turbo_modules/\ntarget/\n*.o\n").unwrap();
 
     eprintln!("\x1b[32m\u{2713}\x1b[0m Created project `{name}`");
-    eprintln!("  cd {name} && turbo run");
+    eprintln!("  cd {name} && turbolang run");
 }
 
 /// Read the project name from `turbo.toml` in the current directory, if it exists.
@@ -476,7 +476,7 @@ fn update_deps() {
                 let target = Path::new("turbo_modules").join(name);
                 if !target.exists() {
                     eprintln!(
-                        "  \x1b[33m!\x1b[0m {} not installed — run `turbo install` first",
+                        "  \x1b[33m!\x1b[0m {} not installed — run `turbolang install` first",
                         name
                     );
                     continue;
@@ -848,7 +848,7 @@ fn test_file(file: Option<PathBuf>) {
             collect_test_files(tests_dir)
         } else {
             eprintln!("\x1b[1;31merror\x1b[0m: no file specified and no `tests/` directory found");
-            eprintln!("  Usage: turbo test <file.tb>");
+            eprintln!("  Usage: turbolang test <file.tb>");
             std::process::exit(1);
         }
     };
@@ -858,7 +858,7 @@ fn test_file(file: Option<PathBuf>) {
         std::process::exit(0);
     }
 
-    let turbo_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("turbo"));
+    let turbo_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("turbolang"));
 
     let mut total_passed = 0u32;
     let mut total_failed = 0u32;
@@ -1022,7 +1022,7 @@ fn bench_file(file: Option<PathBuf>, iterations: u32) {
             eprintln!(
                 "\x1b[1;31merror\x1b[0m: no file specified and no `benchmarks/` directory found"
             );
-            eprintln!("  Usage: turbo bench <file.tb>");
+            eprintln!("  Usage: turbolang bench <file.tb>");
             std::process::exit(1);
         }
     };
@@ -1032,7 +1032,7 @@ fn bench_file(file: Option<PathBuf>, iterations: u32) {
         std::process::exit(0);
     }
 
-    let turbo_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("turbo"));
+    let turbo_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("turbolang"));
 
     eprintln!("\x1b[1mTurbo Benchmark Suite\x1b[0m");
     eprintln!("\x1b[90m=====================\x1b[0m");
@@ -1202,7 +1202,7 @@ fn collect_bench_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Internal: compile a file and run a single named function via JIT.
-/// Used by `turbo test` to run each @test in its own subprocess.
+/// Used by `turbolang test` to run each @test in its own subprocess.
 fn test_run_fn(path: &std::path::Path, fn_name: &str) {
     check_file_size(path);
 
@@ -1727,7 +1727,7 @@ fn extract_backtick_name(message: &str) -> Option<&str> {
 }
 
 // =============================================================================
-// turbo explain -- Print description for an error code
+// turbolang explain -- Print description for an error code
 // =============================================================================
 
 fn explain_error(code_str: &str) {
@@ -1736,13 +1736,13 @@ fn explain_error(code_str: &str) {
     } else {
         eprintln!("\x1b[1;31merror\x1b[0m: unknown error code `{code_str}`");
         eprintln!("  Error codes range from E0001 to E0513.");
-        eprintln!("  Example: turbo explain E0100");
+        eprintln!("  Example: turbolang explain E0100");
         std::process::exit(1);
     }
 }
 
 // =============================================================================
-// turbo doc -- Generate markdown documentation from source
+// turbolang doc -- Generate markdown documentation from source
 // =============================================================================
 
 /// Extract doc comments (lines starting with `///`) from source text.

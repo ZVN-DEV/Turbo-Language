@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-TURBO="$PROJECT_DIR/target/release/turbo"
+TURBO="$PROJECT_DIR/target/release/turbolang"
 
 # Colors
 BOLD="\033[1m"
@@ -44,7 +44,7 @@ for bench in "$SCRIPT_DIR"/bench_*.tb; do
         printf "${DIM}  expected: %s${RESET}\n" "$expected"
     fi
 
-    # JIT mode (turbo run)
+    # JIT mode (turbolang run)
     printf "  ${YELLOW}Cranelift JIT:${RESET} "
     jit_start=$(python3 -c "import time; print(time.time())")
     jit_output=$("$TURBO" run "$bench" 2>&1) || true
@@ -52,7 +52,7 @@ for bench in "$SCRIPT_DIR"/bench_*.tb; do
     jit_time=$(python3 -c "print(f'{${jit_end} - ${jit_start}:.3f}s')")
     printf "%s  ${DIM}(%s)${RESET}\n" "$jit_output" "$jit_time"
 
-    # AOT mode (turbo build + run native binary)
+    # AOT mode (turbolang build + run native binary)
     printf "  ${YELLOW}Cranelift AOT:${RESET} "
     tmp_bin="/tmp/turbo_bench_${name}"
     if "$TURBO" build "$bench" -o "$tmp_bin" >/dev/null 2>&1; then

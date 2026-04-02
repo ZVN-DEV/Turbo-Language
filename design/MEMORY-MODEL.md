@@ -233,12 +233,12 @@ fn process_audio_buffer(input: &[f32], output: &mut [f32]) {
 
 Turbo's philosophy of "write it like JavaScript, then optimize" requires world-class tooling to show developers where their implicit memory decisions have performance costs. Memory profiling is not a third-party add-on -- it is built into the compiler and runtime from day one.
 
-**`turbo build --memory-report`: Compile-Time Memory Analysis**
+**`turbolang build --memory-report`: Compile-Time Memory Analysis**
 
 After any build, pass `--memory-report` to get a detailed breakdown of how the compiler managed memory in your code:
 
 ```
-$ turbo build --memory-report
+$ turbolang build --memory-report
 
 === Memory Report: my_project ===
 
@@ -262,16 +262,16 @@ Suggestions:
   i src/models.tb:15    record clone in loop. Consider pre-allocating with [T].with_capacity().
 ```
 
-**`turbo profile`: Runtime Memory Profiler**
+**`turbolang profile`: Runtime Memory Profiler**
 
 A built-in runtime profiler modeled after Chrome DevTools' Memory tab. Attach to any running Turbo process:
 
 ```
-$ turbo profile --pid 12345
-$ turbo profile --attach my_server
+$ turbolang profile --pid 12345
+$ turbolang profile --attach my_server
 
 # Or run with profiling enabled from the start:
-$ turbo run --profile=memory src/main.tb
+$ turbolang run --profile=memory src/main.tb
 ```
 
 The profiler provides:
@@ -281,7 +281,7 @@ The profiler provides:
 - **Allocation flame graphs.** Visualize which call stacks are responsible for the most allocations. Built into the toolchain -- no external tools needed.
 
 ```
-$ turbo profile --flamegraph --duration 30s --output allocs.svg
+$ turbolang profile --flamegraph --duration 30s --output allocs.svg
 # Generates an SVG flame graph of allocation hotspots over a 30-second sample.
 ```
 
@@ -290,8 +290,8 @@ $ turbo profile --flamegraph --duration 30s --output allocs.svg
 The workflow Turbo enables -- and encourages -- is:
 
 1. **Write it like JavaScript.** Use Level 0. Do not think about memory. Ship it.
-2. **Profile under real load.** Use `turbo profile` to see where memory is actually spent.
-3. **Read the memory report.** Run `turbo build --memory-report` to see auto-clone costs.
+2. **Profile under real load.** Use `turbolang profile` to see where memory is actually spent.
+3. **Read the memory report.** Run `turbolang build --memory-report` to see auto-clone costs.
 4. **Optimize the hot paths.** The report tells you exactly which lines to address. Add `let ref` borrows (Level 1) or `region` blocks (Level 2) only where the data shows it matters.
 5. **Repeat.** Most codebases stabilize at step 2 with zero manual intervention. Only performance-critical systems need step 4.
 
@@ -304,7 +304,7 @@ fn process_all(records: [Record]) -> [Result] {
         transform(validated)
     }).collect()
 }
-// turbo build --memory-report says: "record.clone() ~2KB x 100,000 iterations = ~200MB"
+// turbolang build --memory-report says: "record.clone() ~2KB x 100,000 iterations = ~200MB"
 
 // After optimization (Level 1 -- one annotation added):
 fn process_all(records: [Record]) -> [Result] {

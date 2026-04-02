@@ -10,7 +10,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   - `ErrorCode` enum in `turbo-ast/src/errors.rs` with `as_str()`, `description()`, `Display`
   - All `SemaError`, `ParseError`, and `CodegenError` types now carry an `ErrorCode`
   - CLI displays errors as `error[E0100]: message` via ariadne
-  - New `turbo explain <code>` CLI subcommand prints the error description
+  - New `turbolang explain <code>` CLI subcommand prints the error description
   - Error code reference: `docs/errors.md`
 - Gold standard audit: CI workflow, SECURITY.md, CLAUDE.md, allocation safety, strip binary
 - CONTRIBUTING.md and CHANGELOG.md documentation
@@ -79,8 +79,8 @@ Initial public release of the Turbo compiler.
 
 ### Compiler Infrastructure
 - Five-stage pipeline: Lexer (logos) -> Parser (recursive descent) -> Sema -> Codegen -> Link
-- Cranelift JIT backend (`turbo run`) for rapid development
-- Cranelift AOT backend (`turbo build`) for native binary production
+- Cranelift JIT backend (`turbolang run`) for rapid development
+- Cranelift AOT backend (`turbolang build`) for native binary production
 - C runtime (`turbo_rt.c`) linked into AOT binaries for print, allocation, strings, arrays, async
 - Multi-error parser recovery (no bail-on-first-error)
 - `Ty::Error` poison type in sema to prevent cascading diagnostics
@@ -91,17 +91,17 @@ Initial public release of the Turbo compiler.
 - Builtin shadowing rejection and argument count validation in sema
 
 ### Toolchain
-- `turbo run <file>` -- JIT compile and execute
-- `turbo build <file>` -- AOT compile to native binary
-- `turbo test <file>` -- run `@test` functions with subprocess-based runner
-- `turbo bench <file>` -- benchmark with timing
-- `turbo fmt <file>` -- source code formatter
-- `turbo doc <file>` -- documentation generator
-- `turbo init <name>` -- project scaffolding (with `.gitignore`)
-- `turbo install` -- dependency resolution from `turbo.toml` / `turbo_modules`
-- `turbo update` -- GitHub package registry support
-- `turbo repl` -- interactive REPL
-- `turbo lsp` -- Language Server Protocol server (diagnostics, hover, go-to-definition)
+- `turbolang run <file>` -- JIT compile and execute
+- `turbolang build <file>` -- AOT compile to native binary
+- `turbolang test <file>` -- run `@test` functions with subprocess-based runner
+- `turbolang bench <file>` -- benchmark with timing
+- `turbolang fmt <file>` -- source code formatter
+- `turbolang doc <file>` -- documentation generator
+- `turbolang init <name>` -- project scaffolding (with `.gitignore`)
+- `turbolang install` -- dependency resolution from `turbo.toml` / `turbo_modules`
+- `turbolang update` -- GitHub package registry support
+- `turbolang repl` -- interactive REPL
+- `turbolang lsp` -- Language Server Protocol server (diagnostics, hover, go-to-definition)
 - VS Code extension (`zvndev.turbo-lang`) -- syntax highlighting, snippets, LSP client
 - Built-in HTTP server framework with socket-based runtime
 

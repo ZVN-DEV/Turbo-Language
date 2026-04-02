@@ -42,8 +42,8 @@ fn main() {
 ```
 
 ```bash
-turbo run hello.tb        # JIT — compile and run instantly
-turbo build hello.tb      # AOT — produce a native binary
+turbolang run hello.tb        # JIT — compile and run instantly
+turbolang build hello.tb      # AOT — produce a native binary
 ./hello
 ```
 
@@ -83,9 +83,9 @@ async fn main() {
 
 Turbo compiles directly to machine code. Programs start instantly and run at native speed.
 
-- **JIT execution** via `turbo run` for rapid development (Cranelift)
-- **AOT compilation** via `turbo build` for production binaries (Cranelift)
-- **Optimized AOT** via `turbo build --llvm` for maximum performance (LLVM 18)
+- **JIT execution** via `turbolang run` for rapid development (Cranelift)
+- **AOT compilation** via `turbolang build` for production binaries (Cranelift)
+- **Optimized AOT** via `turbolang build --llvm` for maximum performance (LLVM 18)
 
 ### Type System
 
@@ -231,7 +231,7 @@ fn add(a: i64, b: i64) -> i64 { a + b }
 ```
 
 ```bash
-turbo test myfile.tb
+turbolang test myfile.tb
 #   PASS  test_add
 # 1 passed, 0 failed
 ```
@@ -259,7 +259,7 @@ Three runnable example projects demonstrate real-world Turbo code.
 Word frequency analysis with pipes, HashMaps, and string interpolation.
 
 ```bash
-turbo run examples/simple-script/main.tb
+turbolang run examples/simple-script/main.tb
 ```
 
 See [`examples/simple-script/main.tb`](examples/simple-script/main.tb)
@@ -269,7 +269,7 @@ See [`examples/simple-script/main.tb`](examples/simple-script/main.tb)
 An HTTP server on port 8080 with endpoints for fibonacci, prime counting, and sorting benchmarks. Returns JSON responses.
 
 ```bash
-turbo run examples/speed-server/main.tb
+turbolang run examples/speed-server/main.tb
 # curl http://localhost:8080/api/fib
 ```
 
@@ -280,7 +280,7 @@ See [`examples/speed-server/main.tb`](examples/speed-server/main.tb)
 A full benchmark dashboard with a styled HTML UI served on port 3000. Run benchmarks from the browser and see results in real time.
 
 ```bash
-turbo run examples/web-dashboard/main.tb
+turbolang run examples/web-dashboard/main.tb
 # open http://localhost:3000
 ```
 
@@ -290,28 +290,28 @@ See [`examples/web-dashboard/main.tb`](examples/web-dashboard/main.tb)
 
 | Command | Description |
 |---------|-------------|
-| `turbo run <file.tb>` | Compile and run via JIT |
-| `turbo build <file.tb>` | Compile to native binary (Cranelift) |
-| `turbo build --llvm <file.tb>` | Compile with LLVM optimizations |
-| `turbo test <file.tb>` | Run `@test` functions |
-| `turbo bench <file.tb>` | Benchmark with timing |
-| `turbo check <file.tb>` | Type-check without compiling |
-| `turbo install` | Install dependencies from turbo.toml |
-| `turbo update` | Update GitHub dependencies |
-| `turbo playground` | Launch browser-based playground |
-| `turbo fmt <file.tb>` | Format source code |
-| `turbo init <name>` | Create a new project |
-| `turbo doc <file.tb>` | Generate documentation |
-| `turbo repl` | Interactive REPL |
-| `turbo lsp` | Start Language Server |
-| `turbo explain <code>` | Explain an error code (e.g. `turbo explain E0100`) |
+| `turbolang run <file.tb>` | Compile and run via JIT |
+| `turbolang build <file.tb>` | Compile to native binary (Cranelift) |
+| `turbolang build --llvm <file.tb>` | Compile with LLVM optimizations |
+| `turbolang test <file.tb>` | Run `@test` functions |
+| `turbolang bench <file.tb>` | Benchmark with timing |
+| `turbolang check <file.tb>` | Type-check without compiling |
+| `turbolang install` | Install dependencies from turbo.toml |
+| `turbolang update` | Update GitHub dependencies |
+| `turbolang playground` | Launch browser-based playground |
+| `turbolang fmt <file.tb>` | Format source code |
+| `turbolang init <name>` | Create a new project |
+| `turbolang doc <file.tb>` | Generate documentation |
+| `turbolang repl` | Interactive REPL |
+| `turbolang lsp` | Start Language Server |
+| `turbolang explain <code>` | Explain an error code (e.g. `turbolang explain E0100`) |
 
 ## Error Codes
 
 Every compiler diagnostic has a unique, searchable error code (E0001--E0513). Look up any code from the command line:
 
 ```bash
-turbo explain E0100
+turbolang explain E0100
 ```
 
 Full reference: [`docs/errors.md`](docs/errors.md)
@@ -362,7 +362,7 @@ cargo build --release -p turbo-cli --manifest-path turbo/Cargo.toml
 cd turbo && ./tests/run_tests.sh
 
 # Run a single file
-turbo run turbo/tests/phase1/fibonacci.tb
+turbolang run turbo/tests/phase1/fibonacci.tb
 ```
 
 358+ tests across unit and integration suites.
@@ -374,7 +374,7 @@ For maximum performance, install LLVM 18 and rebuild:
 ```bash
 brew install llvm@18
 LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --release -p turbo-codegen-llvm -p turbo-cli --features turbo-cli/llvm
-turbo build --llvm myapp.tb -o myapp
+turbolang build --llvm myapp.tb -o myapp
 ```
 
 ## Ecosystem
@@ -385,7 +385,7 @@ turbo build --llvm myapp.tb -o myapp
 | **Tree-sitter Grammar** | [ZVN-DEV/tree-sitter-turbo](https://github.com/ZVN-DEV/tree-sitter-turbo) |
 | **Homebrew** | `brew tap ZVN-DEV/turbo && brew install turbo-lang` |
 | **Docker** | [`distribution/Dockerfile`](distribution/Dockerfile) |
-| **LSP Server** | `turbo lsp` -- diagnostics, hover, completions, go-to-definition |
+| **LSP Server** | `turbolang lsp` -- diagnostics, hover, completions, go-to-definition |
 | **Install Script** | `curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh \| sh` |
 
 ## Contributing

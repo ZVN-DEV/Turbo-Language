@@ -66,7 +66,7 @@ export default function TestingPage() {
         Running Tests
       </h2>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`$ turbo test myfile.tb
+        <code>{`$ turbolang test myfile.tb
   PASS  test_add
   PASS  test_negative
 2 passed, 0 failed`}</code>

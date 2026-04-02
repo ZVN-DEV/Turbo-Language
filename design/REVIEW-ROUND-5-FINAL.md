@@ -77,7 +77,7 @@ AGENTIC.md line 611 introduces `model_config { ... }` as a top-level declaration
 
 ### 4. Duplicated Benchmarking Section in TOOLCHAIN.md (Round 3 Carryover)
 
-Lines 89-96 and 206-237 both describe `turbo bench`. Four reviews have flagged this.
+Lines 89-96 and 206-237 both describe `turbolang bench`. Four reviews have flagged this.
 
 ### 5. VectorMemory Still Couples to ChromaDB (Round 3 Carryover)
 
@@ -193,7 +193,7 @@ They would FAIL if:
 
 The JS-to-Turbo cheat sheet in SYNTAX.md is excellent and would raise this to 8/10 if prominently linked from the getting-started experience.
 
-**What would make this a 9/10:** A `turbo playground` command that opens an interactive REPL with contextual hints (like Elm's error messages but in a REPL). Show "Did you mean `trait` instead of `interface`?" when the developer types something from JS/TS.
+**What would make this a 9/10:** A `turbolang playground` command that opens an interactive REPL with contextual hints (like Elm's error messages but in a REPL). Show "Did you mean `trait` instead of `interface`?" when the developer types something from JS/TS.
 
 ### 4. The "Production Test"
 

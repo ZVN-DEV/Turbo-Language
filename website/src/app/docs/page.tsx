@@ -34,9 +34,9 @@ export default function DocsPage() {
       <ul className="list-disc list-inside space-y-2 mb-6 text-gray-300">
         <li>
           <strong className="text-white">Native compilation</strong> -- JIT via{" "}
-          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">turbo run</code>,
+          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">turbolang run</code>,
           AOT via{" "}
-          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">turbo build</code>
+          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">turbolang build</code>
         </li>
         <li>
           <strong className="text-white">Type-safe</strong> -- Generics, traits,

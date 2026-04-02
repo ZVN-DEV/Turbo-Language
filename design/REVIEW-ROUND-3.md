@@ -81,7 +81,7 @@ CONCURRENCY.md line 18 still claims: "No colored function problem -- the runtime
 
 ### 2. Duplicated Benchmarking Section in TOOLCHAIN.md
 
-TOOLCHAIN.md has two benchmarking sections: one under "The Complete Toolchain" (lines 89-96) and one under "Performance Monitoring & Observability" (lines 206-237). They cover the same `turbo bench` command with overlapping content. The second is more detailed. The first should be removed or reduced to a cross-reference.
+TOOLCHAIN.md has two benchmarking sections: one under "The Complete Toolchain" (lines 89-96) and one under "Performance Monitoring & Observability" (lines 206-237). They cover the same `turbolang bench` command with overlapping content. The second is more detailed. The first should be removed or reduced to a cross-reference.
 
 ### 3. VARIANTS.md Purpose Is Unclear Post-Decision
 

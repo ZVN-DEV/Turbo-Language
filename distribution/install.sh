@@ -60,7 +60,7 @@ case "${OS}-${ARCH}" in
         ;;
 esac
 
-TARBALL="turbo-v${VERSION}-${TARGET}.tar.gz"
+TARBALL="turbolang-v${VERSION}-${TARGET}.tar.gz"
 BASE_URL="https://github.com/ZVN-DEV/Turbo-Language/releases/download/v${VERSION}"
 URL="${BASE_URL}/${TARBALL}"
 CHECKSUMS_URL="${BASE_URL}/checksums.txt"
@@ -97,19 +97,19 @@ tar xz -C "${TMPDIR}" -f "${TMPDIR}/${TARBALL}"
 
 # Install
 if [ -w "${INSTALL_DIR}" ]; then
-    mv "${TMPDIR}/turbo" "${INSTALL_DIR}/turbo"
+    mv "${TMPDIR}/turbolang" "${INSTALL_DIR}/turbolang"
 else
     echo "Need sudo to install to ${INSTALL_DIR}"
-    sudo mv "${TMPDIR}/turbo" "${INSTALL_DIR}/turbo"
+    sudo mv "${TMPDIR}/turbolang" "${INSTALL_DIR}/turbolang"
 fi
 
 echo ""
-echo "Turbo v${VERSION} installed to ${INSTALL_DIR}/turbo"
+echo "Turbo v${VERSION} installed to ${INSTALL_DIR}/turbolang"
 echo ""
 echo "Get started:"
-echo "  turbo init myproject"
+echo "  turbolang init myproject"
 echo "  cd myproject"
-echo "  turbo run"
+echo "  turbolang run"
 echo ""
 echo "Or try the REPL:"
-echo "  turbo repl"
+echo "  turbolang repl"

@@ -47,7 +47,7 @@ cd Turbo-Language/turbo
 # Build in release mode
 cargo build --release -p turbo-cli
 
-# The binary is at target/release/turbo`}</code>
+# The binary is at target/release/turbolang`}</code>
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
@@ -66,7 +66,7 @@ cd Turbo-Language/turbo
 LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --release -p turbo-codegen-llvm -p turbo-cli --features turbo-cli/llvm
 
 # Use the LLVM backend with the --llvm flag
-./target/release/turbo build --llvm hello.tb`}</code>
+./target/release/turbolang build --llvm hello.tb`}</code>
       </pre>
       <p className="text-sm text-gray-500 mb-6">
         The LLVM backend is fully functional (116/116 tests pass) but requires
@@ -90,7 +90,7 @@ export PATH="$HOME/Turbo-Language/turbo/target/release:$PATH"`}</code>
         Verify Installation
       </h2>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`turbo --version`}</code>
+        <code>{`turbolang --version`}</code>
       </pre>
       <p className="mb-6">
         You should see the current version number printed to the terminal.

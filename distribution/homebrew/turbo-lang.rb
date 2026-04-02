@@ -6,13 +6,13 @@ class TurboLang < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/ZVN-DEV/Turbo-Language/releases/download/v0.1.0/turbo-v0.1.0-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/ZVN-DEV/Turbo-Language/releases/download/v0.1.0/turbolang-v0.1.0-aarch64-apple-darwin.tar.gz"
       sha256 "71f87e437d0cc519899f6a657a7947fe76f956001266ae5ae7f2a8978a423383"
     end
   end
 
   def install
-    bin.install "turbo"
+    bin.install "turbolang"
   end
 
   test do
@@ -21,6 +21,6 @@ class TurboLang < Formula
           print("Hello from Turbo!")
       }
     EOS
-    assert_equal "Hello from Turbo!\n", shell_output("#{bin}/turbo run #{testpath}/hello.tb")
+    assert_equal "Hello from Turbo!\n", shell_output("#{bin}/turbolang run #{testpath}/hello.tb")
   end
 end

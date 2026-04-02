@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TURBO="./target/release/turbo"
+TURBO="./target/release/turbolang"
 PASS=0
 FAIL=0
 SKIP=0

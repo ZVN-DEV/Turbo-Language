@@ -21,7 +21,7 @@ The complete language specification lives in `design/`. Each document covers one
 | [design/CONCURRENCY.md](design/CONCURRENCY.md) | Async/await, actors, channels, structured concurrency, supervision trees |
 | [design/AGENTIC.md](design/AGENTIC.md) | AI agent primitives: `tool fn`, `agent` keyword, streaming, memory, supervision |
 | [design/COMPILATION.md](design/COMPILATION.md) | LLVM + Cranelift backends, WASM pipeline, sanitizers, compilation modes |
-| [design/TOOLCHAIN.md](design/TOOLCHAIN.md) | CLI (`turbo build/run/test/fmt/bench`), testing framework, stdlib, profiler |
+| [design/TOOLCHAIN.md](design/TOOLCHAIN.md) | CLI (`turbolang build/run/test/fmt/bench`), testing framework, stdlib, profiler |
 | [design/POLYGLOT.md](design/POLYGLOT.md) | FFI (C/C++), WASM interop, JavaScript bridge, TypeScript type generation |
 | [design/ROADMAP.md](design/ROADMAP.md) | Progressive disclosure roadmap: v1.0 Core through v1.4 Distributed |
 | [design/VARIANTS.md](design/VARIANTS.md) | Historical: memory model alternatives evaluated during design phase |

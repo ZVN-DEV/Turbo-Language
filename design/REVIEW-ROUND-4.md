@@ -239,7 +239,7 @@ The new testing section in AGENTIC.md is comprehensive and practical. Key streng
 - Tool mocking with `mock(get_weather, returns: ...)` integrates with the standard `turbo/test` framework
 - Multi-step tool verification (`mock_search.last_args().query`) enables detailed behavior testing
 - Error recovery testing (circuit breaker, retry) uses the same mock infrastructure
-- No separate test harness -- everything works with `@test` and `turbo test`
+- No separate test harness -- everything works with `@test` and `turbolang test`
 
 ### 5. The Syntax Sugar System Is a Genuine Differentiator
 The `T?` / `T ! E` / `none` / `some()` / `ok()` / `err()` / `[T]` / `{K: V}` / `{T}` sugar system is now the most readable approach to optionals, errors, and collections in any systems language. The TYPE-SYSTEM.md "Sugar vs. Power" section showing equivalence (`T?` = `Optional<T>`, `T ! E` = `Result<T, E>`) is exemplary progressive disclosure.

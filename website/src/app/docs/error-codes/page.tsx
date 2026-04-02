@@ -5,14 +5,14 @@ export default function ErrorCodesPage() {
       <p className="text-lg text-gray-400 mb-8">
         Every Turbo compiler diagnostic includes a unique error code. Use{" "}
         <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
-          turbo explain E0100
+          turbolang explain E0100
         </code>{" "}
         to look up any code from the command line.
       </p>
 
       <div className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-8">
         <pre className="text-sm font-[family-name:var(--font-geist-mono)] text-gray-300 m-0">
-          <code>{`$ turbo explain E0100
+          <code>{`$ turbolang explain E0100
 E0100: Type mismatch
   The compiler expected one type but found another.`}</code>
         </pre>

@@ -507,7 +507,7 @@ fn test_weather_agent() {
 
 ### Snapshot Testing for Agent Responses
 
-Capture structured agent output and compare against saved snapshots. When agent behavior changes intentionally, run `turbo test --update-snapshots` to accept the new output.
+Capture structured agent output and compare against saved snapshots. When agent behavior changes intentionally, run `turbolang test --update-snapshots` to accept the new output.
 
 ```
 @test

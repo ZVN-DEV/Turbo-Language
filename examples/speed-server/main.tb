@@ -1,6 +1,6 @@
 // Speed Benchmark Server
 // Showcases Turbo's computation speed via an HTTP API.
-// Run: turbo run examples/speed-server/main.tb
+// Run: turbolang run examples/speed-server/main.tb
 
 // --- Algorithms ---
 

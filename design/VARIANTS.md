@@ -194,10 +194,10 @@ spawn async { use_config(shared_config) }  // RC increment here
 
 These are not exclusive — they're build flags:
 ```
-turbo build                          # Dev profile (fast compile)
-turbo build --release                # Release profile (LLVM, full opts)
-turbo build --target wasm32-wasi     # WASM profile
-turbo build --target thumbv7 --no-std # Embedded profile
+turbolang build                          # Dev profile (fast compile)
+turbolang build --release                # Release profile (LLVM, full opts)
+turbolang build --target wasm32-wasi     # WASM profile
+turbolang build --target thumbv7 --no-std # Embedded profile
 ```
 
 ## Axis 3: Concurrency Flavor Variants
@@ -210,7 +210,7 @@ All variants have async/await + channels. They diverge on the runtime:
 | **Actor-based** | Elixir-style isolated processes | Preemptive per-actor | Fault-tolerant distributed systems |
 | **Minimal** | Single-threaded event loop | Cooperative | Embedded, WASM, simple tools |
 
-Selection: `turbo build --runtime=default|actor|minimal`
+Selection: `turbolang build --runtime=default|actor|minimal`
 
 ## The Research Loop
 
@@ -237,9 +237,9 @@ One variant dominates on most metrics. Ship it as the default, deprecate others.
 
 ### Scenario 2: Domain-Specific Winners
 Different variants win for different domains:
-- Ownership-Lite wins for systems/servers → ship as `turbo build --memory=ownership`
-- Regions wins for games/real-time → ship as `turbo build --memory=regions`
-- CTRC wins for agents/apps → ship as `turbo build --memory=ctrc`
+- Ownership-Lite wins for systems/servers → ship as `turbolang build --memory=ownership`
+- Regions wins for games/real-time → ship as `turbolang build --memory=regions`
+- CTRC wins for agents/apps → ship as `turbolang build --memory=ctrc`
 
 ### Scenario 3: Hybrid Wins
 The Hybrid (C) variant proves that combining ownership + regions is strictly better. Ship it as the only option.

@@ -77,19 +77,19 @@ task-agent/
 
 ```bash
 # Build and run
-turbo run
+turbolang run
 
 # Run all tests
-turbo test
+turbolang test
 
 # Run only unit tests
-turbo test tests/store_test.tb
+turbolang test tests/store_test.tb
 
 # Run performance tests
-turbo test tests/perf_test.tb
+turbolang test tests/perf_test.tb
 
 # Run with custom config
-TASK_PORT=8080 TASK_LOG_LEVEL=debug turbo run
+TASK_PORT=8080 TASK_LOG_LEVEL=debug turbolang run
 ```
 
 ## API Endpoints

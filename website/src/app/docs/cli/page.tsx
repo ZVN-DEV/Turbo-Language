@@ -21,20 +21,20 @@ export default function CliPage() {
           </thead>
           <tbody>
             {[
-              ["turbo run <file.tb>", "Compile and run via JIT (Cranelift)"],
-              ["turbo build <file.tb>", "Compile to a native binary (AOT). Use --llvm for LLVM backend"],
-              ["turbo test <file.tb>", "Run @test functions"],
-              ["turbo bench <file.tb>", "Benchmark with timing"],
-              ["turbo init <name>", "Create a new project"],
-              ["turbo install", "Install dependencies from turbo.toml"],
-              ["turbo update", "Update GitHub dependencies"],
-              ["turbo fmt <file.tb>", "Format source code"],
-              ["turbo doc <file.tb>", "Generate documentation"],
-              ["turbo repl", "Interactive REPL"],
-              ["turbo lsp", "Start Language Server Protocol server"],
-              ["turbo check <file.tb>", "Type-check without compiling"],
-              ["turbo explain <code>", "Explain an error code (e.g. E0100)"],
-              ["turbo playground", "Launch browser-based playground"],
+              ["turbolang run <file.tb>", "Compile and run via JIT (Cranelift)"],
+              ["turbolang build <file.tb>", "Compile to a native binary (AOT). Use --llvm for LLVM backend"],
+              ["turbolang test <file.tb>", "Run @test functions"],
+              ["turbolang bench <file.tb>", "Benchmark with timing"],
+              ["turbolang init <name>", "Create a new project"],
+              ["turbolang install", "Install dependencies from turbo.toml"],
+              ["turbolang update", "Update GitHub dependencies"],
+              ["turbolang fmt <file.tb>", "Format source code"],
+              ["turbolang doc <file.tb>", "Generate documentation"],
+              ["turbolang repl", "Interactive REPL"],
+              ["turbolang lsp", "Start Language Server Protocol server"],
+              ["turbolang check <file.tb>", "Type-check without compiling"],
+              ["turbolang explain <code>", "Explain an error code (e.g. E0100)"],
+              ["turbolang playground", "Launch browser-based playground"],
             ].map(([cmd, desc]) => (
               <tr key={cmd} className="border-b border-[#1a1a2e]">
                 <td className="px-4 py-2">
@@ -50,22 +50,22 @@ export default function CliPage() {
       </div>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        turbo run
+        turbolang run
       </h2>
       <p className="mb-4">
         Compiles and executes a Turbo source file using the JIT compiler. Best
         for development.
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`$ turbo run hello.tb
+        <code>{`$ turbolang run hello.tb
 Hello, world!
 
 # With verbose output
-$ turbo run --verbose hello.tb`}</code>
+$ turbolang run --verbose hello.tb`}</code>
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        turbo build
+        turbolang build
       </h2>
       <p className="mb-4">
         Compiles to a standalone native binary. The binary is linked with the C
@@ -73,20 +73,20 @@ $ turbo run --verbose hello.tb`}</code>
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
         <code>{`# Compile to native binary (Cranelift backend, default)
-$ turbo build hello.tb
+$ turbolang build hello.tb
 $ ./hello
 
 # Compile using the LLVM backend (requires LLVM 18)
-$ turbo build --llvm hello.tb
+$ turbolang build --llvm hello.tb
 $ ./hello
 
 # With custom output name
-$ turbo build hello.tb --output my-app
+$ turbolang build hello.tb --output my-app
 $ ./my-app`}</code>
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        turbo test
+        turbolang test
       </h2>
       <p className="mb-4">
         Runs all functions marked with{" "}
@@ -96,34 +96,34 @@ $ ./my-app`}</code>
         :
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`$ turbo test myfile.tb
+        <code>{`$ turbolang test myfile.tb
   PASS  test_add
   PASS  test_subtract
 2 passed, 0 failed`}</code>
       </pre>
 
       <h2 id="formatting" className="text-2xl font-bold text-white mt-10 mb-4">
-        turbo fmt
+        turbolang fmt
       </h2>
       <p className="mb-4">
         Formats source code according to the standard Turbo style:
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
         <code>{`# Format a file in place
-$ turbo fmt myfile.tb
+$ turbolang fmt myfile.tb
 
 # Check formatting without modifying
-$ turbo fmt --check myfile.tb`}</code>
+$ turbolang fmt --check myfile.tb`}</code>
       </pre>
 
       <h2 id="repl" className="text-2xl font-bold text-white mt-10 mb-4">
-        turbo repl
+        turbolang repl
       </h2>
       <p className="mb-4">
         Start an interactive read-eval-print loop for experimenting:
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`$ turbo repl
+        <code>{`$ turbolang repl
 turbo> print("hello")
 hello
 turbo> let x = 42
@@ -132,7 +132,7 @@ turbo> print(x * 2)
       </pre>
 
       <h2 id="lsp" className="text-2xl font-bold text-white mt-10 mb-4">
-        turbo lsp
+        turbolang lsp
       </h2>
       <p className="mb-4">
         Starts the Language Server Protocol server for editor integration.
@@ -147,20 +147,20 @@ turbo> print(x * 2)
       </ul>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
         <code>{`# Usually started automatically by your editor
-$ turbo lsp`}</code>
+$ turbolang lsp`}</code>
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        turbo explain
+        turbolang explain
       </h2>
       <p className="mb-4">
         Look up any compiler error code:
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`$ turbo explain E0100
+        <code>{`$ turbolang explain E0100
 E0100: type mismatch
 
-$ turbo explain E0200
+$ turbolang explain E0200
 E0200: match expression is not exhaustive`}</code>
       </pre>
 

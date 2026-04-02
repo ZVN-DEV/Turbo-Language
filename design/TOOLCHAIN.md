@@ -5,47 +5,47 @@ Lessons from research: Cargo, Go's toolchain, and Deno are the gold standard. Sh
 
 ## The Complete Toolchain
 
-### Package Manager: `turbo add`, `turbo remove`, `turbo publish`
+### Package Manager: `turbolang add`, `turbolang remove`, `turbolang publish`
 - Centralized registry: `packages.turbo.dev` (like crates.io, npm)
 - Lockfile for reproducible builds (`turbo.lock`)
 - Workspace support (monorepo with multiple packages)
 - Semantic versioning enforced
 - Dependency resolution with conflict detection
-- `turbo add serde` — add a dependency
-- `turbo remove serde` — remove
-- `turbo publish` — publish to registry
-- `turbo update` — update dependencies
-- `turbo audit` — check for known vulnerabilities
+- `turbolang add serde` — add a dependency
+- `turbolang remove serde` — remove
+- `turbolang publish` — publish to registry
+- `turbolang update` — update dependencies
+- `turbolang audit` — check for known vulnerabilities
 - Inspired by: Cargo, Go modules, Deno
 
-### Build System: `turbo build`, `turbo run`, `turbo watch`
+### Build System: `turbolang build`, `turbolang run`, `turbolang watch`
 - Zero-config for simple projects (convention over configuration)
 - `turbo.toml` config file (like Cargo.toml)
-- `turbo build` — build the project
-- `turbo build --release` — optimized build
-- `turbo build --target wasm32-wasi` — cross-compile
-- `turbo run` — build and run
-- `turbo run --watch` — watch for changes, auto-rebuild
-- `turbo clean` — clean build artifacts
+- `turbolang build` — build the project
+- `turbolang build --release` — optimized build
+- `turbolang build --target wasm32-wasi` — cross-compile
+- `turbolang run` — build and run
+- `turbolang run --watch` — watch for changes, auto-rebuild
+- `turbolang clean` — clean build artifacts
 - Build scripts for code generation / FFI binding generation
 - Inspired by: Cargo, Go, Zig build system
 
-### Testing Framework: `turbo test`
+### Testing Framework: `turbolang test`
 
-A full native app testing suite — not just unit tests. Built-in performance testing, memory analysis, CPU profiling, regression detection, stress testing, and native app diagnostics. No external dependencies. One command: `turbo test`.
+A full native app testing suite — not just unit tests. Built-in performance testing, memory analysis, CPU profiling, regression detection, stress testing, and native app diagnostics. No external dependencies. One command: `turbolang test`.
 
 #### CLI Overview
 
-- `turbo test` — run all tests
-- `turbo test module_name` — run tests in a module
-- `turbo test --filter "pattern"` — filter tests by name
-- `turbo test --parallel` — parallel execution (default)
-- `turbo test --sequential` — sequential execution (useful for stateful tests)
-- `turbo test --coverage` — code coverage report
-- `turbo test --watch` — re-run on file changes
-- `turbo test --perf` — run only performance-annotated tests
-- `turbo test --stress` — run only stress tests
-- `turbo test --update-snapshots` — accept snapshot changes
+- `turbolang test` — run all tests
+- `turbolang test module_name` — run tests in a module
+- `turbolang test --filter "pattern"` — filter tests by name
+- `turbolang test --parallel` — parallel execution (default)
+- `turbolang test --sequential` — sequential execution (useful for stateful tests)
+- `turbolang test --coverage` — code coverage report
+- `turbolang test --watch` — re-run on file changes
+- `turbolang test --perf` — run only performance-annotated tests
+- `turbolang test --stress` — run only stress tests
+- `turbolang test --update-snapshots` — accept snapshot changes
 - Inspired by: Cargo test, Go test, Jest, Criterion.rs
 
 ---
@@ -84,7 +84,7 @@ fn test_serialization() {
   assert_snapshot(json.stringify(user))
   // First run: saves snapshot to __snapshots__/
   // Subsequent runs: compares against saved snapshot
-  // turbo test --update-snapshots to accept changes
+  // turbolang test --update-snapshots to accept changes
 }
 
 // Mocking via traits
@@ -270,7 +270,7 @@ fn test_sort_performance() {
 }
 ```
 
-Use `turbo test --save-baseline` to record a new baseline, and `turbo test --compare <branch>` to compare against any branch:
+Use `turbolang test --save-baseline` to record a new baseline, and `turbolang test --compare <branch>` to compare against any branch:
 
 ```
 @test
@@ -329,16 +329,16 @@ struct StressReport {
 }
 ```
 
-Stress tests are excluded from normal `turbo test` runs. Use `turbo test --stress` to run them explicitly, or `turbo test --all` to include everything.
+Stress tests are excluded from normal `turbolang test` runs. Use `turbolang test --stress` to run them explicitly, or `turbolang test --all` to include everything.
 
 ---
 
 #### Test Output Format
 
-`turbo test` produces clear, information-dense output. Performance tests show resource usage inline. Failures show exactly which constraint was violated.
+`turbolang test` produces clear, information-dense output. Performance tests show resource usage inline. Failures show exactly which constraint was violated.
 
 ```
-$ turbo test
+$ turbolang test
 
 Running 24 tests...
 
@@ -359,7 +359,7 @@ Running 24 tests...
   Auto-clones: 47 (0 in hot paths)
 ```
 
-For CI pipelines, use `turbo test --output json` for machine-readable output, or `turbo test --output markdown` for PR comments.
+For CI pipelines, use `turbolang test --output json` for machine-readable output, or `turbolang test --output markdown` for PR comments.
 
 ---
 
@@ -413,7 +413,7 @@ fn test_api_client() {
 ```
 @test
 fn test_cli_output() {
-  let result = TestProcess.run("turbo", ["run", "my-app.tb", "--verbose"])
+  let result = TestProcess.run("turbolang", ["run", "my-app.tb", "--verbose"])
   assert_eq(result.exit_code, 0)
   assert(result.stdout.contains("Success"))
   assert(result.stderr.is_empty())
@@ -421,7 +421,7 @@ fn test_cli_output() {
 
 @test
 fn test_cli_error_handling() {
-  let result = TestProcess.run("turbo", ["run", "nonexistent.tb"])
+  let result = TestProcess.run("turbolang", ["run", "nonexistent.tb"])
   assert_ne(result.exit_code, 0)
   assert(result.stderr.contains("file not found"))
 }
@@ -475,34 +475,34 @@ fn test_cache_expiry() {
 | `@regression(...)` | Compare against baseline branch | `@regression(baseline: "main", threshold: 5.percent())` |
 | `@stress(...)` | Sustained concurrent load testing | `@stress(duration: 30.seconds(), concurrency: 100)` |
 
-### Formatter: `turbo fmt`
+### Formatter: `turbolang fmt`
 - One style, no configuration (like gofmt)
 - Deterministic output — same code always formats the same way
 - Fast enough to run on save
-- `turbo fmt` — format all files
-- `turbo fmt --check` — check without modifying (for CI)
+- `turbolang fmt` — format all files
+- `turbolang fmt --check` — check without modifying (for CI)
 - Editor integration via LSP
 - Inspired by: gofmt, rustfmt, Prettier
 
-### Linter: `turbo check`
+### Linter: `turbolang check`
 - Built-in linting rules for common mistakes, performance, style
-- `turbo check` — run all lints
-- `turbo check --fix` — auto-fix what can be fixed
+- `turbolang check` — run all lints
+- `turbolang check --fix` — auto-fix what can be fixed
 - Configurable: enable/disable rules in `turbo.toml`
 - Custom lint rules via compiler plugins (stretch goal)
 - Categories: correctness, performance, style, complexity, security
 - Inspired by: Clippy, ESLint, golangci-lint
 
-### Doc Generator: `turbo doc`
+### Doc Generator: `turbolang doc`
 - Generate documentation from doc comments (`///`)
 - HTML output with search (like docs.rs, ExDoc)
-- `turbo doc` — generate docs
-- `turbo doc --open` — generate and open in browser
+- `turbolang doc` — generate docs
+- `turbolang doc --open` — generate and open in browser
 - Doc tests: code examples in docs are compiled and tested
 - Cross-references between modules/types/functions
 - Inspired by: Cargo doc, ExDoc, Go doc
 
-### REPL: `turbo repl`
+### REPL: `turbolang repl`
 - Interactive REPL for exploration and prototyping
 - Full language support (not a subset)
 - Tab completion, syntax highlighting
@@ -517,10 +517,10 @@ fn test_cache_expiry() {
 - Agent/tool-aware: autocomplete tool names, validate agent configs
 - Inspired by: rust-analyzer, gopls, TypeScript language service
 
-### Benchmarking: `turbo bench`
+### Benchmarking: `turbolang bench`
 - Built-in micro-benchmarking framework — see [Performance Monitoring & Observability > Benchmarking](#benchmarking-turbo-bench) for full details
 
-### Cross-Compilation: `turbo build --target`
+### Cross-Compilation: `turbolang build --target`
 - Ship the cross-compilation toolchain in the standard install
 - No need for separate toolchains/SDKs per target
 - Common targets:
@@ -543,17 +543,17 @@ fn test_cache_expiry() {
 
 ## Performance Monitoring & Observability
 
-### Built-in Profiler (`turbo profile`)
+### Built-in Profiler (`turbolang profile`)
 
 - CPU profiling with flame graph generation (like Chrome DevTools)
 - Memory allocation tracking with per-function breakdown
 - Async task profiling — see where time is spent across concurrent tasks
 - Zero overhead when disabled (compile-time instrumentation switches)
-- `turbo profile run ./my-app` — profile an execution
-- `turbo profile --web` — open an interactive web UI for exploring profiles
-- `turbo profile --cpu` — CPU time only
-- `turbo profile --alloc` — memory allocations only
-- `turbo profile --async` — async task scheduling and wait times
+- `turbolang profile run ./my-app` — profile an execution
+- `turbolang profile --web` — open an interactive web UI for exploring profiles
+- `turbolang profile --cpu` — CPU time only
+- `turbolang profile --alloc` — memory allocations only
+- `turbolang profile --async` — async task scheduling and wait times
 - Works for both native and WASM targets
 - Output formats: HTML flame graph, JSON, Chrome Trace Event format
 - Inspired by: Chrome DevTools, perf, Instruments, tokio-console
@@ -588,7 +588,7 @@ fn process_request(req: Request) -> Response {
 
 ### Compile-Time Performance Hints
 
-- `turbo build --perf-hints` analyzes your code and shows optimization suggestions
+- `turbolang build --perf-hints` analyzes your code and shows optimization suggestions
 - Warns about:
   - Unnecessary heap allocations where stack allocation suffices
   - Auto-clones in hot loops (suggests borrowing instead)
@@ -628,12 +628,12 @@ fn handle(req: Request) -> Response {
 - Built-in exposition endpoint: `turbo/metrics.serve(":9090")` for Prometheus scraping
 - Inspired by: Prometheus client libraries, OpenTelemetry, micrometer
 
-### Benchmarking (`turbo bench`)
+### Benchmarking (`turbolang bench`)
 
 - Built-in micro-benchmarking framework with statistical rigor
 - Statistical analysis: mean, median, P95, P99, standard deviation
-- Comparison mode: `turbo bench --compare main` compares against a git branch
-- Regression detection for CI: `turbo bench --fail-on-regression=5%`
+- Comparison mode: `turbolang bench --compare main` compares against a git branch
+- Regression detection for CI: `turbolang bench --fail-on-regression=5%`
 - Warm-up iterations, outlier detection, and configurable sample sizes
 - Output formats: terminal table, JSON, markdown (for CI comments)
 
@@ -656,9 +656,9 @@ fn bench_parse_json(b: Bencher) {
 }
 ```
 
-- `turbo bench` — run all benchmarks
-- `turbo bench --compare baseline` — compare against saved baseline
-- `turbo bench --output json` — machine-readable output for CI pipelines
+- `turbolang bench` — run all benchmarks
+- `turbolang bench --compare baseline` — compare against saved baseline
+- `turbolang bench --output json` — machine-readable output for CI pipelines
 - Inspired by: criterion.rs, Go benchmark, Cargo bench
 
 ## Project Structure (Convention)
@@ -882,7 +882,7 @@ let response = json.parse<ApiResponse>(body)?  // validated against schema
 
 ### `turbo/test` — Testing Framework
 
-A full native app testing suite. Unit tests, performance tests, memory analysis, CPU profiling, regression detection, stress testing, and native app diagnostics — all built in. See the [Testing Framework: `turbo test`](#testing-framework-turbo-test) section above for the complete reference with all code examples.
+A full native app testing suite. Unit tests, performance tests, memory analysis, CPU profiling, regression detection, stress testing, and native app diagnostics — all built in. See the [Testing Framework: `turbolang test`](#testing-framework-turbo-test) section above for the complete reference with all code examples.
 
 Core imports:
 
@@ -1030,13 +1030,13 @@ scoop install turbo
 apt install turbo
 
 # Verify
-turbo --version
-# turbo 0.1.0 (aarch64-apple-darwin)
+turbolang --version
+# turbolang 0.1.0 (aarch64-apple-darwin)
 # Includes: compiler, lsp, fmt, test, bench, doc, repl, pkg
 
 # Create a new project
-turbo new my-project
+turbolang new my-project
 cd my-project
-turbo run
+turbolang run
 # Hello, World!
 ```

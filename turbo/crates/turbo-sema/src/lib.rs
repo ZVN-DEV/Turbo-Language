@@ -311,7 +311,7 @@ struct Checker {
     current_return_type: Ty,
     /// Hint for closure parameter types when checking closures passed to map/filter/reduce
     closure_param_hint: Option<Vec<Ty>>,
-    /// When true, `main` is not required (used for `turbo test` mode)
+    /// When true, `main` is not required (used for `turbolang test` mode)
     test_mode: bool,
     /// Whether we are currently checking inside an `@unsafe` function
     in_unsafe_context: bool,

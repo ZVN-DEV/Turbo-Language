@@ -192,22 +192,22 @@ Both Java and Go use garbage collectors. Here is why that is disqualifying:
 
 ```bash
 # Build optimized release binary
-turbo build --release
+turbolang build --release
 
 # Run the exchange
-turbo run src/main.tb
+turbolang run src/main.tb
 
 # Run all tests
-turbo test
+turbolang test
 
 # Run performance tests only
-turbo test --filter @perf
+turbolang test --filter @perf
 
 # Run stress tests only
-turbo test --filter @stress
+turbolang test --filter @stress
 
 # Build with memory report to see allocation analysis
-turbo build --release --memory-report
+turbolang build --release --memory-report
 ```
 
 ## Architecture

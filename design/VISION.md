@@ -224,7 +224,7 @@ Turbo ships as a focused core and grows through progressive disclosure -- every 
 | Version | Milestone | Key Addition |
 |---------|-----------|-------------|
 | **v1.0** | Core | Syntax, types, CTRC memory, async, agents, full toolchain, LLVM + WASM |
-| **v1.1** | Script Mode | `turbo run file.tb` with zero config, shebang, REPL, full inference |
+| **v1.1** | Script Mode | `turbolang run file.tb` with zero config, shebang, REPL, full inference |
 | **v1.2** | GPU & Compute | `@gpu` kernels, `turbo/tensor`, SIMD, ML inference, Python interop |
 | **v1.3** | Mobile | iOS + Android targets, `turbo/ui` cross-platform framework, platform SDKs |
 | **v1.4** | Distributed | `turbo/cluster` for distributed actors, service mesh, consensus primitives |

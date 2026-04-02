@@ -56,8 +56,8 @@ extern async fn host_fetch(url: str, options: FetchOptions) -> FetchResponse
 ```
 
 This means the same Turbo code works in both environments:
-- **Native:** `turbo run` -- uses the OS network stack, filesystem, etc.
-- **WASM:** `turbo build --target wasm32-wasi` -- imports host functions from the edge runtime.
+- **Native:** `turbolang run` -- uses the OS network stack, filesystem, etc.
+- **WASM:** `turbolang build --target wasm32-wasi` -- imports host functions from the edge runtime.
 
 No `#[cfg(target_arch = "wasm32")]` conditional compilation needed. The compiler resolves imports at link time.
 
@@ -181,13 +181,13 @@ Build and deploy in two commands:
 
 ```bash
 # Compile to WASM
-turbo build --target wasm32-wasi
+turbolang build --target wasm32-wasi
 
 # Deploy to all edge locations
-turbo deploy --edge
+turbolang deploy --edge
 ```
 
-The `turbo deploy` command auto-detects the target platform from `turbo.toml`:
+The `turbolang deploy` command auto-detects the target platform from `turbo.toml`:
 
 ```toml
 [edge]

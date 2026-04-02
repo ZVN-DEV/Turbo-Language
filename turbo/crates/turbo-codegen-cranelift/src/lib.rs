@@ -270,7 +270,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     Ok(())
 }
 
-/// Compile a module and run a single named function (used for `turbo test --run-fn`).
+/// Compile a module and run a single named function (used for `turbolang test --run-fn`).
 /// The function is called via JIT and the process exits with the function's outcome
 /// (0 on success, 1 on assertion failure).
 pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result<(), CodegenError> {

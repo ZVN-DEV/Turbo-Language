@@ -378,5 +378,5 @@ extern fn __wasm_memory_size(memory_idx: u32) -> usize
 //     |> execute(executor, context)
 //
 // Deploy:
-//   turbo build --target wasm32-wasi
-//   turbo deploy --edge
+//   turbolang build --target wasm32-wasi
+//   turbolang deploy --edge

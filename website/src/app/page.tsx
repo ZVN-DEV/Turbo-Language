@@ -426,7 +426,7 @@ export default function Home() {
                   <span className="text-[#00ff88]">cargo build</span> --release
                   -p turbo-cli --manifest-path turbo/Cargo.toml{"\n"}
                   <span className="text-gray-500">$</span>{" "}
-                  <span className="text-[#00ff88]">./target/release/turbo</span>{" "}
+                  <span className="text-[#00ff88]">./target/release/turbolang</span>{" "}
                   run hello.tb
                 </code>
               </pre>
@@ -445,7 +445,7 @@ export default function Home() {
                   <span className="text-[#00ff88]">brew install</span> turbo-lang
                   {"\n\n"}
                   <span className="text-gray-500">$</span>{" "}
-                  <span className="text-[#00ff88]">turbo</span> run hello.tb
+                  <span className="text-[#00ff88]">turbolang</span> run hello.tb
                 </code>
               </pre>
             </div>

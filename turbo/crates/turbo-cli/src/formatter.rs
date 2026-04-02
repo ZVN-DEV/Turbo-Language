@@ -20,7 +20,7 @@ pub fn format_file(path: &Path, check: bool) {
     if check {
         if source != formatted {
             eprintln!(
-                "error: {} is not formatted (run `turbo fmt {}` to fix)",
+                "error: {} is not formatted (run `turbolang fmt {}` to fix)",
                 path.display(),
                 path.display()
             );

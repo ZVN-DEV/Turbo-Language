@@ -23,11 +23,11 @@ Everything in the current design documents. What ships on day one.
 - Debug, release, and size-optimized build profiles
 
 ### Toolchain
-- `turbo build` / `turbo run` / `turbo test` / `turbo bench`
-- `turbo fmt` -- single canonical style, zero config
-- `turbo lint` -- built-in linter with extensible rules
-- `turbo doc` -- documentation generator with tested examples
-- `turbo repl` -- interactive exploration environment
+- `turbolang build` / `turbolang run` / `turbolang test` / `turbolang bench`
+- `turbolang fmt` -- single canonical style, zero config
+- `turbolang lint` -- built-in linter with extensible rules
+- `turbolang doc` -- documentation generator with tested examples
+- `turbolang repl` -- interactive exploration environment
 - LSP server for editor integration
 - Package manager with lockfiles, workspaces, semantic versioning
 
@@ -49,15 +49,15 @@ Everything in the current design documents. What ships on day one.
 **Progressive disclosure principle:** Level 0 developers get scripting for free. The compilation step becomes invisible for simple programs.
 
 ### What Ships
-- **`turbo run script.tb`** executes single files directly. No `turbo.toml` required. No explicit types required. The compiler infers everything for local scripts.
-- **Shebang support:** `#!/usr/bin/env turbo` at the top of any `.tb` file makes it executable from the shell.
-- **`turbo repl`** enhanced with contextual hints, tab completion, and inline documentation. Ideal for learning and prototyping.
-- **Full type inference for scripts:** Write `let x = 5` and `fn add(a, b) => a + b`. No annotations needed. When you want types, add them -- the compiler helps you migrate with `turbo annotate`.
+- **`turbolang run script.tb`** executes single files directly. No `turbo.toml` required. No explicit types required. The compiler infers everything for local scripts.
+- **Shebang support:** `#!/usr/bin/env turbolang` at the top of any `.tb` file makes it executable from the shell.
+- **`turbolang repl`** enhanced with contextual hints, tab completion, and inline documentation. Ideal for learning and prototyping.
+- **Full type inference for scripts:** Write `let x = 5` and `fn add(a, b) => a + b`. No annotations needed. When you want types, add them -- the compiler helps you migrate with `turbolang annotate`.
 - **Implicit main:** A script file without an explicit `fn main()` wraps top-level statements in an async main automatically.
 - **Script dependencies:** `// @dep turbo/http ^1.0` comment syntax for single-file dependency declarations.
 
 ### What Does NOT Change
-The base language is identical. Script mode is a compiler front-end convenience, not a language fork. Any script can be promoted to a full project by adding `turbo.toml` and type annotations. The compiler provides `turbo init` to scaffold a project from an existing script.
+The base language is identical. Script mode is a compiler front-end convenience, not a language fork. Any script can be promoted to a full project by adding `turbo.toml` and type annotations. The compiler provides `turbolang init` to scaffold a project from an existing script.
 
 ### Why v1.1
 Scripting is the lowest-friction entry point. It lets developers start with Turbo the way they start with Python -- a single file, zero ceremony -- and grow into typed, structured projects as complexity warrants. This captures the "quick scripts" use case that v1.0 explicitly defers to other languages.
@@ -97,12 +97,12 @@ GPU compute is the next frontier after scripting. With the AI boom driving deman
 ### What Ships
 - **iOS target:** ARM64 via LLVM. Swift/ObjC bridge for calling platform APIs (UIKit, SwiftUI interop, system services).
   ```bash
-  turbo build --target ios-arm64
-  turbo build --target ios-arm64-simulator
+  turbolang build --target ios-arm64
+  turbolang build --target ios-arm64-simulator
   ```
 - **Android target:** ARM64 via LLVM. Kotlin/JNI bridge for calling Android SDK APIs.
   ```bash
-  turbo build --target android-arm64
+  turbolang build --target android-arm64
   ```
 - **`turbo/ui` declarative UI framework:** Cross-platform UI components that compile to native platform widgets. Inspired by SwiftUI and Jetpack Compose, expressed in Turbo syntax.
   ```
@@ -162,8 +162,8 @@ Every feature maps to a disclosure level. Developers discover complexity only wh
 | Concurrency | `await` | `spawn`, `all()` | Actors, channels | Supervision trees |
 | Agents | `Agent.quick(...)` | `tool fn` + `agent` | Multi-agent orchestration | Custom providers |
 | Performance | Just works | `@perf` tests | `@inline`, `const fn` | `region {}`, SIMD |
-| Targets | `turbo run` (native) | `--target wasm32` | `--target ios-arm64` | `@gpu` kernels |
-| Scripts | `turbo run file.tb` | `turbo.toml` project | Workspaces | Custom build steps |
+| Targets | `turbolang run` (native) | `--target wasm32` | `--target ios-arm64` | `@gpu` kernels |
+| Scripts | `turbolang run file.tb` | `turbo.toml` project | Workspaces | Custom build steps |
 
 ### How to Read This Table
 
@@ -182,7 +182,7 @@ Each version follows the same pattern:
 
 1. **New capabilities are additive.** No breaking changes to existing syntax, semantics, or APIs.
 2. **New capabilities are opt-in.** No new imports, annotations, or concepts appear unless the developer explicitly requests them.
-3. **The base language stays clean.** A `turbo run hello.tb` that prints "Hello, world!" looks identical in v1.0 and v1.4.
+3. **The base language stays clean.** A `turbolang run hello.tb` that prints "Hello, world!" looks identical in v1.0 and v1.4.
 4. **Migration is gradual.** Developers adopt new features at their own pace. There is no "v1.2 migration guide" because nothing breaks.
 
 This is the core promise of progressive disclosure: **Turbo grows without burdening the developers who do not need the growth.**
