@@ -7,7 +7,7 @@
 A compiled, type-safe programming language with familiar syntax, native performance, and first-class AI agent primitives. Compiles to machine code via Cranelift -- no VM, no garbage collector, no overhead.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-237%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-358%20passing-brightgreen.svg)](#testing)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 
@@ -28,7 +28,7 @@ brew tap ZVN-DEV/turbo && brew install turbo-lang
 # Or build from source
 git clone https://github.com/ZVN-DEV/Turbo-Language.git
 cd Turbo-Language/turbo
-cargo build --release
+cargo build --release -p turbo-cli
 export PATH="$PWD/target/release:$PATH"
 ```
 
@@ -99,7 +99,7 @@ type Option<T> {
     None
 }
 
-trait Display {
+trait Printable {
     fn to_string(self) -> str
 }
 
@@ -243,8 +243,8 @@ Safe value semantics without a garbage collector.
 ```turbo
 fn main() {
     let a = [1, 2, 3]
-    let b = a           // shared (cheap)
-    b[0] = 99           // copy-on-write (safe)
+    let mut b = a        // shared (cheap)
+    b[0] = 99            // copy-on-write (safe)
     print(a[0])          // 1 — original unchanged
     print(b[0])          // 99 — independent copy
 }
@@ -295,7 +295,10 @@ See [`examples/web-dashboard/main.tb`](examples/web-dashboard/main.tb)
 | `turbo build --llvm <file.tb>` | Compile with LLVM optimizations |
 | `turbo test <file.tb>` | Run `@test` functions |
 | `turbo bench <file.tb>` | Benchmark with timing |
-| `turbo check <file.tb>` | Type-check without running |
+| `turbo check <file.tb>` | Type-check without compiling |
+| `turbo install` | Install dependencies from turbo.toml |
+| `turbo update` | Update GitHub dependencies |
+| `turbo playground` | Launch browser-based playground |
 | `turbo fmt <file.tb>` | Format source code |
 | `turbo init <name>` | Create a new project |
 | `turbo doc <file.tb>` | Generate documentation |
@@ -319,10 +322,10 @@ Benchmarked on Apple Silicon (fib(40), recursive):
 
 | Language | Time | Binary Size |
 |----------|------|-------------|
-| **Turbo (LLVM)** | **160ms** | **35 KB** |
-| C (cc -O2) | 170ms | 33 KB |
 | Rust (rustc -O) | 180ms | 441 KB |
-| Turbo (Cranelift) | 220ms | 35 KB |
+| **Turbo (Cranelift)** | **250ms** | **55 KB** |
+| C (cc -O2) | 290ms | 33 KB |
+| **Turbo (LLVM)** | **290ms** | **55 KB** |
 | Node.js | 580ms | N/A |
 | Python | 13.1s | N/A |
 
@@ -352,17 +355,17 @@ Full specification lives in `design/`: [SYNTAX.md](design/SYNTAX.md), [TYPE-SYST
 
 ```bash
 # Unit tests (all crates)
-cargo test --all --manifest-path turbo/Cargo.toml
+cargo test --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
 
 # Integration tests (requires release build)
-cargo build --release --manifest-path turbo/Cargo.toml
+cargo build --release -p turbo-cli --manifest-path turbo/Cargo.toml
 cd turbo && ./tests/run_tests.sh
 
 # Run a single file
 turbo run turbo/tests/phase1/fibonacci.tb
 ```
 
-237 tests across unit and integration suites.
+358+ tests across unit and integration suites.
 
 ## LLVM Backend (Optional)
 
@@ -370,7 +373,7 @@ For maximum performance, install LLVM 18 and rebuild:
 
 ```bash
 brew install llvm@18
-LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --release
+LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --release -p turbo-codegen-llvm -p turbo-cli --features turbo-cli/llvm
 turbo build --llvm myapp.tb -o myapp
 ```
 
@@ -383,7 +386,7 @@ turbo build --llvm myapp.tb -o myapp
 | **Homebrew** | `brew tap ZVN-DEV/turbo && brew install turbo-lang` |
 | **Docker** | [`distribution/Dockerfile`](distribution/Dockerfile) |
 | **LSP Server** | `turbo lsp` -- diagnostics, hover, completions, go-to-definition |
-| **Install Script** | `curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/install.sh \| sh` |
+| **Install Script** | `curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh \| sh` |
 
 ## Contributing
 

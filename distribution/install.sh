@@ -29,7 +29,7 @@ done
 # If VERSION not set via env or flag, fetch latest from GitHub API
 if [ -z "${VERSION:-}" ]; then
     echo "Fetching latest release version..."
-    VERSION=$(curl -fsSL https://api.github.com/repos/ZVN-DEV/turbo/releases/latest | grep '"tag_name"' | sed 's/.*"v\(.*\)".*/\1/')
+    VERSION=$(curl -fsSL https://api.github.com/repos/ZVN-DEV/Turbo-Language/releases/latest | grep '"tag_name"' | sed 's/.*"v\(.*\)".*/\1/')
     if [ -z "${VERSION}" ]; then
         echo "Error: Could not determine latest version from GitHub API."
         echo "Try specifying a version: VERSION=0.1.0 bash install.sh"

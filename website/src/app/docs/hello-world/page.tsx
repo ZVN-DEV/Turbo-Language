@@ -118,7 +118,7 @@ Hello, world!`}</code>
         A Slightly Bigger Example
       </h2>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`fn abs(x: i64) -> i64 {
+        <code>{`fn my_abs(x: i64) -> i64 {
     if x < 0 { 0 - x } else { x }
 }
 
@@ -128,7 +128,7 @@ fn clamp(val: i64, lo: i64, hi: i64) -> i64 {
 }
 
 fn main() {
-    assert(abs(-42) == 42)
+    assert(my_abs(-42) == 42)
     assert(clamp(150, 0, 100) == 100)
     print("All checks passed!")
 }`}</code>

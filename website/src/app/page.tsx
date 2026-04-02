@@ -17,16 +17,16 @@ const exampleTabs = [
     label: "Pattern Matching",
     filename: "shapes.tb",
     code: `type Shape {
-    Circle(f64),
-    Rectangle(f64, f64),
-    Triangle(f64, f64),
+    Circle(f64)
+    Rectangle(f64, f64)
+    Triangle(f64, f64)
 }
 
 fn area(shape: Shape) -> f64 {
     match shape {
-        Circle(r) => 3.14159 * r * r,
-        Rectangle(w, h) => w * h,
-        Triangle(b, h) => 0.5 * b * h,
+        Circle(r) => 3.14159 * r * r
+        Rectangle(w, h) => w * h
+        Triangle(b, h) => 0.5 * b * h
     }
 }
 
@@ -57,24 +57,24 @@ fn main() {
   {
     label: "AI Agent",
     filename: "assistant.tb",
-    code: `// Agent syntax is experimental
+    code: `tool fn get_weather(city: str) -> str {
+    "Weather for: " + city
+}
+
+tool fn get_forecast(city: str, days: i64) -> str {
+    "Forecast for " + city + " (" + to_str(days) + " days)"
+}
+
 agent WeatherBot {
     model: "gpt-4"
+    tools: [get_weather, get_forecast]
     system: "You are a helpful weather assistant."
+}
 
-    tool fn get_weather(city: str) -> str {
-        let resp = await http_get(
-            "https://wttr.in/" + city + "?format=3"
-        )
-        resp.body
-    }
-
-    tool fn get_forecast(city: str, days: i64) -> str {
-        let resp = await http_get(
-            "https://wttr.in/" + city + "?format=v2&days=" + to_str(days)
-        )
-        resp.body
-    }
+fn main() {
+    let bot = WeatherBot {}
+    print(bot.model)
+    print(get_weather("Tokyo"))
 }`,
   },
 ];
@@ -421,10 +421,10 @@ export default function Home() {
                   <span className="text-[#00ff88]">git clone</span>{" "}
                   https://github.com/ZVN-DEV/Turbo-Language.git{"\n"}
                   <span className="text-gray-500">$</span>{" "}
-                  <span className="text-[#00ff88]">cd</span> turbo-lang{"\n"}
+                  <span className="text-[#00ff88]">cd</span> Turbo-Language{"\n"}
                   <span className="text-gray-500">$</span>{" "}
                   <span className="text-[#00ff88]">cargo build</span> --release
-                  --manifest-path turbo/Cargo.toml{"\n"}
+                  -p turbo-cli --manifest-path turbo/Cargo.toml{"\n"}
                   <span className="text-gray-500">$</span>{" "}
                   <span className="text-[#00ff88]">./target/release/turbo</span>{" "}
                   run hello.tb

@@ -39,10 +39,10 @@ brew install turbo-lang`}</code>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
         <code>{`# Clone the repository
 git clone https://github.com/ZVN-DEV/Turbo-Language.git
-cd turbo-lang/turbo
+cd Turbo-Language/turbo
 
 # Build in release mode
-cargo build --release
+cargo build --release -p turbo-cli
 
 # The binary is at target/release/turbo`}</code>
       </pre>
@@ -59,8 +59,8 @@ cargo build --release
 brew install llvm@18
 
 # Build Turbo with LLVM support enabled
-cd turbo-lang/turbo
-cargo build --release --features llvm
+cd Turbo-Language/turbo
+LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --release -p turbo-codegen-llvm -p turbo-cli --features turbo-cli/llvm
 
 # Use the LLVM backend with the --llvm flag
 ./target/release/turbo build --llvm hello.tb`}</code>
@@ -80,7 +80,7 @@ cargo build --release --features llvm
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
         <code>{`# Add to ~/.bashrc, ~/.zshrc, or equivalent
-export PATH="$HOME/turbo-lang/turbo/target/release:$PATH"`}</code>
+export PATH="$HOME/Turbo-Language/turbo/target/release:$PATH"`}</code>
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">

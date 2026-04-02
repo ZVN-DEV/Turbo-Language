@@ -79,6 +79,11 @@ enum Commands {
     Update,
     /// Start the Language Server Protocol server
     Lsp,
+    /// Type-check a Turbo source file without compiling or running
+    Check {
+        /// Path to the .tb source file (optional if turbo.toml exists)
+        file: Option<PathBuf>,
+    },
     /// Run @test functions in a Turbo source file
     Test {
         /// Path to the .tb source file (or directory)
@@ -133,6 +138,10 @@ fn main() {
         Commands::Doc { file } => doc_file(&file),
         Commands::Install => install_deps(),
         Commands::Update => update_deps(),
+        Commands::Check { file } => {
+            let path = resolve_entry_file(file);
+            check_file(&path);
+        }
         Commands::Lsp => start_lsp(),
         Commands::Test { file } => test_file(file),
         Commands::Bench { file, iterations } => bench_file(file, iterations),
@@ -716,6 +725,91 @@ fn run_file(path: &std::path::Path, verbose: bool) {
             std::process::exit(1);
         }
     }
+}
+
+fn check_file(path: &std::path::Path) {
+    check_file_size(path);
+
+    let source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}",
+                path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let filename = path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| "<unknown>".to_string());
+
+    // Lex
+    let (tokens, lex_errors) = turbo_lexer::tokenize(&source);
+
+    if !lex_errors.is_empty() {
+        for span in &lex_errors {
+            let snippet = &source[span.clone()];
+            report_error(
+                &source,
+                &filename,
+                &format!("unexpected character `{snippet}`"),
+                span,
+                Some("remove this character or check for typos"),
+                None,
+            );
+        }
+        std::process::exit(1);
+    }
+
+    // Parse
+    let (mut module, parse_errors) = turbo_parser::parse(tokens);
+
+    if !parse_errors.is_empty() {
+        for err in &parse_errors {
+            report_error(
+                &source,
+                &filename,
+                &err.message,
+                &err.span,
+                None,
+                Some(err.code),
+            );
+        }
+        std::process::exit(1);
+    }
+
+    // Resolve imports
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let canonical_self = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut loading = HashSet::new();
+    loading.insert(canonical_self);
+    if let Err(e) = resolve_imports(&mut module, base_dir, &mut loading) {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+
+    // Semantic analysis
+    let sema_errors = turbo_sema::check(&module);
+
+    if !sema_errors.is_empty() {
+        for err in &sema_errors {
+            let help = sema_help(&err.message);
+            report_error(
+                &source,
+                &filename,
+                &err.message,
+                &err.span,
+                help.as_deref(),
+                Some(err.code),
+            );
+        }
+        std::process::exit(1);
+    }
+
+    eprintln!("\x1b[32m\u{2713}\x1b[0m No errors in `{}`", filename);
 }
 
 fn test_file(file: Option<PathBuf>) {

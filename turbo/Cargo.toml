@@ -9,6 +9,15 @@ members = [
     "crates/turbo-cli",
     "crates/turbo-lsp",
 ]
+default-members = [
+    "crates/turbo-lexer",
+    "crates/turbo-ast",
+    "crates/turbo-parser",
+    "crates/turbo-codegen-cranelift",
+    "crates/turbo-sema",
+    "crates/turbo-cli",
+    "crates/turbo-lsp",
+]
 resolver = "2"
 
 [workspace.dependencies]

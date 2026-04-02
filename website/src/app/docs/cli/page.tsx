@@ -32,7 +32,9 @@ export default function CliPage() {
               ["turbo doc <file.tb>", "Generate documentation"],
               ["turbo repl", "Interactive REPL"],
               ["turbo lsp", "Start Language Server Protocol server"],
+              ["turbo check <file.tb>", "Type-check without compiling"],
               ["turbo explain <code>", "Explain an error code (e.g. E0100)"],
+              ["turbo playground", "Launch browser-based playground"],
             ].map(([cmd, desc]) => (
               <tr key={cmd} className="border-b border-[#1a1a2e]">
                 <td className="px-4 py-2">
@@ -156,12 +158,10 @@ $ turbo lsp`}</code>
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
         <code>{`$ turbo explain E0100
-E0100: Type mismatch
-  The compiler expected one type but found another.
+E0100: type mismatch
 
 $ turbo explain E0200
-E0200: Match expression is not exhaustive
-  Your match is missing one or more possible patterns.`}</code>
+E0200: match expression is not exhaustive`}</code>
       </pre>
 
       <h2 id="builtins" className="text-2xl font-bold text-white mt-10 mb-4">
