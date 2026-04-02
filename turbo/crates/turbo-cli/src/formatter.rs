@@ -50,13 +50,16 @@ pub fn format_source(source: &str) -> String {
     // Phase 1: trim trailing whitespace
     let trimmed: Vec<String> = lines.iter().map(|l| l.trim_end().to_string()).collect();
 
-    // Phase 2: normalize indentation based on brace depth
-    let reindented = reindent(&trimmed);
+    // Phase 2: normalize intra-line spacing (collapse runs, space after commas/colons)
+    let spaced_lines: Vec<String> = trimmed.iter().map(|l| normalize_line_spacing(l)).collect();
 
-    // Phase 3: normalize blank lines between top-level items
+    // Phase 3: normalize indentation based on brace depth
+    let reindented = reindent(&spaced_lines);
+
+    // Phase 4: normalize blank lines between top-level items
     let spaced = normalize_top_level_spacing(&reindented);
 
-    // Phase 4: ensure exactly one trailing newline
+    // Phase 5: ensure exactly one trailing newline
     let mut result = spaced.join("\n");
     // Trim trailing blank lines then add exactly one newline
     while result.ends_with('\n') {
@@ -64,6 +67,123 @@ pub fn format_source(source: &str) -> String {
     }
     result.push('\n');
     result
+}
+
+/// Normalize intra-line spacing: collapse multiple spaces to one, ensure space
+/// after commas and colons (in type annotations), remove space before `)` and `]`,
+/// remove space after `(` and `[`. Preserves string contents and leading indent.
+fn normalize_line_spacing(line: &str) -> String {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with("//") {
+        return line.to_string();
+    }
+
+    // Preserve leading whitespace (will be fixed by reindent anyway)
+    let leading = line.len() - line.trim_start().len();
+    let indent = &line[..leading];
+    let content = &line[leading..];
+
+    let mut result = String::with_capacity(content.len());
+    let mut in_string = false;
+    let mut escape_next = false;
+    let mut chars = content.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if escape_next {
+            escape_next = false;
+            result.push(c);
+            continue;
+        }
+        if c == '\\' && in_string {
+            escape_next = true;
+            result.push(c);
+            continue;
+        }
+        if c == '"' {
+            in_string = !in_string;
+            result.push(c);
+            continue;
+        }
+        if in_string {
+            result.push(c);
+            continue;
+        }
+
+        // Line comment — pass through rest unchanged
+        if c == '/' && chars.peek() == Some(&'/') {
+            result.push(c);
+            for rest in chars.by_ref() {
+                result.push(rest);
+            }
+            break;
+        }
+
+        // Collapse multiple spaces to one
+        if c == ' ' {
+            // Skip if previous char is `(` or `[` (no space after open paren/bracket)
+            if result.ends_with('(') || result.ends_with('[') {
+                // eat all spaces
+                while chars.peek() == Some(&' ') {
+                    chars.next();
+                }
+                continue;
+            }
+            // eat extra spaces
+            while chars.peek() == Some(&' ') {
+                chars.next();
+            }
+            // Skip if next char is `)` or `]` (no space before close paren/bracket)
+            if let Some(&next) = chars.peek() {
+                if next == ')' || next == ']' {
+                    continue;
+                }
+            }
+            result.push(' ');
+            continue;
+        }
+
+        // Ensure space after comma
+        if c == ',' {
+            result.push(',');
+            // Eat existing spaces
+            while chars.peek() == Some(&' ') {
+                chars.next();
+            }
+            // Add exactly one space (unless next is newline/end)
+            if chars.peek().is_some() {
+                result.push(' ');
+            }
+            continue;
+        }
+
+        // Remove space before `)` and `]`
+        if (c == ')' || c == ']') && result.ends_with(' ') {
+            // Only trim if the previous non-space isn't a keyword
+            let trimmed_result = result.trim_end();
+            // Simple heuristic: don't trim if it would eat a keyword space
+            let last_word_start = trimmed_result.rfind(|ch: char| !ch.is_alphanumeric() && ch != '_');
+            let last_word = if let Some(pos) = last_word_start {
+                &trimmed_result[pos + 1..]
+            } else {
+                trimmed_result
+            };
+            let is_keyword = matches!(
+                last_word,
+                "if" | "while" | "for" | "match" | "return" | "let" | "fn" | "else"
+            );
+            if !is_keyword {
+                while result.ends_with(' ') {
+                    result.pop();
+                }
+            }
+            result.push(c);
+            continue;
+        }
+
+        result.push(c);
+    }
+
+    format!("{indent}{result}")
 }
 
 /// Reindent lines based on brace-counting (`{` increases, `}` decreases).
@@ -310,7 +430,7 @@ fn main() {
 }
 "#;
         let output = format_source(input);
-        let expected = r#"fn add(a: i64,    b: i64) -> i64 {
+        let expected = r#"fn add(a: i64, b: i64) -> i64 {
     a + b
 }
 
@@ -320,5 +440,27 @@ fn main() {
 }
 "#;
         assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_spacing_in_function_signatures() {
+        let input = "fn    main(    ) {\n    print(\"hello\")\n}\n";
+        let output = format_source(input);
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines[0], "fn main() {");
+    }
+
+    #[test]
+    fn test_spacing_after_commas() {
+        let input = "fn main() {\n    let arr = [1,2,3]\n}\n";
+        let output = format_source(input);
+        assert!(output.contains("[1, 2, 3]"));
+    }
+
+    #[test]
+    fn test_spacing_preserves_strings() {
+        let input = "fn main() {\n    print(\"hello    world\")\n}\n";
+        let output = format_source(input);
+        assert!(output.contains("\"hello    world\""));
     }
 }

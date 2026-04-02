@@ -212,6 +212,10 @@ fn resolve_entry_file(file: Option<PathBuf>) -> PathBuf {
 /// Initialize a new Turbo project with the given name.
 fn init_project(name: &str) {
     let dir = Path::new(name);
+    let pkg_name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| name.to_string());
 
     if dir.exists() {
         eprintln!("\x1b[1;31merror\x1b[0m: directory `{name}` already exists");
@@ -231,7 +235,7 @@ fn init_project(name: &str) {
     std::fs::write(
         dir.join("turbo.toml"),
         format!(
-            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n"
+            "[package]\nname = \"{pkg_name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n"
         ),
     )
     .unwrap();
@@ -239,14 +243,14 @@ fn init_project(name: &str) {
     // src/main.tb
     std::fs::write(
         dir.join("src/main.tb"),
-        format!("fn main() {{\n    print(\"Hello from {name}!\")\n}}\n"),
+        format!("fn main() {{\n    print(\"Hello from {pkg_name}!\")\n}}\n"),
     )
     .unwrap();
 
     // tests/main_test.tb
     std::fs::write(
         dir.join("tests/main_test.tb"),
-        "fn main() {\n    assert(1 + 1 == 2, \"basic math works\")\n    print(\"All tests passed!\")\n}\n",
+        "@test fn test_math() {\n    assert(1 + 1 == 2, \"basic math works\")\n}\n\n@test fn test_greeting() {\n    let name = \"Turbo\"\n    assert(name == \"Turbo\", \"greeting is correct\")\n}\n",
     )
     .unwrap();
 
@@ -255,6 +259,23 @@ fn init_project(name: &str) {
 
     eprintln!("\x1b[32m\u{2713}\x1b[0m Created project `{name}`");
     eprintln!("  cd {name} && turbo run");
+}
+
+/// Read the project name from `turbo.toml` in the current directory, if it exists.
+fn read_project_name() -> Option<PathBuf> {
+    let toml = std::fs::read_to_string("turbo.toml").ok()?;
+    for line in toml.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("name") {
+            if let Some(val) = trimmed.split('=').nth(1) {
+                let name = val.trim().trim_matches('"').trim_matches('\'');
+                if !name.is_empty() {
+                    return Some(PathBuf::from(name));
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Extract a quoted value for a given key from a TOML inline table string.
@@ -1314,11 +1335,18 @@ fn build_file(
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| "<unknown>".to_string());
 
-    // Default output: filename without .tb extension
-    let default_output = path
-        .file_stem()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("a.out"));
+    // Default output: project name from turbo.toml if available, else filename without .tb
+    let default_output = if output.is_none() {
+        read_project_name().unwrap_or_else(|| {
+            path.file_stem()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("a.out"))
+        })
+    } else {
+        path.file_stem()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("a.out"))
+    };
     let output_path = output.unwrap_or(&default_output);
 
     // Lex

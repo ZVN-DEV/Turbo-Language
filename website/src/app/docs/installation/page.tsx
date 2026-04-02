@@ -27,7 +27,10 @@ export default function InstallationPage() {
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
         Option 1: Homebrew (macOS)
       </h2>
-      <p className="mb-4">The fastest way to install on macOS:</p>
+      <p className="mb-4">
+        Install on macOS via Homebrew. Requires the Rust toolchain (installed
+        automatically as a build dependency).
+      </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
         <code>{`brew tap ZVN-DEV/turbo
 brew install turbo-lang`}</code>
