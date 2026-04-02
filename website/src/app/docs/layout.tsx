@@ -47,7 +47,7 @@ const sections = [
     title: "Community",
     links: [
       {
-        href: "https://github.com/ZVN-DEV/turbo-lang",
+        href: "https://github.com/ZVN-DEV/Turbo-Language",
         label: "GitHub",
         external: true,
       },

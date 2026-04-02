@@ -261,7 +261,7 @@ export default function Home() {
                   </svg>
                 </Link>
                 <a
-                  href="https://github.com/ZVN-DEV/turbo-lang"
+                  href="https://github.com/ZVN-DEV/Turbo-Language"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 border border-[#1a1a2e] text-gray-300 px-6 py-3 rounded-lg hover:border-[#00ff88] hover:text-[#00ff88] transition-colors text-sm"
@@ -419,7 +419,7 @@ export default function Home() {
                 <code>
                   <span className="text-gray-500">$</span>{" "}
                   <span className="text-[#00ff88]">git clone</span>{" "}
-                  https://github.com/ZVN-DEV/turbo-lang.git{"\n"}
+                  https://github.com/ZVN-DEV/Turbo-Language.git{"\n"}
                   <span className="text-gray-500">$</span>{" "}
                   <span className="text-[#00ff88]">cd</span> turbo-lang{"\n"}
                   <span className="text-gray-500">$</span>{" "}

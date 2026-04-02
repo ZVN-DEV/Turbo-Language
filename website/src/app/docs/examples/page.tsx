@@ -147,7 +147,7 @@ let upper = cleaned |> upper`}</code>
         <p className="text-gray-300 mb-0">
           All examples are available in the{" "}
           <a
-            href="https://github.com/ZVN-DEV/turbo-lang/tree/main/examples"
+            href="https://github.com/ZVN-DEV/Turbo-Language/tree/main/examples"
             target="_blank"
             rel="noopener noreferrer"
             className="text-[#00ff88] hover:underline"
