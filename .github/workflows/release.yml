@@ -17,7 +17,7 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: turbolang
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             artifact: turbolang
           - os: ubuntu-latest
@@ -50,9 +50,11 @@ jobs:
           cargo build --release --target ${{ matrix.target }}
 
       - name: Smoke test
+        if: matrix.target != 'x86_64-apple-darwin'
         run: ./turbo/target/${{ matrix.target }}/release/turbolang --version
 
       - name: Smoke test - compile and run
+        if: matrix.target != 'x86_64-apple-darwin'
         run: |
           echo 'fn main() { print("turbo works") }' > /tmp/test.tb
           ./turbo/target/${{ matrix.target }}/release/turbolang run /tmp/test.tb
