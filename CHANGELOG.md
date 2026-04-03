@@ -5,6 +5,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-04-03
+
+### Added
+- LLVM 18 AOT backend now ships with Homebrew install (`turbolang build --llvm`)
+- REPL auto-prints expression results (no need to wrap in `print()`)
+- `turbolang doc` properly extracts fields from single-line struct definitions
+
+### Fixed
+- Suppress `<error>` type leak in optional/result diagnostics (recursive `contains_error()`)
+- Website examples updated to use string interpolation instead of deprecated `to_str()` concatenation
+- Variables & Types docs now document string interpolation nesting limitation
+
+### Changed
+- Release CI builds include LLVM backend for all 3 targets (ARM macOS, Intel macOS, Linux x86_64)
+
 ## [0.2.1] - 2026-04-03
 
 ### Added
