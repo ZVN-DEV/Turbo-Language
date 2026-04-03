@@ -1,6 +1,6 @@
 class TurboLang < Formula
   desc "Compiled, type-safe language with TypeScript DX and Rust performance"
-  homepage "https://github.com/ZVN-DEV/Turbo-Language"
+  homepage "https://turbolang.dev"
   version "0.2.1"
   license "MIT"
 

@@ -369,14 +369,19 @@ turbolang run turbo/tests/phase1/fibonacci.tb
 
 378+ tests across unit and integration suites.
 
-## LLVM Backend (Optional)
+## LLVM Backend
 
-For maximum performance, install LLVM 18 and rebuild:
+The LLVM 18 backend ships with the Homebrew install for maximum performance:
+
+```bash
+turbolang build --llvm myapp.tb -o myapp
+```
+
+For building from source with LLVM support:
 
 ```bash
 brew install llvm@18
-LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --release -p turbo-codegen-llvm -p turbo-cli --features turbo-cli/llvm
-turbolang build --llvm myapp.tb -o myapp
+LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --release -p turbo-cli --features turbo-cli/llvm
 ```
 
 ## Ecosystem
