@@ -103,6 +103,22 @@ export default function VariablesTypesPage() {
     // Output: Welcome to Turbo v1!
 }`}</code>
       </pre>
+      <p className="mb-6 text-sm text-gray-400">
+        <strong className="text-gray-300">Note:</strong> Expressions inside{" "}
+        <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
+          {"{...}"}
+        </code>{" "}
+        cannot contain quoted strings. If you need to call a function with a
+        string argument, assign it to a variable first:{" "}
+        <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
+          let val = greet(&quot;world&quot;)
+        </code>{" "}
+        then use{" "}
+        <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
+          {'"Result: {val}"'}
+        </code>
+        .
+      </p>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">Constants</h2>
       <p className="mb-4">

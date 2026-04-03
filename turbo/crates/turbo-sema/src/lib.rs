@@ -99,6 +99,21 @@ impl Ty {
     fn is_error(&self) -> bool {
         matches!(self, Ty::Error)
     }
+
+    /// Check if this type contains `Ty::Error` anywhere in its structure
+    /// (e.g., `Optional(Error)`, `Result(Error, Error)`, `Array(Error)`).
+    /// Used to suppress cascading diagnostics when the inner error was already reported.
+    fn contains_error(&self) -> bool {
+        match self {
+            Ty::Error => true,
+            Ty::Optional(inner) | Ty::Future(inner) | Ty::Array(inner) => inner.contains_error(),
+            Ty::Result(ok, err) => ok.contains_error() || err.contains_error(),
+            Ty::Fn(params, ret) => {
+                ret.contains_error() || params.iter().any(|p| p.contains_error())
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Check if two types are compatible (allowing partial Result types where Error = unknown).
@@ -2955,8 +2970,9 @@ impl Checker {
                             }
                             for (i, arg) in args.iter().enumerate() {
                                 let arg_ty = self.check_expr(arg);
-                                if !arg_ty.is_error()
-                                    && !param_tys[i].is_error()
+                                if !arg_ty.contains_error()
+                                    && !param_tys[i].contains_error()
+                                    && !types_compatible(&param_tys[i], &arg_ty)
                                     && arg_ty != param_tys[i]
                                 {
                                     self.error(
@@ -3034,9 +3050,10 @@ impl Checker {
                             let arg_ty = &arg_types[i];
                             let (ref param_name, ref param_ty) = &sig.params[i];
                             let concrete_param_ty = self.substitute_ty(param_ty, &substitutions);
-                            if !arg_ty.is_error()
-                                && !concrete_param_ty.is_error()
+                            if !arg_ty.contains_error()
+                                && !concrete_param_ty.contains_error()
                                 && !matches!(concrete_param_ty, Ty::TypeParam(_))
+                                && !types_compatible(&concrete_param_ty, arg_ty)
                                 && *arg_ty != concrete_param_ty
                             {
                                 // Allow integer literal coercion: i64 literal -> i32, u32, u64
@@ -3158,8 +3175,9 @@ impl Checker {
                                         let arg_ty = self.check_expr(arg);
                                         let (ref param_name, ref param_ty) =
                                             method_sig.params[i + 1];
-                                        if !arg_ty.is_error()
-                                            && !param_ty.is_error()
+                                        if !arg_ty.contains_error()
+                                            && !param_ty.contains_error()
+                                            && !types_compatible(param_ty, &arg_ty)
                                             && arg_ty != *param_ty
                                         {
                                             self.error(ErrorCode::E0100,
@@ -3203,7 +3221,9 @@ impl Checker {
                             for (i, arg) in args.iter().enumerate() {
                                 let arg_ty = self.check_expr(arg);
                                 let (ref param_name, ref param_ty) = method_sig.params[i + 1];
-                                if !arg_ty.is_error() && !param_ty.is_error() && arg_ty != *param_ty
+                                if !arg_ty.contains_error() && !param_ty.contains_error()
+                                    && !types_compatible(param_ty, &arg_ty)
+                                    && arg_ty != *param_ty
                                 {
                                     self.error(ErrorCode::E0100,
                                         format!("argument `{param_name}` expects `{param_ty}`, found `{arg_ty}`"),
@@ -3310,7 +3330,9 @@ impl Checker {
                             expr.span.clone(),
                         );
                     }
-                    if !val_ty.is_error() && !info.ty.is_error() && val_ty != info.ty {
+                    if !val_ty.contains_error() && !info.ty.contains_error()
+                        && !types_compatible(&info.ty, &val_ty) && val_ty != info.ty
+                    {
                         self.error(
                             ErrorCode::E0111,
                             format!(
@@ -3358,7 +3380,9 @@ impl Checker {
                             expr.span.clone(),
                         );
                     }
-                    if !val_ty.is_error() && !info.ty.is_error() && val_ty != info.ty {
+                    if !val_ty.contains_error() && !info.ty.contains_error()
+                        && !types_compatible(&info.ty, &val_ty) && val_ty != info.ty
+                    {
                         self.error(ErrorCode::E0130,
                             format!(
                                 "cannot apply `{op_str}=` with `{val_ty}` to variable `{target}` of type `{}`",
@@ -4505,7 +4529,7 @@ impl Checker {
                 let declared_ty = if let Some(ty_expr) = ty {
                     match resolve_type_expr(&ty_expr.node, Some(&self.structs), Some(&self.enums)) {
                         Some(t) => {
-                            if !val_ty.is_error() && t != val_ty {
+                            if !val_ty.contains_error() && !types_compatible(&t, &val_ty) && t != val_ty {
                                 // Allow integer literal coercion: i64 literal -> i32, u32, u64
                                 let is_int_literal_coercion = val_ty == Ty::I64
                                     && matches!(t, Ty::I32 | Ty::U32 | Ty::U64)
@@ -4560,9 +4584,10 @@ impl Checker {
                     Ty::Unit
                 };
 
-                if !ret_ty.is_error()
-                    && !self.current_return_type.is_error()
+                if !ret_ty.contains_error()
+                    && !self.current_return_type.contains_error()
                     && self.current_return_type != Ty::Unit
+                    && !types_compatible(&self.current_return_type, &ret_ty)
                     && ret_ty != self.current_return_type
                 {
                     self.error(
@@ -5059,6 +5084,35 @@ agent A {
 }
 fn main() { }"#,
             "agent `A` is already defined",
+        );
+    }
+
+    #[test]
+    fn test_optional_none_no_error_leak() {
+        // Regression: `let x: i64? = none` should not produce an error
+        // containing `<error>?` (internal type representation leaking).
+        assert_no_errors("fn main() { let x: i64? = none }");
+    }
+
+    #[test]
+    fn test_optional_none_no_error_in_message() {
+        // If an error IS produced, it must never contain `<error>`
+        let errors = check_source("fn main() { let x: i64? = none }");
+        for e in &errors {
+            assert!(
+                !e.message.contains("<error>"),
+                "Internal type `<error>` leaked into error message: {}",
+                e.message
+            );
+        }
+    }
+
+    #[test]
+    fn test_optional_none_return_no_error_leak() {
+        // Returning `none` from a function that returns `i64?` should not
+        // produce `<error>?` in any diagnostic message.
+        assert_no_errors(
+            "fn get_val() -> i64? { none }\nfn main() { let x = get_val() }",
         );
     }
 }

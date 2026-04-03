@@ -9,7 +9,7 @@ const heroCode = `fn fib(n: i64) -> i64 {
 
 fn main() {
     let result = fib(40)
-    print("fib(40) = " + to_str(result))
+    print("fib(40) = {result}")
 }`;
 
 const exampleTabs = [
@@ -32,7 +32,7 @@ fn area(shape: Shape) -> f64 {
 
 fn main() {
     let s = Shape.Circle(5.0)
-    print("Area: " + to_str(area(s)))
+    print("Area: {area(s)}")
 }`,
   },
   {
@@ -51,22 +51,22 @@ fn main() {
     // Await both results
     let users = await a
     let posts = await b
-    print("Got " + to_str(len(users)) + " bytes")
+    print("Got {len(users)} bytes")
 }`,
   },
   {
     label: "AI Agent",
     filename: "assistant.tb",
     code: `tool fn get_weather(city: str) -> str {
-    "Weather for: " + city
+    "Weather for: {city}"
 }
 
 tool fn get_forecast(city: str, days: i64) -> str {
-    "Forecast for " + city + " (" + to_str(days) + " days)"
+    "Forecast for {city} ({days} days)"
 }
 
 agent WeatherBot {
-    model: "gpt-4"
+    model: "claude-sonnet"
     tools: [get_weather, get_forecast]
     system: "You are a helpful weather assistant."
 }
