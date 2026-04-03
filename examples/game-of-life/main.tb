@@ -1,0 +1,160 @@
+// Conway's Game of Life -- Simulation in Turbo
+// Showcases: string-as-grid, char_at, nested loops, algorithms, constants, functions
+
+const WIDTH = 20
+const HEIGHT = 10
+const GENERATIONS = 8
+
+// ── Grid operations (string-backed) ────────────
+
+fn get_cell(grid: str, x: i64, y: i64) -> str {
+    if x < 0 { return "." }
+    if y < 0 { return "." }
+    if x >= WIDTH { return "." }
+    if y >= HEIGHT { return "." }
+    char_at(grid, y * WIDTH + x)
+}
+
+fn set_cell(grid: str, x: i64, y: i64) -> str {
+    let idx = y * WIDTH + x
+    let total = WIDTH * HEIGHT
+    let mut result = ""
+    for i in 0..total {
+        if i == idx {
+            result = result + "#"
+        } else {
+            result = result + char_at(grid, i)
+        }
+    }
+    result
+}
+
+fn count_neighbors(grid: str, x: i64, y: i64) -> i64 {
+    let mut count = 0
+    if get_cell(grid, x - 1, y - 1) == "#" { count += 1 }
+    if get_cell(grid, x,     y - 1) == "#" { count += 1 }
+    if get_cell(grid, x + 1, y - 1) == "#" { count += 1 }
+    if get_cell(grid, x - 1, y)     == "#" { count += 1 }
+    if get_cell(grid, x + 1, y)     == "#" { count += 1 }
+    if get_cell(grid, x - 1, y + 1) == "#" { count += 1 }
+    if get_cell(grid, x,     y + 1) == "#" { count += 1 }
+    if get_cell(grid, x + 1, y + 1) == "#" { count += 1 }
+    count
+}
+
+fn step(current: str) -> str {
+    let mut next = ""
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let alive = get_cell(current, x, y) == "#"
+            let n = count_neighbors(current, x, y)
+            if alive {
+                if n == 2 {
+                    next = next + "#"
+                } else if n == 3 {
+                    next = next + "#"
+                } else {
+                    next = next + "."
+                }
+            } else {
+                if n == 3 {
+                    next = next + "#"
+                } else {
+                    next = next + "."
+                }
+            }
+        }
+    }
+    next
+}
+
+fn count_alive(grid: str) -> i64 {
+    let mut count = 0
+    let total = WIDTH * HEIGHT
+    for i in 0..total {
+        if char_at(grid, i) == "#" { count += 1 }
+    }
+    count
+}
+
+fn render(grid: str, gen: i64) {
+    let alive = count_alive(grid)
+    let border = "+" + repeat("-", WIDTH + 2) + "+"
+    print(border + "  Gen {gen}  Alive: {alive}")
+    for y in 0..HEIGHT {
+        let mut row = "| "
+        for x in 0..WIDTH {
+            row = row + char_at(grid, y * WIDTH + x)
+        }
+        row = row + " |"
+        print(row)
+    }
+    print(border)
+}
+
+// ── Pattern placement ──────────────────────────
+
+fn place_glider(grid: str, ox: i64, oy: i64) -> str {
+    //  .#.
+    //  ..#
+    //  ###
+    let mut g = set_cell(grid, ox + 1, oy)
+    g = set_cell(g, ox + 2, oy + 1)
+    g = set_cell(g, ox, oy + 2)
+    g = set_cell(g, ox + 1, oy + 2)
+    g = set_cell(g, ox + 2, oy + 2)
+    g
+}
+
+fn place_blinker(grid: str, ox: i64, oy: i64) -> str {
+    let mut g = set_cell(grid, ox, oy)
+    g = set_cell(g, ox + 1, oy)
+    g = set_cell(g, ox + 2, oy)
+    g
+}
+
+fn place_block(grid: str, ox: i64, oy: i64) -> str {
+    // 2x2 still life
+    let mut g = set_cell(grid, ox, oy)
+    g = set_cell(g, ox + 1, oy)
+    g = set_cell(g, ox, oy + 1)
+    g = set_cell(g, ox + 1, oy + 1)
+    g
+}
+
+// ── Main ───────────────────────────────────────
+
+fn main() {
+    print("")
+    print(repeat("=", 50))
+    print("  Conway's Game of Life -- Turbo Edition")
+    print(repeat("=", 50))
+    print("")
+
+    // Create empty grid (string of dots)
+    let empty = repeat(".", WIDTH * HEIGHT)
+
+    // Place patterns
+    let mut grid = place_glider(empty, 1, 0)
+    grid = place_blinker(grid, 10, 2)
+    grid = place_block(grid, 16, 6)
+
+    print("  Patterns: Glider, Blinker, Block")
+    print("  Grid: {WIDTH}x{HEIGHT}  Generations: {GENERATIONS}")
+    print("")
+
+    render(grid, 0)
+    let max_gen = GENERATIONS + 1
+    for gen in 1..max_gen {
+        grid = step(grid)
+        print("")
+        render(grid, gen)
+    }
+
+    let final_alive = count_alive(grid)
+    print("")
+    print(repeat("=", 50))
+    print("  Done! {final_alive} cells alive after {GENERATIONS} generations")
+    print(repeat("=", 50))
+    print("")
+}

@@ -1,0 +1,149 @@
+// Turbo Todo CLI — Task Manager
+// Showcases: structs, file I/O, string ops, closures, pipes, for-in, if/else
+
+struct Task {
+    id: i64,
+    title: str,
+    pri: str,
+    done: bool,
+}
+
+fn print_task(t: Task) {
+    let check = if t.done { "[x]" } else { "[ ]" }
+    let label = if t.pri == "high" { "[!!!]" } else if t.pri == "medium" { "[!! ]" } else { "[!  ]" }
+    print("  {check} {label} #{t.id}  {t.title}")
+}
+
+fn count_done(tasks: [Task]) -> i64 {
+    let mut n = 0
+    for t in tasks {
+        if t.done { n += 1 }
+    }
+    n
+}
+
+fn count_high(tasks: [Task]) -> i64 {
+    let mut n = 0
+    for t in tasks {
+        if t.pri == "high" { n += 1 }
+    }
+    n
+}
+
+fn print_stats(tasks: [Task]) {
+    let total = len(tasks)
+    let done = count_done(tasks)
+    let remaining = total - done
+    let high = count_high(tasks)
+    print("")
+    print(repeat("-", 50))
+    print("  Total: {total}  Done: {done}  Remaining: {remaining}  High: {high}")
+    print(repeat("-", 50))
+}
+
+// ── File persistence (pipe-delimited) ───────────
+
+fn save_tasks(tasks: [Task]) {
+    let mut out = ""
+    for t in tasks {
+        let done_str = if t.done { "1" } else { "0" }
+        let line = to_str(t.id) + "|" + t.title + "|" + t.pri + "|" + done_str
+        if len(out) > 0 {
+            out = out + "\n" + line
+        } else {
+            out = line
+        }
+    }
+    write_file("/tmp/turbo_todos.txt", out)
+}
+
+fn main() {
+    print("")
+    print(repeat("=", 50))
+    print("  Turbo Todo Manager")
+    print(repeat("=", 50))
+
+    // Build task list
+    let tasks = [
+        Task { id: 1, title: "Set up CI/CD pipeline", pri: "high", done: false },
+        Task { id: 2, title: "Write unit tests", pri: "high", done: false },
+        Task { id: 3, title: "Design landing page", pri: "medium", done: false },
+        Task { id: 4, title: "Update README", pri: "low", done: false },
+        Task { id: 5, title: "Review pull requests", pri: "medium", done: false },
+        Task { id: 6, title: "Fix login bug", pri: "high", done: true }
+    ]
+
+    // Show all tasks
+    print("")
+    print("  All tasks:")
+    for t in tasks {
+        print_task(t)
+    }
+    print_stats(tasks)
+
+    // Save to disk
+    save_tasks(tasks)
+    print("")
+    print("  Saved to /tmp/turbo_todos.txt")
+
+    // Load back and verify
+    let raw = read_file("/tmp/turbo_todos.txt")
+    let lines = split(raw, "\n")
+    print("  Loaded {len(lines)} lines from disk")
+
+    // Mark tasks #1 and #2 as done
+    print("")
+    print("  Completing tasks #1 and #2...")
+    let updated = [
+        Task { id: 1, title: "Set up CI/CD pipeline", pri: "high", done: true },
+        Task { id: 2, title: "Write unit tests", pri: "high", done: true },
+        Task { id: 3, title: "Design landing page", pri: "medium", done: false },
+        Task { id: 4, title: "Update README", pri: "low", done: false },
+        Task { id: 5, title: "Review pull requests", pri: "medium", done: false },
+        Task { id: 6, title: "Fix login bug", pri: "high", done: true }
+    ]
+
+    print("")
+    print("  Updated tasks:")
+    for t in updated {
+        print_task(t)
+    }
+    print_stats(updated)
+
+    // Save updated state
+    save_tasks(updated)
+
+    // Filter views
+    print("")
+    print("  Remaining high-priority:")
+    for t in updated {
+        if !t.done {
+            if t.pri == "high" {
+                print_task(t)
+            }
+        }
+    }
+
+    print("")
+    print("  Completed tasks:")
+    for t in updated {
+        if t.done {
+            print_task(t)
+        }
+    }
+
+    // Show file contents
+    print("")
+    print("  Persisted file:")
+    let saved = read_file("/tmp/turbo_todos.txt")
+    let saved_lines = split(saved, "\n")
+    for line in saved_lines {
+        print("    {line}")
+    }
+
+    print("")
+    print(repeat("=", 50))
+    print("  Done!")
+    print(repeat("=", 50))
+    print("")
+}

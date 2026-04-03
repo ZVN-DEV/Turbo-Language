@@ -1,0 +1,164 @@
+// Turbo Data Pipeline — Log Analysis Engine
+// Showcases: file I/O, hashmaps, string ops, closures, pipes, structs, pattern matching
+
+fn generate_sample_logs() -> str {
+    let lines = [
+        "[08:01:12] INFO Server started on port 8080",
+        "[08:01:13] INFO Connected to database",
+        "[08:02:45] WARN High memory usage detected (85%)",
+        "[08:03:01] INFO GET /api/users 200 45ms",
+        "[08:03:02] INFO GET /api/users/42 200 12ms",
+        "[08:03:15] ERROR POST /api/orders 500 230ms",
+        "[08:03:16] WARN Retrying database connection",
+        "[08:03:17] INFO Database reconnected",
+        "[08:04:00] INFO GET /api/products 200 33ms",
+        "[08:04:05] INFO POST /api/orders 201 89ms",
+        "[08:04:30] WARN Slow query detected (> 100ms)",
+        "[08:05:00] INFO GET /api/health 200 2ms",
+        "[08:05:15] ERROR GET /api/reports 503 5000ms",
+        "[08:05:16] ERROR Upstream timeout analytics-svc",
+        "[08:05:30] WARN Circuit breaker opened analytics-svc",
+        "[08:06:00] INFO DELETE /api/users/7 204 15ms",
+        "[08:06:30] INFO GET /api/products 200 28ms",
+        "[08:07:00] INFO Cron cleanup expired sessions",
+        "[08:07:45] INFO PUT /api/users/42 200 67ms",
+        "[08:08:00] INFO GET /api/health 200 1ms"
+    ]
+    join(lines, "\n")
+}
+
+fn section(title: str) {
+    print("")
+    print(repeat("-", 55))
+    print("  {title}")
+    print(repeat("-", 55))
+}
+
+fn main() {
+    print("")
+    print(repeat("=", 55))
+    print("  Turbo Data Pipeline -- Log Analyzer")
+    print(repeat("=", 55))
+
+    // Generate and save sample data
+    let raw = generate_sample_logs()
+    write_file("/tmp/turbo_logs.txt", raw)
+    print("")
+    print("  Generated 20 log entries -> /tmp/turbo_logs.txt")
+
+    // Load and parse
+    let data = read_file("/tmp/turbo_logs.txt")
+    let lines = split(data, "\n")
+    print("  Loaded {len(lines)} lines")
+
+    // ── Level Distribution ──────────────────────
+    section("Log Level Distribution")
+    let mut info_count = 0
+    let mut warn_count = 0
+    let mut error_count = 0
+
+    for line in lines {
+        if contains(line, "] INFO ") { info_count += 1 }
+        if contains(line, "] WARN ") { warn_count += 1 }
+        if contains(line, "] ERROR ") { error_count += 1 }
+    }
+
+    print("  INFO:  {info_count}  " + repeat("#", info_count))
+    print("  WARN:  {warn_count}   " + repeat("#", warn_count))
+    print("  ERROR: {error_count}   " + repeat("#", error_count))
+    print("  Total: {len(lines)}")
+
+    // ── Error Details ───────────────────────────
+    section("Error Details")
+    let mut error_idx = 1
+    for line in lines {
+        if contains(line, "] ERROR ") {
+            print("  {error_idx}. {line}")
+            error_idx += 1
+        }
+    }
+
+    // ── HTTP Method Breakdown ───────────────────
+    section("HTTP Request Analysis")
+    let mut get_count = 0
+    let mut post_count = 0
+    let mut put_count = 0
+    let mut delete_count = 0
+    let mut request_total = 0
+
+    for line in lines {
+        if contains(line, " GET ") { get_count += 1; request_total += 1 }
+        if contains(line, " POST ") { post_count += 1; request_total += 1 }
+        if contains(line, " PUT ") { put_count += 1; request_total += 1 }
+        if contains(line, " DELETE ") { delete_count += 1; request_total += 1 }
+    }
+
+    print("  Requests:  {request_total}")
+    print("  GET:       {get_count}  " + repeat("#", get_count))
+    print("  POST:      {post_count}  " + repeat("#", post_count))
+    print("  PUT:       {put_count}  " + repeat("#", put_count))
+    print("  DELETE:    {delete_count}  " + repeat("#", delete_count))
+
+    // ── Status Code Analysis ────────────────────
+    section("Status Code Breakdown")
+    let mut s200 = 0
+    let mut s201 = 0
+    let mut s204 = 0
+    let mut s500 = 0
+    let mut s503 = 0
+
+    for line in lines {
+        if contains(line, " 200 ") { s200 += 1 }
+        if contains(line, " 201 ") { s201 += 1 }
+        if contains(line, " 204 ") { s204 += 1 }
+        if contains(line, " 500 ") { s500 += 1 }
+        if contains(line, " 503 ") { s503 += 1 }
+    }
+
+    print("  200 OK:          {s200}")
+    print("  201 Created:     {s201}")
+    print("  204 No Content:  {s204}")
+    print("  500 Server Err:  {s500}")
+    print("  503 Unavailable: {s503}")
+
+    // ── Endpoint Frequency (using hashmap) ──────
+    section("Endpoint Frequency")
+    let endpoints = hashmap()
+    let known = ["/api/users", "/api/products", "/api/orders", "/api/health", "/api/reports"]
+
+    for endpoint in known {
+        let mut count = 0
+        for line in lines {
+            if contains(line, endpoint) { count += 1 }
+        }
+        if count > 0 {
+            hashmap_set(endpoints, endpoint, to_str(count))
+            print("  {endpoint}: {count} hits")
+        }
+    }
+
+    // ── Warnings Timeline ───────────────────────
+    section("Warning Timeline")
+    for line in lines {
+        if contains(line, "] WARN ") {
+            print("  {line}")
+        }
+    }
+
+    // ── Summary Report ──────────────────────────
+    section("Summary")
+    let health = if error_count == 0 { "HEALTHY" } else { "DEGRADED" }
+    print("  System health:  {health}")
+    print("  Throughput:     {request_total} requests in log window")
+    let success = s200 + s201 + s204
+    print("  Success rate:   {success}/{request_total} requests")
+    if error_count > 0 {
+        print("  Action needed:  {error_count} errors require investigation")
+    }
+
+    print("")
+    print(repeat("=", 55))
+    print("  Pipeline complete!")
+    print(repeat("=", 55))
+    print("")
+}
