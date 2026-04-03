@@ -1291,10 +1291,7 @@ fn collect_test_files(dir: &Path) -> Vec<PathBuf> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().map(|e| e == "tb").unwrap_or(false) {
-                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                if stem.ends_with("_test") || stem.starts_with("test_") {
-                    files.push(path);
-                }
+                files.push(path);
             }
         }
     }

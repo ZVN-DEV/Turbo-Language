@@ -1271,13 +1271,23 @@ impl Checker {
                         if *op == BinOp::Add && lhs == Ty::Str && rhs == Ty::Str {
                             return Ty::Str;
                         }
-                        // String coercion: str + non-str or non-str + str auto-converts to str
+                        // Reject mixed str + non-str in arithmetic — use to_str() or string interpolation
                         if *op == BinOp::Add {
-                            if lhs == Ty::Str && (rhs.is_numeric() || rhs == Ty::Bool) {
-                                return Ty::Str;
+                            if lhs == Ty::Str && rhs != Ty::Str {
+                                self.error(
+                                    ErrorCode::E0102,
+                                    format!("cannot add `str` and `{rhs}` — use to_str() or string interpolation"),
+                                    expr.span.clone(),
+                                );
+                                return Ty::Error;
                             }
-                            if rhs == Ty::Str && (lhs.is_numeric() || lhs == Ty::Bool) {
-                                return Ty::Str;
+                            if rhs == Ty::Str && lhs != Ty::Str {
+                                self.error(
+                                    ErrorCode::E0102,
+                                    format!("cannot add `{lhs}` and `str` — use to_str() or string interpolation"),
+                                    expr.span.clone(),
+                                );
+                                return Ty::Error;
                             }
                         }
                         if !lhs.is_numeric() {

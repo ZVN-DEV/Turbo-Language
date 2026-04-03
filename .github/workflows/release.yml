@@ -49,6 +49,11 @@ jobs:
           cd turbo
           cargo build --release --target ${{ matrix.target }}
 
+      - name: Build turbo-lsp
+        run: |
+          cd turbo
+          cargo build --release --target ${{ matrix.target }} -p turbo-lsp
+
       - name: Smoke test
         if: matrix.target != 'x86_64-apple-darwin'
         run: ./turbo/target/${{ matrix.target }}/release/turbolang --version
@@ -62,7 +67,7 @@ jobs:
       - name: Package
         run: |
           cd turbo/target/${{ matrix.target }}/release
-          tar czf turbolang-${{ github.ref_name }}-${{ matrix.target }}.tar.gz turbolang
+          tar czf turbolang-${{ github.ref_name }}-${{ matrix.target }}.tar.gz turbolang turbo-lsp
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

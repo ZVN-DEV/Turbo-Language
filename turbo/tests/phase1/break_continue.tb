@@ -10,7 +10,7 @@ fn main() {
     let mut n = 0
     while true {
         if n == 3 { break }
-        print("w" + n)
+        print("w{n}")
         n = n + 1
     }
 
@@ -19,7 +19,7 @@ fn main() {
     while j < 6 {
         j = j + 1
         if j % 2 == 0 { continue }
-        print("odd: " + j)
+        print("odd: {j}")
     }
 
     // break in for-in array

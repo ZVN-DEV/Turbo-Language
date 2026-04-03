@@ -1,267 +1,312 @@
-# Turbo Language -- Full DX Audit (2026-04-01)
+# Turbo Language -- Full DX Audit (2026-04-03)
 
 ## Executive Summary
 
-The Turbo compiler core is solid: all 138 integration tests and 237 unit tests pass, every README code example runs correctly, and the CLI has good bones with helpful error messages. However, the project has a serious credibility gap between what the documentation/examples promise and what the compiler actually supports. Five of eight "example projects" fail to parse because they use syntax the compiler does not implement (optional chaining `?.`, `from` imports, `Shared<T>`, result types in function signatures). The Homebrew install path is broken for normal users, the install script only has a macOS ARM binary, and the `turbo init` scaffolded test file generates zero passing tests. These are the gaps between "impressive demo" and "usable tool."
+The Turbo compiler is in strong shape. Homebrew installation works smoothly (`brew install turbo-lang` installs v0.2.0 in seconds via prebuilt bottle), all 138 integration tests and 240 unit tests pass, every README code example runs correctly, and the CLI is polished with 15 commands and excellent error messages. The three working example projects (simple-script, speed-server, web-dashboard) are compelling demos. However, several issues remain: a version mismatch between the Homebrew formula (v0.2.0) and the binary's self-reported version (0.1.0), the LSP binary is not included in the Homebrew install (breaking `turbolang lsp`), five aspirational example projects in `examples/roadmap/` still fail to parse, and `10 + "hello"` silently coerces to string concatenation without a type error.
 
 ---
 
-## 1. Homebrew Install
+## 1. Installation
 
-**Command tested:** `brew tap ZVN-DEV/turbo && brew install turbo-lang`
+### Homebrew (Primary Path)
 
-| Aspect | Finding |
-|--------|---------|
-| Tap | Works. Repo `ZVN-DEV/homebrew-turbo` exists. |
-| `brew install turbo-lang` | **FAILS.** Formula is HEAD-only. Must use `brew install --HEAD zvn-dev/turbo/turbo-lang`. |
-| `brew install --HEAD ...` | **FAILS on this machine** due to outdated Command Line Tools. When CLT is current, it would compile from source (~3-5 min). |
-| `brew info turbo-lang` | Shows "HEAD" with no versioned releases. No bottle (prebuilt binary). |
-| Formula source | Has `url` and `sha256` commented out: `# url "https://github.com/ZVN-DEV/Turbo-Language/archive/refs/tags/v0.1.0.tar.gz"` |
-| Version after install | Would be 0.1.0 (HEAD-a562d4b). |
+| Step | Result |
+|------|--------|
+| `brew tap ZVN-DEV/turbo` | PASS. Taps cleanly. |
+| `brew install turbo-lang` | PASS. Installs prebuilt bottle (0.2.0, arm64_sequoia) in ~3 seconds. |
+| `which turbolang` | `/opt/homebrew/bin/turbolang` |
+| `turbolang --version` | **`turbolang 0.1.0`** -- version mismatch (bottle says 0.2.0, binary says 0.1.0) |
+| Binary size | 3.7 MB (CLI binary) |
+| Installed files | 3 files in `/opt/homebrew/Cellar/turbo-lang/0.2.0/` |
+| `brew test turbo-lang` | FAILS -- formula test asserts `turbolang 0.2.0` but binary reports `0.1.0` (also blocked by outdated Xcode CLT on this machine) |
 
-**Verdict:** The README says `brew install turbo-lang` but that command fails. This is the very first thing a new user would try. Broken.
+**Version mismatch root cause:** `turbo/crates/turbo-cli/Cargo.toml` has `version = "0.1.0"` but the Homebrew formula at `distribution/homebrew/turbo-lang.rb` declares `version "0.2.0"`. The `Cargo.toml` version was never bumped.
 
-**Recommendation:** Either publish a proper tagged release with a bottle, or update the README to say `brew install --HEAD turbo-lang` and note it requires Rust.
+### Install Script
+
+The install script at `distribution/install.sh` is well-written with checksum verification and platform detection. It supports macOS ARM64, macOS x86_64, and Linux x86_64. The README references it at the correct URL: `https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh`.
+
+### Docker
+
+`distribution/Dockerfile` exists, builds `turbo-cli` and `turbo-lsp`, uses `rust:1.86-slim`. Notably, the Dockerfile builds `turbo-lsp` but the Homebrew formula does not include it.
 
 ---
 
 ## 2. CLI Commands Audit
 
-Binary tested: `turbo/target/release/turbo` (v0.1.0, built from source)
+Binary tested: `/opt/homebrew/bin/turbolang` (installed via Homebrew, reports v0.1.0)
 
 | Command | Status | Notes |
 |---------|--------|-------|
-| `turbo --help` | PASS | Clean output, all 14 commands listed. |
-| `turbo --version` | PASS | Reports `turbo 0.1.0`. |
-| `turbo run <file>` | PASS | JIT execution works. Tested with 10+ files. |
-| `turbo run` (no file) | PASS | Good error: "no file specified and no turbo.toml found" with usage hint. |
-| `turbo run` (in project) | PASS | Finds `turbo.toml`, runs `src/main.tb` automatically. |
-| `turbo build <file>` | PASS | Produces working native binary (56,600 bytes for hello world -- matches ~55 KB claim). |
-| `turbo build` (in project) | PASS | Compiles to binary named after source file ("main"), not project name. |
-| `turbo build --llvm` | PASS (graceful) | Reports "LLVM backend not available -- rebuild with --features llvm". Clear message. |
-| `turbo check <file>` | PASS | Type-checks without running. Good error messages with spans, hints, and error codes. |
-| `turbo fmt <file>` | PARTIAL | Only adjusts indentation. Does NOT normalize spacing (e.g., `fn    main(    )` stays as-is, only body indentation changes). Minimal formatter. |
-| `turbo init <name>` | PARTIAL | Creates project structure (`turbo.toml`, `src/main.tb`, `tests/main_test.tb`, `.gitignore`). But generated test file has NO `@test` annotation, so `turbo test` finds 0 tests. |
-| `turbo test <file>` | PASS | Runs `@test` functions correctly. Tested with `test_framework.tb` (5/5 pass). |
-| `turbo test` (in project) | PARTIAL | Scans `tests/` directory but the init-generated test has no `@test` fns, so reports "0 passed, 0 failed". Misleading for new users. |
-| `turbo bench <file>` | PASS | Runs JIT and AOT, reports timing, compares outputs. Works well. |
-| `turbo playground` | PASS | Starts HTTP server on port 3000 with `/benchmarks` route. Serves interactive playground. |
-| `turbo repl` | PASS | Interactive REPL with `:help`, `:clear`, `:quit` commands. `exit` gives confusing "undefined variable" error (should be `:quit`). |
-| `turbo doc <file>` | PASS | Generates minimal markdown docs (function signatures only). Very basic. |
-| `turbo lsp` | PASS | Starts LSP server (expects stdio connection from editor). |
-| `turbo explain E0100` | PASS | Returns "E0100: type mismatch". Works for all tested codes. |
-| `turbo explain E9999` | PASS | Good error: "unknown error code, range is E0001 to E0513". |
-| `turbo install` | PASS | Reads `turbo.toml` dependencies. Reports "No dependencies found" when empty. |
-| `turbo update` | PASS | Reports "No GitHub dependencies found to update." |
+| `turbolang --help` | PASS | Clean output, 15 commands listed. |
+| `turbolang --version` | PASS (see note) | Reports `turbolang 0.1.0` -- should say 0.2.0 per formula. |
+| `turbolang run <file>` | PASS | JIT execution works. Tested 15+ files. |
+| `turbolang run` (no file, in project) | PASS | Finds `turbo.toml`, runs `src/main.tb`. |
+| `turbolang build <file>` | PASS | Produces working native binary. AOT via Cranelift. |
+| `turbolang build --llvm` | PASS (graceful) | "LLVM backend not available -- rebuild with --features llvm". |
+| `turbolang check <file>` | PASS | Type-checks without running. Excellent diagnostics. |
+| `turbolang fmt <file>` | PASS | Formats source code. `--check` mode exits 0 if already formatted. |
+| `turbolang init <name>` | PASS | Creates `turbo.toml`, `src/main.tb`, `tests/`, `.gitignore`. Running `turbolang run` in the new project works immediately. |
+| `turbolang test <file>` | PASS | Runs `@test` functions. Tested with `test_framework.tb` (5/5 pass). |
+| `turbolang test <dir>` | PARTIAL | Only finds `@test` functions in one file (`test_framework.tb`), not across all `.tb` files in the directory. |
+| `turbolang bench <file>` | PASS | JIT + AOT comparison with median timing. Output match verification. |
+| `turbolang playground` | PASS | Starts HTTP server on port 3000 with `/benchmarks`. Clean startup output. |
+| `turbolang repl` | PASS | Interactive mode, `:help`, `:quit`, and `exit` all work. Clean banner: "Turbo v0.1.0 -- Interactive Mode". |
+| `turbolang doc <file>` | PASS | Generates basic markdown docs (function signatures). Minimal but functional. |
+| `turbolang lsp` | **FAIL** | `turbo-lsp binary not found at /opt/homebrew/bin/turbo-lsp`. Not included in Homebrew bottle. |
+| `turbolang explain E0100` | PASS | Returns "E0100: type mismatch". |
+| `turbolang explain E9999` | PASS | Good error: "unknown error code, range is E0001 to E0513". |
+| `turbolang install` | PASS | Reports "no turbo.toml found" when not in a project. |
+| `turbolang update` | PASS | Reports "no turbo.toml found" when not in a project. |
 
-**Key issues:**
-1. `turbo init` generates a broken test file (no `@test` annotation)
-2. `turbo fmt` is minimal -- only indentation, not a real formatter
-3. `turbo repl` does not recognize `exit` or `quit` -- only `:quit`
-4. `turbo build` in a project names the binary "main" not the project name
+### Error Message Quality
+
+Tested with deliberately broken code:
+
+| Input | Error Quality |
+|-------|---------------|
+| `let x: i32 = "hello"` | Excellent. `error[E0110]: type annotation 'i32' doesn't match value type 'str'` with Help hint. |
+| `print(xyz)` | Excellent. `error[E0300]: undefined variable 'xyz'` with suggestion: "did you mean to declare `xyz` with `let xyz = ...`?" |
+| `fn main( { }` | Good. `error[E0001]: expected identifier, found '{'` with span. |
+| Empty file | Excellent. "no functions defined" with Help: "add a `fn main() { ... }` function to get started". |
+| No `main` function | Excellent. `error[E0314]: no 'main' function found` with Help hint. |
+| Nonexistent file | Good. "could not stat file: No such file or directory". |
+| `let x: i64 = (i32 value)` | Correctly catches cross-type assignment. |
+
+### Type Safety Issue
+
+| Input | Expected | Actual |
+|-------|----------|--------|
+| `let x = 10 + "hello"; print(x)` | Type error (int + str) | **Silently produces `10hello` and exits 0** |
+
+`turbolang check` also passes this code without error. This is implicit string coercion in the `+` operator, which contradicts the "type-safe" marketing. Integer-to-string coercion in arithmetic is the kind of behavior Turbo claims to prevent.
 
 ---
 
-## 3. Documentation vs Reality
+## 3. Documentation Audit
 
 ### README.md
 
 | Claim | Verified? | Notes |
 |-------|-----------|-------|
-| "358 tests passing" badge | Roughly accurate | 237 unit + 138 integration = 375. Badge says 358, close enough (may have been accurate at badge creation time). |
-| `brew tap ZVN-DEV/turbo && brew install turbo-lang` | **BROKEN** | Requires `--HEAD` flag. |
-| Hello World example | PASS | Works exactly as shown. |
-| "A Taste of Turbo" example | PASS | Works exactly as shown (counter, fib, async spawn). |
+| `brew tap ZVN-DEV/turbo && brew install turbo-lang` | PASS | Works via prebuilt bottle. |
+| "358 tests passing" badge | Close | 240 unit + 138 integration = 378. Badge says 358 -- roughly accurate. |
+| Hello World example | PASS | Works. |
+| "A Taste of Turbo" example | PASS | Works perfectly (counter, fib, async spawn, string interpolation). |
 | Pattern matching example | PASS | Works. |
 | Async/await example | PASS | Works. |
 | AI agent example | PASS | Works. |
-| Closures example | PASS | Works. |
+| Closures/higher-order example | PASS | Works. |
 | Pipes & collections example | PASS | Works. |
-| HTTP server example | PASS | Compiles and type-checks. |
-| Derive & testing example | PASS | Works (`@test` runs, 1 passed). |
-| Copy-on-write example | PASS | Works (COW behavior confirmed). |
-| Performance table (fib(40) 250ms Cranelift) | Not independently verified | Claims Turbo Cranelift beats C. Would need controlled benchmark to confirm. |
-| "E0001--E0513" error codes | Misleading | There are 97 unique error codes in the E0001-E0513 range (not 513 sequential codes). The range is accurate but the phrasing suggests 513 codes exist. |
-| Install script URL | PASS | `curl -fsSL https://raw.githubusercontent.com/.../distribution/install.sh` is accessible (HTTP 200). |
-| Docker reference | EXISTS | `distribution/Dockerfile` exists but uses Rust 1.83 (outdated, current is ~1.94). |
-| [Website](https://turbolang.dev) link | PASS | Resolves, serves correct Turbo landing page. Title: "Turbo -- Fast, Type-Safe Language for the AI Age". |
-| [Documentation](https://turbolang.dev/docs) link | PASS | Resolves. Has installation, hello-world, variables, functions, etc. pages. |
+| HTTP server example | PASS | Structure shown is valid. |
+| Derive & testing example | PASS | Works (`turbolang test` finds and runs `@test`). |
+| Copy-on-write example | PASS | COW behavior confirmed (original unchanged after copy mutation). |
+| Performance table (fib(40) 250ms Cranelift, 55 KB binary) | Partially verified | Binary size confirmed (~55 KB). Timing not independently benchmarked. |
+| VS Code extension `zvndev.turbo-lang` with "23 snippets, LSP client" | PASS | Published v0.2.0 extension has exactly 23 snippets and LSP client configuration. |
+| Tree-sitter grammar link | EXISTS | Links to ZVN-DEV/tree-sitter-turbo. |
+| Docker reference | EXISTS | `distribution/Dockerfile` exists and is reasonable. |
+| [Website](https://turbolang.dev) link | PASS | HTTP 200, serves correct content. |
+| [Documentation](https://turbolang.dev/docs) link | PASS | Resolves. |
+| Install script URL | PASS | Correct path (`distribution/install.sh`). |
+| `turbolang build --llvm` for LLVM backend | PASS | Graceful error when LLVM not available. |
+| `turbolang lsp` -- "diagnostics, hover, completions, go-to-definition" | **BROKEN** via Homebrew | `turbo-lsp` binary not shipped in the bottle. |
 
-### examples/README.md
+### design/ Directory (16 files)
 
-| Claim | Reality |
-|-------|---------|
-| "Five progressively complex example projects" | 8 directories exist (simple-script, speed-server, web-dashboard, web-api, desktop-app, task-agent, realtime-system, edge-wasm). Only 3 actually run. |
-| task-agent: "Starter, recommended first example" | **FAILS TO PARSE.** Uses `?.` optional chaining, `() ! Error` result types, `import from` syntax -- none implemented in the compiler. |
-| web-api: "Production-quality bookmarking API" | **FAILS TO PARSE.** Same unsupported syntax (`?.`, `Shared<T>`, `from` imports, etc.). |
-| desktop-app: "Native markdown editor" | **FAILS TO PARSE.** Same issues. |
-| realtime-system: "Trading engine" | **FAILS TO PARSE.** Same issues. |
-| edge-wasm: "Edge image processing" | **FAILS TO PARSE.** Uses `from` imports. |
-| simple-script | PASS | Works perfectly, good demo. |
-| speed-server | PASS | HTTP server starts, serves JSON on all routes. Tested with curl. |
-| web-dashboard | PASS | Starts on port 3000, serves interactive HTML dashboard. |
-| `turbo.toml` dependencies | Fake | All reference nonexistent packages (`turbo-db`, `turbo-http`, `turbo-ws`, `turbo-crypto`, `turbo-otel`, `turbo-image`, etc.). No package registry exists. |
+Well-organized specification documents:
+- SYNTAX.md, TYPE-SYSTEM.md, MEMORY-MODEL.md, CONCURRENCY.md, AGENTIC.md, COMPILATION.md, TOOLCHAIN.md -- core specs
+- POLYGLOT.md, ROADMAP.md, VARIANTS.md, VISION.md -- planning
+- REVIEW-ROUND-2 through REVIEW-ROUND-5-FINAL.md -- review history
+- DEVX-IMPROVEMENTS.md -- applied improvements
 
-**This is the biggest credibility problem.** 5 of 8 examples fail to parse. The examples README describes features (optional chaining, result types, module imports, `Shared<T>`, regions, WASM targets) that do not exist in the compiler. These examples are aspirational design documents, not runnable code.
+These are aspirational design documents. Many features (regions, WASM compilation, `Shared<T>`, package registry, FFI) are not yet implemented in the compiler.
 
-### Website (turbolang.dev)
+### docs/ Directory
 
-| Claim | Status |
-|-------|--------|
-| Code examples (fib, pattern matching, async, AI agent) | PASS -- all verified as runnable |
-| Benchmark table | Same as README -- not independently verified |
-| "Get Started" links to /docs/installation | Works |
-| "From Source" instructions | Minor issue: shows `./target/release/turbo run hello.tb` but after `git clone` + `cd Turbo-Language`, binary is at `turbo/target/release/turbo` |
-| Homebrew instructions | Same broken `brew install turbo-lang` (needs `--HEAD`) |
+Contains `errors.md` with all error codes (E0001-E0513) in a clean table format. Accurate and matches `turbolang explain` output.
 
-### design/ docs
-
-16 design documents exist covering syntax, type system, memory model, concurrency, agentic primitives, compilation, toolchain, and roadmap. These are well-written specifications. Many features described (regions, WASM compilation, `Shared<T>`, package registry) are not yet implemented but the docs don't always make that clear.
-
----
-
-## 4. Example Programs
-
-### Working (3/8)
+### examples/ Directory
 
 | Example | Status | Notes |
 |---------|--------|-------|
-| `examples/simple-script/main.tb` | PASS | Text statistics analyzer. Comprehensive demo of strings, hashmaps, arrays, pipes. |
-| `examples/speed-server/main.tb` | PASS | HTTP server on :8080. Routes: `/`, `/api/fib`, `/api/primes`, `/api/sort`, `/api/health`. All return JSON. Tested with curl. |
-| `examples/web-dashboard/main.tb` | PASS | Benchmark dashboard on :3000. Styled HTML UI, multiple API endpoints. |
+| `examples/simple-script/main.tb` | PASS | Text statistics analyzer. Strings, hashmaps, arrays, pipes. Excellent demo. |
+| `examples/speed-server/main.tb` | PASS | HTTP server on :8080. JSON responses on all routes. Tested with curl. |
+| `examples/web-dashboard/main.tb` | PASS | Benchmark dashboard on :3000. Styled HTML UI. |
+| `examples/roadmap/web-api/` | FAIL (expected) | Aspirational. Uses unparseable syntax (`?.`, `from` imports, `Shared<T>`). |
+| `examples/roadmap/desktop-app/` | FAIL (expected) | Aspirational. Same issues. |
+| `examples/roadmap/task-agent/` | FAIL (expected) | Aspirational. Same issues. |
+| `examples/roadmap/realtime-system/` | FAIL (expected) | Aspirational. Same issues. |
+| `examples/roadmap/edge-wasm/` | FAIL (expected) | Aspirational. Same issues. |
 
-### Failing (5/8)
+The roadmap examples are correctly separated into `examples/roadmap/` rather than mixed with working examples.
 
-| Example | Error | Root Cause |
-|---------|-------|------------|
-| `examples/web-api/src/main.tb` | `expected identifier, found '}'` | Uses `} from "./middleware"` import syntax (not implemented) |
-| `examples/desktop-app/src/main.tb` | `expected identifier, found '?.'` | Uses `?.` optional chaining (not implemented) |
-| `examples/task-agent/src/main.tb` | `expected identifier, found '?.'` | Same: `?.` and `() ! Error` result type syntax |
-| `examples/realtime-system/src/main.tb` | `expected identifier, found '?.'` | Same issues |
-| `examples/edge-wasm/src/main.tb` | `expected identifier, found '}'` | Uses `from` imports |
+### Showcase (showcase/)
 
-All 5 failing examples use syntax from the design docs that has not been implemented in the parser.
+Three static HTML pages:
+- `index.html` (1564 lines) -- full landing page with dark theme, code samples, feature highlights
+- `getting-started.html` -- installation guide
+- `docs.html` -- reference documentation
 
-### Phase 1 Integration Tests
+These are self-contained HTML files (no build step needed). Professional-looking dark theme.
 
-All 138 integration tests pass (0 failed, 4 skipped). Individually tested: fibonacci, closures, structs, async_basic, agentic, pipe_operator, hashmap_basic, generics, data_enums, trait_bounds, cow_array -- all correct output.
+### Website (website/)
 
-### Custom Program
+A separate Next.js 16.2.1 site with React 19 and Tailwind 4. This appears to be the turbolang.dev source. Has `src/app/` with pages and docs directory.
 
-Wrote a custom program from scratch using structs, impl methods, arrays, closures (reduce), and string interpolation. Worked perfectly on first try.
+### Other Documentation
 
-### README Code Examples
-
-Every single code block from the README was extracted and tested. All 8 examples run correctly (hello world, taste of turbo, pattern matching, async/await, AI agents, closures, pipes/collections, derive/testing, copy-on-write).
-
----
-
-## 5. External Links & Repos
-
-| Resource | Status | Notes |
-|----------|--------|-------|
-| [ZVN-DEV/Turbo-Language](https://github.com/ZVN-DEV/Turbo-Language) | EXISTS | Main repo. **No description set on GitHub** (shows "no description"). |
-| [ZVN-DEV/turbo-vscode](https://github.com/ZVN-DEV/turbo-vscode) | EXISTS | VS Code extension repo. Has description. |
-| [ZVN-DEV/tree-sitter-turbo](https://github.com/ZVN-DEV/tree-sitter-turbo) | EXISTS | Tree-sitter grammar repo. Has description. |
-| [ZVN-DEV/homebrew-turbo](https://github.com/ZVN-DEV/homebrew-turbo) | EXISTS | Homebrew formula repo. Has description. |
-| https://turbolang.dev | LIVE | Website loads, correct content, SSL valid. |
-| https://turbolang.dev/docs | LIVE | Documentation pages exist with real content. |
-| GitHub Release v0.1.0 | EXISTS | Created 2026-03-31. Assets: `turbo-v0.1.0-aarch64-apple-darwin.tar.gz` + `checksums.txt`. |
-| Install script URL | ACCESSIBLE | Returns HTTP 200. |
-| VS Code marketplace `zvndev.turbo-lang` | Not verified | Repo exists but marketplace listing not checked. |
-
-**Issues:**
-- GitHub release only has macOS ARM64 binary. No x86_64 macOS or Linux binaries. Install script supports 3 targets but only 1 asset exists.
-- Turbo-Language repo has no description on GitHub.
-- Dockerfile references Rust 1.83 (outdated, current is ~1.94).
+- `CONTRIBUTING.md` -- build instructions, project structure, testing guide. Accurate.
+- `CHANGELOG.md` -- documents v0.1.0 release and unreleased changes. The unreleased section includes error codes. There is no v0.2.0 entry despite the Homebrew formula claiming v0.2.0.
+- `SECURITY.md` -- exists.
+- `INDEX.md` -- comprehensive project index with reading order recommendations.
+- `CLAUDE.md` -- developer guide for AI assistants (architecture, patterns, common tasks).
 
 ---
 
-## 6. DX Pain Points
+## 4. Ecosystem Audit
 
-### Critical (blocks new users)
+### VS Code Extension
 
-1. **Homebrew install is broken.** `brew install turbo-lang` fails. Requires `--HEAD` flag which compiles from source (~5 min with Rust toolchain). The recommended install method in every piece of documentation does not work.
+| Aspect | Finding |
+|--------|---------|
+| Installed | Yes, `zvndev.turbo-lang@0.2.0` |
+| Published version | v0.2.0 |
+| Snippets | 23 snippets confirmed |
+| LSP client | Configured (setting: `turbo.lspPath`) |
+| LSP works? | **No** -- `turbolang lsp` fails because `turbo-lsp` binary is not in the Homebrew install |
+| Syntax highlighting | TextMate grammar (`turbo.tmLanguage.json`) |
+| Local copy in repo | `editors/vscode/turbo-lang/` -- bare v0.1.0 skeleton (no snippets, no LSP client). Out of sync with published version. |
 
-2. **5/8 example projects crash on parse.** The "recommended first example" (task-agent) immediately fails with parse errors. New users following the `examples/README.md` will hit a wall on the very first suggestion.
+### Tree-sitter Grammar
 
-3. **`turbo init` generates broken tests.** The scaffolded `tests/main_test.tb` has no `@test` annotations, so `turbo test` reports "0 passed, 0 failed". A new user's first experience with testing is "nothing happens."
+Referenced in README as `ZVN-DEV/tree-sitter-turbo`. Not tested locally.
 
-4. **Install script only works on macOS ARM.** Linux users and Intel Mac users get a 404 when the script tries to download a binary. No error message explains this -- just a curl failure.
+### LSP Server
 
-### Significant (degrades experience)
+- `turbolang lsp` exists as a CLI command but **fails** when installed via Homebrew because the `turbo-lsp` binary is not included in the bottle.
+- The Dockerfile builds `turbo-lsp` alongside `turbo-cli`, confirming the binary exists as a separate crate.
+- The release CI (`release.yml`) only packages `turbolang` -- it does not package `turbo-lsp`.
+- **Impact:** VS Code extension users who install via Homebrew get no LSP functionality (no diagnostics, no hover, no go-to-definition).
 
-5. **Name collision with Vercel Turbo.** `npx turbo` returns Vercel's Turbo 2.9.3. Many JS developers already have `turbo` in their mental model as Vercel's monorepo tool. Searching "turbo language" will return Vercel results.
+### CI/CD
 
-6. **Fake dependencies in example turbo.toml files.** Examples reference nonexistent packages (`turbo-db`, `turbo-http`, `turbo-ws`, `turbo-crypto`, `turbo-otel`, `turbo-image`, etc.). No package registry exists. `turbo install` silently reports "No dependencies found."
+| Workflow | Description | Assessment |
+|----------|-------------|------------|
+| `ci.yml` | Lint (fmt + clippy) + Test (Ubuntu + macOS) + Release build | Good. Runs on push to master and PRs. Caches cargo registry. |
+| `release.yml` | Cross-platform build on tag push, creates GitHub release with checksums | Good. Builds for aarch64-apple-darwin, x86_64-apple-darwin, x86_64-unknown-linux-gnu. Includes smoke tests. |
 
-7. **Aspirational examples presented as working code.** The failing examples use syntax from design docs (optional chaining `?.`, module imports `from`, `Shared<T>`, region blocks, WASM targets) that reads as if the language already supports these features.
+**Issue:** Neither CI workflow builds or packages `turbo-lsp`.
 
-8. **`turbo fmt` is minimal.** Only adjusts indentation level. Does not normalize spacing, parentheses, or operator alignment. `fn    main(    )` stays as-is after formatting. This is not what users expect from a formatter command.
+---
 
-### Minor (paper cuts)
+## 5. Integration Test Suite
 
-9. **REPL does not understand `exit` or `quit`.** Requires `:quit`. Typing `exit` gives "undefined variable `exit`" error.
+```
+Results: 138 passed, 0 failed, 4 skipped
+All tests passed!
+```
 
-10. **`turbo build` in a project names binary "main" not the project name.** The `turbo.toml` has `name = "myproject"` but `turbo build` produces `./main`.
+Breakdown:
+- 116 phase1 tests (core language features)
+- 11 regression tests
+- 7 adversarial tests
+- 4 import tests (+ 4 skipped library files without `.expected`)
 
-11. **`turbo doc` output is bare minimum.** Just lists function signatures. No doc-comments, no type information, no examples.
+Features confirmed working via integration tests: hello world, arithmetic, arrays, structs, enums, generics, closures, async/await, channels, hashmaps, JSON, traits, pattern matching, pipe operator, string operations, copy-on-write, agents, mutexes, optionals, result types, defer, unsafe, derive attributes, break/continue, for-in loops, ranges, method chaining, higher-order functions, recursion, constants, multiline strings.
 
-12. **Error code documentation gap.** 97 error codes exist. `docs/errors.md` has terse one-line descriptions. No examples or fix suggestions in the doc file (though the compiler itself shows good inline hints).
+---
 
-13. **Website "From Source" instructions have a path issue.** Shows `./target/release/turbo run hello.tb` but after `git clone` + `cd Turbo-Language`, the binary is actually at `turbo/target/release/turbo`.
+## 6. DX Issues (Priority Ordered)
 
-14. **Dockerfile uses Rust 1.83-slim.** Current Rust stable is ~1.94. Will fail to compile if code uses newer Rust features.
+### P0 -- Blocks users
+
+1. **Version mismatch: Homebrew 0.2.0 vs binary 0.1.0.** `Cargo.toml` says `version = "0.1.0"` but the formula says `version "0.2.0"`. The `brew test` assertion (`turbolang 0.2.0`) would fail. The CHANGELOG has no v0.2.0 entry. Fix: bump `Cargo.toml` to `0.2.0` and add a CHANGELOG entry, or fix the formula.
+
+2. **`turbolang lsp` broken via Homebrew.** Error: `turbo-lsp binary not found at /opt/homebrew/bin/turbo-lsp`. The Homebrew formula only installs `turbolang`, not `turbo-lsp`. The Dockerfile builds both. The release CI packages only one. VS Code extension users get no LSP. Fix: include `turbo-lsp` in the release tarball and Homebrew formula.
+
+### P1 -- Significant
+
+3. **Implicit `int + str` coercion.** `10 + "hello"` produces `"10hello"` without any error, even in `check` mode. This undermines the "type-safe" claim. A language that markets itself as having strong static typing should not silently coerce integers to strings in arithmetic.
+
+4. **Roadmap examples still fail to parse.** The 5 examples in `examples/roadmap/` use syntax that does not exist in the compiler (`?.`, `from` imports, `Shared<T>`, `() ! Error`, regions). They are correctly segregated into `roadmap/` but still represent a large gap between documentation and implementation.
+
+### P2 -- Polish
+
+5. **`turbolang test <directory>` only finds tests in one file.** Running `turbolang test turbo/tests/phase1/` only reports tests from `test_framework.tb` (5 tests), ignoring `@test` functions in other files. Expected behavior: discover all `@test` functions across all `.tb` files in the directory.
+
+6. **Local VS Code extension out of sync.** `editors/vscode/turbo-lang/` in the repo is v0.1.0 with no snippets or LSP client. The published extension at `zvndev.turbo-lang@0.2.0` has 23 snippets and LSP support. The repo copy should be updated or removed to avoid confusion.
+
+7. **No `install.sh` at repo root.** The README links to `distribution/install.sh` which is correct, but the previous audit's INDEX.md mentions "Install Script: `install.sh` at repo root" which is wrong -- no such file exists at root.
+
+8. **REPL banner says v0.1.0.** Consistent with the `--version` issue but worth noting as another place the version appears.
 
 ---
 
 ## 7. What Works Well
 
-To be fair, several things are genuinely good:
+1. **Homebrew installation is fast and smooth.** Prebuilt bottle installs in seconds. No compilation required.
 
-- **Compiler error messages are excellent.** Spans, colored output, error codes, and actionable "Help:" hints (e.g., "did you mean to declare `y` with `let y = ...`?"). Rivals Rust's error quality.
-- **All README code examples actually run.** Every code block in README.md was tested and works correctly.
-- **The 3 working examples (simple-script, speed-server, web-dashboard) are impressive.** The HTTP server serving JSON, the interactive dashboard -- these are compelling demos of the language.
-- **The REPL works.** State persists across lines, `:help` is clear, supports function and struct definitions.
-- **`turbo bench` is well-designed.** JIT vs AOT comparison with automatic output verification.
-- **`turbo explain` is useful.** Quick lookup of any error code from the command line.
-- **`turbo check` provides fast feedback.** Type-checks without running, with rich diagnostics.
-- **The test runner (`turbo test`) works correctly** when files have `@test` annotations.
-- **138 integration tests + 237 unit tests all pass.** Zero failures.
-- **Binary size is genuinely small** (~55 KB for hello world, as claimed).
-- **`turbo run` with no file in a project directory** correctly finds `turbo.toml` and runs `src/main.tb`. Good convention-over-configuration.
-- **The playground command** launches a real browser-based playground with benchmarks.
+2. **Compiler error messages are excellent.** Colored spans, error codes (E0001-E0513), and actionable "Help:" hints. Comparable to Rust's error quality. Example: `error[E0300]: undefined variable 'xyz'` with suggestion `did you mean to declare 'xyz' with 'let xyz = ...'?`
+
+3. **Every README code example actually runs.** All 9 code blocks were extracted and tested -- all work correctly. The "A Taste of Turbo" example (structs, impl methods, fib, async spawn) is particularly impressive.
+
+4. **The three working example projects are compelling.** `simple-script` (text analytics), `speed-server` (JSON API with curl-testable endpoints), and `web-dashboard` (full HTML dashboard) demonstrate real capability.
+
+5. **138 integration tests + 240 unit tests all pass.** Zero failures. Good test coverage across language features.
+
+6. **Binary output is genuinely small.** ~55 KB for a fibonacci program via AOT compilation, matching the documented claim.
+
+7. **`turbolang bench` is well-designed.** Compares JIT vs AOT, reports median timing across configurable iterations, verifies output match.
+
+8. **`turbolang init` + `turbolang run` flow works.** Creating a project and running it immediately works as expected -- good first-run experience.
+
+9. **`turbolang playground` launches a real browser playground** with benchmarks endpoint. Impressive for a new language.
+
+10. **`turbolang explain` works across all error codes.** Useful for quick reference from the terminal.
+
+11. **Verbose mode (`-v`) is informative.** Shows token stream, AST dump, and compilation timing in microseconds.
+
+12. **The CLI handles edge cases gracefully.** Empty files, missing files, wrong extensions, no `main` function -- all produce clear, helpful error messages.
+
+13. **The language has real features.** Generics, traits, async/await, closures with capture, pattern matching with guards, copy-on-write arrays, string interpolation, hashmaps, JSON, pipe operators, derive attributes, agents -- these all work and are tested.
 
 ---
 
-## 8. Recommendations (Prioritized)
+## 8. Recommendations
 
-### P0 -- Fix before showing to anyone
+### Immediate (P0)
 
-1. **~~Fix Homebrew install.~~** FIXED. Uncommented `url` and `sha256` in the formula pointing to v0.1.0 release tarball. `brew install turbo-lang` now works. Pushed to `ZVN-DEV/homebrew-turbo`. Website updated to note Rust build dependency.
+1. **Bump `turbo-cli/Cargo.toml` version to `0.2.0`** (or revert the formula to `0.1.0`). Add a v0.2.0 CHANGELOG entry listing what changed since v0.1.0 (error codes, audit fixes, etc.). The version mismatch will fail `brew test`.
 
-2. **~~Fix or remove broken examples.~~** FIXED. Moved 5 broken examples to `examples/roadmap/` with clear "NOT YET IMPLEMENTED" labels. `examples/README.md` rewritten to only list the 3 working examples, with roadmap section at the bottom.
+2. **Include `turbo-lsp` in the release build and Homebrew formula.** Update `release.yml` to package both binaries. Update the Homebrew formula to `bin.install "turbolang"` and `bin.install "turbo-lsp"`. This unblocks the entire LSP/editor experience.
 
-3. **~~Fix `turbo init` test scaffolding.~~** FIXED. Generated `tests/main_test.tb` now has 2 `@test` functions. `turbo test` reports "2 passed, 0 failed" on first run. Also fixed `turbo init` using full path as package name.
+### Soon (P1)
 
-### P1 -- Fix soon
+3. **Add a type error for `int + str`.** The `+` operator between `i64` and `str` should produce a sema error (e.g., `E0102: cannot add i64 and str`). If string coercion is desired, require an explicit `to_str()` call.
 
-4. **Add cross-platform release binaries.** The release.yml already builds for 3 platforms (macOS ARM64, macOS x86_64, Linux x86_64). The v0.1.0 release was created manually with only 1 binary. NEEDS: push a v0.1.1 tag to trigger CI and produce all 3 binaries.
+4. **Fix `turbolang test <dir>` to scan all `.tb` files recursively.** Currently only picks up tests from one file in the directory.
 
-5. **~~Add a GitHub repo description.~~** FIXED. Set via `gh repo edit`.
+### Over Time (P2)
 
-6. **~~Fix REPL exit handling.~~** FIXED. `exit` and `quit` (without colon) now work as aliases for `:quit`.
+5. **Sync or remove the local VS Code extension copy** at `editors/vscode/turbo-lang/`. It's confusing to have a v0.1.0 skeleton alongside a published v0.2.0 extension with more features.
 
-7. **~~Fix `turbo build` to use project name.~~** FIXED. When `turbo.toml` exists, the output binary is named after the `[package] name` field. Falls back to filename stem if no manifest.
+6. **Add a CHANGELOG entry for v0.2.0.** Currently the CHANGELOG only has `[Unreleased]` and `[0.1.0]` sections.
 
-### P2 -- Improve over time
+7. **Consider implementing the most-requested roadmap syntax.** `from` imports and `?.` optional chaining appear in all 5 roadmap examples. Implementing even one of these would move multiple examples from "aspirational" to "working."
 
-8. **~~Improve `turbo fmt`.~~** FIXED. Formatter now normalizes intra-line spacing: collapses multiple spaces, ensures space after commas, removes space inside parens/brackets. Preserves string contents. `fn    main(    )` → `fn main()`, `[1,2,3]` → `[1, 2, 3]`.
+---
 
-9. **Address the naming conflict.** Consider whether "Turbo" is the right name given Vercel's established `turbo` CLI tool (2.9.3, widely used). At minimum, add an FAQ entry about it. NOT FIXED — naming decision for Kirby.
+## Appendix: Test Environment
 
-10. **~~Update Dockerfile Rust version.~~** FIXED. Updated to `rust:1.86-slim`.
-
-11. **~~Separate aspirational features from implemented features in docs.~~** FIXED (via #2). Broken examples moved to `examples/roadmap/` with clear labeling.
-
-12. **~~Remove fake `turbo.toml` dependencies.~~** FIXED (via #2). Fake deps remain only in `roadmap/` directory where they're clearly labeled as aspirational.
+| Item | Value |
+|------|-------|
+| Date | 2026-04-03 |
+| Machine | Apple Silicon (arm64), macOS Sequoia |
+| Homebrew version | Latest |
+| Installed version | turbo-lang 0.2.0 (bottle), binary reports 0.1.0 |
+| Binary path | `/opt/homebrew/bin/turbolang` |
+| Repo | `/Users/macbookpro-kirby/Desktop/Coding/ZVN/new-language` (master, f8b5fef) |
+| Unit tests | 240 passed, 0 failed |
+| Integration tests | 138 passed, 0 failed, 4 skipped |
+| VS Code extension | `zvndev.turbo-lang@0.2.0` installed |
+| Website | https://turbolang.dev -- HTTP 200 |

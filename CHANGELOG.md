@@ -5,6 +5,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-04-03
+
 ### Added
 - Production error codes (E0001-E0513) for all compiler diagnostics, Rust E0308-style
   - `ErrorCode` enum in `turbo-ast/src/errors.rs` with `as_str()`, `description()`, `Display`
@@ -14,8 +16,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   - Error code reference: `docs/errors.md`
 - Gold standard audit: CI workflow, SECURITY.md, CLAUDE.md, allocation safety, strip binary
 - CONTRIBUTING.md and CHANGELOG.md documentation
+- `turbo-lsp` binary now included in Homebrew formula and release artifacts
+
+### Fixed
 - Replace last `panic!` in sema with proper error diagnostic
 - Security audit: safety fixes, tracked artifact cleanup, .gitignore hardening
+- `turbolang test <dir>` now discovers `@test` functions in all `.tb` files, not just `test_*`/`*_test` named files
+
+### Removed
+- Implicit `int + str` / `str + int` coercion in the `+` operator — use `to_str()` or string interpolation instead
 
 ## [0.1.0] - 2026-03-10
 

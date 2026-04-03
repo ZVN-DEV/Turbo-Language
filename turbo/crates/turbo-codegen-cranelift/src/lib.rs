@@ -2828,17 +2828,7 @@ pub(crate) fn compile_expr<M: Module>(
                 }
             }
 
-            // String coercion: str + non-str or non-str + str
-            if *op == BinOp::Add {
-                if lhs_tty == TurboTy::Str && rhs_tty != TurboTy::Str {
-                    let rhs_str = convert_to_str(cx, rhs, &rhs_tty)?;
-                    return compile_str_concat(cx, lhs, rhs_str);
-                }
-                if rhs_tty == TurboTy::Str && lhs_tty != TurboTy::Str {
-                    let lhs_str = convert_to_str(cx, lhs, &lhs_tty)?;
-                    return compile_str_concat(cx, lhs_str, rhs);
-                }
-            }
+            // Mixed str + non-str is rejected by sema — no implicit coercion
 
             // Struct field-by-field equality comparison (@derive(Eq))
             if let TurboTy::Struct(ref struct_name) = lhs_tty {
@@ -5658,12 +5648,12 @@ mod tests {
     }
 
     #[test]
-    fn test_jit_string_coercion() {
+    fn test_jit_explicit_str_conversion() {
         jit_run_source(
             r#"fn main() {
-                let s = "count: " + 42
+                let s = "count: " + to_str(42)
                 assert_eq(s, "count: 42")
-                let s2 = "flag: " + true
+                let s2 = "flag: " + to_str(true)
                 assert_eq(s2, "flag: true")
             }"#,
         );

@@ -1,14 +1,14 @@
 fn main() {
-    // str + int
-    print("count: " + 42)
-    // str + bool
-    print("flag: " + true)
-    // str + float
-    print("pi: " + 3.14)
-    // int + str
-    print(10 + " items")
-    // bool + str
-    print(false + " alarm")
-    // float + str
-    print(2.72 + " is e")
+    // str + int requires explicit to_str()
+    print("count: " + to_str(42))
+    // str + bool requires explicit to_str()
+    print("flag: " + to_str(true))
+    // str + float requires explicit to_str()
+    print("pi: " + to_str(3.14))
+    // int + str requires explicit to_str()
+    print(to_str(10) + " items")
+    // bool + str requires explicit to_str()
+    print(to_str(false) + " alarm")
+    // float + str requires explicit to_str()
+    print(to_str(2.72) + " is e")
 }
