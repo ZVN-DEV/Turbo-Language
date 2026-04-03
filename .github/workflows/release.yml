@@ -68,6 +68,7 @@ jobs:
           cargo build --release --target ${{ matrix.target }} -p turbo-cli --features turbo-cli/llvm
         env:
           LLVM_SYS_180_PREFIX: ${{ matrix.llvm_prefix }}
+          LIBRARY_PATH: ${{ runner.os == 'macOS' && '/opt/homebrew/lib' || '' }}
 
       - name: Build (Cranelift only)
         if: "!matrix.llvm"
