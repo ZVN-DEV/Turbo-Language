@@ -93,7 +93,43 @@ pub fn run_repl() {
             accumulated_vars.push(line.to_string());
         }
 
-        // Build a complete program wrapping everything in main()
+        // For bare expressions (not let bindings), try auto-printing the result
+        let skip_auto_print = line.starts_with("print(")
+            || line.starts_with("assert(")
+            || line.starts_with("assert_eq(");
+
+        if !is_let && !skip_auto_print {
+            let mut print_prog = String::new();
+            for item in &accumulated_items {
+                print_prog.push_str(item);
+                print_prog.push('\n');
+            }
+            print_prog.push_str("fn main() {\n");
+            for var in &accumulated_vars {
+                print_prog.push_str("    ");
+                print_prog.push_str(var);
+                print_prog.push('\n');
+            }
+            print_prog.push_str("    print(");
+            print_prog.push_str(line);
+            print_prog.push_str(")\n");
+            print_prog.push_str("}\n");
+
+            let (tokens, lex_errs) = turbo_lexer::tokenize(&print_prog);
+            if lex_errs.is_empty() {
+                let (module, parse_errs) = turbo_parser::parse(tokens);
+                if parse_errs.is_empty() {
+                    let sema_errs = turbo_sema::check(&module);
+                    if sema_errs.is_empty() {
+                        if turbo_codegen_cranelift::jit_run(&module).is_ok() {
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build the bare program (for let bindings, or when auto-print fails)
         let mut program = String::new();
         for item in &accumulated_items {
             program.push_str(item);
@@ -106,7 +142,6 @@ pub fn run_repl() {
             program.push('\n');
         }
         if !is_let {
-            // This is an expression/statement -- add it
             program.push_str("    ");
             program.push_str(line);
             program.push('\n');

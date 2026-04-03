@@ -1872,16 +1872,36 @@ fn scan_structs(lines: &[&str], doc_comments: &HashMap<usize, Vec<String>>) -> V
 
             let doc = doc_comments.get(&i).cloned().unwrap_or_default();
             let mut fields = Vec::new();
-            i += 1;
-            while i < lines.len() {
-                let field_line = lines[i].trim();
-                if field_line == "}" || field_line.starts_with('}') {
-                    break;
+
+            // Check if this is a single-line struct: `struct Foo { x: i64, y: i64 }`
+            if trimmed.contains('}') {
+                // Extract fields from between { and }
+                if let Some(start) = trimmed.find('{') {
+                    if let Some(end) = trimmed.rfind('}') {
+                        let body = trimmed[start + 1..end].trim();
+                        if !body.is_empty() {
+                            for field_str in body.split(',') {
+                                let f = field_str.trim();
+                                if !f.is_empty() && !f.starts_with("//") {
+                                    fields.push(f.to_string());
+                                }
+                            }
+                        }
+                    }
                 }
-                if !field_line.is_empty() && !field_line.starts_with("//") {
-                    fields.push(field_line.trim_end_matches(',').to_string());
-                }
+            } else {
+                // Multi-line struct: scan subsequent lines for fields
                 i += 1;
+                while i < lines.len() {
+                    let field_line = lines[i].trim();
+                    if field_line == "}" || field_line.starts_with('}') {
+                        break;
+                    }
+                    if !field_line.is_empty() && !field_line.starts_with("//") {
+                        fields.push(field_line.trim_end_matches(',').to_string());
+                    }
+                    i += 1;
+                }
             }
 
             items.push(DocItem::Struct { name, fields, doc });
@@ -2190,8 +2210,38 @@ fn doc_file(path: &std::path::Path) {
         }
     }
 
-    // Structs section
-    if !structs.is_empty() {
+    // Structs section — prefer AST for accurate field types, fall back to scanner
+    let has_ast_structs = ast_functions.as_ref().map_or(false, |module| {
+        module
+            .items
+            .iter()
+            .any(|item| matches!(&item.node, turbo_ast::Item::Struct(_)))
+    });
+
+    if has_ast_structs {
+        let module = ast_functions.as_ref().unwrap();
+        out.push_str("\n## Structs\n");
+        for item in &module.items {
+            if let turbo_ast::Item::Struct(s) = &item.node {
+                out.push_str(&format!("\n### `struct {}`\n", s.name));
+                let struct_line = source[..item.span.start].matches('\n').count();
+                let doc = doc_comments.get(&struct_line).cloned().unwrap_or_default();
+                if !doc.is_empty() {
+                    out.push_str(&format!("{}\n", doc.join("\n")));
+                }
+                if !s.fields.is_empty() {
+                    out.push_str("\nFields:\n");
+                    for field in &s.fields {
+                        out.push_str(&format!(
+                            "- `{}: {}`\n",
+                            field.name,
+                            format_type_expr(&field.ty.node)
+                        ));
+                    }
+                }
+            }
+        }
+    } else if !structs.is_empty() {
         out.push_str("\n## Structs\n");
         for item in &structs {
             if let DocItem::Struct { name, fields, doc } = item {
