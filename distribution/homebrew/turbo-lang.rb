@@ -7,26 +7,19 @@ class TurboLang < Formula
   on_macos do
     on_arm do
       url "https://github.com/ZVN-DEV/Turbo-Language/releases/download/v0.2.1/turbolang-v0.2.1-aarch64-apple-darwin.tar.gz"
-      sha256 "978a46ecc5cba2efcea54020be3efef68fb323b0150d56e640b352b3fc22d4a0"
+      sha256 "f8c7b8e96f7001be068047c6d862c6896f4c2340517f10ad7ee99c90c3ba008b"
     end
     on_intel do
       url "https://github.com/ZVN-DEV/Turbo-Language/releases/download/v0.2.1/turbolang-v0.2.1-x86_64-apple-darwin.tar.gz"
-      sha256 "4100d6fdd73d97e30cc9c9dc311ed2ccac6a464aa954f6f21c5b3325109d0400"
+      sha256 "e87a93275f53295857fddf0454cf042b6041b48fe286e9f936bdd8c629cd36e6"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/ZVN-DEV/Turbo-Language/releases/download/v0.2.1/turbolang-v0.2.1-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "5206070c553f46f7c099c0b12e4bc14877ebb18434f9aaaec63489c7c09ade02"
+      sha256 "e6f65894c71a5cfceb7732ec75b49190db4d896933a0b1f011839dd1f2966aab"
     end
-  end
-
-  bottle do
-    root_url "https://github.com/ZVN-DEV/Turbo-Language/releases/download/v0.2.1"
-    sha256 cellar: :any_skip_relocation, arm64_sequoia: "2416226d6a2726d1164c5700388eac22afc2a329172264665c465fe12f9d9cd7"
-    sha256 cellar: :any_skip_relocation, sequoia:       "98197cf2e6239bec411e7b7471ed59dcc5b43035b5bbf804221c662bf8981a64"
-    sha256 cellar: :any_skip_relocation, x86_64_linux:  "600c57ac9ccf59df01234abeabb0bb1216a233262f12545f5989b0fa1da9913e"
   end
 
   def install
