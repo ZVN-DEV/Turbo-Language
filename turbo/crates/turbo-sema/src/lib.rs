@@ -458,6 +458,10 @@ impl Checker {
                 | "http_listen"
                 | "respond"
                 | "request_body"
+                | "request_method"
+                | "request_path"
+                | "request_query"
+                | "request_header"
                 | "channel"
                 | "send"
                 | "recv"
@@ -470,6 +474,7 @@ impl Checker {
                 | "hashmap_get"
                 | "hashmap_has"
                 | "hashmap_len"
+                | "hashmap_size"
                 | "hashmap_keys"
                 | "hashmap_remove"
                 | "to_json"
@@ -2334,6 +2339,35 @@ impl Checker {
                         return Ty::Str;
                     }
 
+                    // request_method(req: str) -> str, request_path(req: str) -> str
+                    if name == "request_method" || name == "request_path" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("{name}() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        self.check_expr(&args[0]);
+                        return Ty::Str;
+                    }
+                    // request_query(req: str, key: str) -> str
+                    // request_header(req: str, name: str) -> str
+                    if name == "request_query" || name == "request_header" {
+                        if args.len() != 2 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("{name}() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        self.check_expr(&args[0]);
+                        self.check_expr(&args[1]);
+                        return Ty::Str;
+                    }
+
                     // ── JSON builtins ───────────────────────────────
                     // json_get(json: str, key: str) -> str
                     if name == "json_get" {
@@ -2700,8 +2734,8 @@ impl Checker {
                         }
                         return Ty::Bool;
                     }
-                    // hashmap_len(map: i64) -> i64
-                    if name == "hashmap_len" {
+                    // hashmap_len / hashmap_size(map: i64) -> i64
+                    if name == "hashmap_len" || name == "hashmap_size" {
                         if args.len() != 1 {
                             self.error(
                                 ErrorCode::E0513,
@@ -4828,7 +4862,11 @@ impl Checker {
                                             _ => true,
                                         }
                                     );
-                                if !is_int_literal_coercion {
+                                // Allow float literal coercion: f64 literal -> f32
+                                let is_float_literal_coercion = val_ty == Ty::F64
+                                    && t == Ty::F32
+                                    && matches!(&value.node, Expr::FloatLit(_));
+                                if !is_int_literal_coercion && !is_float_literal_coercion {
                                     self.error(ErrorCode::E0110,
                                         format!(
                                             "type annotation `{t}` doesn't match value type `{val_ty}`"

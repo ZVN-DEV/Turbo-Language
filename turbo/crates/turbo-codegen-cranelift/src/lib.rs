@@ -227,6 +227,10 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_http_listen", rt_http_listen as *const u8);
     jit_builder.symbol("rt_respond", rt_respond as *const u8);
     jit_builder.symbol("rt_request_body", rt_request_body as *const u8);
+    jit_builder.symbol("rt_request_method", rt_request_method as *const u8);
+    jit_builder.symbol("rt_request_path", rt_request_path as *const u8);
+    jit_builder.symbol("rt_request_query", rt_request_query as *const u8);
+    jit_builder.symbol("rt_request_header", rt_request_header as *const u8);
     // Channel builtins
     jit_builder.symbol("rt_channel_create", rt_channel_create as *const u8);
     jit_builder.symbol("rt_channel_send", rt_channel_send as *const u8);
@@ -356,6 +360,10 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_http_listen", rt_http_listen as *const u8);
     jit_builder.symbol("rt_respond", rt_respond as *const u8);
     jit_builder.symbol("rt_request_body", rt_request_body as *const u8);
+    jit_builder.symbol("rt_request_method", rt_request_method as *const u8);
+    jit_builder.symbol("rt_request_path", rt_request_path as *const u8);
+    jit_builder.symbol("rt_request_query", rt_request_query as *const u8);
+    jit_builder.symbol("rt_request_header", rt_request_header as *const u8);
     jit_builder.symbol("rt_channel_create", rt_channel_create as *const u8);
     jit_builder.symbol("rt_channel_send", rt_channel_send as *const u8);
     jit_builder.symbol("rt_channel_recv", rt_channel_recv as *const u8);
@@ -1506,6 +1514,34 @@ fn compile_module<M: Module>(
         &mut rt_fns,
         "rt_request_body",
         &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_request_method",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_request_path",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_request_query",
+        &[ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_request_header",
+        &[ptr_type, ptr_type],
         Some(ptr_type),
     )?;
     // Channel runtime declarations
@@ -3946,6 +3982,23 @@ fn compile_stmt<M: Module>(cx: &mut Ctx<'_, M>, stmt: &Spanned<Stmt>) -> Result<
             Ok(())
         }
         Stmt::Expr(e) => {
+            // Auto-reassign for COW builtins used as statements:
+            // `items.push(4)` (rewritten to `push(items, 4)`) should update `items`
+            if let Expr::Call { callee, args } = &e.node {
+                if let Expr::Ident(fn_name) = &callee.node {
+                    if fn_name == "push" && !args.is_empty() {
+                        if let Expr::Ident(var_name) = &args[0].node {
+                            if let Some((var, _cl_ty, _turbo_ty)) = cx.vars.get(var_name).cloned() {
+                                let result = compile_expr(cx, e)?;
+                                if let Some((v, _)) = result {
+                                    cx.builder.def_var(var, v);
+                                }
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
             compile_expr(cx, e)?;
             Ok(())
         }
@@ -4308,6 +4361,10 @@ fn compile_call<M: Module>(
         "http_listen" => compile_builtin_http_listen(cx, args),
         "respond" => compile_builtin_respond(cx, args),
         "request_body" => compile_builtin_request_body(cx, args),
+        "request_method" => compile_builtin_request_simple(cx, args, "rt_request_method"),
+        "request_path" => compile_builtin_request_simple(cx, args, "rt_request_path"),
+        "request_query" => compile_builtin_request_two_arg(cx, args, "rt_request_query"),
+        "request_header" => compile_builtin_request_two_arg(cx, args, "rt_request_header"),
         "to_json" => compile_builtin_to_json(cx, args),
         "to_json_array" => compile_builtin_to_json_array(cx, args),
         // Channel builtins
@@ -4325,7 +4382,7 @@ fn compile_call<M: Module>(
         "hashmap_set" => compile_builtin_hashmap_set(cx, args),
         "hashmap_get" => compile_builtin_hashmap_get(cx, args),
         "hashmap_has" => compile_builtin_hashmap_has(cx, args),
-        "hashmap_len" => compile_builtin_hashmap_len(cx, args),
+        "hashmap_len" | "hashmap_size" => compile_builtin_hashmap_len(cx, args),
         "hashmap_keys" => compile_builtin_hashmap_keys(cx, args),
         "hashmap_remove" => compile_builtin_hashmap_remove(cx, args),
         // Unsafe builtins — raw pointer operations

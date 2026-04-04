@@ -700,6 +700,35 @@ pub(crate) fn compile_builtin_request_body<M: Module>(
     Ok(Some((result, TurboTy::Str)))
 }
 
+/// Generic single-arg request builtin: request_method(req), request_path(req)
+pub(crate) fn compile_builtin_request_simple<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+    rt_fn_name: &str,
+) -> Result<MaybeTyped, CodegenError> {
+    let (req_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns[rt_fn_name];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[req_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// Generic two-arg request builtin: request_query(req, key), request_header(req, name)
+pub(crate) fn compile_builtin_request_two_arg<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+    rt_fn_name: &str,
+) -> Result<MaybeTyped, CodegenError> {
+    let (req_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns[rt_fn_name];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[req_val, key_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
 // ── to_json / to_json_array builtins ────────────────────────────────
 
 /// to_json(val) -> str — serialize a struct to a JSON string at codegen time

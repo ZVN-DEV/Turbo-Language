@@ -1057,6 +1057,187 @@ void rt_http_route(long long server_id, const char *method, const char *path, co
     srv->routes[idx].env_ptr = env_ptr;
 }
 
+/* ── Connection handler data for pthreads ── */
+
+typedef struct {
+    int client_fd;
+    HttpServerC *srv;
+} conn_thread_data;
+
+/* Handle a single HTTP connection with keep-alive support. */
+static void *handle_http_conn(void *arg) {
+    conn_thread_data *data = (conn_thread_data *)arg;
+    int fd = data->client_fd;
+    HttpServerC *srv = data->srv;
+    free(data);
+
+    /* Set read timeout (10 seconds) for keep-alive idle connections */
+    struct timeval tv;
+    tv.tv_sec = 10;
+    tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    /* Persistent read buffer for keep-alive pipelining */
+    char buf[16384];
+    int buf_len = 0;
+
+    while (1) {
+        /* Read more data into buffer */
+        int n = read(fd, buf + buf_len, sizeof(buf) - 1 - buf_len);
+        if (n <= 0) break;
+        buf_len += n;
+        buf[buf_len] = '\0';
+
+    process_request:;
+        /* Find end of headers (\r\n\r\n) */
+        char *hdr_end = strstr(buf, "\r\n\r\n");
+        if (!hdr_end) continue; /* Need more data */
+
+        /* Parse request line */
+        char method[16] = {0}, raw_path[1024] = {0};
+        sscanf(buf, "%15s %1023s", method, raw_path);
+
+        /* Split path and query string */
+        char path_buf[1024] = {0};
+        char query_buf[1024] = {0};
+        char *qmark = strchr(raw_path, '?');
+        if (qmark) {
+            size_t plen = qmark - raw_path;
+            if (plen > 1023) plen = 1023;
+            memcpy(path_buf, raw_path, plen);
+            path_buf[plen] = '\0';
+            strncpy(query_buf, qmark + 1, 1023);
+            query_buf[1023] = '\0';
+        } else {
+            strncpy(path_buf, raw_path, 1023);
+            path_buf[1023] = '\0';
+        }
+
+        /* Find headers (between first \r\n and \r\n\r\n) */
+        char *first_line_end = strstr(buf, "\r\n");
+        const char *headers_raw = "";
+        size_t headers_len = 0;
+        if (first_line_end && first_line_end + 2 < hdr_end) {
+            headers_raw = first_line_end + 2;
+            headers_len = hdr_end - headers_raw;
+        }
+
+        /* Determine content-length */
+        int content_length = 0;
+        {
+            const char *cl = headers_raw;
+            for (size_t i = 0; i + 15 < headers_len; i++) {
+                if (strncasecmp(cl + i, "content-length:", 15) == 0) {
+                    content_length = atoi(cl + i + 15);
+                    break;
+                }
+            }
+        }
+
+        /* Check keep-alive (HTTP/1.1 default is keep-alive) */
+        int keep_alive = 1;
+        {
+            const char *cl = headers_raw;
+            for (size_t i = 0; i + 11 < headers_len; i++) {
+                if (strncasecmp(cl + i, "connection:", 11) == 0) {
+                    const char *v = cl + i + 11;
+                    while (*v == ' ') v++;
+                    if (strncasecmp(v, "close", 5) == 0) keep_alive = 0;
+                    break;
+                }
+            }
+        }
+
+        /* Body starts after \r\n\r\n */
+        char *body_start = hdr_end + 4;
+        int body_available = buf_len - (int)(body_start - buf);
+        if (body_available < content_length) continue; /* Need more data */
+
+        /* Build structured request: METHOD\x01PATH\x01QUERY\x01HEADERS\x01BODY */
+        size_t mlen = strlen(method);
+        size_t plen = strlen(path_buf);
+        size_t qlen = strlen(query_buf);
+        size_t blen = (size_t)content_length;
+        size_t total = mlen + 1 + plen + 1 + qlen + 1 + headers_len + 1 + blen + 1;
+        char *req_str = turbo_alloc(total);
+        char *p = req_str;
+        memcpy(p, method, mlen); p += mlen; *p++ = '\x01';
+        memcpy(p, path_buf, plen); p += plen; *p++ = '\x01';
+        memcpy(p, query_buf, qlen); p += qlen; *p++ = '\x01';
+        memcpy(p, headers_raw, headers_len); p += headers_len; *p++ = '\x01';
+        memcpy(p, body_start, blen); p += blen; *p = '\0';
+
+        const char *conn_hdr = keep_alive ? "keep-alive" : "close";
+
+        /* Match route */
+        int matched = 0;
+        for (int i = 0; i < srv->route_count; i++) {
+            if (strcmp(srv->routes[i].method, method) == 0 &&
+                strcmp(srv->routes[i].path, path_buf) == 0) {
+                const char *resp = srv->routes[i].handler(srv->routes[i].env_ptr, req_str);
+                if (resp) {
+                    const char *colon = strchr(resp, ':');
+                    if (colon) {
+                        int status = atoi(resp);
+                        const char *resp_body = colon + 1;
+                        int resp_len = strlen(resp_body);
+                        char hdr[512];
+                        snprintf(hdr, sizeof(hdr),
+                            "HTTP/1.1 %d OK\r\nContent-Type: application/json\r\n"
+                            "Access-Control-Allow-Origin: *\r\nConnection: %s\r\n"
+                            "Content-Length: %d\r\n\r\n",
+                            status, conn_hdr, resp_len);
+                        write(fd, hdr, strlen(hdr));
+                        write(fd, resp_body, resp_len);
+                    } else {
+                        int resp_len = strlen(resp);
+                        char hdr[512];
+                        snprintf(hdr, sizeof(hdr),
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
+                            "Connection: %s\r\nContent-Length: %d\r\n\r\n",
+                            conn_hdr, resp_len);
+                        write(fd, hdr, strlen(hdr));
+                        write(fd, resp, resp_len);
+                    }
+                } else {
+                    char hdr[256];
+                    snprintf(hdr, sizeof(hdr),
+                        "HTTP/1.1 200 OK\r\nConnection: %s\r\nContent-Length: 0\r\n\r\n",
+                        conn_hdr);
+                    write(fd, hdr, strlen(hdr));
+                }
+                matched = 1;
+                break;
+            }
+        }
+        if (!matched) {
+            char hdr[256];
+            snprintf(hdr, sizeof(hdr),
+                "HTTP/1.1 404 Not Found\r\nConnection: %s\r\nContent-Length: 9\r\n\r\nNot Found",
+                conn_hdr);
+            write(fd, hdr, strlen(hdr));
+        }
+
+        /* Consume processed bytes from buffer */
+        int consumed = (int)(body_start - buf) + content_length;
+        int remaining = buf_len - consumed;
+        if (remaining > 0) {
+            memmove(buf, buf + consumed, remaining);
+        }
+        buf_len = remaining;
+
+        if (!keep_alive) break;
+
+        /* If there's already another request in the buffer, process it immediately */
+        if (buf_len > 0 && strstr(buf, "\r\n\r\n")) {
+            goto process_request;
+        }
+    }
+
+    close(fd);
+    return NULL;
+}
+
 void rt_http_listen(long long server_id) {
     HttpServerC *srv = &http_servers[server_id];
 
@@ -1075,7 +1256,7 @@ void rt_http_listen(long long server_id) {
     if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("bind"); close(server_fd); return;
     }
-    if (listen(server_fd, 128) < 0) {
+    if (listen(server_fd, 1024) < 0) {
         perror("listen"); close(server_fd); return;
     }
 
@@ -1083,68 +1264,20 @@ void rt_http_listen(long long server_id) {
         int client_fd = accept(server_fd, NULL, NULL);
         if (client_fd < 0) continue;
 
-        char buf[8192];
-        int n = read(client_fd, buf, sizeof(buf) - 1);
-        if (n <= 0) { close(client_fd); continue; }
-        buf[n] = '\0';
+        conn_thread_data *data = malloc(sizeof(conn_thread_data));
+        if (!data) { close(client_fd); continue; }
+        data->client_fd = client_fd;
+        data->srv = srv;
 
-        /* Parse request line */
-        char method[16] = {0}, path_buf[1024] = {0};
-        sscanf(buf, "%15s %1023s", method, path_buf);
-
-        /* Find Content-Length */
-        int content_length = 0;
-        char *cl = strstr(buf, "Content-Length:");
-        if (!cl) cl = strstr(buf, "content-length:");
-        if (cl) content_length = atoi(cl + 15);
-
-        /* Find body (after \r\n\r\n) */
-        char *body_start = strstr(buf, "\r\n\r\n");
-        const char *body = body_start ? body_start + 4 : "";
-        (void)content_length; /* body is already in the buffer */
-
-        /* Match route */
-        int matched = 0;
-        for (int i = 0; i < srv->route_count; i++) {
-            if (strcmp(srv->routes[i].method, method) == 0 &&
-                strcmp(srv->routes[i].path, path_buf) == 0) {
-                const char *resp = srv->routes[i].handler(srv->routes[i].env_ptr, body);
-                if (resp) {
-                    /* Parse STATUS:BODY format */
-                    const char *colon = strchr(resp, ':');
-                    if (colon) {
-                        int status = atoi(resp);
-                        const char *resp_body = colon + 1;
-                        int resp_len = strlen(resp_body);
-                        char hdr[512];
-                        snprintf(hdr, sizeof(hdr),
-                            "HTTP/1.1 %d OK\r\nContent-Type: application/json\r\n"
-                            "Access-Control-Allow-Origin: *\r\nContent-Length: %d\r\n\r\n",
-                            status, resp_len);
-                        write(client_fd, hdr, strlen(hdr));
-                        write(client_fd, resp_body, resp_len);
-                    } else {
-                        int resp_len = strlen(resp);
-                        char hdr[512];
-                        snprintf(hdr, sizeof(hdr),
-                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n",
-                            resp_len);
-                        write(client_fd, hdr, strlen(hdr));
-                        write(client_fd, resp, resp_len);
-                    }
-                } else {
-                    const char *empty = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
-                    write(client_fd, empty, strlen(empty));
-                }
-                matched = 1;
-                break;
-            }
+        pthread_t tid;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        if (pthread_create(&tid, &attr, handle_http_conn, data) != 0) {
+            close(client_fd);
+            free(data);
         }
-        if (!matched) {
-            const char *nf = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
-            write(client_fd, nf, strlen(nf));
-        }
-        close(client_fd);
+        pthread_attr_destroy(&attr);
     }
 }
 
@@ -1162,7 +1295,96 @@ const char* rt_respond(long long status, const char *body) {
     return result;
 }
 
+/* ── Request field extraction (structured request: METHOD\x01PATH\x01QUERY\x01HEADERS\x01BODY) */
+
+static const char* req_field(const char *req, int field_index) {
+    if (!req) return "";
+    const char *start = req;
+    for (int i = 0; i < field_index; i++) {
+        const char *sep = strchr(start, '\x01');
+        if (!sep) return "";
+        start = sep + 1;
+    }
+    /* Find end of this field */
+    const char *end = strchr(start, '\x01');
+    if (!end) {
+        /* Last field — copy to end of string */
+        size_t len = strlen(start);
+        char *result = turbo_alloc(len + 1);
+        memcpy(result, start, len);
+        result[len] = '\0';
+        return result;
+    }
+    size_t len = end - start;
+    char *result = turbo_alloc(len + 1);
+    memcpy(result, start, len);
+    result[len] = '\0';
+    return result;
+}
+
+const char* rt_request_method(const char *req) {
+    return req_field(req, 0);
+}
+
+const char* rt_request_path(const char *req) {
+    return req_field(req, 1);
+}
+
+const char* rt_request_query(const char *req, const char *key) {
+    if (!req || !key) return "";
+    const char *qs = req_field(req, 2);
+    if (!qs || !*qs) return "";
+    size_t klen = strlen(key);
+    const char *p = qs;
+    while (*p) {
+        if (strncmp(p, key, klen) == 0 && p[klen] == '=') {
+            const char *val_start = p + klen + 1;
+            const char *val_end = strchr(val_start, '&');
+            size_t vlen = val_end ? (size_t)(val_end - val_start) : strlen(val_start);
+            char *result = turbo_alloc(vlen + 1);
+            memcpy(result, val_start, vlen);
+            result[vlen] = '\0';
+            return result;
+        }
+        const char *amp = strchr(p, '&');
+        if (!amp) break;
+        p = amp + 1;
+    }
+    return "";
+}
+
+const char* rt_request_header(const char *req, const char *name) {
+    if (!req || !name) return "";
+    const char *headers = req_field(req, 3);
+    if (!headers || !*headers) return "";
+    size_t nlen = strlen(name);
+    const char *p = headers;
+    while (*p) {
+        /* Case-insensitive header name match */
+        if (strncasecmp(p, name, nlen) == 0 && p[nlen] == ':') {
+            const char *val = p + nlen + 1;
+            while (*val == ' ') val++; /* skip optional whitespace */
+            const char *eol = strstr(val, "\r\n");
+            size_t vlen = eol ? (size_t)(eol - val) : strlen(val);
+            char *result = turbo_alloc(vlen + 1);
+            memcpy(result, val, vlen);
+            result[vlen] = '\0';
+            return result;
+        }
+        const char *next = strstr(p, "\r\n");
+        if (!next) break;
+        p = next + 2;
+    }
+    return "";
+}
+
 const char* rt_request_body(const char *req) {
+    if (!req) return "";
+    /* If structured request (contains \x01), extract body field */
+    if (strchr(req, '\x01')) {
+        return req_field(req, 4);
+    }
+    /* Backward compat: plain string is the body */
     return req;
 }
 

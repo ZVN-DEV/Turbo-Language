@@ -1,0 +1,17 @@
+struct Pair<A, B> {
+    first: A,
+    second: B,
+}
+
+impl Pair<A, B> {
+    fn describe(self) -> str {
+        "a pair"
+    }
+}
+
+fn main() {
+    let p = Pair { first: 10, second: "hello" }
+    print(p.describe())
+    print("{p.first}")
+    print("{p.second}")
+}

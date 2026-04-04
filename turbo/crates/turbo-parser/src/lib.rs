@@ -455,14 +455,16 @@ impl Parser {
     fn parse_impl_block(&mut self) -> Result<ImplBlock, ParseError> {
         self.expect(&Token::Impl)?;
         let (first_name, _) = self.expect_ident()?;
+        let first_type_params = self.parse_optional_type_params()?;
 
-        // Check for `impl TraitName for TypeName { ... }`
-        let (trait_name, type_name) = if matches!(self.peek(), Some(Token::For)) {
+        // Check for `impl TraitName for TypeName<T> { ... }`
+        let (trait_name, type_name, type_params) = if matches!(self.peek(), Some(Token::For)) {
             self.advance(); // consume `for`
             let (tn, _) = self.expect_ident()?;
-            (Some(first_name), tn)
+            let tp = self.parse_optional_type_params()?;
+            (Some(first_name), tn, tp)
         } else {
-            (None, first_name)
+            (None, first_name, first_type_params)
         };
 
         self.expect(&Token::LBrace)?;
@@ -476,6 +478,7 @@ impl Parser {
         self.expect(&Token::RBrace)?;
         Ok(ImplBlock {
             type_name,
+            type_params,
             trait_name,
             methods,
         })
@@ -731,7 +734,24 @@ impl Parser {
 
         // Named type
         let (name, span) = self.expect_ident()?;
-        let mut ty = Spanned::new(TypeExpr::Named(name), span);
+        let mut end = span.end;
+
+        // Parse generic type arguments: Pair<A, B>, Result<T, E>, etc.
+        if matches!(self.peek(), Some(Token::Less)) {
+            self.advance(); // <
+            loop {
+                let _type_arg = self.parse_type()?;
+                if matches!(self.peek(), Some(Token::Comma)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            end = self.peek_span().end;
+            self.expect(&Token::Greater)?;
+        }
+
+        let mut ty = Spanned::new(TypeExpr::Named(name), start..end);
 
         // Check for result type: T ! E
         if matches!(self.peek(), Some(Token::Bang)) {

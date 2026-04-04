@@ -802,47 +802,64 @@ pub(crate) extern "C" fn rt_http_route(
     }
 }
 
-/// Start the HTTP server. Blocks forever accepting connections.
-pub(crate) extern "C" fn rt_http_listen(server_id: i64) {
+/// Wrapper to allow sending route data across threads.
+/// Safety: JIT function pointers and env pointers are valid for the process lifetime.
+struct SendableRoutes(Vec<(String, String, RouteHandler, *const u8)>);
+unsafe impl Send for SendableRoutes {}
+unsafe impl Sync for SendableRoutes {}
+
+/// Handle a single HTTP connection with keep-alive support.
+fn handle_http_connection(
+    stream: std::net::TcpStream,
+    routes: &[(String, String, RouteHandler, *const u8)],
+) {
     use std::io::{BufRead, BufReader, Read, Write};
-    use std::net::TcpListener;
 
-    let (port, routes) = {
-        let servers = HTTP_SERVERS.lock().unwrap();
-        let server = &servers[server_id as usize];
-        let port = server.port;
-        let routes: Vec<(String, String, RouteHandler, *const u8)> = server.routes.clone();
-        (port, routes)
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    let write_stream = match stream.try_clone() {
+        Ok(s) => s,
+        Err(_) => return,
     };
+    let mut reader = BufReader::new(stream);
+    let mut writer = write_stream;
 
-    let addr = format!("0.0.0.0:{}", port);
-    let listener = TcpListener::bind(&addr).expect("failed to bind HTTP server");
-
-    for stream in listener.incoming().flatten() {
-        let mut reader = BufReader::new(&stream);
+    loop {
+        // Read request line
         let mut request_line = String::new();
-        if reader.read_line(&mut request_line).is_err() {
-            continue;
+        match reader.read_line(&mut request_line) {
+            Ok(0) | Err(_) => break, // Connection closed or error
+            _ => {}
         }
 
         let parts: Vec<&str> = request_line.split_whitespace().collect();
         if parts.len() < 2 {
-            continue;
+            break;
         }
         let method = parts[0];
-        let path = parts[1];
+        let raw_path = parts[1];
+
+        // Split path and query string
+        let (path, query) = if let Some(idx) = raw_path.find('?') {
+            (&raw_path[..idx], &raw_path[idx + 1..])
+        } else {
+            (raw_path, "")
+        };
 
         // Read headers
         let mut content_length: usize = 0;
+        let mut headers_raw = String::new();
+        let mut keep_alive = true; // HTTP/1.1 default
         loop {
             let mut line = String::new();
-            if reader.read_line(&mut line).is_err() {
-                break;
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                _ => {}
             }
             if line.trim().is_empty() {
                 break;
             }
-            if line.to_lowercase().starts_with("content-length:") {
+            let lower = line.to_lowercase();
+            if lower.starts_with("content-length:") {
                 content_length = line
                     .split(':')
                     .nth(1)
@@ -851,30 +868,46 @@ pub(crate) extern "C" fn rt_http_listen(server_id: i64) {
                     .parse()
                     .unwrap_or(0);
             }
+            if lower.starts_with("connection:") {
+                let val = line.split(':').nth(1).unwrap_or("").trim().to_lowercase();
+                keep_alive = val != "close";
+            }
+            headers_raw.push_str(&line);
         }
 
         // Read body
         let mut body = vec![0u8; content_length];
         if content_length > 0 {
-            let _ = reader.read_exact(&mut body);
+            if reader.read_exact(&mut body).is_err() {
+                break;
+            }
         }
 
-        // We need a mutable reference to stream for writing, drop the BufReader first
-        drop(reader);
-        let mut stream = stream;
+        let conn_header = if keep_alive { "keep-alive" } else { "close" };
 
         // Find matching route
         let mut matched = false;
-        for (route_method, route_path, handler, env_ptr) in &routes {
+        for (route_method, route_path, handler, env_ptr) in routes {
             if route_method == method && route_path == path {
                 let body_str = String::from_utf8_lossy(&body);
-                let req_cstr = std::ffi::CString::new(body_str.as_ref())
+                let req_structured = format!(
+                    "{}\x01{}\x01{}\x01{}\x01{}",
+                    method,
+                    path,
+                    query,
+                    headers_raw.trim(),
+                    body_str
+                );
+                let req_cstr = std::ffi::CString::new(req_structured)
                     .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
                 let response_ptr = handler(*env_ptr, req_cstr.as_ptr() as *const u8);
 
-                let http_response = if response_ptr.is_null() {
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n\r\n"
-                        .to_string()
+                if response_ptr.is_null() {
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: {}\r\nContent-Length: 0\r\n\r\n",
+                        conn_header
+                    );
+                    let _ = writer.write_all(resp.as_bytes());
                 } else {
                     let resp = unsafe {
                         std::ffi::CStr::from_ptr(response_ptr as *const std::ffi::c_char)
@@ -887,6 +920,7 @@ pub(crate) extern "C" fn rt_http_listen(server_id: i64) {
                             200 => "OK",
                             201 => "Created",
                             204 => "No Content",
+                            301 | 302 => "Redirect",
                             400 => "Bad Request",
                             401 => "Unauthorized",
                             403 => "Forbidden",
@@ -894,30 +928,62 @@ pub(crate) extern "C" fn rt_http_listen(server_id: i64) {
                             500 => "Internal Server Error",
                             _ => "OK",
                         };
-                        format!(
-                            "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\n\r\n{}",
-                            code, status_text, resp_body.len(), resp_body
-                        )
+                        let http_resp = format!(
+                            "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: {}\r\nContent-Length: {}\r\n\r\n{}",
+                            code, status_text, conn_header, resp_body.len(), resp_body
+                        );
+                        let _ = writer.write_all(http_resp.as_bytes());
                     } else {
-                        format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                            resp.len(), resp
-                        )
+                        let http_resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: {}\r\nContent-Length: {}\r\n\r\n{}",
+                            conn_header, resp.len(), resp
+                        );
+                        let _ = writer.write_all(http_resp.as_bytes());
                     }
-                };
-
-                let _ = stream.write_all(http_response.as_bytes());
-                let _ = stream.flush();
+                }
                 matched = true;
                 break;
             }
         }
 
         if !matched {
-            let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
-            let _ = stream.write_all(not_found.as_bytes());
-            let _ = stream.flush();
+            let not_found = format!(
+                "HTTP/1.1 404 Not Found\r\nConnection: {}\r\nContent-Length: 9\r\n\r\nNot Found",
+                conn_header
+            );
+            let _ = writer.write_all(not_found.as_bytes());
         }
+
+        let _ = writer.flush();
+
+        if !keep_alive {
+            break;
+        }
+    }
+}
+
+/// Start the HTTP server. Spawns a thread per connection with keep-alive.
+pub(crate) extern "C" fn rt_http_listen(server_id: i64) {
+    use std::net::TcpListener;
+    use std::sync::Arc;
+
+    let (port, routes) = {
+        let servers = HTTP_SERVERS.lock().unwrap();
+        let server = &servers[server_id as usize];
+        let port = server.port;
+        let routes: Vec<(String, String, RouteHandler, *const u8)> = server.routes.clone();
+        (port, routes)
+    };
+
+    let routes = Arc::new(SendableRoutes(routes));
+    let addr = format!("0.0.0.0:{}", port);
+    let listener = TcpListener::bind(&addr).expect("failed to bind HTTP server");
+
+    for stream in listener.incoming().flatten() {
+        let routes = Arc::clone(&routes);
+        std::thread::spawn(move || {
+            handle_http_connection(stream, &routes.0);
+        });
     }
 }
 
@@ -932,8 +998,91 @@ pub(crate) extern "C" fn rt_respond(status: i64, body: *const u8) -> *const u8 {
     cs.into_raw() as *const u8
 }
 
-/// Extract body from request (identity — request is already the body string).
+/// Helper: extract Nth field from structured request (fields separated by \x01)
+fn req_field(req: *const u8, index: usize) -> *const u8 {
+    if req.is_null() {
+        return rt_alloc_string("");
+    }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(req as *const std::ffi::c_char) };
+    let s = cstr.to_str().unwrap_or("");
+    let parts: Vec<&str> = s.splitn(5, '\x01').collect();
+    let field = parts.get(index).copied().unwrap_or("");
+    rt_alloc_string(field)
+}
+
+fn rt_alloc_string(s: &str) -> *const u8 {
+    let cs = std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    cs.into_raw() as *const u8
+}
+
+/// Extract HTTP method from structured request
+pub(crate) extern "C" fn rt_request_method(req: *const u8) -> *const u8 {
+    req_field(req, 0)
+}
+
+/// Extract path from structured request
+pub(crate) extern "C" fn rt_request_path(req: *const u8) -> *const u8 {
+    req_field(req, 1)
+}
+
+/// Extract query parameter by key from structured request
+pub(crate) extern "C" fn rt_request_query(req: *const u8, key: *const u8) -> *const u8 {
+    if req.is_null() || key.is_null() {
+        return rt_alloc_string("");
+    }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(req as *const std::ffi::c_char) };
+    let s = cstr.to_str().unwrap_or("");
+    let parts: Vec<&str> = s.splitn(5, '\x01').collect();
+    let qs = parts.get(2).copied().unwrap_or("");
+
+    let key_cstr = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) };
+    let key_str = key_cstr.to_str().unwrap_or("");
+
+    for pair in qs.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            if k == key_str {
+                return rt_alloc_string(v);
+            }
+        }
+    }
+    rt_alloc_string("")
+}
+
+/// Extract header value by name (case-insensitive) from structured request
+pub(crate) extern "C" fn rt_request_header(req: *const u8, name: *const u8) -> *const u8 {
+    if req.is_null() || name.is_null() {
+        return rt_alloc_string("");
+    }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(req as *const std::ffi::c_char) };
+    let s = cstr.to_str().unwrap_or("");
+    let parts: Vec<&str> = s.splitn(5, '\x01').collect();
+    let headers = parts.get(3).copied().unwrap_or("");
+
+    let name_cstr = unsafe { std::ffi::CStr::from_ptr(name as *const std::ffi::c_char) };
+    let name_str = name_cstr.to_str().unwrap_or("").to_lowercase();
+
+    for line in headers.split("\r\n") {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().to_lowercase() == name_str {
+                return rt_alloc_string(v.trim());
+            }
+        }
+    }
+    rt_alloc_string("")
+}
+
+/// Extract body from structured request (field 4) with backward compat
 pub(crate) extern "C" fn rt_request_body(req: *const u8) -> *const u8 {
+    if req.is_null() {
+        return rt_alloc_string("");
+    }
+    let cstr = unsafe { std::ffi::CStr::from_ptr(req as *const std::ffi::c_char) };
+    let s = cstr.to_str().unwrap_or("");
+    // If structured request (contains \x01), extract body field
+    if s.contains('\x01') {
+        return req_field(req, 4);
+    }
+    // Backward compat: plain string is the body
     req
 }
 

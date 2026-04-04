@@ -5,6 +5,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-04-04
+
+### Added
+- Generic impl blocks (`impl Pair<A, B> { ... }`)
+- Generic type arguments in return types (`-> Pair<B, A>`)
+- `hashmap_size()` builtin (alias for `hashmap_len`)
+- HTTP request context builtins (`request_method`, `request_path`, `request_query`, `request_header`)
+
+### Fixed
+- `.push()` method syntax now auto-reassigns (no more silent no-op)
+- `f32` float literal coercion from `f64` annotations
+- README type system and enum constructor examples
+
+### Changed
+- Multi-threaded HTTP server with keep-alive (5x throughput improvement)
+
+### Tests
+- 148 integration tests passing (up from 146)
+
 ## [0.3.0] - 2026-04-03
 
 ### Added

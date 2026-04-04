@@ -1,427 +1,348 @@
-# Turbo Language Audit -- Comprehensive Findings
+# Turbo Language -- Full Audit Findings (v0.3.0)
+Date: 2026-04-04
 
-**Auditor:** Claude Code (automated)
-**Date:** 2026-04-03
-**Version tested:** v0.2.1 (Homebrew install)
-**Repo:** ZVN-DEV/Turbo-Language
-**Prior audit:** 2026-04-03 (v0.2.0) -- this supersedes it
+## Executive Summary
 
----
-
-## 1. Installation
-
-### Homebrew (Primary Distribution)
-
-| Step | Result |
-|------|--------|
-| `brew tap ZVN-DEV/turbo` | Works |
-| `brew install turbo-lang` | Works -- v0.2.1, prebuilt binary |
-| Binary location | `/opt/homebrew/bin/turbolang` |
-| Binary name | `turbolang` (documented correctly) |
-| `turbolang --version` | `turbolang 0.2.1` -- **version now matches** (prior audit: mismatch) |
-| `turbolang --help` | Lists all 14 commands correctly |
-| Formula includes LSP | Yes (`bin.install "turbo-lsp" if File.exist?("turbo-lsp")`) |
-| Installed size | 4.7 MB (5 files) |
-
-**Verdict: Installation works perfectly.** Brew tap to running a program takes under a minute. The Homebrew formula is well-structured with ARM/Intel macOS and Linux x86_64 variants. The v0.2.0 version mismatch has been fixed in v0.2.1.
-
-### Install Script
-
-`distribution/install.sh` exists, supports `--version` flag and auto-detects latest release from GitHub API. Not tested end-to-end (would overwrite brew install).
-
-### Docker
-
-`distribution/Dockerfile` exists. Uses `rust:1.86-slim` builder, ships `turbolang` + `turbo-lsp`, REPL as default entrypoint. Looks correct.
+Turbo v0.3.0 is a remarkably capable single-developer language project. The core compiler pipeline (lexer, parser, sema, codegen) is solid: 259 unit tests and 146 integration tests all pass, both Cranelift JIT and AOT produce correct binaries, LLVM backend works, and fib(40) performance (~0.27s) is competitive with C -O2 (~0.29s). Since the v0.2.2 audit, significant features have landed: arrow closures, if-let, optional chaining, struct destructuring, map literals, typed const declarations, and push(). However, several issues remain: `push()` silently no-ops without reassignment, `.push()` method syntax silently fails, `impl` blocks for generic types don't parse, `f32` is unusable with float literals, and the README/SYNTAX.md still contain some inaccuracies. All 14 CLI commands are functional. The project is in better shape than most languages at this stage.
 
 ---
 
-## 2. Version Audit
+## Version Audit
 
-| Touchpoint | Version | In Sync? |
-|------------|---------|----------|
-| `turbolang --version` | 0.2.1 | Yes |
-| Homebrew formula | 0.2.1 | Yes |
-| `turbo-cli` Cargo.toml | 0.2.1 | Yes |
-| CHANGELOG.md | 0.2.1 | Yes |
-| GitHub release (latest) | v0.2.1 | Yes |
-| VS Code extension (local) | **0.2.0** | **NO -- one minor behind** |
-| VS Code Marketplace | **Not published** | **NO -- 404 on marketplace** |
-| Other crates (internal) | 0.1.0 | Acceptable for internal crates |
-| GitHub repo homepageUrl | **Empty** | **Should be turbolang.dev** |
+| Artifact | Version | Consistent? |
+|----------|---------|-------------|
+| `turbolang --version` | 0.3.0 | Baseline |
+| Homebrew formula | 0.3.0 | YES |
+| CHANGELOG.md latest | 0.3.0 | YES |
+| All Cargo.toml crates | 0.3.0 | YES |
+| VS Code extension | 0.2.0 | **NO -- 2 minor versions behind** |
 
-**Key findings:**
-1. The v0.2.0 version mismatch from the prior audit has been fixed. All core touchpoints now show 0.2.1.
-2. The VS Code extension is still at 0.2.0 and is NOT published on the VS Code Marketplace. The README references it as `zvndev.turbo-lang` implying marketplace availability, but it returns 404. It's local-VSIX-only.
-3. The GitHub repo's `homepageUrl` field is empty despite having a live website at turbolang.dev.
+All 8 crates (turbo-cli, turbo-ast, turbo-lexer, turbo-parser, turbo-sema, turbo-codegen-cranelift, turbo-codegen-llvm, turbo-lsp) are at 0.3.0. This is much improved from the last audit where internal crates were at 0.1.0.
 
 ---
 
-## 3. CLI Commands
-
-All 14 documented commands tested. Also tested `install` and `update` (listed in help but not in README table).
+## CLI Commands Audit
 
 | Command | Status | Notes |
 |---------|--------|-------|
-| `turbolang run <file>` | **Works** | JIT via Cranelift. ~5ms for hello world. |
-| `turbolang run` (project dir) | **Works** | Detects `turbo.toml`, runs `src/main.tb`. |
-| `turbolang build <file>` | **Works** | AOT compilation. ~55 KB binaries. ~116ms. |
-| `turbolang build --llvm` | **Errors correctly** | Clear message: "LLVM backend not available -- rebuild with --features llvm" |
-| `turbolang check <file>` | **Works** | Reports multiple errors per file with spans and help text. |
-| `turbolang test <file>` | **Works** | Finds @test functions, runs them, reports pass/fail count. |
-| `turbolang test <dir>` | **Works** | Discovers test files in directory. |
-| `turbolang bench <file>` | **Works** | Runs JIT and AOT, compares outputs, reports median times over 3 runs. |
-| `turbolang fmt <file>` | **Works** | Reformats in-place, normalizes whitespace. |
-| `turbolang init <name>` | **Works** | Creates `src/main.tb`, `tests/main_test.tb`, `turbo.toml`, `.gitignore`. |
-| `turbolang doc <file>` | **Partially** | Generates markdown but has struct field parsing bug (see DX Issues). |
-| `turbolang explain E0100` | **Works** | Prints error description. 97 error codes documented. |
-| `turbolang repl` | **Partially** | Accepts `print()` but does NOT display expression results (see DX Issues). |
-| `turbolang lsp` | **Works** | LSP help available; server starts (tested via --help). |
-| `turbolang playground` | **Works** | Browser playground at localhost:3000 with /benchmarks page. |
-| `turbolang install` | **Works** | Reads turbo.toml dependencies. Requires project directory. |
-| `turbolang update` | **Works** | Checks for GitHub dependency updates. Requires project directory. |
-| `turbolang` (no args) | **Works** | Shows full help with all commands. |
-| `turbolang run` (no file, no toml) | **Works** | Clear error with usage hint and suggestion to run `turbolang init`. |
+| `turbolang run <file>` | WORKS | Cranelift JIT, correct output, ~0.26s for fib(40) |
+| `turbolang build <file>` | WORKS | Cranelift AOT, produces native Mach-O arm64 binary, 56KB |
+| `turbolang build --llvm <file>` | WORKS | LLVM 18 backend, produces 55KB binary, ~0.28s fib(40) |
+| `turbolang check <file>` | WORKS | Type-checks without compiling, beautiful ariadne diagnostics |
+| `turbolang fmt <file>` | WORKS | Basic formatting; reports "already formatted" for clean files |
+| `turbolang init <name>` | WORKS | Creates project with src/main.tb, tests/, turbo.toml, .gitignore |
+| `turbolang test <file>` | WORKS | Discovers @test fns, pretty PASS/FAIL output with summary |
+| `turbolang bench <file>` | WORKS | Runs JIT+AOT, compares outputs, reports median timing |
+| `turbolang doc <file>` | WORKS | Generates markdown docs with functions, structs, fields, methods |
+| `turbolang repl` | WORKS | Interactive with auto-print, :help, :quit commands |
+| `turbolang playground` | WORKS | Built-in HTTP server at localhost:3000 with code editor |
+| `turbolang lsp` | WORKS | Starts LSP server (needs proper client like VS Code) |
+| `turbolang explain <code>` | WORKS | `explain E0100` -> "type mismatch", covers E0001-E0513 |
+| `turbolang install` | WORKS | Reads turbo.toml dependencies (reports "none found" if empty) |
+| `turbolang update` | WORKS | Updates GitHub dependencies (reports "none found" if empty) |
 
-**Score: 14/14 commands exist, 12/14 fully functional, 2 partially (doc, repl).**
-
-**Improvement since prior audit:** `turbolang lsp` now works (v0.2.1 ships the LSP binary with Homebrew). This was a P0 blocker in the prior audit.
+All 15 advertised CLI commands work. This is a clean sweep.
 
 ---
 
-## 4. Language Features
+## Language Features Audit
 
-### Core Features -- All Working
+### Core Language -- Tested and Working
 
-| Feature | Verified | Notes |
-|---------|----------|-------|
-| Functions, recursion | Yes | Fibonacci, mutual recursion |
-| `let` / `let mut` | Yes | Immutable default, mutable opt-in |
-| Type inference | Yes | Works for locals and generic type params |
-| String interpolation `"{expr}"` | Yes | Including method calls: `"{c.get()}"` |
-| Structs + field access | Yes | `Point { x: 10, y: 20 }`, `p.x` |
-| `impl` blocks + methods | Yes | `self` parameter, method calls |
-| Enums with data variants | Yes | `type Shape { Circle(f64), Rect(f64, f64) }` |
-| Enum construction | Yes | **Uses `Shape.Circle(5.0)` (dot), NOT `Shape::Circle` (double-colon)** |
-| Pattern matching | Yes | With guards, exhaustiveness checking |
-| Arrays `[T]` | Yes | Literals, indexing, `len()`, `for..in` |
-| `while`, `break`, `continue` | Yes | All work |
-| `if/else` as expressions | Yes | Return values from branches |
-| Closures | Yes | Capture by value, HOF, returning closures from functions |
-| `map`, `filter` on arrays | Yes | Method syntax: `nums.map(\|x\| ...)` |
-| `reduce` | Yes | Free function syntax |
-| Pipe operator `\|>` | Yes | `text \|> trim \|> lower` |
-| String builtins | Yes | `trim`, `lower`, `upper`, `replace`, `contains`, `starts_with`, `ends_with` |
-| HashMaps | Yes | `hashmap()`, `hashmap_set`, `hashmap_get`, `hashmap_has` |
-| Async/await/spawn | Yes | `async fn`, `spawn`, `await` all work |
-| Agent/tool primitives | Yes | `agent` blocks, `tool fn`, field access |
-| `@derive(Eq, Clone, Display)` | Yes | Auto-generates trait impls |
-| `@test` functions | Yes | Test runner discovers and executes |
-| `defer` | Yes | Correct execution order (LIFO) |
-| Constants | Yes | `const` declarations |
-| Copy-on-write arrays | Yes | Original unchanged after mutation of copy |
-| Generic functions | Yes | `fn identity<T>(x: T) -> T` |
-| Generic enums | Yes | `type Maybe<T> { Just(T), Nothing }` |
-| HTTP server | Yes | `http_server`, `route`, `http_listen` -- returns real HTTP responses |
-| File I/O | Yes | `write_file`, `read_file` |
-| Imports | Yes | Cross-file imports (tested via integration suite) |
-| Error codes + spans | Yes | 97 codes, source locations, help text |
-| AOT compilation | Yes | Standalone native binaries, ~55 KB |
-| Multiple error reporting | Yes | All errors in one pass, no bail-on-first |
-
-### Partially Working / Caveats
-
-| Feature | Issue |
-|---------|-------|
-| Optional types (`T?`) | `let x: i64? = none` produces confusing error with internal `<error>?` type leaking into message |
-| REPL expression evaluation | `1 + 2` produces no output -- only `print(...)` works |
-| `turbolang doc` | Struct fields section shows `impl` block lines instead of actual field names/types |
-| String interpolation nesting | `"{foo("bar")}"` fails -- inner quotes close outer string. Must extract to variable first. |
-
-### Not Implemented (Design Docs Promise, Compiler Doesn't Deliver)
-
-These are listed in `design/SYNTAX.md` (linked from README as "Language Design") but do not work:
-
-| Feature | Source | Parser Error |
+| Feature | Status | Test Result |
 |---------|--------|-------------|
-| Arrow lambdas `(x) => x * 2` | SYNTAX.md | "expected expression, found `=>`" |
-| Destructuring `let [a, b] = [1, 2]` | SYNTAX.md | "expected identifier, found `[`" |
-| Array comprehensions `[x * 2 for x in items]` | SYNTAX.md | "expected `]`, found `for`" |
-| Optional chaining `user?.address?.city` | SYNTAX.md | Not implemented |
-| `?` error propagation operator | SYNTAX.md | Not implemented |
-| `guard let` | SYNTAX.md | Not implemented |
-| `with` blocks | SYNTAX.md | Not implemented |
-| `const fn` compile-time execution | SYNTAX.md | Not implemented |
-| Scope functions (let, also, apply) | SYNTAX.md | Not implemented |
-| `{K: V}` map literals | SYNTAX.md | Not implemented |
-| `{T}` set literals | SYNTAX.md | Not implemented |
+| Variables (let, let mut) | WORKS | `let x = 42`, `let mut counter = 0` |
+| Type annotations (i32, i64, u32, u64, f64, bool, str) | WORKS | All types tested |
+| Functions with return types | WORKS | `fn add(a: i64, b: i64) -> i64` |
+| Recursion | WORKS | fib(40) = 102334155 |
+| If/else as expressions | WORKS | `let status = if age > 18 { "adult" } else { "minor" }` |
+| Else-if chains | WORKS | `if ... else if ... else ...` |
+| While loops | WORKS | Standard while with condition |
+| For-in loops over arrays | WORKS | `for item in items { ... }` |
+| For-in over ranges | WORKS | `for x in 0..3 { ... }` |
+| Break and continue | WORKS | Both work inside while loops |
+| String interpolation | WORKS | `"Hello, {name}!"` including nested function calls |
+| Nested quote interpolation | WORKS | `"result: {get_name("world")}"` works (fixed in v0.3.0) |
+| Print with interpolation | WORKS | Integers, floats, bools, strings all print correctly |
+| Constants | WORKS | `const MAX: i64 = 100` with type annotations (new in v0.3.0) |
+| Struct types | WORKS | Field access, mutation, passing to functions |
+| Impl blocks with methods | WORKS | `self` parameter, method calls via dot syntax |
+| Enum types with data variants | WORKS | `type Shape { Circle(f64), Rect(f64, f64) }` |
+| Enum constructors | WORKS | Requires qualified syntax: `Shape.Circle(5.0)` |
+| Match expressions | WORKS | Enum patterns, integer patterns, wildcard `_` |
+| Match guards | WORKS | `n if n > 0 => "positive"` |
+| Optional types (T?) | WORKS | `some(v)`, `none`, match patterns |
+| Result types (T ! E) | WORKS | `ok(v)`, `err(e)`, match patterns |
+| ? operator | WORKS | Error propagation in Result-returning functions |
+| If-let expressions | WORKS | `if let some(v) = maybe_value() { ... }` (new in v0.3.0) |
+| Closures (pipe syntax) | WORKS | `\|x: i64\| -> i64 { x * 2 }` with capture |
+| Arrow closures | WORKS | `(x: i64) => x * 2` (new in v0.3.0) |
+| Higher-order functions | WORKS | Functions as parameters and return values |
+| .map() and .filter() on arrays | WORKS | Method chaining works |
+| reduce() | WORKS | `reduce(arr, init, closure)` |
+| Pipe operator (\|>) | WORKS | `text \|> trim \|> lower` |
+| Generic functions | WORKS | `fn identity<T>(x: T) -> T` |
+| Generic structs | WORKS | `struct Pair<A, B> { first: A, second: B }` |
+| Traits | WORKS | `trait Describable { fn describe(self) -> str }` |
+| Trait impl | WORKS | `impl Describable for Dog { ... }` |
+| @derive(Eq, Clone, Display) | WORKS | Struct equality, display formatting |
+| @test functions | WORKS | `@test fn test_add() { assert_eq(...) }` |
+| @unsafe functions | WORKS | `@unsafe fn` declared, sema enforces safe-call restriction |
+| Defer statements | WORKS | `defer { print("cleanup") }` runs at scope exit |
+| Copy-on-write arrays | WORKS | `let mut b = a; b[0] = 99` -- a unchanged |
+| Imports | WORKS | `import { square } from "./math_lib"` resolves .tb files |
+| Struct destructuring | WORKS | `let { x, y } = point` (new in v0.3.0) |
+| Optional chaining | WORKS | `u?.name` returns optional (new in v0.3.0) |
+| Map literals | WORKS | `{"key": "value"}` creates hashmap (new in v0.3.0) |
+| Async/await | WORKS | `async fn`, `spawn`, `await` with thread-based concurrency |
+| Channels | WORKS | Per channels.tb test |
+| Mutex | WORKS | Per mutex_basic.tb test |
+| Hashmap operations | WORKS | `hashmap()`, `hashmap_set()`, `hashmap_get()` |
+| String builtins | WORKS | upper, lower, trim, replace, split, starts_with, ends_with, char_at |
+| Math builtins | WORKS | Per stdlib_math.tb, stdlib_math_ext.tb tests |
+| JSON serialization | WORKS | Per json_*.tb tests |
+| HTTP server | WORKS | `http_server()`, `route()`, `http_listen()` -- verified with curl |
+| Agent/tool declarations | WORKS | `agent`, `tool fn` syntax, field access on agent instances |
+
+### Issues Found
+
+| Issue | Severity | Details |
+|-------|----------|---------|
+| `push()` requires reassignment | P1-BUG | `push(arr, 4)` returns new array but does NOT mutate `arr`. Must use `arr = push(arr, 4)`. Undocumented. |
+| `.push()` method syntax silently no-ops | P0-BUG | `items.push(4)` compiles and runs without error but does nothing -- length unchanged. Silent data loss. |
+| Generic impl blocks don't parse | P1-MISSING | `impl Pair<T> { ... }` fails with "expected `{`, found `<`". Only non-generic impl works. |
+| f32 type unusable | P2-BUG | `let x: f32 = 1.5` fails: "type annotation f32 doesn't match value type f64". All float literals infer as f64, no f32 literal syntax. |
+| `hashmap_size()` not a builtin | P2-MISSING | No way to get hashmap length. `hashmap_size` is undefined. |
+| `unsafe {}` block syntax doesn't parse | P2-GAP | `unsafe { dangerous() }` fails. Sema correctly rejects unsafe calls from safe context, but there's no `unsafe` block syntax to opt in. Existing test just checks the error. |
+| README type system example fails | P1-DOC | README shows `type Option<T> { some(T), none }` which fails because `some` is a reserved keyword. |
+| README async example inconsistency | P2-DOC | README async example shows `fn main()` (non-async) calling `spawn` and `await`. Works, but the "Taste of Turbo" example correctly uses `async fn main()`. |
+| README shows unqualified enum constructors | P1-DOC | README pattern matching shows `Circle(r)` -- should be `Shape.Circle(r)` for construction (pattern matching does use unqualified). |
+| Agent syntax: trailing commas rejected | P2-DOC | Agent fields with trailing commas (`model: "claude-sonnet",`) fail to parse. Must omit trailing commas. |
+| Test count badge stale | P3-DOC | README badge says "378 passing" but actual count is 405 (259 unit + 146 integration). Should be updated upward. |
 
 ---
 
-## 5. Example Programs
+## Build Path Audit
 
-### Working Examples (6/6 pass)
+### JIT (turbolang run)
+- **Status: WORKS**
+- Cranelift backend compiles and executes in-process
+- fib(40) = 102334155 in ~0.26s (includes compilation)
+- All test programs produce correct output
 
-| Example | What it Does | Verdict |
-|---------|-------------|---------|
-| `examples/simple-script/main.tb` | Text statistics analyzer with word frequency, string ops, arrays, pipes, hashmaps | Impressive. Real-world complexity. |
-| `examples/todo-cli/main.tb` | Task manager with priorities, file I/O persistence, filtering | Full CRUD app with disk persistence. |
-| `examples/data-pipeline/main.tb` | Log analyzer with level distribution, HTTP analysis, endpoint frequency | Data processing pipeline with hashmap analytics. |
-| `examples/game-of-life/main.tb` | Conway's Game of Life, 20x10 grid, 8 generations | Algorithmic demo with string-as-grid representation. |
-| `examples/speed-server/main.tb` | HTTP REST API with /api/fib, /api/primes, /api/sort, /api/health | Tested with curl -- returns JSON. Actually serves HTTP. |
-| `examples/web-dashboard/main.tb` | Full benchmark dashboard with styled HTML served on port 3000 | Not fully tested (port conflict) but starts correctly. |
+### AOT Cranelift (turbolang build)
+- **Status: WORKS**
+- Produces native Mach-O arm64 binary (56KB for fib program)
+- Links against turbo_rt.c runtime
+- fib(40) binary runs correctly in ~0.27s
 
-### Roadmap Examples (5/5 fail -- by design)
+### AOT LLVM (turbolang build --llvm)
+- **Status: WORKS**
+- Produces native binary (55KB)
+- fib(40) runs correctly in ~0.28s
+- Ships with Homebrew install (no separate LLVM setup needed)
 
-The `examples/roadmap/` directory contains 5 ambitious projects (task-agent, web-api, desktop-app, realtime-system, edge-wasm) that use unimplemented syntax. These are correctly labeled as "Planned" in the examples README and properly segregated from working examples. They represent the gap between design aspirations and current implementation.
+### Performance vs Claims
 
----
+| Benchmark | README Claim | Measured | Verdict |
+|-----------|-------------|----------|---------|
+| Turbo Cranelift fib(40) | 250ms | ~270ms | APPROXIMATELY TRUE |
+| Turbo LLVM fib(40) | 290ms | ~280ms | TRUE |
+| C (cc -O2) fib(40) | 290ms | ~290ms | TRUE |
+| Binary size | 55 KB | 55-56 KB | TRUE |
 
-## 6. Documentation Gaps
-
-### What's Promised but Wrong
-
-| Location | Claim | Reality |
-|----------|-------|---------|
-| **README enum syntax** | Shows `Color::Red` (Rust-style `::`) in pattern matching section | **Actual syntax is `Color.Red` (dot notation).** Copying the README example verbatim produces a parse error. |
-| README test badge | "358 passing" | Actual: 240 unit + 138 integration = **378**. Badge is stale (now undercounts). |
-| SYNTAX.md features | Arrow lambdas, destructuring, comprehensions, optional chaining, guard, with, const fn, etc. | **None implemented.** SYNTAX.md is a design doc but linked from README as "Language Design" without caveat. |
-| README ecosystem | Lists VS Code extension as `zvndev.turbo-lang` | Not on marketplace. Returns 404. Local VSIX only. |
-| README | `turbolang build --llvm` for LLVM backend | Flag exists but LLVM not included in Homebrew binary. Users must build from source. |
-| Website code examples | Use `to_str()` + string concatenation (`"fib(40) = " + to_str(result)`) | Idiomatic Turbo uses interpolation `"fib(40) = {result}"`. Inconsistent with README. |
-| GitHub repo | `homepageUrl` | Empty. Should be `https://turbolang.dev`. |
-
-### What Exists but Isn't Well-Documented
-
-| Feature | Notes |
-|---------|-------|
-| `turbo.toml` project system | `turbolang init` creates a project, `turbolang run` auto-detects it, but the README doesn't explain project structure or turbo.toml fields. |
-| Multiple error reporting | Compiler reports all errors in one pass. This is a significant quality feature not highlighted anywhere. |
-| `turbolang install` / `turbolang update` | Present in CLI help, handle turbo.toml dependencies, but workflow is undocumented. |
-| `examples/roadmap/` aspirational projects | 5 ambitious demo projects exist but aren't mentioned in root README. |
+Performance claims are honest. Turbo is genuinely competitive with C on this benchmark.
 
 ---
 
-## 7. DX Issues
+## Test Suite Status
 
-### Error Messages: Excellent (Best-in-Class for a Young Language)
+### Unit Tests (cargo test)
+- **259 tests, 0 failures**
+- Breakdown: lexer 0, ast 23, parser 106, sema 58, codegen 18, cli 13, lsp 41
+- All pass cleanly in ~0.02s total
 
-Tested with 5 intentionally broken programs. Every error includes:
-- Unique code (e.g., `error[E0110]`)
-- Source location with line/column
-- Colored snippet with carets
-- Contextual help text
-- Multiple errors per file (no bail-on-first-error)
+### Integration Tests (run_tests.sh)
+- **146 passed, 0 failed, 4 skipped**
+- Phase1: 124 test files
+- Regression: 11 tests
+- Import tests: 7 tests (4 skipped -- helper files without .expected)
+- Adversarial: 7 tests
+- All pass cleanly
 
-Examples:
-- Undefined function: `error[E0301]: undefined function 'foo'` + `Help: define 'foo' with 'fn foo(...) { ... }'`
-- Undefined variable: `error[E0300]: undefined variable 'x'` + `Help: did you mean to declare 'x' with 'let x = ...'?`
-- Type mismatch: `error[E0110]: type annotation 'i64' doesn't match value type 'str'` + `Help: either change the type annotation or the assigned value`
-- Return type mismatch: `error[E0109]: function 'foo' should return 'i64' but body returns 'str'`
-- Wrong arg count: `error[E0100]: function 'add' expects 2 argument(s) but 1 were given`
-
-This quality is on par with Rust's diagnostics. Genuinely impressive.
-
-### Compilation Speed: Excellent
-
-| Operation | Time |
-|-----------|------|
-| JIT hello world | ~5ms |
-| AOT fibonacci | ~116ms |
-| JIT fibonacci (with computation) | ~5ms |
-
-The edit-run cycle feels instant. This is a genuine competitive advantage.
-
-### Binary Size: As Advertised
-
-Fibonacci AOT binary: 56,608 bytes (~55.3 KB). README claims ~55 KB -- verified.
-
-### `turbolang init`: Good
-
-Creates a usable project with working tests. `turbolang run` from the project directory works immediately. `turbolang test tests/` discovers and runs the generated tests. Good first-run experience.
-
-### REPL: Needs Work
-
-- Starts correctly with version banner
-- `print(x)` statements work
-- Expression results are NOT displayed (`1 + 2` shows nothing)
-- This is a significant gap -- every major REPL auto-prints expression values
-
-### `turbolang doc`: Has Bugs
-
-Struct fields section includes `impl` block source lines instead of actual field definitions:
-```
-Fields:
-- `impl User {`           <-- BUG
-- `fn greet(self) -> str`  <-- BUG
-```
-Should show: `name: str`, `age: i64`.
-
-### Playground: Works Well
-
-Launches at localhost:3000 with a `/benchmarks` page. Clean output, quick startup.
+### Test Coverage Assessment
+The test suite is comprehensive. It covers:
+- All numeric types (i32, i64, u32, u64, f64)
+- All control flow (if/else, while, for, break, continue, match)
+- All data types (struct, enum, array, hashmap, optional, result)
+- All features (closures, generics, traits, async, agents, defer, unsafe)
+- Error cases (type mismatches, undefined variables, exhaustiveness)
+- Edge cases (NaN comparison, integer overflow, deep nesting, shadowing)
 
 ---
 
-## 8. Ecosystem
+## Ecosystem Tools
+
+### LSP Server (turbo-lsp)
+- **Status: WORKS** (binary installs, starts on stdio, needs VS Code client)
+- Installed at `/opt/homebrew/bin/turbo-lsp`
+- Claims: diagnostics, hover, completions, go-to-definition, document symbols
+- 41 unit tests pass
+
+### Formatter (turbolang fmt)
+- **Status: WORKS** but incomplete
+- Handles indentation and basic spacing
+- Reports "already formatted" for clean files
+- Does NOT normalize all operator spacing or brace formatting
+
+### Playground (turbolang playground)
+- **Status: WORKS**
+- Built-in HTTP server at localhost:3000
+- Includes code editor and benchmarks page
+- Self-contained HTML app embedded in binary
+
+### REPL (turbolang repl)
+- **Status: WORKS**
+- Auto-prints expression results
+- Supports let bindings across lines
+- :help and :quit commands work
 
 ### VS Code Extension
-
-| Aspect | Status |
-|--------|--------|
-| On VS Code Marketplace | **No -- 404** |
-| Installed locally | Yes, `zvndev.turbo-lang` v0.2.0 |
-| Syntax highlighting | Yes (TextMate grammar) |
-| Snippets | Yes (23 claimed) |
-| LSP client | Yes (configured) |
-| Version | **0.2.0 (behind compiler at 0.2.1)** |
-
-### Tree-sitter Grammar
-
-`ZVN-DEV/tree-sitter-turbo` repo exists, public.
-
-### LSP Server
-
-Now ships with Homebrew formula (v0.2.1 fix). `turbolang lsp --help` works. This was broken in v0.2.0.
-
-### Website (turbolang.dev)
-
-- Live, returns 200
-- Built with Next.js 16 + React 19 + Tailwind 4
-- Landing page with feature highlights, code examples, benchmark chart
-- `/docs` section with comprehensive guides for every language feature
-- Documentation sidebar covers: Introduction, Installation, Hello World, Variables & Types, Functions, Control Flow, Structs & Enums, Traits & Generics, Pattern Matching, Closures, Async & Concurrency, Error Handling, Collections, Agents, CLI Reference, Testing, Formatting, REPL, LSP, Error Codes, Built-in Functions, Examples
-
-### CI/CD
-
-GitHub Actions CI configured with lint + test on Ubuntu/macOS, release builds on tag push. Three releases: v0.1.0, v0.2.0, v0.2.1.
-
-### Integration Tests
-
-138 passed, 0 failed, 4 skipped. Zero failures.
-
-### Unit Tests
-
-240 passed across all crates (12 lexer, 106 parser, 13 AST, 13 sema, 41 codegen, 55 CLI).
+- **Status: INSTALLED** at v0.2.0 (behind compiler at v0.3.0)
+- Provides syntax highlighting and 23 snippets
 
 ---
 
-## 9. Critical Issues (Prioritized)
+## README/Docs Accuracy
 
-### P0 -- Must Fix Before Marketing Push
+### Claims That Are TRUE
+- Homebrew install works
+- JIT and AOT compilation work
+- LLVM backend works
+- Performance benchmarks are honest
+- All listed types work (i32, i64, u32, u64, f64, bool, str, T?, T ! E)
+- Pattern matching with guards works
+- Async/await with spawn works
+- Closures with capture work
+- .map(), .filter() on arrays work
+- Pipe operator works
+- String interpolation works (including nested quotes, fixed in v0.3.0)
+- Copy-on-write arrays work
+- Agents and tool fn syntax work (as struct-like declarations)
+- HTTP server built-in works
+- All 3 example projects run correctly
+- Error codes E0001-E0513 all documented
 
-1. **README enum syntax is wrong.** Shows `Color::Red` but actual syntax is `Color.Red`. New users copying the pattern matching example will get a parse error. 5-minute fix.
+### Claims That Are INACCURATE
+1. **Type system example** in README uses `some(T)` as enum variant name -- `some` is reserved
+2. **Pattern matching example** uses unqualified constructors `Circle(r)` for construction -- needs `Shape.Circle(r)`
+3. **Test badge** says "378 passing" -- actual count is 405
+4. **README shows `.push(4)` method syntax** -- this silently fails (does nothing)
+5. **SYNTAX.md marks some features `[Implemented]` that have caveats** -- e.g. destructuring works for structs but not for arrays, optional chaining works but README doesn't show the required `if let` unwrap
 
-2. **VS Code extension not on marketplace.** README implies it's installable. It's not. New users cannot get syntax highlighting without manual VSIX install. Either publish it or document the manual installation process honestly.
-
-3. **REPL doesn't show expression results.** `1 + 2` produces no output. Every REPL users have ever used (Python, Node, IRB, Elixir) auto-prints expression values. Makes the REPL feel broken.
-
-### P1 -- Should Fix Soon
-
-4. **Design docs linked without caveat.** SYNTAX.md describes arrow lambdas, destructuring, comprehensions, optional chaining, and ~10 other features that don't exist. Linked from README as "Language Design." Users will think these features exist. Add status labels or split into implemented/planned.
-
-5. **GitHub homepage URL empty.** Should be `turbolang.dev`.
-
-6. **Test badge stale.** "358 passing" but actual count is 378.
-
-7. **Website examples use outdated idiom.** `to_str()` + concatenation instead of string interpolation.
-
-8. **`turbolang doc` struct field bug.** Shows impl block lines as struct fields.
-
-### P2 -- Polish
-
-9. **Optional type error leaks internal `<error>` type.** `let x: i64? = none` shows `<error>?` in error message.
-
-10. **VS Code extension one version behind** (0.2.0 vs 0.2.1).
-
-11. **LLVM backend advertised but not shipped.** The `--llvm` flag, README section, and website all reference LLVM, but Homebrew users can't use it without building from source.
-
-12. **String interpolation can't nest quoted strings.** `"{foo("bar")}"` fails. Worth documenting as a known limitation.
-
----
-
-## 10. What's Genuinely Good
-
-This section exists because the audit should be fair, not just a bug list.
-
-1. **Error messages are best-in-class.** Unique codes, source spans, colored output, help text, multiple errors per compilation. On par with Rust. Genuinely impressive for a v0.2 language.
-
-2. **Compilation speed is excellent.** 5ms JIT, 116ms AOT. The edit-run cycle feels instant. This is a real competitive advantage.
-
-3. **55 KB binaries.** Claim verified. Tiny standalone executables with no runtime dependency.
-
-4. **Example projects are compelling.** 6 working examples covering text analysis, task management, data pipelines, Game of Life, HTTP REST APIs, and web dashboards. These demonstrate real capability, not just toy programs.
-
-5. **HTTP server works out of the box.** `http_server(8080)` + `route()` + `http_listen()` -- tested with curl, returns actual responses. Impressive for a compiled language at this stage.
-
-6. **`turbolang init` creates a working project.** Tests pass immediately. `turbolang run` from project dir works. Good onboarding.
-
-7. **`turbolang bench` is thoughtful.** Runs JIT + AOT, verifies output match, reports median over multiple runs.
-
-8. **Homebrew distribution is frictionless.** Tap, install, run. Zero issues.
-
-9. **Feature set is surprisingly complete for v0.2.** Generics, traits, async/await, closures, pattern matching, agents, HTTP, file I/O, testing, formatting, LSP -- all working.
-
-10. **Website exists with real documentation.** Not a placeholder -- 20+ doc pages covering every feature, properly deployed at turbolang.dev.
-
-11. **138 integration tests, 240 unit tests, all passing.** Zero failures. Solid test coverage.
-
-12. **V0.2.1 fixed the prior audit's top two issues** (version mismatch and missing LSP binary). Shows the team responds to audit findings.
+### Links Check
+- turbolang.dev: LIVE (HTTP 200)
+- turbolang.dev/docs: LIVE (HTTP 200)
+- All design/ docs referenced in README exist
+- CONTRIBUTING.md exists
+- LICENSE exists
+- docs/errors.md exists
+- distribution/Dockerfile exists
+- distribution/install.sh exists
 
 ---
 
-## 11. Recommendations (Prioritized)
+## DX Issues
 
-### Immediate (hours of work)
+1. **Silent `.push()` failure is dangerous** -- `items.push(4)` compiles, runs, and does nothing. No error, no warning. The array length doesn't change. This is the most dangerous bug found because it causes silent data loss. The correct usage is `items = push(items, 4)` but nothing tells the user this.
 
-1. **Fix README enum syntax** -- change `Color::Red` to `Color.Red`. Prevents immediate user confusion.
-2. **Set GitHub homepage URL** to `turbolang.dev`.
-3. **Update test badge** to 378 or make it dynamic.
+2. **Float literal inflexibility** -- All float literals infer as f64. The f32 type exists in the type system but there's no way to create an f32 value from a literal. `let x: f32 = 1.5` fails with a type mismatch.
 
-### Short-term (next release)
+3. **No `unsafe` block syntax** -- @unsafe functions can be declared and sema correctly rejects calls from safe contexts, but there's no `unsafe { ... }` block to actually call them. The feature is half-implemented.
 
-4. **Publish VS Code extension** to marketplace. Single biggest DX gap.
-5. **REPL expression auto-printing** -- make `1 + 2` show `3`.
-6. **Fix `turbolang doc` struct parsing** -- show field names/types, not impl blocks.
-7. **Add caveat to design docs** -- mark unimplemented features clearly.
-8. **Sync website code examples** to use string interpolation.
+4. **Error messages are excellent** -- Ariadne-formatted, with error codes, source highlighting, span pointing, and actionable help hints. This is production-quality DX and better than many mature languages.
 
-### Medium-term (next few releases)
-
-9. **Implement arrow lambdas** `(x) => x * 2` -- most-missed JS feature from the design doc.
-10. **Implement destructuring** -- core ergonomic feature for the JS/TS audience.
-11. **Implement optional chaining** `?.` -- appears in all roadmap examples.
-12. **Document turbo.toml project system** -- init creates it, but no docs explain it.
-
-### Long-term
-
-13. **Ship LLVM backend in Homebrew** or de-emphasize it in docs.
-14. **Implement remaining SYNTAX.md features** -- comprehensions, guard, with blocks, etc.
+5. **Agent system is structural only** -- `agent` and `tool fn` parse and create data structures, but there's no actual LLM integration. They're essentially fancy structs. This is fine for v0.3.0 but should be made clearer.
 
 ---
 
-## Appendix: Test Environment
+## Recommendations (Prioritized)
 
-| Item | Value |
-|------|-------|
-| Date | 2026-04-03 |
-| Machine | Apple Silicon (arm64), macOS Sequoia (Darwin 25.3.0) |
-| Homebrew formula version | 0.2.1 |
-| Binary version | turbolang 0.2.1 |
-| Binary path | `/opt/homebrew/bin/turbolang` |
-| Installed size | 4.7 MB (5 files) |
-| Repo | `/Users/macbookpro-kirby/Desktop/Coding/ZVN/new-language` (master, 09c31b3) |
-| Unit tests | 240 passed, 0 failed |
-| Integration tests | 138 passed, 0 failed, 4 skipped |
-| VS Code extension | `zvndev.turbo-lang@0.2.0` (local install only) |
-| Website | https://turbolang.dev -- HTTP 200 |
-| GitHub releases | v0.1.0, v0.2.0, v0.2.1 (latest) |
+### P0 -- Fix Before Anyone Evaluates
+1. ~~**Fix `.push()` method syntax**~~ -- **FIXED in v0.3.1**: Compiler auto-reassigns push() result in statement position
+2. ~~**Fix README type system example**~~ -- **FIXED in v0.3.1**: Changed to `Result<T>` example
+3. ~~**Fix README enum constructor examples**~~ -- **FIXED in v0.3.1**: Added qualified syntax
 
-## Changes Since Prior Audit (v0.2.0 -> v0.2.1)
+### P1 -- Fix Soon
+4. ~~**Add generic impl blocks**~~ -- **FIXED in v0.3.1**: Parser handles `impl Pair<A, B> { ... }`
+5. ~~**Add hashmap_size() builtin**~~ -- **FIXED in v0.3.1**: Added as alias for hashmap_len
+6. ~~**Update test count badge**~~ -- **FIXED in v0.3.1**: Updated to current count
+7. **Sync VS Code extension to 0.3.1** -- Extension is behind compiler
+8. ~~**Document push() semantics**~~ -- **FIXED in v0.3.1**: push() now works as method syntax
 
-| Prior P0 Issue | Status |
-|----------------|--------|
-| Version mismatch (Homebrew 0.2.0 vs binary 0.1.0) | **FIXED** -- all touchpoints now show 0.2.1 |
-| `turbolang lsp` broken (turbo-lsp not in Homebrew) | **FIXED** -- LSP binary now shipped |
-| Implicit `int + str` coercion | **FIXED** -- CHANGELOG says "removed implicit int+str/str+int coercion in + operator" |
+### P2 -- Nice to Have
+9. ~~**Add f32 literal coercion**~~ -- **FIXED in v0.3.1**: Sema coerces f64 literals to f32 when annotated
+10. **Add `unsafe {}` block syntax** -- Complete the unsafe feature
+11. **Improve formatter** -- Add operator spacing and brace normalization
+12. **Add `hashmap_keys()` and `hashmap_values()` builtins** -- Common operations missing
 
-Three of four P0 issues from the prior audit were fixed in v0.2.1. The remaining top issues (README enum syntax, VS Code marketplace, REPL expression printing) are new findings from this deeper audit.
+### P3 -- Roadmap
+13. List comprehensions, guard let, with blocks -- documented as planned in SYNTAX.md
+14. Standard library modules (proper `import std/...`)
+15. Package manager with lockfiles
+16. Actual LLM integration for agents
+
+---
+
+## TurboServo Stress Test Findings (v0.3.1)
+
+Building TurboServo (a full HTTP server framework) as a real-world stress test of the language surfaced several issues and drove fixes:
+
+### Issues Found & Fixed
+
+| Issue | Severity | Status | Fix |
+|-------|----------|--------|-----|
+| `.push()` method syntax silently no-ops | P0-BUG | **FIXED** | Compiler auto-reassigns push() result in statement position |
+| Generic impl blocks don't parse | P1-MISSING | **FIXED** | Parser now handles `impl Pair<A, B> { ... }` |
+| f32 literals fail type check | P2-BUG | **FIXED** | Sema now coerces f64 float literals to f32 when annotation is f32 |
+| `hashmap_size()` missing | P2-MISSING | **FIXED** | Added as alias for `hashmap_len()` in sema + codegen |
+| README type system example wrong | P1-DOC | **FIXED** | Changed `Option<T>` example to `Result<T>` |
+| README unqualified enum constructors | P1-DOC | **FIXED** | Added `Shape.Circle(3.14)` qualified syntax |
+| Test badge stale (378) | P3-DOC | **FIXED** | Updated to current count |
+| Generic type args in return types fail | P1-MISSING | **FIXED** | Parser now handles `-> Pair<B, A>` return types |
+| HTTP handlers only receive body | P1-MISSING | **FIXED** | New structured request format with method/path/query/headers/body |
+| Single-threaded HTTP accept loop | P1-PERF | **FIXED** | Thread-per-connection + HTTP/1.1 keep-alive in both runtimes |
+
+### New Builtins Added
+- `request_method(req)` -- extract HTTP method from request
+- `request_path(req)` -- extract URL path
+- `request_query(req, key)` -- extract query parameter by key
+- `request_header(req, key)` -- extract header value by key
+
+### Dual Runtime Lesson
+**CRITICAL**: Every runtime change must be made in BOTH `turbo_rt.c` (C for AOT) AND `runtime.rs` (Rust for JIT). The JIT uses the Rust runtime at development time; AOT links the C runtime for production. Missing one causes behavioral divergence. This was discovered when HTTP request context worked in AOT but not JIT.
+
+### Benchmark Results (post-fix)
+
+| Framework | GET /json (req/s) | GET /user?id=1 (req/s) | Avg Latency | Memory |
+|---|---|---|---|---|
+| **TurboServo (Turbo)** | **165,253** | **166,982** | **~595μs** | **5 MB** |
+| Hono (Bun) | 114,961 | 118,173 | ~857μs | ~35 MB |
+| Go net/http | 94,697 | 95,428 | ~1.03ms | ~15 MB |
+
+TurboServo is 1.4x faster than Hono/Bun and 1.7x faster than Go net/http with 7x less memory than Bun. The multi-threaded HTTP + keep-alive fix was a 5.3x improvement from the initial single-threaded 31K req/s.
+
+---
+
+## What's Genuinely Impressive
+
+- **259 unit + 146 integration tests, all passing** -- Excellent coverage for a young language
+- **Both JIT and AOT work** -- Cranelift AND LLVM, both producing correct binaries
+- **Performance is honest** -- fib(40) benchmarks match claims, competitive with C
+- **15 working CLI commands** -- More tooling than languages 10x its age
+- **6 working example projects** -- Real programs (Game of Life, HTTP servers, data pipelines)
+- **Error diagnostics** -- Production-quality with error codes, source highlighting, help hints
+- **Built-in playground and REPL** -- Shipped in the binary
+- **HTTP server built-in** -- Actually works, verified with curl
+- **Significant progress since v0.2.2** -- Arrow closures, if-let, optional chaining, destructuring, map literals all landed
+- **The language design** -- T?, T ! E, match, closures, pipes, agents -- cohesive and elegant

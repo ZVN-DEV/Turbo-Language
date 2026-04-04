@@ -62,6 +62,8 @@ pub struct AgentDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplBlock {
     pub type_name: String,
+    /// Generic type parameters: `impl Pair<T> { ... }`
+    pub type_params: Vec<TypeParam>,
     /// If Some, this is a trait impl: `impl TraitName for TypeName { ... }`
     pub trait_name: Option<String>,
     pub methods: Vec<Spanned<FnDef>>,

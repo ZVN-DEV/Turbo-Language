@@ -7,7 +7,7 @@
 A compiled, type-safe programming language with familiar syntax, native performance, and first-class AI agent primitives. Compiles to machine code via Cranelift -- no VM, no garbage collector, no overhead.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-378%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-407%20passing-brightgreen.svg)](#testing)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 
@@ -94,9 +94,9 @@ Strong static typing with inference, generics, traits, and algebraic data types.
 ```turbo
 struct Point<T> { x: T, y: T }
 
-type Option<T> {
-    some(T)
-    none
+type Result<T> {
+    Ok(T)
+    Err(str)
 }
 
 trait Printable {
@@ -116,12 +116,14 @@ type Shape {
     Rectangle(f64, f64)
 }
 
-fn area(s: Shape) -> str {
+fn describe(s: Shape) -> str {
     match s {
         Circle(r) => "circle"
         Rectangle(w, h) => "rectangle"
     }
 }
+
+let s = Shape.Circle(3.14)
 
 fn classify(n: i64) -> str {
     match n {
@@ -367,7 +369,7 @@ cd turbo && ./tests/run_tests.sh
 turbolang run turbo/tests/phase1/fibonacci.tb
 ```
 
-378+ tests across unit and integration suites.
+407+ tests across unit and integration suites.
 
 ## LLVM Backend
 

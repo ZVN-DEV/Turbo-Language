@@ -1,0 +1,20 @@
+fn main() {
+    let mut items: [i64] = [1, 2, 3]
+
+    // Method syntax auto-reassigns
+    items.push(4)
+    print("{len(items)}")
+
+    // Function syntax without assignment also auto-reassigns
+    push(items, 5)
+    print("{len(items)}")
+
+    // Function syntax with explicit assignment still works
+    items = push(items, 6)
+    print("{len(items)}")
+
+    // Verify all values present
+    for item in items {
+        print("{item}")
+    }
+}
