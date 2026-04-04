@@ -822,11 +822,23 @@ impl Parser {
 
                 // If followed by RBrace, this is the tail expression
                 if matches!(self.peek(), Some(Token::RBrace)) {
-                    tail_expr = Some(Box::new(expr));
+                    // If the tail expr is a COW builtin call, convert it to a
+                    // statement with auto-reassign instead. The block returns Unit.
+                    if Self::is_cow_builtin_call(&expr) {
+                        let span = expr.span.clone();
+                        let stmt = Self::maybe_rewrite_cow_stmt(expr);
+                        stmts.push(Spanned::new(stmt, span));
+                    } else {
+                        tail_expr = Some(Box::new(expr));
+                    }
                 } else {
-                    // It's a statement expression
+                    // It's a statement expression — check for COW builtin auto-reassign.
+                    // Rewrites e.g. `push(items, 4)` → `items = push(items, 4)`
+                    // This handles all control flow correctly because Assign is
+                    // already compiled with proper SSA phi nodes.
                     let span = expr.span.clone();
-                    stmts.push(Spanned::new(Stmt::Expr(expr), span));
+                    let stmt = Self::maybe_rewrite_cow_stmt(expr);
+                    stmts.push(Spanned::new(stmt, span));
                 }
             }
         }
@@ -836,6 +848,92 @@ impl Parser {
 
         self.exit_nesting();
         Ok(Spanned::new(Expr::Block { stmts, tail_expr }, start..end))
+    }
+
+    /// COW builtins that return a new value instead of mutating in-place.
+    /// When called in statement position via UFCS (e.g. `items.push(4)`),
+    /// the parser rewrites to an assignment so the result isn't silently discarded.
+    const COW_BUILTINS: &'static [&'static str] = &[
+        "push", "map", "filter", "replace", "upper", "lower", "trim", "repeat", "split",
+    ];
+
+    /// If `expr` is a call to a COW builtin in statement position, rewrite it
+    /// to an assignment back to the source variable. Otherwise return Stmt::Expr.
+    ///
+    /// `push(items, 4)` → `items = push(items, 4)`  (Assign)
+    /// `push(b.items, 4)` → `b.items = push(b.items, 4)` (FieldAssign)
+    /// `push(arr[0], 4)` → `arr[0] = push(arr[0], 4)` (IndexAssign)
+    /// Check if an expression is a call to a COW builtin.
+    fn is_cow_builtin_call(expr: &Spanned<Expr>) -> bool {
+        if let Expr::Call {
+            ref callee,
+            ref args,
+        } = expr.node
+        {
+            if let Expr::Ident(ref fn_name) = callee.node {
+                return Self::COW_BUILTINS.contains(&fn_name.as_str()) && !args.is_empty();
+            }
+        }
+        false
+    }
+
+    fn maybe_rewrite_cow_stmt(expr: Spanned<Expr>) -> Stmt {
+        if let Expr::Call {
+            ref callee,
+            ref args,
+        } = expr.node
+        {
+            if let Expr::Ident(ref fn_name) = callee.node {
+                if Self::COW_BUILTINS.contains(&fn_name.as_str()) && !args.is_empty() {
+                    let target_arg = &args[0];
+                    let span = expr.span.clone();
+
+                    // Simple variable: push(items, 4) → items = push(items, 4)
+                    if let Expr::Ident(ref var_name) = target_arg.node {
+                        return Stmt::Expr(Spanned::new(
+                            Expr::Assign {
+                                target: var_name.clone(),
+                                value: Box::new(expr),
+                            },
+                            span,
+                        ));
+                    }
+
+                    // Field access: push(b.items, 4) → b.items = push(b.items, 4)
+                    if let Expr::FieldAccess {
+                        ref object,
+                        ref field,
+                    } = target_arg.node
+                    {
+                        return Stmt::Expr(Spanned::new(
+                            Expr::FieldAssign {
+                                object: object.clone(),
+                                field: field.clone(),
+                                value: Box::new(expr),
+                            },
+                            span,
+                        ));
+                    }
+
+                    // Index access: push(arr[0], 4) → arr[0] = push(arr[0], 4)
+                    if let Expr::Index {
+                        ref object,
+                        ref index,
+                    } = target_arg.node
+                    {
+                        return Stmt::Expr(Spanned::new(
+                            Expr::IndexAssign {
+                                object: object.clone(),
+                                index: index.clone(),
+                                value: Box::new(expr),
+                            },
+                            span,
+                        ));
+                    }
+                }
+            }
+        }
+        Stmt::Expr(expr)
     }
 
     fn parse_let_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {

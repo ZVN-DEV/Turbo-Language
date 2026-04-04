@@ -3982,23 +3982,8 @@ fn compile_stmt<M: Module>(cx: &mut Ctx<'_, M>, stmt: &Spanned<Stmt>) -> Result<
             Ok(())
         }
         Stmt::Expr(e) => {
-            // Auto-reassign for COW builtins used as statements:
-            // `items.push(4)` (rewritten to `push(items, 4)`) should update `items`
-            if let Expr::Call { callee, args } = &e.node {
-                if let Expr::Ident(fn_name) = &callee.node {
-                    if fn_name == "push" && !args.is_empty() {
-                        if let Expr::Ident(var_name) = &args[0].node {
-                            if let Some((var, _cl_ty, _turbo_ty)) = cx.vars.get(var_name).cloned() {
-                                let result = compile_expr(cx, e)?;
-                                if let Some((v, _)) = result {
-                                    cx.builder.def_var(var, v);
-                                }
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
-            }
+            // COW builtin auto-reassign is handled in the parser now
+            // (rewrites `push(items, 4)` → `items = push(items, 4)`)
             compile_expr(cx, e)?;
             Ok(())
         }

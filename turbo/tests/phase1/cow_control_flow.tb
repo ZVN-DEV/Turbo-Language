@@ -1,0 +1,63 @@
+// Tests COW builtin auto-reassign across all control flow
+struct Bag {
+    items: [i64],
+}
+
+fn main() {
+    // push in if block
+    let mut a = [1, 2, 3]
+    if true { a.push(4) }
+    print(len(a))
+
+    // push in if/else
+    let mut b = [10, 20]
+    let x = 5
+    if x > 3 { b.push(30) } else { b.push(0) }
+    print(len(b))
+
+    // push in for loop
+    let mut c = [1, 2, 3]
+    for i in 0..3 { c.push(i + 10) }
+    print(len(c))
+
+    // push in match
+    let mut d = [1, 2, 3]
+    let val = 5
+    match val {
+        5 => { d.push(4) }
+        _ => { d.push(0) }
+    }
+    print(len(d))
+
+    // push on struct field
+    let mut bag = Bag { items: [1, 2, 3] }
+    bag.items.push(4)
+    print(len(bag.items))
+
+    // map as statement
+    let mut e = [1, 2, 3]
+    e.map(|v: i64| -> i64 { v * 2 })
+    print(e[0])
+
+    // filter as statement
+    let mut f = [1, 2, 3, 4, 5]
+    f.filter(|v: i64| -> bool { v > 2 })
+    print(len(f))
+
+    // string replace as statement
+    let mut s = "hello world"
+    s.replace("world", "turbo")
+    print(s)
+
+    // string upper as statement
+    let mut u = "hello"
+    u.upper()
+    print(u)
+
+    // nested push in if inside for
+    let mut g = [1]
+    for i in 0..3 {
+        if i > 0 { g.push(i * 10) }
+    }
+    print(len(g))
+}
