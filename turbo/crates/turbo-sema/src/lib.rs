@@ -1075,7 +1075,10 @@ impl Checker {
             let ty = if let Some(ty_expr) = &c.ty {
                 match resolve_type_expr(&ty_expr.node, Some(&self.structs), Some(&self.enums)) {
                     Some(t) => {
-                        if !inferred_ty.contains_error() && !types_compatible(&t, &inferred_ty) && t != inferred_ty {
+                        if !inferred_ty.contains_error()
+                            && !types_compatible(&t, &inferred_ty)
+                            && t != inferred_ty
+                        {
                             // Allow integer literal coercion: i64 literal -> i32, u32, u64
                             let is_int_literal_coercion = inferred_ty == Ty::I64
                                 && matches!(t, Ty::I32 | Ty::U32 | Ty::U64)
@@ -1577,10 +1580,7 @@ impl Checker {
                         if args.len() != 2 {
                             self.error(
                                 ErrorCode::E0513,
-                                format!(
-                                    "push() takes exactly 2 arguments, got {}",
-                                    args.len()
-                                ),
+                                format!("push() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1589,10 +1589,7 @@ impl Checker {
                         let elem_ty = self.check_expr(&args[1]);
                         match &arr_ty {
                             Ty::Array(inner) => {
-                                if !elem_ty.is_error()
-                                    && !inner.is_error()
-                                    && **inner != elem_ty
-                                {
+                                if !elem_ty.is_error() && !inner.is_error() && **inner != elem_ty {
                                     self.error(
                                         ErrorCode::E0133,
                                         format!(
@@ -3308,7 +3305,8 @@ impl Checker {
                             for (i, arg) in args.iter().enumerate() {
                                 let arg_ty = self.check_expr(arg);
                                 let (ref param_name, ref param_ty) = method_sig.params[i + 1];
-                                if !arg_ty.contains_error() && !param_ty.contains_error()
+                                if !arg_ty.contains_error()
+                                    && !param_ty.contains_error()
                                     && !types_compatible(param_ty, &arg_ty)
                                     && arg_ty != *param_ty
                                 {
@@ -3430,7 +3428,9 @@ impl Checker {
                             if !matches!(val_ty, Ty::Optional(_)) {
                                 self.error(
                                     ErrorCode::E0116,
-                                    format!("`if let none` requires an optional type, found `{val_ty}`"),
+                                    format!(
+                                        "`if let none` requires an optional type, found `{val_ty}`"
+                                    ),
                                     value.span.clone(),
                                 );
                             }
@@ -3445,7 +3445,9 @@ impl Checker {
                             if !val_ty.is_error() {
                                 self.error(
                                     ErrorCode::E0116,
-                                    format!("`if let ok(...)` requires a result type, found `{val_ty}`"),
+                                    format!(
+                                        "`if let ok(...)` requires a result type, found `{val_ty}`"
+                                    ),
                                     value.span.clone(),
                                 );
                             }
@@ -3535,8 +3537,10 @@ impl Checker {
                             expr.span.clone(),
                         );
                     }
-                    if !val_ty.contains_error() && !info.ty.contains_error()
-                        && !types_compatible(&info.ty, &val_ty) && val_ty != info.ty
+                    if !val_ty.contains_error()
+                        && !info.ty.contains_error()
+                        && !types_compatible(&info.ty, &val_ty)
+                        && val_ty != info.ty
                     {
                         self.error(
                             ErrorCode::E0111,
@@ -3585,8 +3589,10 @@ impl Checker {
                             expr.span.clone(),
                         );
                     }
-                    if !val_ty.contains_error() && !info.ty.contains_error()
-                        && !types_compatible(&info.ty, &val_ty) && val_ty != info.ty
+                    if !val_ty.contains_error()
+                        && !info.ty.contains_error()
+                        && !types_compatible(&info.ty, &val_ty)
+                        && val_ty != info.ty
                     {
                         self.error(ErrorCode::E0130,
                             format!(
@@ -4809,7 +4815,10 @@ impl Checker {
                 let declared_ty = if let Some(ty_expr) = ty {
                     match resolve_type_expr(&ty_expr.node, Some(&self.structs), Some(&self.enums)) {
                         Some(t) => {
-                            if !val_ty.contains_error() && !types_compatible(&t, &val_ty) && t != val_ty {
+                            if !val_ty.contains_error()
+                                && !types_compatible(&t, &val_ty)
+                                && t != val_ty
+                            {
                                 // Allow integer literal coercion: i64 literal -> i32, u32, u64
                                 let is_int_literal_coercion = val_ty == Ty::I64
                                     && matches!(t, Ty::I32 | Ty::U32 | Ty::U64)
@@ -4939,9 +4948,7 @@ impl Checker {
                     _ => {
                         self.error(
                             ErrorCode::E0110,
-                            format!(
-                                "cannot destructure non-struct type `{val_ty}`"
-                            ),
+                            format!("cannot destructure non-struct type `{val_ty}`"),
                             stmt.span.clone(),
                         );
                     }
@@ -5454,8 +5461,6 @@ fn main() { }"#,
     fn test_optional_none_return_no_error_leak() {
         // Returning `none` from a function that returns `i64?` should not
         // produce `<error>?` in any diagnostic message.
-        assert_no_errors(
-            "fn get_val() -> i64? { none }\nfn main() { let x = get_val() }",
-        );
+        assert_no_errors("fn get_val() -> i64? { none }\nfn main() { let x = get_val() }");
     }
 }

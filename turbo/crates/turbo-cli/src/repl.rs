@@ -27,12 +27,7 @@ pub fn run_repl() {
         }
 
         // REPL commands
-        if line == ":quit"
-            || line == ":q"
-            || line == ":exit"
-            || line == "exit"
-            || line == "quit"
-        {
+        if line == ":quit" || line == ":q" || line == ":exit" || line == "exit" || line == "quit" {
             println!("Goodbye!");
             break;
         }

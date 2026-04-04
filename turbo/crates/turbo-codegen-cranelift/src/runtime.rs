@@ -196,7 +196,7 @@ pub(crate) extern "C" fn rt_array_push(arr: *const u8, value: i64) -> *mut u8 {
     let new_data = unsafe { new_alloc.add(8) };
     unsafe {
         *(new_data as *mut i64) = new_len as i64; // set length
-        // Copy old elements
+                                                  // Copy old elements
         std::ptr::copy_nonoverlapping(arr.add(8), new_data.add(8), old_len * 8);
         // Append new element
         *((new_data as *mut i64).add(1 + old_len)) = value;

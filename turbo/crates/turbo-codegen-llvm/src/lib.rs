@@ -494,7 +494,9 @@ fn collect_free_vars_llvm(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<S
             collect_free_vars_llvm(&index.node, bound, free);
             collect_free_vars_llvm(&value.node, bound, free);
         }
-        Expr::FieldAccess { object, .. } | Expr::OptionalChain { object, .. } => collect_free_vars_llvm(&object.node, bound, free),
+        Expr::FieldAccess { object, .. } | Expr::OptionalChain { object, .. } => {
+            collect_free_vars_llvm(&object.node, bound, free)
+        }
         Expr::Index { object, index } => {
             collect_free_vars_llvm(&object.node, bound, free);
             collect_free_vars_llvm(&index.node, bound, free);

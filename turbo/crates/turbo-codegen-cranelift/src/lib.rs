@@ -3891,13 +3891,9 @@ pub(crate) fn compile_expr<M: Module>(
             Ok(Some((result, def_tty)))
         }
 
-        Expr::OptionalChain { object, field } => {
-            compile_optional_chain(cx, object, field)
-        }
+        Expr::OptionalChain { object, field } => compile_optional_chain(cx, object, field),
 
-        Expr::MapLit(entries) => {
-            compile_map_lit(cx, entries)
-        }
+        Expr::MapLit(entries) => compile_map_lit(cx, entries),
     }
 }
 
@@ -3974,16 +3970,13 @@ fn compile_stmt<M: Module>(cx: &mut Ctx<'_, M>, stmt: &Spanned<Stmt>) -> Result<
             // — they are collected and emitted in reverse order at the end of the block.
             Ok(())
         }
-        Stmt::LetDestructure {
-            fields, value, ..
-        } => {
+        Stmt::LetDestructure { fields, value, .. } => {
             // Compile the value expression (should produce a struct pointer)
-            let (struct_ptr, struct_tty) = compile_expr(cx, value)?.ok_or_else(|| {
-                CodegenError {
+            let (struct_ptr, struct_tty) =
+                compile_expr(cx, value)?.ok_or_else(|| CodegenError {
                     code: ErrorCode::E0400,
                     message: "destructured value produced no result".to_string(),
-                }
-            })?;
+                })?;
 
             let struct_name = match &struct_tty {
                 TurboTy::Struct(name) => name.clone(),
@@ -4588,7 +4581,11 @@ fn compile_call<M: Module>(
             // tagged unions require proper call/return semantics), and for
             // Optional-returning functions (SomeExpr/NoneExpr lose inner type info).
             let ret_is_optional = matches!(&actual_ret_tty, TurboTy::Optional(_));
-            if cx.inline_depth < MAX_INLINE_DEPTH && type_params.is_empty() && !ret_is_result && !ret_is_optional {
+            if cx.inline_depth < MAX_INLINE_DEPTH
+                && type_params.is_empty()
+                && !ret_is_result
+                && !ret_is_optional
+            {
                 if let Some(callee_def) = cx.fn_asts.get(name.as_str()).cloned() {
                     if !has_return(&callee_def.body.node)
                         && callee_def.params.len() == arg_values.len()

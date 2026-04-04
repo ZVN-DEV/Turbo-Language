@@ -380,7 +380,6 @@ fn lex_string(lex: &mut logos::Lexer<Token>) -> Option<std::string::String> {
     }
 }
 
-
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -706,7 +705,9 @@ mod tests {
         let (tokens, errors) = tokenize(source);
         assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
         assert_eq!(tokens.len(), 1, "Expected 1 token, got {:?}", tokens);
-        assert!(matches!(&tokens[0].value, Token::String(s) if s == r#"x={get("a")} y={get("b")}"#));
+        assert!(
+            matches!(&tokens[0].value, Token::String(s) if s == r#"x={get("a")} y={get("b")}"#)
+        );
     }
 
     #[test]

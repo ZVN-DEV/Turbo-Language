@@ -162,7 +162,8 @@ fn normalize_line_spacing(line: &str) -> String {
             // Only trim if the previous non-space isn't a keyword
             let trimmed_result = result.trim_end();
             // Simple heuristic: don't trim if it would eat a keyword space
-            let last_word_start = trimmed_result.rfind(|ch: char| !ch.is_alphanumeric() && ch != '_');
+            let last_word_start =
+                trimmed_result.rfind(|ch: char| !ch.is_alphanumeric() && ch != '_');
             let last_word = if let Some(pos) = last_word_start {
                 &trimmed_result[pos + 1..]
             } else {
@@ -230,7 +231,11 @@ fn normalize_line_spacing(line: &str) -> String {
                 .map(|p| p + 1)
                 .unwrap_or(0);
             let prev_word = &trimmed_res[word_start..];
-            let prev_starts_upper = prev_word.chars().next().map(|ch| ch.is_uppercase()).unwrap_or(false);
+            let prev_starts_upper = prev_word
+                .chars()
+                .next()
+                .map(|ch| ch.is_uppercase())
+                .unwrap_or(false);
 
             if prev_starts_upper {
                 // Generic type — no spacing, track depth
@@ -241,7 +246,10 @@ fn normalize_line_spacing(line: &str) -> String {
 
             // Comparison operator — add spaces
             let prev_char = result.chars().last().unwrap();
-            let prev_is_value = prev_char.is_alphanumeric() || prev_char == '_' || prev_char == ')' || prev_char == ']';
+            let prev_is_value = prev_char.is_alphanumeric()
+                || prev_char == '_'
+                || prev_char == ')'
+                || prev_char == ']';
             if prev_is_value {
                 if !result.ends_with(' ') {
                     result.push(' ');
@@ -267,10 +275,17 @@ fn normalize_line_spacing(line: &str) -> String {
 
             // Comparison operator — add spaces
             let prev_char = result.chars().last().unwrap();
-            let prev_is_value = prev_char.is_alphanumeric() || prev_char == '_' || prev_char == ')' || prev_char == ']';
+            let prev_is_value = prev_char.is_alphanumeric()
+                || prev_char == '_'
+                || prev_char == ')'
+                || prev_char == ']';
             if prev_is_value {
                 if let Some(&next) = chars.peek() {
-                    let next_is_value = next.is_alphanumeric() || next == '_' || next == '(' || next == '!' || next == '-';
+                    let next_is_value = next.is_alphanumeric()
+                        || next == '_'
+                        || next == '('
+                        || next == '!'
+                        || next == '-';
                     if next_is_value || next == ' ' {
                         if !result.ends_with(' ') {
                             result.push(' ');
@@ -576,7 +591,11 @@ fn main() {
     fn test_brace_spacing_after_else() {
         let input = "fn main() {\n    if true {\n        1\n    } else{\n        2\n    }\n}\n";
         let output = format_source(input);
-        assert!(output.contains("} else {"), "Expected `else {{`, got:\n{}", output);
+        assert!(
+            output.contains("} else {"),
+            "Expected `else {{`, got:\n{}",
+            output
+        );
     }
 
     #[test]
@@ -599,35 +618,55 @@ fn main() {
     fn test_operator_spacing_comparison() {
         let input = "fn main() {\n    if x>10 {\n        print(x)\n    }\n}\n";
         let output = format_source(input);
-        assert!(output.contains("if x > 10 {"), "Expected `x > 10`, got:\n{}", output);
+        assert!(
+            output.contains("if x > 10 {"),
+            "Expected `x > 10`, got:\n{}",
+            output
+        );
     }
 
     #[test]
     fn test_operator_spacing_less_than() {
         let input = "fn main() {\n    if x<10 {\n        print(x)\n    }\n}\n";
         let output = format_source(input);
-        assert!(output.contains("if x < 10 {"), "Expected `x < 10`, got:\n{}", output);
+        assert!(
+            output.contains("if x < 10 {"),
+            "Expected `x < 10`, got:\n{}",
+            output
+        );
     }
 
     #[test]
     fn test_operator_spacing_double_equals() {
         let input = "fn main() {\n    if x==10 {\n        print(x)\n    }\n}\n";
         let output = format_source(input);
-        assert!(output.contains("if x == 10 {"), "Expected `x == 10`, got:\n{}", output);
+        assert!(
+            output.contains("if x == 10 {"),
+            "Expected `x == 10`, got:\n{}",
+            output
+        );
     }
 
     #[test]
     fn test_operator_spacing_not_equals() {
         let input = "fn main() {\n    if x!=10 {\n        print(x)\n    }\n}\n";
         let output = format_source(input);
-        assert!(output.contains("if x != 10 {"), "Expected `x != 10`, got:\n{}", output);
+        assert!(
+            output.contains("if x != 10 {"),
+            "Expected `x != 10`, got:\n{}",
+            output
+        );
     }
 
     #[test]
     fn test_operator_spacing_and_or() {
         let input = "fn main() {\n    if a&&b||c {\n        print(x)\n    }\n}\n";
         let output = format_source(input);
-        assert!(output.contains("a && b || c"), "Expected `a && b || c`, got:\n{}", output);
+        assert!(
+            output.contains("a && b || c"),
+            "Expected `a && b || c`, got:\n{}",
+            output
+        );
     }
 
     #[test]
@@ -635,7 +674,11 @@ fn main() {
         // `->` and `=>` should not be broken apart by operator spacing
         let input = "fn add(a: i64) -> i64 {\n    a\n}\n";
         let output = format_source(input);
-        assert!(output.contains("-> i64"), "Arrow should be preserved, got:\n{}", output);
+        assert!(
+            output.contains("-> i64"),
+            "Arrow should be preserved, got:\n{}",
+            output
+        );
     }
 
     #[test]
@@ -643,13 +686,21 @@ fn main() {
         // `<` and `>` in generics should not get extra spaces
         let input = "fn main() {\n    let x: Vec<i64> = []\n}\n";
         let output = format_source(input);
-        assert!(output.contains("Vec<i64>"), "Generics should be preserved, got:\n{}", output);
+        assert!(
+            output.contains("Vec<i64>"),
+            "Generics should be preserved, got:\n{}",
+            output
+        );
     }
 
     #[test]
     fn test_operator_spacing_in_strings_preserved() {
         let input = "fn main() {\n    print(\"x>10\")\n}\n";
         let output = format_source(input);
-        assert!(output.contains("\"x>10\""), "Operators inside strings should be preserved, got:\n{}", output);
+        assert!(
+            output.contains("\"x>10\""),
+            "Operators inside strings should be preserved, got:\n{}",
+            output
+        );
     }
 }

@@ -2742,7 +2742,9 @@ pub(crate) fn compile_map_lit<M: Module>(
             code: ErrorCode::E0405,
             message: "map value must return a value".to_string(),
         })?;
-        cx.builder.ins().call(set_fref, &[map_val, key_val, val_val]);
+        cx.builder
+            .ins()
+            .call(set_fref, &[map_val, key_val, val_val]);
     }
 
     Ok(Some((map_val, TurboTy::Int)))
@@ -2830,10 +2832,14 @@ pub(crate) fn compile_optional_chain<M: Module>(
     };
 
     // Find field index and type
-    let fields = cx.struct_fields.get(&struct_name).ok_or_else(|| CodegenError {
-        code: ErrorCode::E0400,
-        message: format!("undefined struct: {struct_name}"),
-    })?.clone();
+    let fields = cx
+        .struct_fields
+        .get(&struct_name)
+        .ok_or_else(|| CodegenError {
+            code: ErrorCode::E0400,
+            message: format!("undefined struct: {struct_name}"),
+        })?
+        .clone();
 
     let (field_idx, field_tty) = fields
         .iter()
@@ -2905,8 +2911,7 @@ pub(crate) fn compile_optional_chain<M: Module>(
     cx.builder.ins().jump(merge_block, &[none_result]);
 
     // Merge block
-    cx.builder
-        .append_block_param(merge_block, cx.ptr_type);
+    cx.builder.append_block_param(merge_block, cx.ptr_type);
     cx.builder.switch_to_block(merge_block);
     cx.builder.seal_block(merge_block);
     let result = cx.builder.block_params(merge_block)[0];
