@@ -350,6 +350,11 @@ pub enum Expr {
         value: Box<Spanned<Expr>>,
         default: Box<Spanned<Expr>>,
     },
+    /// Optional chaining: expr?.field — unwraps optional, accesses field, re-wraps in optional
+    OptionalChain {
+        object: Box<Spanned<Expr>>,
+        field: String,
+    },
     /// Await expression: await expr
     Await(Box<Spanned<Expr>>),
     /// Spawn expression: spawn expr

@@ -552,6 +552,7 @@ fn has_return(expr: &Expr) -> bool {
         }
         Expr::OkExpr(e) | Expr::ErrExpr(e) | Expr::SomeExpr(e) => has_return(&e.node),
         Expr::NoneExpr => false,
+        Expr::OptionalChain { object, .. } => has_return(&object.node),
         Expr::NullCoalesce { value, default } => {
             has_return(&value.node) || has_return(&default.node)
         }
@@ -717,7 +718,7 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
                 collect_free_vars(&v.node, bound, free);
             }
         }
-        Expr::FieldAccess { object, .. } => {
+        Expr::FieldAccess { object, .. } | Expr::OptionalChain { object, .. } => {
             collect_free_vars(&object.node, bound, free);
         }
         Expr::Match { subject, arms } => {
@@ -926,6 +927,9 @@ fn extract_closures_from_expr<'a>(
         Expr::Await(inner) | Expr::Spawn(inner) | Expr::Try(inner) => {
             extract_closures_from_expr(inner, out, counter);
         }
+        Expr::OptionalChain { object, .. } => {
+            extract_closures_from_expr(object, out, counter);
+        }
         _ => {} // Literals, Ident, Unit, NoneExpr, etc. -- no sub-expressions with closures
     }
 }
@@ -1066,7 +1070,7 @@ fn extract_spawn_sites_from_expr(
             extract_spawn_sites_from_expr(start, out, counter);
             extract_spawn_sites_from_expr(end, out, counter);
         }
-        Expr::FieldAccess { object, .. } => {
+        Expr::FieldAccess { object, .. } | Expr::OptionalChain { object, .. } => {
             extract_spawn_sites_from_expr(object, out, counter);
         }
         Expr::ArrayLit(elems) => {
@@ -3847,6 +3851,10 @@ pub(crate) fn compile_expr<M: Module>(
             let result = cx.builder.block_params(merge_block)[0];
 
             Ok(Some((result, def_tty)))
+        }
+
+        Expr::OptionalChain { object, field } => {
+            compile_optional_chain(cx, object, field)
         }
     }
 }

@@ -483,7 +483,9 @@ impl Checker {
     fn root_var_name(expr: &Spanned<Expr>) -> Option<String> {
         match &expr.node {
             Expr::Ident(name) => Some(name.clone()),
-            Expr::FieldAccess { object, .. } => Self::root_var_name(object),
+            Expr::FieldAccess { object, .. } | Expr::OptionalChain { object, .. } => {
+                Self::root_var_name(object)
+            }
             Expr::Index { object, .. } => Self::root_var_name(object),
             _ => None,
         }
@@ -4044,6 +4046,59 @@ impl Checker {
                         self.error(
                             ErrorCode::E0135,
                             format!("cannot access field `{field}` on type `{obj_ty}`"),
+                            object.span.clone(),
+                        );
+                        Ty::Error
+                    }
+                }
+            }
+
+            Expr::OptionalChain { object, field } => {
+                let obj_ty = self.check_expr(object);
+                match &obj_ty {
+                    Ty::Optional(inner) => match inner.as_ref() {
+                        Ty::Struct(struct_name) => {
+                            if let Some(struct_info) = self.structs.get(struct_name).cloned() {
+                                if let Some((_, field_ty)) =
+                                    struct_info.fields.iter().find(|(n, _)| n == field)
+                                {
+                                    Ty::Optional(Box::new(field_ty.clone()))
+                                } else {
+                                    self.error(
+                                        ErrorCode::E0315,
+                                        format!("struct `{struct_name}` has no field `{field}`"),
+                                        expr.span.clone(),
+                                    );
+                                    Ty::Error
+                                }
+                            } else {
+                                self.error(
+                                    ErrorCode::E0302,
+                                    format!("undefined struct `{struct_name}`"),
+                                    expr.span.clone(),
+                                );
+                                Ty::Error
+                            }
+                        }
+                        Ty::Error => Ty::Error,
+                        other => {
+                            self.error(
+                                ErrorCode::E0135,
+                                format!(
+                                    "optional chaining `?.` requires an optional struct type, found `{other}?`"
+                                ),
+                                expr.span.clone(),
+                            );
+                            Ty::Error
+                        }
+                    },
+                    Ty::Error => Ty::Error,
+                    _ => {
+                        self.error(
+                            ErrorCode::E0135,
+                            format!(
+                                "optional chaining `?.` requires an optional type, found `{obj_ty}`"
+                            ),
                             object.span.clone(),
                         );
                         Ty::Error

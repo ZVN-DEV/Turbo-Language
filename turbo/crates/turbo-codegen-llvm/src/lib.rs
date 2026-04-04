@@ -488,7 +488,7 @@ fn collect_free_vars_llvm(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<S
             collect_free_vars_llvm(&index.node, bound, free);
             collect_free_vars_llvm(&value.node, bound, free);
         }
-        Expr::FieldAccess { object, .. } => collect_free_vars_llvm(&object.node, bound, free),
+        Expr::FieldAccess { object, .. } | Expr::OptionalChain { object, .. } => collect_free_vars_llvm(&object.node, bound, free),
         Expr::Index { object, index } => {
             collect_free_vars_llvm(&object.node, bound, free);
             collect_free_vars_llvm(&index.node, bound, free);
@@ -654,6 +654,9 @@ fn extract_closures_from_expr_llvm<'a>(
             extract_closures_from_expr_llvm(value, out, counter);
             extract_closures_from_expr_llvm(default, out, counter);
         }
+        Expr::OptionalChain { object, .. } => {
+            extract_closures_from_expr_llvm(object, out, counter);
+        }
         Expr::Interpolation(parts) => {
             for part in parts {
                 if let InterpolPart::Expr(e) = part {
@@ -792,6 +795,9 @@ fn extract_spawn_sites_from_expr_llvm(
         Expr::NullCoalesce { value, default } => {
             extract_spawn_sites_from_expr_llvm(value, out, counter);
             extract_spawn_sites_from_expr_llvm(default, out, counter);
+        }
+        Expr::OptionalChain { object, .. } => {
+            extract_spawn_sites_from_expr_llvm(object, out, counter);
         }
         Expr::ArrayLit(elems) => {
             for e in elems {
@@ -2963,6 +2969,15 @@ fn compile_expr<'a, 'ctx>(
             phi.add_incoming(&[(&default_val, then_end_block), (&unwrapped, else_end_block)]);
 
             Ok(Some((phi.as_basic_value(), default_tty)))
+        }
+
+        Expr::OptionalChain { .. } => {
+            // TODO: implement optional chaining in LLVM backend
+            Err(CodegenError {
+                code: ErrorCode::E0400,
+                message: "optional chaining `?.` is not yet supported in the LLVM backend"
+                    .to_string(),
+            })
         }
 
         Expr::Closure { params, .. } => {

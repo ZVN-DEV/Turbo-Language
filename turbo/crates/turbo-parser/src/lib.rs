@@ -1144,6 +1144,18 @@ impl Parser {
                     },
                     span,
                 );
+            } else if matches!(self.peek(), Some(Token::QuestionDot)) {
+                // Optional chaining: expr?.field
+                self.advance(); // consume `?.`
+                let (field, field_span) = self.expect_ident()?;
+                let span = expr.span.start..field_span.end;
+                expr = Spanned::new(
+                    Expr::OptionalChain {
+                        object: Box::new(expr),
+                        field,
+                    },
+                    span,
+                );
             } else if matches!(self.peek(), Some(Token::Dot)) {
                 // Dot access: method call, field access, or enum variant (resolved in sema)
                 self.advance(); // consume .

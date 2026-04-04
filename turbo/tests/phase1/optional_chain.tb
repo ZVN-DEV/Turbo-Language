@@ -1,0 +1,28 @@
+struct User {
+    name: str,
+    age: i64,
+}
+
+fn find_user(id: i64) -> User? {
+    if id == 1 {
+        some(User { name: "Alice", age: 30 })
+    } else {
+        none
+    }
+}
+
+fn main() {
+    let u1 = find_user(1)
+    let name1 = u1?.name
+    if let some(n) = name1 {
+        print("Name: {n}")
+    }
+
+    let u2 = find_user(2)
+    let name2 = u2?.name
+    if let some(n) = name2 {
+        print("Should not print")
+    } else {
+        print("No user found")
+    }
+}

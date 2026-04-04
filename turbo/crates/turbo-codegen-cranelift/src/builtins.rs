@@ -2762,3 +2762,122 @@ pub(crate) fn compile_builtin_store<M: Module>(
     cx.builder.ins().store(MemFlags::new(), val, addr_val, 0);
     Ok(None)
 }
+
+/// Optional chaining: expr?.field
+///
+/// If expr is none, return none. If expr is some(v), unwrap v, access .field,
+/// and wrap the result back in some(field_value). Result type is Optional<field_type>.
+pub(crate) fn compile_optional_chain<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    object: &Spanned<Expr>,
+    field: &str,
+) -> Result<MaybeTyped, CodegenError> {
+    // Compile the object expression (should produce an Optional value)
+    let (opt_val, val_tty) = compile_expr(cx, object)?.unwrap();
+
+    // Get the inner TurboTy from Optional
+    let inner_tty = match &val_tty {
+        TurboTy::Optional(inner) => inner.as_ref().clone(),
+        _ => {
+            return Err(CodegenError {
+                code: ErrorCode::E0400,
+                message: "optional chaining `?.` requires an optional type".to_string(),
+            })
+        }
+    };
+
+    // Get struct name from inner type
+    let struct_name = match &inner_tty {
+        TurboTy::Struct(name) => name.clone(),
+        _ => {
+            return Err(CodegenError {
+                code: ErrorCode::E0400,
+                message: "optional chaining `?.` requires an optional struct type".to_string(),
+            })
+        }
+    };
+
+    // Find field index and type
+    let fields = cx.struct_fields.get(&struct_name).ok_or_else(|| CodegenError {
+        code: ErrorCode::E0400,
+        message: format!("undefined struct: {struct_name}"),
+    })?.clone();
+
+    let (field_idx, field_tty) = fields
+        .iter()
+        .enumerate()
+        .find(|(_, (name, _))| name == field)
+        .map(|(idx, (_, tty))| (idx, tty.clone()))
+        .ok_or_else(|| CodegenError {
+            code: ErrorCode::E0400,
+            message: format!("struct `{struct_name}` has no field `{field}`"),
+        })?;
+
+    let offset = (field_idx as i32) * 8;
+
+    // Extract tag: 0 = none, 1 = some
+    let tag_fid = cx.rt_fns["rt_option_tag"];
+    let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+    let tag_call = cx.builder.ins().call(tag_fref, &[opt_val]);
+    let tag = cx.builder.inst_results(tag_call)[0];
+
+    // Check if tag == 1 (some)
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let is_some = cx.builder.ins().icmp(IntCC::Equal, tag, one);
+
+    let some_block = cx.builder.create_block();
+    let none_block = cx.builder.create_block();
+    let merge_block = cx.builder.create_block();
+
+    cx.builder
+        .ins()
+        .brif(is_some, some_block, &[], none_block, &[]);
+
+    // Some path: unwrap, access field, wrap back in some
+    cx.builder.switch_to_block(some_block);
+    cx.builder.seal_block(some_block);
+
+    let val_fid = cx.rt_fns["rt_option_value"];
+    let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
+    let val_call = cx.builder.ins().call(val_fref, &[opt_val]);
+    let inner_val = cx.builder.inst_results(val_call)[0];
+
+    // Load field from struct pointer at offset
+    let field_val = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlags::new(), inner_val, offset);
+
+    // For float fields, bitcast to i64 before wrapping in optional
+    // (rt_option_some takes i64)
+    let field_val_i64 = match &field_tty {
+        TurboTy::Bool => cx.builder.ins().sextend(types::I64, field_val),
+        _ => field_val,
+    };
+
+    // Wrap field value in some()
+    let some_fid = cx.rt_fns["rt_option_some"];
+    let some_fref = cx.module.declare_func_in_func(some_fid, cx.builder.func);
+    let some_call = cx.builder.ins().call(some_fref, &[field_val_i64]);
+    let some_result = cx.builder.inst_results(some_call)[0];
+    cx.builder.ins().jump(merge_block, &[some_result]);
+
+    // None path: return none
+    cx.builder.switch_to_block(none_block);
+    cx.builder.seal_block(none_block);
+
+    let none_fid = cx.rt_fns["rt_option_none"];
+    let none_fref = cx.module.declare_func_in_func(none_fid, cx.builder.func);
+    let none_call = cx.builder.ins().call(none_fref, &[]);
+    let none_result = cx.builder.inst_results(none_call)[0];
+    cx.builder.ins().jump(merge_block, &[none_result]);
+
+    // Merge block
+    cx.builder
+        .append_block_param(merge_block, cx.ptr_type);
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
+    let result = cx.builder.block_params(merge_block)[0];
+
+    Ok(Some((result, TurboTy::Optional(Box::new(field_tty)))))
+}
