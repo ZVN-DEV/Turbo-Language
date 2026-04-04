@@ -2336,6 +2336,14 @@ fn compile_expr<'a, 'ctx>(
             else_branch,
         } => compile_if(cx, condition, then_branch, else_branch.as_deref()),
 
+        Expr::IfLet { .. } => {
+            // TODO: if-let not yet implemented for LLVM backend
+            Err(CodegenError {
+                code: ErrorCode::E0400,
+                message: "if-let is not yet supported in the LLVM backend".to_string(),
+            })
+        }
+
         Expr::Block { stmts, tail_expr } => {
             let saved_vars = cx.vars.clone();
 

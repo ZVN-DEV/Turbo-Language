@@ -518,6 +518,16 @@ fn has_return(expr: &Expr) -> bool {
                 || has_return(&then_branch.node)
                 || else_branch.as_ref().is_some_and(|e| has_return(&e.node))
         }
+        Expr::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            has_return(&value.node)
+                || has_return(&then_branch.node)
+                || else_branch.as_ref().is_some_and(|e| has_return(&e.node))
+        }
         Expr::While { condition, body } => has_return(&condition.node) || has_return(&body.node),
         Expr::ForIn { iterable, body, .. } => has_return(&iterable.node) || has_return(&body.node),
         Expr::BinaryOp { left, right, .. } => has_return(&left.node) || has_return(&right.node),
@@ -628,6 +638,27 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
         } => {
             collect_free_vars(&condition.node, bound, free);
             collect_free_vars(&then_branch.node, bound, free);
+            if let Some(e) = else_branch {
+                collect_free_vars(&e.node, bound, free);
+            }
+        }
+        Expr::IfLet {
+            pattern,
+            value,
+            then_branch,
+            else_branch,
+        } => {
+            collect_free_vars(&value.node, bound, free);
+            let orig_len = bound.len();
+            // Bind pattern variable so it's not seen as free
+            match &pattern.node {
+                Pattern::Some(binding) | Pattern::Ok(binding) | Pattern::Err(binding) => {
+                    bound.push(binding.clone());
+                }
+                _ => {}
+            }
+            collect_free_vars(&then_branch.node, bound, free);
+            bound.truncate(orig_len);
             if let Some(e) = else_branch {
                 collect_free_vars(&e.node, bound, free);
             }
@@ -836,6 +867,18 @@ fn extract_closures_from_expr<'a>(
                 extract_closures_from_expr(e, out, counter);
             }
         }
+        Expr::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            extract_closures_from_expr(value, out, counter);
+            extract_closures_from_expr(then_branch, out, counter);
+            if let Some(e) = else_branch {
+                extract_closures_from_expr(e, out, counter);
+            }
+        }
         Expr::While { condition, body } => {
             extract_closures_from_expr(condition, out, counter);
             extract_closures_from_expr(body, out, counter);
@@ -961,6 +1004,18 @@ fn extract_spawn_sites_from_expr(
             else_branch,
         } => {
             extract_spawn_sites_from_expr(condition, out, counter);
+            extract_spawn_sites_from_expr(then_branch, out, counter);
+            if let Some(e) = else_branch {
+                extract_spawn_sites_from_expr(e, out, counter);
+            }
+        }
+        Expr::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            extract_spawn_sites_from_expr(value, out, counter);
             extract_spawn_sites_from_expr(then_branch, out, counter);
             if let Some(e) = else_branch {
                 extract_spawn_sites_from_expr(e, out, counter);
@@ -2894,6 +2949,13 @@ pub(crate) fn compile_expr<M: Module>(
             else_branch,
         } => compile_if(cx, condition, then_branch, else_branch.as_deref()),
 
+        Expr::IfLet {
+            pattern,
+            value,
+            then_branch,
+            else_branch,
+        } => compile_if_let(cx, pattern, value, then_branch, else_branch.as_deref()),
+
         Expr::Block { stmts, tail_expr } => {
             let saved_vars = cx.vars.clone();
 
@@ -4416,9 +4478,11 @@ fn compile_call<M: Module>(
             // Try inline expansion: inline the callee body at this call site
             // if we haven't exceeded the depth limit and the function is inlineable.
             // Skip inlining for generic functions (type parameter inference needs
-            // normal call path) and for Result-returning functions (heap-allocated
-            // tagged unions require proper call/return semantics).
-            if cx.inline_depth < MAX_INLINE_DEPTH && type_params.is_empty() && !ret_is_result {
+            // normal call path), for Result-returning functions (heap-allocated
+            // tagged unions require proper call/return semantics), and for
+            // Optional-returning functions (SomeExpr/NoneExpr lose inner type info).
+            let ret_is_optional = matches!(&actual_ret_tty, TurboTy::Optional(_));
+            if cx.inline_depth < MAX_INLINE_DEPTH && type_params.is_empty() && !ret_is_result && !ret_is_optional {
                 if let Some(callee_def) = cx.fn_asts.get(name.as_str()).cloned() {
                     if !has_return(&callee_def.body.node)
                         && callee_def.params.len() == arg_values.len()

@@ -3387,6 +3387,124 @@ impl Checker {
                 }
             }
 
+            Expr::IfLet {
+                pattern,
+                value,
+                then_branch,
+                else_branch,
+            } => {
+                let val_ty = self.check_expr(value);
+
+                // Type-check: push scope, bind variable, check then branch
+                let then_ty = match &pattern.node {
+                    Pattern::Some(binding) => {
+                        self.push_scope();
+                        let inner_ty = if let Ty::Optional(ref inner) = val_ty {
+                            *inner.clone()
+                        } else {
+                            if !val_ty.is_error() {
+                                self.error(
+                                    ErrorCode::E0116,
+                                    format!("`if let some(...)` requires an optional type, found `{val_ty}`"),
+                                    value.span.clone(),
+                                );
+                            }
+                            Ty::Error
+                        };
+                        self.define_var(
+                            binding,
+                            VarInfo {
+                                ty: inner_ty,
+                                mutable: false,
+                            },
+                            &pattern.span,
+                        );
+                        let ty = self.check_expr(then_branch);
+                        self.pop_scope();
+                        ty
+                    }
+                    Pattern::None => {
+                        if !val_ty.is_error() {
+                            if !matches!(val_ty, Ty::Optional(_)) {
+                                self.error(
+                                    ErrorCode::E0116,
+                                    format!("`if let none` requires an optional type, found `{val_ty}`"),
+                                    value.span.clone(),
+                                );
+                            }
+                        }
+                        self.check_expr(then_branch)
+                    }
+                    Pattern::Ok(binding) => {
+                        self.push_scope();
+                        let ok_ty = if let Ty::Result(ref ok, _) = val_ty {
+                            *ok.clone()
+                        } else {
+                            if !val_ty.is_error() {
+                                self.error(
+                                    ErrorCode::E0116,
+                                    format!("`if let ok(...)` requires a result type, found `{val_ty}`"),
+                                    value.span.clone(),
+                                );
+                            }
+                            Ty::Error
+                        };
+                        self.define_var(
+                            binding,
+                            VarInfo {
+                                ty: ok_ty,
+                                mutable: false,
+                            },
+                            &pattern.span,
+                        );
+                        let ty = self.check_expr(then_branch);
+                        self.pop_scope();
+                        ty
+                    }
+                    Pattern::Err(binding) => {
+                        self.push_scope();
+                        let err_ty = if let Ty::Result(_, ref err) = val_ty {
+                            *err.clone()
+                        } else {
+                            if !val_ty.is_error() {
+                                self.error(
+                                    ErrorCode::E0116,
+                                    format!("`if let err(...)` requires a result type, found `{val_ty}`"),
+                                    value.span.clone(),
+                                );
+                            }
+                            Ty::Error
+                        };
+                        self.define_var(
+                            binding,
+                            VarInfo {
+                                ty: err_ty,
+                                mutable: false,
+                            },
+                            &pattern.span,
+                        );
+                        let ty = self.check_expr(then_branch);
+                        self.pop_scope();
+                        ty
+                    }
+                    _ => {
+                        self.error(
+                            ErrorCode::E0116,
+                            "unsupported pattern in `if let`".to_string(),
+                            pattern.span.clone(),
+                        );
+                        self.check_expr(then_branch)
+                    }
+                };
+
+                if let Some(else_expr) = else_branch {
+                    let _else_ty = self.check_expr(else_expr);
+                    then_ty
+                } else {
+                    Ty::Unit
+                }
+            }
+
             Expr::Block { stmts, tail_expr } => {
                 self.push_scope();
 

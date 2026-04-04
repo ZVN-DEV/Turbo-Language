@@ -1475,6 +1475,166 @@ pub(crate) fn compile_if<M: Module>(
     }
 }
 
+// ── If-let pattern matching ────────────────────────────────────────
+
+pub(crate) fn compile_if_let<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    pattern: &Spanned<Pattern>,
+    value: &Spanned<Expr>,
+    then_branch: &Spanned<Expr>,
+    else_branch: Option<&Spanned<Expr>>,
+) -> Result<MaybeTyped, CodegenError> {
+    // Compile the value expression
+    let (val, val_tty) = compile_expr(cx, value)?.unwrap();
+
+    // Determine the tag check based on the pattern
+    let matches_cond = match &pattern.node {
+        Pattern::Some(_) => {
+            let tag_fid = cx.rt_fns["rt_option_tag"];
+            let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+            let tag_call = cx.builder.ins().call(tag_fref, &[val]);
+            let tag = cx.builder.inst_results(tag_call)[0];
+            let one = cx.builder.ins().iconst(types::I64, 1);
+            cx.builder.ins().icmp(IntCC::Equal, tag, one)
+        }
+        Pattern::None => {
+            let tag_fid = cx.rt_fns["rt_option_tag"];
+            let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+            let tag_call = cx.builder.ins().call(tag_fref, &[val]);
+            let tag = cx.builder.inst_results(tag_call)[0];
+            let zero = cx.builder.ins().iconst(types::I64, 0);
+            cx.builder.ins().icmp(IntCC::Equal, tag, zero)
+        }
+        Pattern::Ok(_) => {
+            let tag_fid = cx.rt_fns["rt_result_tag"];
+            let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+            let tag_call = cx.builder.ins().call(tag_fref, &[val]);
+            let tag = cx.builder.inst_results(tag_call)[0];
+            let zero = cx.builder.ins().iconst(types::I64, 0);
+            cx.builder.ins().icmp(IntCC::Equal, tag, zero)
+        }
+        Pattern::Err(_) => {
+            let tag_fid = cx.rt_fns["rt_result_tag"];
+            let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+            let tag_call = cx.builder.ins().call(tag_fref, &[val]);
+            let tag = cx.builder.inst_results(tag_call)[0];
+            let one = cx.builder.ins().iconst(types::I64, 1);
+            cx.builder.ins().icmp(IntCC::Equal, tag, one)
+        }
+        _ => {
+            return Err(CodegenError {
+                code: ErrorCode::E0400,
+                message: "unsupported pattern in `if let`".to_string(),
+            });
+        }
+    };
+
+    let then_block = cx.builder.create_block();
+    let else_block = cx.builder.create_block();
+    let merge_block = cx.builder.create_block();
+
+    cx.builder
+        .ins()
+        .brif(matches_cond, then_block, &[], else_block, &[]);
+
+    // Then block: bind the pattern variable and compile the then branch
+    cx.builder.switch_to_block(then_block);
+    cx.builder.seal_block(then_block);
+
+    let saved_vars = cx.vars.clone();
+
+    // Bind the extracted value to the pattern variable
+    match &pattern.node {
+        Pattern::Some(binding) => {
+            let val_fid = cx.rt_fns["rt_option_value"];
+            let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
+            let val_call = cx.builder.ins().call(val_fref, &[val]);
+            let raw_val = cx.builder.inst_results(val_call)[0];
+
+            let var = Variable::new(cx.next_var);
+            cx.next_var += 1;
+            cx.builder.declare_var(var, types::I64);
+            cx.builder.def_var(var, raw_val);
+
+            let turbo_ty = match &val_tty {
+                TurboTy::Optional(inner_tty) => *inner_tty.clone(),
+                _ => TurboTy::Int,
+            };
+            cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
+        }
+        Pattern::Ok(binding) | Pattern::Err(binding) => {
+            let val_fid = cx.rt_fns["rt_result_value"];
+            let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
+            let val_call = cx.builder.ins().call(val_fref, &[val]);
+            let raw_val = cx.builder.inst_results(val_call)[0];
+
+            let var = Variable::new(cx.next_var);
+            cx.next_var += 1;
+            cx.builder.declare_var(var, types::I64);
+            cx.builder.def_var(var, raw_val);
+
+            let turbo_ty = match &val_tty {
+                TurboTy::Result(ok_tty, err_tty) => {
+                    if matches!(&pattern.node, Pattern::Ok(_)) {
+                        *ok_tty.clone()
+                    } else {
+                        *err_tty.clone()
+                    }
+                }
+                _ => TurboTy::Int,
+            };
+            cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
+        }
+        Pattern::None => {
+            // No binding for none pattern
+        }
+        _ => {}
+    }
+
+    let then_result = compile_expr(cx, then_branch)?;
+    let then_needs_jump = !cx.builder.is_unreachable();
+    if then_needs_jump {
+        if let Some((v, _)) = then_result {
+            cx.builder.ins().jump(merge_block, &[v]);
+        } else {
+            cx.builder.ins().jump(merge_block, &[]);
+        }
+    }
+
+    // Restore variables
+    cx.vars = saved_vars;
+
+    // Else block
+    cx.builder.switch_to_block(else_block);
+    cx.builder.seal_block(else_block);
+    let else_result = if let Some(else_expr) = else_branch {
+        compile_expr(cx, else_expr)?
+    } else {
+        None
+    };
+    let else_needs_jump = !cx.builder.is_unreachable();
+    if else_needs_jump {
+        if let Some((v, _)) = else_result {
+            cx.builder.ins().jump(merge_block, &[v]);
+        } else {
+            cx.builder.ins().jump(merge_block, &[]);
+        }
+    }
+
+    // Merge block
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
+
+    if let (Some((then_val, then_tty)), Some(_)) = (then_result, else_result) {
+        let ty = cx.builder.func.dfg.value_type(then_val);
+        cx.builder.append_block_param(merge_block, ty);
+        let param = cx.builder.block_params(merge_block)[0];
+        Ok(Some((param, then_tty)))
+    } else {
+        Ok(None)
+    }
+}
+
 // ── String operations ───────────────────────────────────────────────
 
 pub(crate) fn compile_str_concat<M: Module>(

@@ -1,0 +1,45 @@
+fn get_name() -> str? {
+    some("Alice")
+}
+
+fn get_nothing() -> str? {
+    none
+}
+
+fn divide(a: i64, b: i64) -> i64 ! str {
+    if b == 0 {
+        err("division by zero")
+    } else {
+        ok(a / b)
+    }
+}
+
+fn main() {
+    let name = get_name()
+    if let some(n) = name {
+        print("Got name: {n}")
+    } else {
+        print("No name")
+    }
+
+    let nothing = get_nothing()
+    if let some(n) = nothing {
+        print("Got: {n}")
+    } else {
+        print("Nothing here")
+    }
+
+    let result = divide(10, 2)
+    if let ok(v) = result {
+        print("Result: {v}")
+    } else {
+        print("Error")
+    }
+
+    let bad = divide(10, 0)
+    if let err(e) = bad {
+        print("Error: {e}")
+    } else {
+        print("OK")
+    }
+}

@@ -356,6 +356,13 @@ pub enum Expr {
     Spawn(Box<Spanned<Expr>>),
     /// Try operator: expr? — unwraps Ok, propagates Err
     Try(Box<Spanned<Expr>>),
+    /// If-let pattern matching: `if let some(v) = expr { ... } else { ... }`
+    IfLet {
+        pattern: Box<Spanned<Pattern>>,
+        value: Box<Spanned<Expr>>,
+        then_branch: Box<Spanned<Expr>>,
+        else_branch: Option<Box<Spanned<Expr>>>,
+    },
     /// Break out of the innermost loop
     Break,
     /// Continue to the next iteration of the innermost loop

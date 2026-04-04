@@ -1457,6 +1457,42 @@ impl Parser {
         let start = self.peek_span().start;
         self.expect(&Token::If)?;
 
+        // Check for `if let` pattern matching
+        if matches!(self.peek(), Some(Token::Let)) {
+            self.advance(); // consume `let`
+            let pattern = self.parse_pattern()?;
+            self.expect(&Token::Eq)?;
+            let value = self.parse_expr()?;
+            let then_branch = self.parse_block()?;
+
+            let else_branch = if matches!(self.peek(), Some(Token::Else)) {
+                self.advance();
+                if matches!(self.peek(), Some(Token::If)) {
+                    Some(self.parse_if_expr()?)
+                } else {
+                    Some(self.parse_block()?)
+                }
+            } else {
+                None
+            };
+
+            let end = else_branch
+                .as_ref()
+                .map(|e| e.span.end)
+                .unwrap_or(then_branch.span.end);
+
+            self.exit_nesting();
+            return Ok(Spanned::new(
+                Expr::IfLet {
+                    pattern: Box::new(pattern),
+                    value: Box::new(value),
+                    then_branch: Box::new(then_branch),
+                    else_branch: else_branch.map(Box::new),
+                },
+                start..end,
+            ));
+        }
+
         let condition = self.parse_expr()?;
         let then_branch = self.parse_block()?;
 
