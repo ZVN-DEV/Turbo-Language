@@ -1039,7 +1039,7 @@ impl Checker {
                 continue;
             }
             // Check that the value is a literal
-            let ty = match &c.value.node {
+            let inferred_ty = match &c.value.node {
                 Expr::IntLit(_) => Ty::I64,
                 Expr::FloatLit(_) => Ty::F64,
                 Expr::BoolLit(_) => Ty::Bool,
@@ -1067,6 +1067,46 @@ impl Checker {
                     );
                     Ty::Error
                 }
+            };
+            // Validate optional type annotation
+            let ty = if let Some(ty_expr) = &c.ty {
+                match resolve_type_expr(&ty_expr.node, Some(&self.structs), Some(&self.enums)) {
+                    Some(t) => {
+                        if !inferred_ty.contains_error() && !types_compatible(&t, &inferred_ty) && t != inferred_ty {
+                            // Allow integer literal coercion: i64 literal -> i32, u32, u64
+                            let is_int_literal_coercion = inferred_ty == Ty::I64
+                                && matches!(t, Ty::I32 | Ty::U32 | Ty::U64)
+                                && matches!(&c.value.node, Expr::IntLit(n) if
+                                    match t {
+                                        Ty::U32 | Ty::U64 => *n >= 0,
+                                        _ => true,
+                                    }
+                                );
+                            if !is_int_literal_coercion {
+                                self.error(
+                                    ErrorCode::E0110,
+                                    format!(
+                                        "type annotation `{t}` doesn't match value type `{inferred_ty}`"
+                                    ),
+                                    ty_expr.span.clone(),
+                                );
+                            }
+                        }
+                        t
+                    }
+                    None => {
+                        if let TypeExpr::Named(name) = &ty_expr.node {
+                            self.error(
+                                ErrorCode::E0305,
+                                format!("unknown type `{name}`"),
+                                ty_expr.span.clone(),
+                            );
+                        }
+                        inferred_ty
+                    }
+                }
+            } else {
+                inferred_ty
             };
             self.constants.insert(c.name.clone(), ty);
         }

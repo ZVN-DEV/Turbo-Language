@@ -1,0 +1,13 @@
+const MAX: i64 = 100
+const NAME: str = "turbo"
+const PI: f64 = 3.14
+const DEBUG: bool = true
+const PLAIN = 42
+
+fn main() {
+    print(MAX)
+    print(NAME)
+    print(PI)
+    print(DEBUG)
+    print(PLAIN)
+}

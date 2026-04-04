@@ -306,11 +306,17 @@ impl Parser {
             Some(Token::Const) => {
                 self.advance(); // consume `const`
                 let (name, _) = self.expect_ident()?;
+                let ty = if matches!(self.peek(), Some(Token::Colon)) {
+                    self.advance();
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
                 self.expect(&Token::Eq)?;
                 let value = self.parse_expr()?;
                 let end = value.span.end;
                 Ok(Spanned::new(
-                    Item::Const(ConstDef { name, value }),
+                    Item::Const(ConstDef { name, ty, value }),
                     start..end,
                 ))
             }

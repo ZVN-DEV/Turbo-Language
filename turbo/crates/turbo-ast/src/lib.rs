@@ -41,10 +41,11 @@ pub enum Item {
     Const(ConstDef),
 }
 
-/// Constant definition: `const NAME = expr`
+/// Constant definition: `const NAME: type = expr` or `const NAME = expr`
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConstDef {
     pub name: String,
+    pub ty: Option<Spanned<TypeExpr>>,
     pub value: Spanned<Expr>,
 }
 
