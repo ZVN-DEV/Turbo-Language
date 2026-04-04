@@ -95,8 +95,8 @@ Strong static typing with inference, generics, traits, and algebraic data types.
 struct Point<T> { x: T, y: T }
 
 type Option<T> {
-    Some(T)
-    None
+    some(T)
+    none
 }
 
 trait Printable {

@@ -39,6 +39,8 @@ let user = response.json<User>()?       // Type-safe parsing
 let city = user?.address?.city ?? "Unknown"  // Safe optional access
 ```
 
+> **Status legend:** `[Implemented]` = compiles and runs today. `[Planned]` = language design only, not yet in compiler.
+
 ## Design Principles
 - Readability over writability
 - Familiarity for JS/TS/Rust developers
@@ -123,7 +125,7 @@ let city = user?.address?.city ?? "Unknown"  // Safe optional access
 
 ## Complete Syntax Reference
 
-### Variables and Constants
+### Variables and Constants `[Implemented]`
 
 > **Coming from JavaScript?** Here's how variable declarations map:
 > - JS `const x = 5` &rarr; Turbo `let x = 5` (immutable binding -- the default, and the right default)
@@ -146,7 +148,7 @@ const MAX_SIZE: usize = 1024
 const PI: f64 = 3.14159265358979
 ```
 
-### Functions
+### Functions `[Implemented]`
 ```
 // Basic function
 fn add(a: i32, b: i32) -> i32 {
@@ -184,7 +186,7 @@ async fn fetch(url: str) -> Response ! Error {
 }
 ```
 
-### Arrow Functions
+### Arrow Functions `[Planned]`
 Arrow functions work just like JavaScript — concise syntax for lambdas and callbacks.
 
 ```
@@ -213,7 +215,7 @@ let arrow = items.map((x) => x * 2)  // preferred
 let short = items.map(|x| x * 2)     // also works (Rust-style shorthand)
 ```
 
-### Destructuring
+### Destructuring `[Implemented]`
 Destructuring works just like JavaScript/TypeScript — pull values out of objects and arrays with clean syntax.
 
 ```
@@ -247,7 +249,7 @@ match response {
 }
 ```
 
-### Optional Chaining & Null Coalescing
+### Optional Chaining & Null Coalescing `[Implemented]`
 Works just like JavaScript's `?.` and `??` operators, but integrated with Turbo's `T?` type system.
 
 ```
@@ -270,7 +272,7 @@ let upper_name = user?.name?.to_upper() ?? "UNKNOWN"
 let city = await fetch_user(id)?.address?.city ?? "Unknown"
 ```
 
-### Types
+### Types `[Implemented]`
 ```
 // Structs
 @derive(Debug, Eq, Serialize)
@@ -316,7 +318,7 @@ impl Drawable for Circle {
 }
 ```
 
-### Pattern Matching
+### Pattern Matching `[Implemented]`
 ```
 // Match expressions (exhaustive)
 fn area(shape: Shape) -> f64 {
@@ -349,7 +351,7 @@ fn factorial(0) -> u64 { 1 }
 fn factorial(n: u64) -> u64 { n * factorial(n - 1) }
 ```
 
-### Error Handling
+### Error Handling `[Implemented]`
 ```
 // Result type — T ! E means "returns T or fails with E"
 fn parse_int(s: str) -> i32 ! ParseError {
@@ -369,18 +371,18 @@ match parse_int("42") {
   err(e) => print("Error: {e}")
 }
 
-// if let — for simple optional/result unwrapping
-if let user = find_user(42) {
+// if let — for simple optional/result unwrapping [Implemented]
+if let some(user) = find_user(42) {
   print("Found {user.name}")
 }
 
-// guard let — unwrap or early return (Swift-inspired)
+// guard let — unwrap or early return (Swift-inspired) [Planned]
 guard let config = load_config() else {
   return err("No config found")
 }
 // config is now unwrapped and available here
 
-// with blocks (Elixir-inspired)
+// with blocks (Elixir-inspired) [Planned]
 fn complex_operation() -> Data ! Error {
   with {
     let config = load_config()?
@@ -392,7 +394,7 @@ fn complex_operation() -> Data ! Error {
 }
 ```
 
-### Pipe Operator
+### Pipe Operator `[Implemented]`
 ```
 let result = raw_data
   |> parse
@@ -407,7 +409,7 @@ let filtered = users
   |> take(10)
 ```
 
-### Control Flow
+### Control Flow `[Implemented]`
 ```
 // If/else (expression)
 let status = if age >= 18 { "adult" } else { "minor" }
@@ -433,28 +435,28 @@ let result = loop {
   if attempt.is_ok() { break attempt }
 }
 
-// Comprehensions
+// Comprehensions [Planned]
 let squares = [x * x for x in 1..=10]
 let evens = [x for x in items if x % 2 == 0]
 let pairs = [(x, y) for x in xs for y in ys]
 ```
 
-### Collections
+### Collections `[Implemented]`
 ```
 // Arrays — just like JavaScript
 let nums = [1, 2, 3, 4, 5]
 
-// Dynamic arrays
+// Dynamic arrays [Implemented]
 let mut items = [1, 2, 3]
-items.push(4)
+items.push(4)              // push() builtin [Implemented]
 
-// Maps — JS-like object literal syntax
+// Maps — JS-like object literal syntax [Implemented]
 let mut scores = {
   "Alice": 100,
   "Bob": 85,
 }
 
-// Sets — like maps but just values
+// Sets — like maps but just values [Planned]
 let uniq = {1, 2, 3, 4}
 
 // Typed collections using type sugar
@@ -467,7 +469,7 @@ let r = 1..10      // exclusive end
 let r = 1..=10     // inclusive end
 ```
 
-### Literal Disambiguation
+### Literal Disambiguation `[Implemented]`
 
 Because `{}` is used for blocks, maps, and sets, the parser uses the following rules to disambiguate:
 
@@ -482,7 +484,7 @@ Because `{}` is used for blocks, maps, and sets, the parser uses the following r
 
 **Parser rule:** If the first non-whitespace token inside `{` is followed by `:` and a value, it is a map. If items are comma-separated without colons, it is a set. Otherwise it is a block expression. The empty-literal forms `{:}` and `{,}` resolve the ambiguity for zero-element maps and sets.
 
-### Async / Streaming
+### Async / Streaming `[Implemented]`
 ```
 // Async function
 async fn fetch_user(id: u64) -> User ! Error {
@@ -490,7 +492,7 @@ async fn fetch_user(id: u64) -> User ! Error {
   resp.json<User>()?
 }
 
-// Streaming
+// Streaming [Planned]
 async fn stream_tokens(prompt: str) -> Stream<Token> {
   let response = await llm.stream(prompt)
   for await token in response {
@@ -498,7 +500,7 @@ async fn stream_tokens(prompt: str) -> Stream<Token> {
   }
 }
 
-// Concurrent execution
+// Concurrent execution [Planned]
 async fn fetch_all(ids: [u64]) -> [User] ! Error {
   scope (s) => {
     let tasks = ids.map((id) => s.spawn(async { await fetch_user(id)? }))
@@ -507,7 +509,7 @@ async fn fetch_all(ids: [u64]) -> [User] ! Error {
 }
 ```
 
-### Agents and Tools (novel)
+### Agents and Tools `[Implemented]`
 ```
 // Tool definition
 tool fn get_weather(city: str, units: TemperatureUnit = .celsius) -> WeatherData {
@@ -531,7 +533,7 @@ agent Assistant {
 }
 ```
 
-### Compile-Time Execution
+### Compile-Time Execution `[Planned]`
 ```
 const fn generate_lookup() -> {str: u32} {
   let mut map = {}
@@ -544,7 +546,7 @@ const fn generate_lookup() -> {str: u32} {
 const LOOKUP = generate_lookup()  // evaluated at compile time because it's a const fn assigned to a const
 ```
 
-### Modules and Imports
+### Modules and Imports `[Implemented]`
 ```
 // Import specific items
 import { HashMap, HashSet } from "std/collections"
@@ -562,7 +564,7 @@ pub struct PublicStruct { }
 fn private_function() { }
 ```
 
-### Attributes / Decorators
+### Attributes / Decorators `[Implemented]`
 ```
 @test
 fn test_addition() {
@@ -584,7 +586,7 @@ fn hot_path() { }
 struct Config { }
 ```
 
-## Metaprogramming
+## Metaprogramming `[Implemented]`
 
 Turbo takes a deliberately minimal approach to metaprogramming. Instead of a macro system, Turbo relies on three mechanisms that cover 95% of use cases with zero magic:
 
@@ -618,7 +620,7 @@ const ROUTES = generate_routes("/api", ["users", "posts", "comments"])
 
 **Future direction:** If a general-purpose macro system becomes necessary, it will be hygienic and AST-based (like Scala 3 inline/macro or Swift macros) — never textual substitution. This is a post-1.0 consideration.
 
-## Type Sugar Reference
+## Type Sugar Reference `[Implemented]`
 
 Turbo provides elegant type sugar so you never need to write verbose generic types for common patterns. Under the hood, these are all full discriminated unions — the sugar is purely a surface convenience.
 
@@ -630,7 +632,7 @@ Turbo provides elegant type sugar so you never need to write verbose generic typ
 | `{K: V}` | `Map<K, V>` | Map from K to V |
 | `{T}` | `Set<T>` | Set of T |
 
-### Optional (`T?`)
+### Optional (`T?`) `[Implemented]`
 ```
 // Type annotation
 let name: str? = "Alice"         // has a value
@@ -651,19 +653,19 @@ match find_user(42) {
 // Optional chaining + coalescing
 let city = user?.address?.city ?? "Unknown"
 
-// if let — unwrap for a block
-if let user = find_user(42) {
+// if let — unwrap for a block [Implemented]
+if let some(user) = find_user(42) {
   print("Hello, {user.name}")
 }
 
-// guard let — unwrap or bail
+// guard let — unwrap or bail [Planned]
 guard let user = find_user(42) else {
   return none
 }
 print(user.name)  // user is unwrapped here
 ```
 
-### Result (`T ! E`)
+### Result (`T ! E`) `[Implemented]`
 ```
 // Type annotation
 fn parse(input: str) -> Config ! ParseError {
@@ -689,7 +691,7 @@ match parse("config.toml") {
 }
 ```
 
-### Collections
+### Collections `[Implemented]`
 ```
 let names: [str] = ["Alice", "Bob"]       // array of strings
 let scores: {str: i32} = {"Alice": 100}   // map str -> i32
@@ -698,33 +700,33 @@ let ids: {u64} = {1, 2, 3}               // set of u64
 
 ## Syntax Summary Table
 
-| Feature | Syntax | Inspired By |
-|---------|--------|-------------|
-| Immutable binding | `let x = 5` | Rust |
-| Mutable binding | `let mut x = 5` | Rust |
-| String interpolation | `"Hello, {name}"` | Python f-strings |
-| Optional type | `T?` | Swift/Kotlin |
-| Result type | `T ! E` | Novel (inspired by Rust) |
-| No value | `none` | Swift (`nil`), Turbo-style |
-| Pipe | `x \|> f \|> g` | Elixir |
-| Error propagation | `expr?` | Rust |
-| Pattern match | `match x { ... }` | Rust |
-| if let | `if let x = expr { }` | Swift |
-| guard let | `guard let x = expr else { }` | Swift |
-| Arrow function (preferred) | `(x) => x + 1` | JavaScript |
-| Lambda (pipe, shorthand) | `\|x\| x + 1` | Rust |
-| Destructuring | `let { a, b } = obj` | JavaScript |
-| Optional chaining | `x?.y?.z` | TypeScript |
-| Null coalescing | `x ?? default` | JavaScript |
-| Comprehension | `[x for x in xs]` | Python |
-| Array type | `[T]` | Swift |
-| Map type | `{K: V}` | Novel |
-| Set type | `{T}` | Novel |
-| Async | `async fn / await` | JS/Rust |
-| Agent | `agent Name { }` | Novel |
-| Tool | `tool fn name() { }` | Novel |
-| Compile-time | `const fn` | Zig (adapted) |
-| Defer | `defer { cleanup() }` | Go |
+| Feature | Syntax | Inspired By | Status |
+|---------|--------|-------------|--------|
+| Immutable binding | `let x = 5` | Rust | Implemented |
+| Mutable binding | `let mut x = 5` | Rust | Implemented |
+| String interpolation | `"Hello, {name}"` | Python f-strings | Implemented |
+| Optional type | `T?` | Swift/Kotlin | Implemented |
+| Result type | `T ! E` | Novel (inspired by Rust) | Implemented |
+| No value | `none` | Swift (`nil`), Turbo-style | Implemented |
+| Pipe | `x \|> f \|> g` | Elixir | Implemented |
+| Error propagation | `expr?` | Rust | Implemented |
+| Pattern match | `match x { ... }` | Rust | Implemented |
+| if let | `if let some(v) = expr { }` | Swift | Implemented |
+| guard let | `guard let x = expr else { }` | Swift | Planned |
+| Arrow function (preferred) | `(x) => x + 1` | JavaScript | Planned |
+| Lambda (pipe, shorthand) | `\|x\| x + 1` | Rust | Implemented |
+| Destructuring | `let { a, b } = obj` | JavaScript | Implemented |
+| Optional chaining | `x?.y?.z` | TypeScript | Implemented |
+| Null coalescing | `x ?? default` | JavaScript | Implemented |
+| Comprehension | `[x for x in xs]` | Python | Planned |
+| Array type | `[T]` | Swift | Implemented |
+| Map type | `{K: V}` | Novel | Implemented |
+| Set type | `{T}` | Novel | Planned |
+| Async | `async fn / await` | JS/Rust | Implemented |
+| Agent | `agent Name { }` | Novel | Implemented |
+| Tool | `tool fn name() { }` | Novel | Implemented |
+| Compile-time | `const fn` | Zig (adapted) | Planned |
+| Defer | `defer { cleanup() }` | Go | Implemented |
 
 ## Real-World Patterns
 
