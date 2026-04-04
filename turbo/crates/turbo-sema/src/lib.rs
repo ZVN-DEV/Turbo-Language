@@ -14,6 +14,18 @@ impl std::fmt::Display for SemaError {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SemaWarning {
+    pub code: ErrorCode,
+    pub message: String,
+    pub span: Span,
+}
+
+pub struct SemaResult {
+    pub errors: Vec<SemaError>,
+    pub warnings: Vec<SemaWarning>,
+}
+
 /// Internal type representation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
@@ -309,6 +321,7 @@ struct TraitMethodInfo {
 #[allow(dead_code)]
 struct Checker {
     errors: Vec<SemaError>,
+    warnings: Vec<SemaWarning>,
     functions: HashMap<String, FnSig>,
     agents: HashMap<String, AgentInfo>,
     structs: HashMap<String, StructInfo>,
@@ -358,6 +371,7 @@ impl Checker {
 
         Self {
             errors: Vec::new(),
+            warnings: Vec::new(),
             functions: HashMap::new(),
             agents: HashMap::new(),
             structs: HashMap::new(),
@@ -378,6 +392,14 @@ impl Checker {
 
     fn error(&mut self, code: ErrorCode, message: String, span: Span) {
         self.errors.push(SemaError {
+            code,
+            message,
+            span,
+        });
+    }
+
+    fn warn(&mut self, code: ErrorCode, message: String, span: Span) {
+        self.warnings.push(SemaWarning {
             code,
             message,
             span,
@@ -1223,11 +1245,22 @@ impl Checker {
         // Check body
         let body_ty = self.check_expr(&f.body);
 
-        // Check return type matches
+        // Check return type matches.
+        // Skip if the body ends with a `return` statement — those are checked
+        // individually in Stmt::Return, and the block's own type is Unit (which
+        // would falsely trigger this error).
+        let body_has_return = if let Expr::Block { stmts, .. } = &f.body.node {
+            stmts
+                .last()
+                .map_or(false, |s| matches!(s.node, Stmt::Return(_)))
+        } else {
+            false
+        };
         if !sig.ret.is_error()
             && !body_ty.is_error()
             && sig.ret != Ty::Unit
             && !types_compatible(&sig.ret, &body_ty)
+            && !body_has_return
         {
             self.error(
                 ErrorCode::E0109,
@@ -1266,10 +1299,18 @@ impl Checker {
 
         let body_ty = self.check_expr(&f.body);
 
+        let body_has_return = if let Expr::Block { stmts, .. } = &f.body.node {
+            stmts
+                .last()
+                .map_or(false, |s| matches!(s.node, Stmt::Return(_)))
+        } else {
+            false
+        };
         if !sig.ret.is_error()
             && !body_ty.is_error()
             && sig.ret != Ty::Unit
             && !types_compatible(&sig.ret, &body_ty)
+            && !body_has_return
         {
             self.error(
                 ErrorCode::E0109,
@@ -4902,7 +4943,31 @@ impl Checker {
                 );
             }
             Stmt::Expr(e) => {
-                self.check_expr(e);
+                let ty = self.check_expr(e);
+                // Warn when a pure builtin's return value is discarded in statement position
+                if ty != Ty::Unit && ty != Ty::Error {
+                    if let Expr::Call { ref callee, .. } = e.node {
+                        if let Expr::Ident(ref fn_name) = callee.node {
+                            const PURE_BUILTINS: &[&str] = &[
+                                "len", "abs", "min", "max", "pow", "sqrt",
+                                "to_str", "starts_with", "ends_with", "contains",
+                                "char_at", "index_of", "join", "reduce", "clone",
+                                "hashmap_get", "hashmap_has", "hashmap_len", "hashmap_size",
+                                "hashmap_keys", "read_line", "read_file",
+                                "json_get", "json_stringify",
+                                "request_body", "request_method", "request_path",
+                                "request_query", "request_header",
+                            ];
+                            if PURE_BUILTINS.contains(&fn_name.as_str()) {
+                                self.warn(
+                                    ErrorCode::E0514,
+                                    format!("return value of `{fn_name}()` is unused"),
+                                    e.span.clone(),
+                                );
+                            }
+                        }
+                    }
+                }
             }
             Stmt::Return(value) => {
                 let ret_ty = if let Some(val) = value {
@@ -4997,18 +5062,24 @@ impl Checker {
 }
 
 /// Run semantic analysis on a module. Returns errors found.
-pub fn check(module: &Module) -> Vec<SemaError> {
+pub fn check(module: &Module) -> SemaResult {
     let mut checker = Checker::new();
     checker.check_module(module);
-    checker.errors
+    SemaResult {
+        errors: checker.errors,
+        warnings: checker.warnings,
+    }
 }
 
 /// Run semantic analysis in test mode (no `main` required). Returns errors found.
-pub fn check_test(module: &Module) -> Vec<SemaError> {
+pub fn check_test(module: &Module) -> SemaResult {
     let mut checker = Checker::new();
     checker.test_mode = true;
     checker.check_module(module);
-    checker.errors
+    SemaResult {
+        errors: checker.errors,
+        warnings: checker.warnings,
+    }
 }
 
 #[cfg(test)]
@@ -5018,7 +5089,7 @@ mod tests {
     fn check_source(source: &str) -> Vec<SemaError> {
         let (tokens, _) = turbo_lexer::tokenize(source);
         let (module, _) = turbo_parser::parse(tokens);
-        check(&module)
+        check(&module).errors
     }
 
     fn assert_no_errors(source: &str) {

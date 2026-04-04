@@ -567,6 +567,37 @@ fn report_error(
         .unwrap();
 }
 
+fn report_warning(
+    source: &str,
+    filename: &str,
+    message: &str,
+    span: &std::ops::Range<usize>,
+    code: Option<ErrorCode>,
+) {
+    let start = span.start.min(source.len());
+    let end = span.end.min(source.len()).max(start);
+    let clamped = start..end;
+
+    let display_message = if let Some(c) = code {
+        format!("warning[{}]: {}", c.as_str(), message)
+    } else {
+        message.to_string()
+    };
+
+    let builder = Report::build(ReportKind::Warning, filename, clamped.start)
+        .with_message(&display_message)
+        .with_label(
+            Label::new((filename, clamped))
+                .with_message(message)
+                .with_color(Color::Yellow),
+        );
+
+    builder
+        .finish()
+        .eprint((filename, Source::from(source)))
+        .unwrap();
+}
+
 /// Maximum source file size: 50 MB. Files larger than this are rejected
 /// to prevent denial-of-service via memory exhaustion.
 const MAX_SOURCE_FILE_SIZE: u64 = 50 * 1024 * 1024;
@@ -698,19 +729,25 @@ fn run_file(path: &std::path::Path, verbose: bool) {
 
     // Semantic analysis
     let sema_start = std::time::Instant::now();
-    let sema_errors = turbo_sema::check(&module);
+    let sema_result = turbo_sema::check(&module);
     let sema_time = sema_start.elapsed();
 
     if verbose {
         eprintln!(
-            "--- Sema ({} errors, {:.2?}) ---",
-            sema_errors.len(),
+            "--- Sema ({} errors, {} warnings, {:.2?}) ---",
+            sema_result.errors.len(),
+            sema_result.warnings.len(),
             sema_time
         );
     }
 
-    if !sema_errors.is_empty() {
-        for err in &sema_errors {
+    // Display warnings (non-fatal)
+    for w in &sema_result.warnings {
+        report_warning(&source, &filename, &w.message, &w.span, Some(w.code));
+    }
+
+    if !sema_result.errors.is_empty() {
+        for err in &sema_result.errors {
             let help = sema_help(&err.message);
             report_error(
                 &source,
@@ -813,10 +850,14 @@ fn check_file(path: &std::path::Path) {
     }
 
     // Semantic analysis
-    let sema_errors = turbo_sema::check(&module);
+    let sema_result = turbo_sema::check(&module);
 
-    if !sema_errors.is_empty() {
-        for err in &sema_errors {
+    for w in &sema_result.warnings {
+        report_warning(&source, &filename, &w.message, &w.span, Some(w.code));
+    }
+
+    if !sema_result.errors.is_empty() {
+        for err in &sema_result.errors {
             let help = sema_help(&err.message);
             report_error(
                 &source,
@@ -945,9 +986,12 @@ fn test_file(file: Option<PathBuf>) {
         }
 
         // Semantic analysis in test mode (main not required)
-        let sema_errors = turbo_sema::check_test(&module);
-        if !sema_errors.is_empty() {
-            for err in &sema_errors {
+        let sema_result = turbo_sema::check_test(&module);
+        for w in &sema_result.warnings {
+            report_warning(&source, &filename, &w.message, &w.span, Some(w.code));
+        }
+        if !sema_result.errors.is_empty() {
+            for err in &sema_result.errors {
                 let help = sema_help(&err.message);
                 report_error(
                     &source,
@@ -1266,9 +1310,12 @@ fn test_run_fn(path: &std::path::Path, fn_name: &str) {
     }
 
     // Semantic analysis in test mode
-    let sema_errors = turbo_sema::check_test(&module);
-    if !sema_errors.is_empty() {
-        for err in &sema_errors {
+    let sema_result = turbo_sema::check_test(&module);
+    for w in &sema_result.warnings {
+        eprintln!("warning: {}", w.message);
+    }
+    if !sema_result.errors.is_empty() {
+        for err in &sema_result.errors {
             eprintln!("error: {}", err.message);
         }
         std::process::exit(1);
@@ -1421,11 +1468,15 @@ fn build_file(
 
     // Semantic analysis
     let sema_start = std::time::Instant::now();
-    let sema_errors = turbo_sema::check(&module);
+    let sema_result = turbo_sema::check(&module);
     let sema_time = sema_start.elapsed();
 
-    if !sema_errors.is_empty() {
-        for err in &sema_errors {
+    for w in &sema_result.warnings {
+        report_warning(&source, &filename, &w.message, &w.span, Some(w.code));
+    }
+
+    if !sema_result.errors.is_empty() {
+        for err in &sema_result.errors {
             let help = sema_help(&err.message);
             report_error(
                 &source,

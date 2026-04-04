@@ -214,6 +214,8 @@ pub enum ErrorCode {
     E0512,
     /// Builtin argument count error
     E0513,
+    /// Unused return value of pure function
+    E0514,
 }
 
 impl ErrorCode {
@@ -323,6 +325,7 @@ impl ErrorCode {
             ErrorCode::E0511 => "E0511",
             ErrorCode::E0512 => "E0512",
             ErrorCode::E0513 => "E0513",
+            ErrorCode::E0514 => "E0514",
         }
     }
 
@@ -432,6 +435,7 @@ impl ErrorCode {
             ErrorCode::E0511 => "agent does not accept field initializers",
             ErrorCode::E0512 => "only named function calls are supported",
             ErrorCode::E0513 => "builtin function argument count error",
+            ErrorCode::E0514 => "unused return value of pure function",
         }
     }
 
@@ -541,6 +545,7 @@ impl ErrorCode {
             ErrorCode::E0511,
             ErrorCode::E0512,
             ErrorCode::E0513,
+            ErrorCode::E0514,
         ]
     }
 }

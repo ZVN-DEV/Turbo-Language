@@ -114,8 +114,8 @@ pub fn run_repl() {
             if lex_errs.is_empty() {
                 let (module, parse_errs) = turbo_parser::parse(tokens);
                 if parse_errs.is_empty() {
-                    let sema_errs = turbo_sema::check(&module);
-                    if sema_errs.is_empty() {
+                    let sema_result = turbo_sema::check(&module);
+                    if sema_result.errors.is_empty() {
                         if turbo_codegen_cranelift::jit_run(&module).is_ok() {
                             continue;
                         }
@@ -169,9 +169,12 @@ pub fn run_repl() {
         }
 
         // Semantic analysis
-        let sema_errors = turbo_sema::check(&module);
-        if !sema_errors.is_empty() {
-            for e in &sema_errors {
+        let sema_result = turbo_sema::check(&module);
+        for w in &sema_result.warnings {
+            eprintln!("warning: {}", w.message);
+        }
+        if !sema_result.errors.is_empty() {
+            for e in &sema_result.errors {
                 eprintln!("error: {}", e.message);
             }
             if is_let {

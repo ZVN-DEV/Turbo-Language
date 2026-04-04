@@ -2677,27 +2677,34 @@ mod tests {
 
     #[test]
     fn test_method_style_with_args() {
-        // a.push(5) desugars to push(a, 5)
+        // a.push(5) desugars to push(a, 5), then COW rewrite makes it a = push(a, 5)
         let source = "fn main() { let a = [1, 2, 3]\n a.push(5) }";
         let module = parse_source(source);
         let Item::Function(f) = &module.items[0].node else {
             panic!("Expected function")
         };
-        if let Expr::Block {
-            tail_expr: Some(tail),
-            ..
-        } = &f.body.node
-        {
-            if let Expr::Call { callee, args } = &tail.node {
-                assert!(matches!(&callee.node, Expr::Ident(name) if name == "push"));
-                assert_eq!(args.len(), 2);
-                assert!(matches!(&args[0].node, Expr::Ident(name) if name == "a"));
-                assert!(matches!(&args[1].node, Expr::IntLit(5)));
+        if let Expr::Block { stmts, .. } = &f.body.node {
+            // Last stmt should be the COW-rewritten assign: a = push(a, 5)
+            let last = stmts.last().expect("Expected statements");
+            if let Stmt::Expr(expr) = &last.node {
+                if let Expr::Assign { target, value } = &expr.node {
+                    assert_eq!(target, "a");
+                    if let Expr::Call { callee, args } = &value.node {
+                        assert!(matches!(&callee.node, Expr::Ident(name) if name == "push"));
+                        assert_eq!(args.len(), 2);
+                        assert!(matches!(&args[0].node, Expr::Ident(name) if name == "a"));
+                        assert!(matches!(&args[1].node, Expr::IntLit(5)));
+                    } else {
+                        panic!("Expected Call inside Assign, got {:?}", value.node);
+                    }
+                } else {
+                    panic!("Expected Assign, got {:?}", expr.node);
+                }
             } else {
-                panic!("Expected Call, got {:?}", tail.node);
+                panic!("Expected Stmt::Expr, got {:?}", last.node);
             }
         } else {
-            panic!("Expected tail expr");
+            panic!("Expected Block");
         }
     }
 

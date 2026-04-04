@@ -181,12 +181,20 @@ fn publish_diagnostics(connection: &Connection, uri: &Uri, source: &str) {
         }
 
         if parse_errors.is_empty() {
-            let sema_errors = turbo_sema::check(&module);
-            for err in &sema_errors {
+            let sema_result = turbo_sema::check(&module);
+            for err in &sema_result.errors {
                 diagnostics.push(Diagnostic {
                     range: span_to_range(source, &err.span),
                     severity: Some(DiagnosticSeverity::ERROR),
                     message: err.message.clone(),
+                    ..Default::default()
+                });
+            }
+            for w in &sema_result.warnings {
+                diagnostics.push(Diagnostic {
+                    range: span_to_range(source, &w.span),
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    message: w.message.clone(),
                     ..Default::default()
                 });
             }
