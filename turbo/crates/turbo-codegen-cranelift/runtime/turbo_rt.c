@@ -146,6 +146,22 @@ long long rt_array_len(const void *arr) {
     return *(const long long*)arr;
 }
 
+void* rt_array_push(void *arr, long long value) {
+    long long old_len = *(const long long*)arr;
+    long long new_len = old_len + 1;
+    size_t data_size = 8 + new_len * 8;   /* length field + elements */
+    size_t total = 8 + data_size;          /* + refcount header */
+    void *new_alloc = turbo_calloc(1, total);
+    *(long long*)new_alloc = 1;            /* refcount = 1 */
+    void *new_data = (char*)new_alloc + 8;
+    *(long long*)new_data = new_len;       /* set length */
+    /* Copy old elements */
+    memcpy((char*)new_data + 8, (const char*)arr + 8, (size_t)old_len * 8);
+    /* Append new element */
+    ((long long*)new_data)[1 + old_len] = value;
+    return new_data;
+}
+
 long long rt_str_len(const char *s) {
     return s ? (long long)strlen(s) : 0;
 }

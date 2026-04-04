@@ -2571,6 +2571,27 @@ pub(crate) fn compile_builtin_deref<M: Module>(
     Ok(Some((result, TurboTy::Int)))
 }
 
+/// push(arr, elem) — returns a NEW array with `elem` appended (COW semantics)
+pub(crate) fn compile_builtin_push<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    if args.len() != 2 {
+        return Err(CodegenError {
+            code: ErrorCode::E0400,
+            message: "push() requires exactly 2 arguments".to_string(),
+        });
+    }
+    let (arr_val, arr_tty) = compile_expr(cx, &args[0])?.unwrap();
+    let (elem_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let push_fid = cx.rt_fns["rt_array_push"];
+    let push_ref = cx.module.declare_func_in_func(push_fid, cx.builder.func);
+    let call = cx.builder.ins().call(push_ref, &[arr_val, elem_val]);
+    let result = cx.builder.inst_results(call)[0];
+    // Preserve the array element type from the input array
+    Ok(Some((result, arr_tty)))
+}
+
 /// store(addr: i64, value: i64) — store an i64 at the given memory address
 pub(crate) fn compile_builtin_store<M: Module>(
     cx: &mut Ctx<'_, M>,

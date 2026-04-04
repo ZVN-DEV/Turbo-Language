@@ -180,6 +180,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_array_get", rt_array_get as *const u8);
     jit_builder.symbol("rt_array_set", rt_array_set as *const u8);
     jit_builder.symbol("rt_array_len", rt_array_len as *const u8);
+    jit_builder.symbol("rt_array_push", rt_array_push as *const u8);
     jit_builder.symbol("rt_str_len", rt_str_len as *const u8);
     jit_builder.symbol("rt_struct_alloc", rt_struct_alloc as *const u8);
     jit_builder.symbol("rt_i64_to_str", rt_i64_to_str as *const u8);
@@ -312,6 +313,7 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_array_get", rt_array_get as *const u8);
     jit_builder.symbol("rt_array_set", rt_array_set as *const u8);
     jit_builder.symbol("rt_array_len", rt_array_len as *const u8);
+    jit_builder.symbol("rt_array_push", rt_array_push as *const u8);
     jit_builder.symbol("rt_str_len", rt_str_len as *const u8);
     jit_builder.symbol("rt_struct_alloc", rt_struct_alloc as *const u8);
     jit_builder.symbol("rt_i64_to_str", rt_i64_to_str as *const u8);
@@ -1134,6 +1136,13 @@ fn compile_module<M: Module>(
         "rt_array_len",
         &[ptr_type],
         Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_array_push",
+        &[ptr_type, types::I64],
+        Some(ptr_type),
     )?;
     declare_rt_fn(
         module,
@@ -4097,6 +4106,7 @@ fn compile_call<M: Module>(
         "assert_eq" => compile_assert_eq(cx, args, false),
         "assert_ne" => compile_assert_eq(cx, args, true),
         "len" => compile_len(cx, args),
+        "push" => compile_builtin_push(cx, args),
         "abs" => compile_abs(cx, args),
         "min" => compile_min(cx, args),
         "max" => compile_max(cx, args),

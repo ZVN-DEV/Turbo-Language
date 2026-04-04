@@ -423,6 +423,7 @@ impl Checker {
                 | "assert_eq"
                 | "assert_ne"
                 | "len"
+                | "push"
                 | "abs"
                 | "min"
                 | "max"
@@ -1563,6 +1564,50 @@ impl Checker {
                                 self.error(
                                     ErrorCode::E0133,
                                     format!("len() expects array or string, found `{arg_ty}`"),
+                                    args[0].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        }
+                    }
+
+                    if name == "push" {
+                        if args.len() != 2 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!(
+                                    "push() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arr_ty = self.check_expr(&args[0]);
+                        let elem_ty = self.check_expr(&args[1]);
+                        match &arr_ty {
+                            Ty::Array(inner) => {
+                                if !elem_ty.is_error()
+                                    && !inner.is_error()
+                                    && **inner != elem_ty
+                                {
+                                    self.error(
+                                        ErrorCode::E0133,
+                                        format!(
+                                            "push() element type `{elem_ty}` does not match array element type `{inner}`"
+                                        ),
+                                        args[1].span.clone(),
+                                    );
+                                }
+                                return arr_ty;
+                            }
+                            _ if arr_ty.is_error() => return Ty::Error,
+                            _ => {
+                                self.error(
+                                    ErrorCode::E0133,
+                                    format!(
+                                        "push() expects array as first argument, found `{arr_ty}`"
+                                    ),
                                     args[0].span.clone(),
                                 );
                                 return Ty::Error;

@@ -179,6 +179,31 @@ pub(crate) extern "C" fn rt_array_len(arr: *const u8) -> i64 {
     unsafe { *(arr as *const i64) }
 }
 
+pub(crate) extern "C" fn rt_array_push(arr: *const u8, value: i64) -> *mut u8 {
+    let old_len = unsafe { *(arr as *const i64) } as usize;
+    let new_len = old_len + 1;
+    let data_size = 8 + new_len * 8; // length field + elements
+    let total = 8 + data_size; // + refcount header
+    let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
+    let new_alloc = unsafe { std::alloc::alloc_zeroed(layout) };
+    if new_alloc.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    unsafe {
+        *(new_alloc as *mut i64) = 1; // refcount = 1
+    }
+    let new_data = unsafe { new_alloc.add(8) };
+    unsafe {
+        *(new_data as *mut i64) = new_len as i64; // set length
+        // Copy old elements
+        std::ptr::copy_nonoverlapping(arr.add(8), new_data.add(8), old_len * 8);
+        // Append new element
+        *((new_data as *mut i64).add(1 + old_len)) = value;
+    }
+    new_data
+}
+
 pub(crate) extern "C" fn rt_str_len(s: *const u8) -> i64 {
     if s.is_null() {
         return 0;

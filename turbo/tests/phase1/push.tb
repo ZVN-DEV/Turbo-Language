@@ -1,0 +1,13 @@
+fn main() {
+    let mut arr = [1, 2, 3]
+    arr = push(arr, 4)
+    arr = push(arr, 5)
+    print(len(arr))
+    print(arr[3])
+    print(arr[4])
+
+    let mut names = ["alice", "bob"]
+    names = push(names, "charlie")
+    print(len(names))
+    print(names[2])
+}
