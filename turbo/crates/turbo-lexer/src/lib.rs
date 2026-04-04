@@ -94,7 +94,7 @@ pub enum Token {
     Int(i64),
 
     #[token(r#"""""#, lex_triple_quote_string, priority = 10)]
-    #[regex(r#""([^"\\]|\\.)*""#, parse_string)]
+    #[token("\"", lex_string, priority = 5)]
     String(std::string::String),
 
     // --- Identifiers ---
@@ -278,41 +278,108 @@ fn lex_triple_quote_string(lex: &mut logos::Lexer<Token>) -> Option<std::string:
     }
 }
 
-fn parse_string(lex: &mut logos::Lexer<Token>) -> Option<std::string::String> {
-    let slice = lex.slice();
-    // Strip surrounding quotes
-    let inner = &slice[1..slice.len() - 1];
-    // Process escape sequences
-    let mut result = std::string::String::new();
-    let mut chars = inner.chars();
-    while let std::option::Option::Some(c) = chars.next() {
+/// Lex a double-quoted string, handling `{...}` interpolation blocks that may
+/// contain nested quotes (e.g. `"{hashmap_get(m, "key")}"`).
+///
+/// Called after the opening `"` has been consumed by logos. We walk the
+/// remainder character-by-character, tracking interpolation brace depth so
+/// that `"` inside `{...}` is treated as part of the interpolated expression
+/// rather than ending the outer string.
+fn lex_string(lex: &mut logos::Lexer<Token>) -> Option<std::string::String> {
+    let remainder = lex.remainder();
+    let mut chars = remainder.char_indices();
+    let mut brace_depth: u32 = 0; // > 0 means we are inside {…} interpolation
+    let mut in_inner_string = false; // inside a quoted string within interpolation
+    let mut escape_next = false;
+    let mut end_offset: Option<usize> = None;
+
+    while let Some((i, c)) = chars.next() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
         if c == '\\' {
-            match chars.next() {
-                std::option::Option::Some('n') => result.push('\n'),
-                std::option::Option::Some('t') => result.push('\t'),
-                std::option::Option::Some('r') => result.push('\r'),
-                std::option::Option::Some('\\') => result.push('\\'),
-                std::option::Option::Some('"') => result.push('"'),
-                std::option::Option::Some('{') => {
-                    result.push('\\');
-                    result.push('{');
-                }
-                std::option::Option::Some('}') => {
-                    result.push('\\');
-                    result.push('}');
-                }
-                std::option::Option::Some(other) => {
-                    result.push('\\');
-                    result.push(other);
-                }
-                std::option::Option::None => result.push('\\'),
+            escape_next = true;
+            continue;
+        }
+
+        if brace_depth == 0 {
+            // At the top level of the string literal
+            if c == '"' {
+                // This is the closing quote
+                end_offset = Some(i);
+                break;
             }
+            if c == '{' {
+                brace_depth += 1;
+            }
+            // `}` at depth 0 is just a literal char (or escaped) — keep going
         } else {
-            result.push(c);
+            // Inside an interpolation block
+            if in_inner_string {
+                if c == '"' {
+                    in_inner_string = false;
+                }
+                // Everything else (including braces) is part of the inner string
+            } else {
+                match c {
+                    '"' => {
+                        in_inner_string = true;
+                    }
+                    '{' => {
+                        brace_depth += 1;
+                    }
+                    '}' => {
+                        brace_depth -= 1;
+                        // If depth returns to 0, we're back in the outer string
+                    }
+                    _ => {}
+                }
+            }
         }
     }
-    std::option::Option::Some(result)
+
+    if let Some(end) = end_offset {
+        let content = &remainder[..end];
+        lex.bump(end + 1); // skip content + closing "
+
+        // Process escape sequences (same logic as parse_string)
+        let mut result = std::string::String::new();
+        let mut chars = content.chars();
+        while let std::option::Option::Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    std::option::Option::Some('n') => result.push('\n'),
+                    std::option::Option::Some('t') => result.push('\t'),
+                    std::option::Option::Some('r') => result.push('\r'),
+                    std::option::Option::Some('\\') => result.push('\\'),
+                    std::option::Option::Some('"') => result.push('"'),
+                    std::option::Option::Some('{') => {
+                        result.push('\\');
+                        result.push('{');
+                    }
+                    std::option::Option::Some('}') => {
+                        result.push('\\');
+                        result.push('}');
+                    }
+                    std::option::Option::Some(other) => {
+                        result.push('\\');
+                        result.push(other);
+                    }
+                    std::option::Option::None => result.push('\\'),
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        std::option::Option::Some(result)
+    } else {
+        // Unterminated string — consume to end
+        lex.bump(remainder.len());
+        std::option::Option::Some(remainder.to_string())
+    }
 }
+
 
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -620,5 +687,58 @@ mod tests {
         assert!(matches!(kinds[1], Token::Ident(s) if s == "Helper"));
         assert!(matches!(kinds[2], Token::LBrace));
         assert!(matches!(kinds[3], Token::RBrace));
+    }
+
+    #[test]
+    fn test_interpolation_with_nested_quotes() {
+        // "{hashmap_get(m, "key")}" should be a single string token
+        let source = r#""{hashmap_get(m, "key")}""#;
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
+        assert_eq!(tokens.len(), 1, "Expected 1 token, got {:?}", tokens);
+        assert!(matches!(&tokens[0].value, Token::String(s) if s == r#"{hashmap_get(m, "key")}"#));
+    }
+
+    #[test]
+    fn test_interpolation_with_multiple_nested_quotes() {
+        // Two interpolation blocks each containing quoted strings
+        let source = r#""x={get("a")} y={get("b")}""#;
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
+        assert_eq!(tokens.len(), 1, "Expected 1 token, got {:?}", tokens);
+        assert!(matches!(&tokens[0].value, Token::String(s) if s == r#"x={get("a")} y={get("b")}"#));
+    }
+
+    #[test]
+    fn test_interpolation_with_nested_braces() {
+        // Nested braces inside interpolation (e.g. a block expression)
+        let source = r#""{if true { "yes" } else { "no" }}""#;
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
+        assert_eq!(tokens.len(), 1, "Expected 1 token, got {:?}", tokens);
+        assert!(
+            matches!(&tokens[0].value, Token::String(s) if s == r#"{if true { "yes" } else { "no" }}"#)
+        );
+    }
+
+    #[test]
+    fn test_simple_interpolation_still_works() {
+        // Simple interpolation without nested quotes
+        let source = r#""Hello, {name}!""#;
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
+        assert_eq!(tokens.len(), 1, "Expected 1 token, got {:?}", tokens);
+        assert!(matches!(&tokens[0].value, Token::String(s) if s == "Hello, {name}!"));
+    }
+
+    #[test]
+    fn test_string_after_interpolation_string() {
+        // Ensure the lexer correctly advances past the interpolated string
+        let source = r#""{get("k")}" "normal""#;
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
+        assert_eq!(tokens.len(), 2, "Expected 2 tokens, got {:?}", tokens);
+        assert!(matches!(&tokens[0].value, Token::String(s) if s == r#"{get("k")}"#));
+        assert!(matches!(&tokens[1].value, Token::String(s) if s == "normal"));
     }
 }

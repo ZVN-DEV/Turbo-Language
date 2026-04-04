@@ -1,0 +1,32 @@
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
+    f(x)
+}
+
+fn apply2(f: fn(i64, i64) -> i64, a: i64, b: i64) -> i64 {
+    f(a, b)
+}
+
+fn main() {
+    let double = (x: i64) => x * 2
+    print(double(5))
+
+    let add = (x: i64, y: i64) => x + y
+    print(add(3, 4))
+
+    let result = apply((x: i64) => x + 10, 5)
+    print(result)
+
+    let sum = apply2((a: i64, b: i64) => a + b, 10, 20)
+    print(sum)
+
+    let nums = [1, 2, 3, 4, 5]
+    let doubled = nums.map((x) => x * 2)
+    print(doubled[0])
+    print(doubled[4])
+
+    let evens = nums.filter((x) => x % 2 == 0)
+    print(len(evens))
+
+    let constant = () => 42
+    print(constant())
+}

@@ -32,8 +32,8 @@
         },
         "keywords": {
             "patterns": [
-                { "name": "keyword.control.turbo", "match": "\\b(if|else|while|for|in|match|return|await|spawn|async)\\b" },
-                { "name": "keyword.declaration.turbo", "match": "\\b(fn|let|mut|struct|type|impl|trait|import|from|agent|tool)\\b" },
+                { "name": "keyword.control.turbo", "match": "\\b(if|else|while|for|in|match|return|await|spawn|async|break|continue|defer)\\b" },
+                { "name": "keyword.declaration.turbo", "match": "\\b(fn|let|mut|const|struct|enum|type|impl|trait|import|from|agent|tool|unsafe)\\b" },
                 { "name": "keyword.other.turbo", "match": "\\b(ok|err|some|none)\\b" }
             ]
         },
@@ -45,7 +45,7 @@
         "functions": {
             "patterns": [
                 { "name": "entity.name.function.turbo", "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()" },
-                { "name": "support.function.builtin.turbo", "match": "\\b(print|len|abs|min|max|to_str|assert|panic|map|filter|reduce|split|trim|upper|lower|replace|starts_with|ends_with|char_at|read_line|read_file|write_file|pow|sqrt)\\b" }
+                { "name": "support.function.builtin.turbo", "match": "\\b(print|len|push|abs|min|max|to_str|to_json|assert|assert_eq|assert_ne|panic|map|filter|reduce|split|trim|upper|lower|replace|starts_with|ends_with|char_at|read_line|read_file|write_file|pow|sqrt|sleep|http_get|http_post|hashmap|hashmap_get|hashmap_set|hashmap_keys|channel|mutex)\\b" }
             ]
         },
         "numbers": {

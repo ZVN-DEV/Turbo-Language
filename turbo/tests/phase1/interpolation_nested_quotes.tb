@@ -1,0 +1,7 @@
+fn pick(a: str, b: str) -> str {
+    a
+}
+
+fn main() {
+    print("{pick("hello", "world")} there")
+}

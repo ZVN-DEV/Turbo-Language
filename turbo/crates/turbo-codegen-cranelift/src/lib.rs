@@ -1946,6 +1946,16 @@ fn compile_module<M: Module>(
             )?));
             param_turbo_tys.push(turbo_ty_from_type_expr(&param.ty.node, &enum_variants));
         }
+        // Determine whether this closure returns a value.
+        // - Explicit return type: use it.
+        // - Inferred params (e.g. used in .map/.filter): assume i64 return.
+        // - Expression body (Block with only a tail_expr, no stmts): the
+        //   expression result is the return value — this covers arrow closures
+        //   `(x: i64) => x * 2` and pipe-closure expression bodies `|x: i64| x * 2`.
+        let is_expression_body = matches!(
+            &closure.body.node,
+            Expr::Block { stmts, tail_expr: Some(_) } if stmts.is_empty()
+        );
         let ret_turbo = if let Some(ret_ty) = closure.return_type {
             let cl = resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?;
             sig.returns.push(AbiParam::new(cl));
@@ -1955,7 +1965,7 @@ fn compile_module<M: Module>(
                 .params
                 .iter()
                 .any(|p| matches!(p.ty.node, TypeExpr::Inferred));
-            if has_inferred_params {
+            if has_inferred_params || is_expression_body {
                 sig.returns.push(AbiParam::new(types::I64));
                 TurboTy::Int
             } else {
@@ -2540,6 +2550,11 @@ fn compile_module<M: Module>(
                     &[],
                 )?));
         }
+        // Mirror the return type logic from the declaration site above.
+        let is_expression_body = matches!(
+            &closure.body.node,
+            Expr::Block { stmts, tail_expr: Some(_) } if stmts.is_empty()
+        );
         if let Some(ret_ty) = closure.return_type {
             cl_ctx
                 .func
@@ -2552,12 +2567,12 @@ fn compile_module<M: Module>(
                     &[],
                 )?));
         } else {
-            // For closures with inferred params, add i64 return to match the declaration
+            // For closures with inferred params or expression bodies, add i64 return
             let has_inferred_params = closure
                 .params
                 .iter()
                 .any(|p| matches!(p.ty.node, TypeExpr::Inferred));
-            if has_inferred_params {
+            if has_inferred_params || is_expression_body {
                 cl_ctx
                     .func
                     .signature
@@ -2646,16 +2661,8 @@ fn compile_module<M: Module>(
             let result = compile_expr(&mut cx, closure.body)?;
 
             if !cx.builder.is_unreachable() {
-                let has_inferred = closure
-                    .params
-                    .iter()
-                    .any(|p| matches!(p.ty.node, TypeExpr::Inferred));
-                if closure.return_type.is_some() || has_inferred {
-                    if let Some((val, _)) = result {
-                        cx.builder.ins().return_(&[val]);
-                    } else {
-                        cx.builder.ins().return_(&[]);
-                    }
+                if let Some((val, _)) = result {
+                    cx.builder.ins().return_(&[val]);
                 } else {
                     cx.builder.ins().return_(&[]);
                 }

@@ -1380,9 +1380,49 @@ impl Parser {
                 }
             }
             Some(Token::LParen) => {
-                // Parenthesized expression or unit
+                // Could be: arrow closure `(params) => body`, parenthesized expr, or unit `()`
+                // Lookahead: scan to matching `)`, then check for `=>`
+                let save_pos = self.pos;
+                self.advance(); // consume `(`
+                let mut could_be_arrow = true;
+                let mut depth: usize = 1;
+
+                // Scan forward to find matching `)`
+                while depth > 0 {
+                    match self.peek() {
+                        Some(Token::LParen) => {
+                            depth += 1;
+                            self.advance();
+                        }
+                        Some(Token::RParen) => {
+                            depth -= 1;
+                            if depth > 0 {
+                                self.advance();
+                            }
+                        }
+                        None => {
+                            could_be_arrow = false;
+                            break;
+                        }
+                        _ => {
+                            self.advance();
+                        }
+                    }
+                }
+
+                if could_be_arrow && depth == 0 {
+                    self.advance(); // consume the matching `)`
+                    if matches!(self.peek(), Some(Token::FatArrow)) {
+                        // It's an arrow closure — backtrack and parse properly
+                        self.pos = save_pos;
+                        return self.parse_arrow_closure();
+                    }
+                }
+
+                // Not an arrow closure — backtrack and parse as paren expr / unit
+                self.pos = save_pos;
                 self.enter_nesting()?;
-                self.advance();
+                self.advance(); // consume `(`
                 if matches!(self.peek(), Some(Token::RParen)) {
                     let end = self.peek_span().end;
                     self.advance();
@@ -1759,6 +1799,77 @@ impl Parser {
             Expr::Closure {
                 params,
                 return_type,
+                body: Box::new(body),
+            },
+            start..end,
+        ))
+    }
+
+    /// Parse an arrow closure: `(params) => body`
+    ///
+    /// The caller has already determined (via lookahead) that the token stream
+    /// matches `( ... ) =>`, so we parse params, expect `=>`, then parse the
+    /// body expression.  Produces the same `Expr::Closure` node as pipe closures.
+    fn parse_arrow_closure(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        self.enter_nesting()?;
+        let start = self.peek_span().start;
+        self.expect(&Token::LParen)?;
+
+        // Parse parameters (same format as pipe-closure / function params)
+        let mut params = Vec::new();
+        if !matches!(self.peek(), Some(Token::RParen)) {
+            loop {
+                let param_start = self.peek_span().start;
+                let (name, name_span) = self.expect_ident()?;
+
+                // Type annotation is optional for arrow closure parameters
+                let ty = if matches!(self.peek(), Some(Token::Colon)) {
+                    self.advance();
+                    self.parse_type()?
+                } else {
+                    // TypeExpr::Inferred — will be resolved by sema from context
+                    let inferred_end = name_span.end;
+                    Spanned::new(TypeExpr::Inferred, param_start..inferred_end)
+                };
+
+                let param_end = ty.span.end;
+                params.push(Param {
+                    name,
+                    ty,
+                    span: param_start..param_end,
+                });
+                if matches!(self.peek(), Some(Token::Comma)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        self.expect(&Token::RParen)?;
+        self.expect(&Token::FatArrow)?;
+
+        // Body: either a block { ... } or a single expression
+        let body = if matches!(self.peek(), Some(Token::LBrace)) {
+            self.parse_block()?
+        } else {
+            // Single expression body (no braces needed)
+            let expr = self.parse_expr()?;
+            let span = expr.span.clone();
+            Spanned::new(
+                Expr::Block {
+                    stmts: vec![],
+                    tail_expr: Some(Box::new(expr)),
+                },
+                span,
+            )
+        };
+        let end = body.span.end;
+
+        self.exit_nesting();
+        Ok(Spanned::new(
+            Expr::Closure {
+                params,
+                return_type: None,
                 body: Box::new(body),
             },
             start..end,

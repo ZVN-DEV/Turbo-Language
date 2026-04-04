@@ -1,40 +1,28 @@
-# Build artifacts
+# Rust build artifacts
 target/
 turbo/target/
-benchmarks/*/target/
 
-# Dependencies
-turbo_modules/
+# Node.js
 node_modules/
+.next/
+
+# OS
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Build outputs
+turbo_test_build
+hello
+*.o
+*.d
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Claude worktrees
-.claude/
-
-# Temp files
-*.o
-*.a
-*.dylib
-*.so
-/tmp/
-
-# Dependencies (nested)
-node_modules/
-
-# Compiled artifacts
-*.class
-benchmarks/cpp/benchmark
-benchmarks/swift/benchmark
-benchmark-section*.png
-
-# Playwright MCP
-.playwright-mcp/
+# Temporary
+*.tmp
+findings.md
+docs/superpowers/

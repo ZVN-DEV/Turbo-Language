@@ -1,0 +1,14 @@
+/target/
+.DS_Store
+*.swp
+*~
+*.o
+*.d
+*.tmp
+.vscode/
+.idea/
+website/node_modules/
+website/.next/
+fuzz/corpus/
+fuzz/artifacts/
+.playwright-mcp/

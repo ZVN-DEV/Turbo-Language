@@ -86,6 +86,7 @@ fn normalize_line_spacing(line: &str) -> String {
     let mut result = String::with_capacity(content.len());
     let mut in_string = false;
     let mut escape_next = false;
+    let mut generic_depth: u32 = 0; // track <...> nesting for generics
     let mut chars = content.chars().peekable();
 
     while let Some(c) = chars.next() {
@@ -178,6 +179,113 @@ fn normalize_line_spacing(line: &str) -> String {
             }
             result.push(c);
             continue;
+        }
+
+        // Ensure space before `{` (e.g. `else{` -> `else {`, `){` -> `) {`)
+        if c == '{' && !result.is_empty() && !result.ends_with(' ') && !result.ends_with('\t') {
+            result.push(' ');
+            result.push(c);
+            continue;
+        }
+
+        // Operator spacing: ensure spaces around comparison/logical operators
+        // Handle two-char operators first: ==, !=, <=, >=, &&, ||
+        if let Some(&next) = chars.peek() {
+            let two = format!("{}{}", c, next);
+            if matches!(two.as_str(), "==" | "!=" | "<=" | ">=" | "&&" | "||") {
+                // Ensure space before
+                if !result.is_empty() && !result.ends_with(' ') {
+                    result.push(' ');
+                }
+                result.push(c);
+                result.push(next);
+                chars.next();
+                // Ensure space after
+                while chars.peek() == Some(&' ') {
+                    chars.next();
+                }
+                if chars.peek().is_some() {
+                    result.push(' ');
+                }
+                continue;
+            }
+            // Skip `->` and `=>` (arrows) — don't add operator spacing around them
+            if (c == '-' && next == '>') || (c == '=' && next == '>') {
+                result.push(c);
+                result.push(next);
+                chars.next();
+                continue;
+            }
+        }
+
+        // Single-char `<` and `>`: distinguish generics from comparisons.
+        // For `<`: if the preceding word starts with an uppercase letter
+        // (e.g. `Vec<i64>`, `Option<str>`), treat as generic opener.
+        // For `>`: if we're inside a generic (generic_depth > 0), close it.
+        if c == '<' && !result.is_empty() {
+            // Extract the word immediately before `<`
+            let trimmed_res = result.trim_end();
+            let word_start = trimmed_res
+                .rfind(|ch: char| !ch.is_alphanumeric() && ch != '_')
+                .map(|p| p + 1)
+                .unwrap_or(0);
+            let prev_word = &trimmed_res[word_start..];
+            let prev_starts_upper = prev_word.chars().next().map(|ch| ch.is_uppercase()).unwrap_or(false);
+
+            if prev_starts_upper {
+                // Generic type — no spacing, track depth
+                generic_depth += 1;
+                result.push(c);
+                continue;
+            }
+
+            // Comparison operator — add spaces
+            let prev_char = result.chars().last().unwrap();
+            let prev_is_value = prev_char.is_alphanumeric() || prev_char == '_' || prev_char == ')' || prev_char == ']';
+            if prev_is_value {
+                if !result.ends_with(' ') {
+                    result.push(' ');
+                }
+                result.push(c);
+                while chars.peek() == Some(&' ') {
+                    chars.next();
+                }
+                if chars.peek().is_some() {
+                    result.push(' ');
+                }
+                continue;
+            }
+        }
+
+        if c == '>' && !result.is_empty() {
+            if generic_depth > 0 {
+                // Closing a generic — no spacing
+                generic_depth -= 1;
+                result.push(c);
+                continue;
+            }
+
+            // Comparison operator — add spaces
+            let prev_char = result.chars().last().unwrap();
+            let prev_is_value = prev_char.is_alphanumeric() || prev_char == '_' || prev_char == ')' || prev_char == ']';
+            if prev_is_value {
+                if let Some(&next) = chars.peek() {
+                    let next_is_value = next.is_alphanumeric() || next == '_' || next == '(' || next == '!' || next == '-';
+                    if next_is_value || next == ' ' {
+                        if !result.ends_with(' ') {
+                            result.push(' ');
+                        }
+                        result.push(c);
+                        while chars.peek() == Some(&' ') {
+                            chars.next();
+                        }
+                        if chars.peek().is_some() {
+                            result.push(' ');
+                        }
+                        continue;
+                    }
+                }
+            }
         }
 
         result.push(c);
@@ -462,5 +570,86 @@ fn main() {
         let input = "fn main() {\n    print(\"hello    world\")\n}\n";
         let output = format_source(input);
         assert!(output.contains("\"hello    world\""));
+    }
+
+    #[test]
+    fn test_brace_spacing_after_else() {
+        let input = "fn main() {\n    if true {\n        1\n    } else{\n        2\n    }\n}\n";
+        let output = format_source(input);
+        assert!(output.contains("} else {"), "Expected `else {{`, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_brace_spacing_after_paren() {
+        let input = "fn main(){\n    print(\"hi\")\n}\n";
+        let output = format_source(input);
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines[0], "fn main() {");
+    }
+
+    #[test]
+    fn test_brace_spacing_preserves_existing() {
+        // Already correct spacing should be preserved
+        let input = "fn main() {\n    if x > 10 {\n        print(x)\n    }\n}\n";
+        let output = format_source(input);
+        assert_eq!(input, output);
+    }
+
+    #[test]
+    fn test_operator_spacing_comparison() {
+        let input = "fn main() {\n    if x>10 {\n        print(x)\n    }\n}\n";
+        let output = format_source(input);
+        assert!(output.contains("if x > 10 {"), "Expected `x > 10`, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_operator_spacing_less_than() {
+        let input = "fn main() {\n    if x<10 {\n        print(x)\n    }\n}\n";
+        let output = format_source(input);
+        assert!(output.contains("if x < 10 {"), "Expected `x < 10`, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_operator_spacing_double_equals() {
+        let input = "fn main() {\n    if x==10 {\n        print(x)\n    }\n}\n";
+        let output = format_source(input);
+        assert!(output.contains("if x == 10 {"), "Expected `x == 10`, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_operator_spacing_not_equals() {
+        let input = "fn main() {\n    if x!=10 {\n        print(x)\n    }\n}\n";
+        let output = format_source(input);
+        assert!(output.contains("if x != 10 {"), "Expected `x != 10`, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_operator_spacing_and_or() {
+        let input = "fn main() {\n    if a&&b||c {\n        print(x)\n    }\n}\n";
+        let output = format_source(input);
+        assert!(output.contains("a && b || c"), "Expected `a && b || c`, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_operator_spacing_preserves_arrows() {
+        // `->` and `=>` should not be broken apart by operator spacing
+        let input = "fn add(a: i64) -> i64 {\n    a\n}\n";
+        let output = format_source(input);
+        assert!(output.contains("-> i64"), "Arrow should be preserved, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_operator_spacing_preserves_generics() {
+        // `<` and `>` in generics should not get extra spaces
+        let input = "fn main() {\n    let x: Vec<i64> = []\n}\n";
+        let output = format_source(input);
+        assert!(output.contains("Vec<i64>"), "Generics should be preserved, got:\n{}", output);
+    }
+
+    #[test]
+    fn test_operator_spacing_in_strings_preserved() {
+        let input = "fn main() {\n    print(\"x>10\")\n}\n";
+        let output = format_source(input);
+        assert!(output.contains("\"x>10\""), "Operators inside strings should be preserved, got:\n{}", output);
     }
 }

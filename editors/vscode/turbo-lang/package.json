@@ -2,7 +2,7 @@
     "name": "turbo-lang",
     "displayName": "Turbo Language",
     "description": "Syntax highlighting and language support for the Turbo programming language",
-    "version": "0.1.0",
+    "version": "0.3.0",
     "publisher": "zvn-dev",
     "engines": { "vscode": "^1.80.0" },
     "categories": ["Programming Languages"],

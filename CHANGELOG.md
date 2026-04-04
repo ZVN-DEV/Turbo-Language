@@ -5,6 +5,27 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-03
+
+### Added
+- **Arrow closures**: TypeScript-style `(x: int) => x * 2` syntax alongside existing `|x| x * 2`
+- **Typed const declarations**: `const MAX: int = 100` with type annotation validation
+- **`push` builtin**: array push as a proper builtin function with type checking
+- **`if let` expressions**: pattern matching on `Optional` and `Result` values inline
+- **Optional chaining**: `user?.name` syntax for safe field access on optional structs
+- **Struct destructuring**: `let { x, y } = point` for extracting struct fields
+- **Map literals**: `{"key": value}` sugar for hashmap creation
+- **String interpolation nesting**: fixed lexer to handle nested quotes inside `{...}` blocks
+- **Formatter improvements**: operator spacing (`==`, `!=`, `<=`, `>=`, `&&`, `||`) and brace spacing (`else {`)
+- 8 new integration test files covering all new features
+- 259 unit tests, 144+ integration tests all passing
+
+### Fixed
+- String interpolation lexer now correctly handles `"hello {get_name("world")}"` with nested quotes
+- Expression-body closures with typed parameters now correctly return their value
+- Optional-returning functions no longer lose inner type info when inlined
+- Formatter no longer mangles generic type parameters when adding operator spacing
+
 ## [0.2.2] - 2026-04-03
 
 ### Added
