@@ -1,0 +1,25 @@
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+struct User {
+    name: str,
+    age: i64,
+}
+
+fn make_point() -> Point {
+    Point { x: 10, y: 20 }
+}
+
+fn main() {
+    let p = make_point()
+    let { x, y } = p
+    print(x)
+    print(y)
+
+    let user = User { name: "Alice", age: 30 }
+    let { name, age } = user
+    print(name)
+    print(age)
+}

@@ -811,6 +811,36 @@ impl Parser {
             false
         };
 
+        // Check for struct destructuring: let { field1, field2 } = expr
+        if matches!(self.peek(), Some(Token::LBrace)) {
+            self.advance(); // consume '{'
+            let mut fields = Vec::new();
+            loop {
+                if matches!(self.peek(), Some(Token::RBrace)) {
+                    break;
+                }
+                let (field_name, _) = self.expect_ident()?;
+                fields.push(field_name);
+                if matches!(self.peek(), Some(Token::Comma)) {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(&Token::RBrace)?;
+            self.expect(&Token::Eq)?;
+            let value = self.parse_expr()?;
+            let end = value.span.end;
+            return Ok(Spanned::new(
+                Stmt::LetDestructure {
+                    mutable,
+                    fields,
+                    value,
+                },
+                start..end,
+            ));
+        }
+
         let (name, _) = self.expect_ident()?;
 
         let ty = if matches!(self.peek(), Some(Token::Colon)) {

@@ -390,6 +390,12 @@ pub enum Stmt {
     Return(Option<Spanned<Expr>>),
     /// Defer statement: `defer expr` — runs expr at end of enclosing block (LIFO)
     Defer(Spanned<Expr>),
+    /// Struct destructuring: `let [mut] { field1, field2 } = struct_expr`
+    LetDestructure {
+        mutable: bool,
+        fields: Vec<String>,
+        value: Spanned<Expr>,
+    },
 }
 
 /// A match arm: pattern [if guard] => body

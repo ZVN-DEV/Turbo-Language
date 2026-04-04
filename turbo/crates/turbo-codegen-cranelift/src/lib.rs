@@ -490,7 +490,7 @@ fn has_return(expr: &Expr) -> bool {
             for stmt in stmts {
                 match &stmt.node {
                     Stmt::Return(_) => return true,
-                    Stmt::Let { value, .. } => {
+                    Stmt::Let { value, .. } | Stmt::LetDestructure { value, .. } => {
                         if has_return(&value.node) {
                             return true;
                         }
@@ -607,6 +607,12 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
                     Stmt::Let { name, value, .. } => {
                         collect_free_vars(&value.node, bound, free);
                         bound.push(name.clone());
+                    }
+                    Stmt::LetDestructure { fields, value, .. } => {
+                        collect_free_vars(&value.node, bound, free);
+                        for field_name in fields {
+                            bound.push(field_name.clone());
+                        }
                     }
                     Stmt::Expr(e) => collect_free_vars(&e.node, bound, free),
                     Stmt::Return(Some(e)) => collect_free_vars(&e.node, bound, free),
@@ -846,7 +852,9 @@ fn extract_closures_from_expr<'a>(
         Expr::Block { stmts, tail_expr } => {
             for stmt in stmts {
                 match &stmt.node {
-                    Stmt::Let { value, .. } => extract_closures_from_expr(value, out, counter),
+                    Stmt::Let { value, .. } | Stmt::LetDestructure { value, .. } => {
+                        extract_closures_from_expr(value, out, counter)
+                    }
                     Stmt::Expr(e) => extract_closures_from_expr(e, out, counter),
                     Stmt::Return(Some(e)) => extract_closures_from_expr(e, out, counter),
                     Stmt::Return(None) => {}
@@ -991,7 +999,9 @@ fn extract_spawn_sites_from_expr(
         Expr::Block { stmts, tail_expr } => {
             for stmt in stmts {
                 match &stmt.node {
-                    Stmt::Let { value, .. } => extract_spawn_sites_from_expr(value, out, counter),
+                    Stmt::Let { value, .. } | Stmt::LetDestructure { value, .. } => {
+                        extract_spawn_sites_from_expr(value, out, counter)
+                    }
                     Stmt::Expr(e) => extract_spawn_sites_from_expr(e, out, counter),
                     Stmt::Return(Some(e)) => extract_spawn_sites_from_expr(e, out, counter),
                     Stmt::Return(None) => {}
@@ -3930,6 +3940,62 @@ fn compile_stmt<M: Module>(cx: &mut Ctx<'_, M>, stmt: &Spanned<Stmt>) -> Result<
         Stmt::Defer(_) => {
             // Defer statements are handled at the block level (compile_expr for Block)
             // — they are collected and emitted in reverse order at the end of the block.
+            Ok(())
+        }
+        Stmt::LetDestructure {
+            fields, value, ..
+        } => {
+            // Compile the value expression (should produce a struct pointer)
+            let (struct_ptr, struct_tty) = compile_expr(cx, value)?.ok_or_else(|| {
+                CodegenError {
+                    code: ErrorCode::E0400,
+                    message: "destructured value produced no result".to_string(),
+                }
+            })?;
+
+            let struct_name = match &struct_tty {
+                TurboTy::Struct(name) => name.clone(),
+                _ => {
+                    return Err(CodegenError {
+                        code: ErrorCode::E0400,
+                        message: "cannot destructure non-struct type".to_string(),
+                    })
+                }
+            };
+
+            let struct_layout = cx
+                .struct_fields
+                .get(&struct_name)
+                .ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
+                    message: format!("undefined struct: {struct_name}"),
+                })?
+                .clone();
+
+            for field_name in fields {
+                let field_index = struct_layout
+                    .iter()
+                    .position(|(n, _)| n == field_name)
+                    .ok_or_else(|| CodegenError {
+                        code: ErrorCode::E0400,
+                        message: format!("struct `{struct_name}` has no field `{field_name}`"),
+                    })?;
+
+                let field_tty = struct_layout[field_index].1.clone();
+                let offset = (field_index * 8) as i32;
+
+                let val = cx
+                    .builder
+                    .ins()
+                    .load(types::I64, MemFlags::new(), struct_ptr, offset);
+
+                let var = Variable::new(cx.next_var);
+                cx.next_var += 1;
+                cx.builder.declare_var(var, types::I64);
+                cx.builder.def_var(var, val);
+                cx.vars
+                    .insert(field_name.clone(), (var, types::I64, field_tty));
+            }
             Ok(())
         }
     }

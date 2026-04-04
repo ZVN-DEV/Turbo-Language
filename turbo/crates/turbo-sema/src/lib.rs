@@ -4862,6 +4862,69 @@ impl Checker {
                 // Type-check the deferred expression (it should be a valid expression, typically a call)
                 self.check_expr(expr);
             }
+            Stmt::LetDestructure {
+                mutable,
+                fields,
+                value,
+            } => {
+                let val_ty = self.check_expr(value);
+                match &val_ty {
+                    Ty::Struct(struct_name) => {
+                        if let Some(info) = self.structs.get(struct_name).cloned() {
+                            for field_name in fields {
+                                if let Some((_, field_ty)) =
+                                    info.fields.iter().find(|(n, _)| n == field_name)
+                                {
+                                    self.define_var(
+                                        field_name,
+                                        VarInfo {
+                                            ty: field_ty.clone(),
+                                            mutable: *mutable,
+                                        },
+                                        &stmt.span,
+                                    );
+                                } else {
+                                    self.error(
+                                        ErrorCode::E0303,
+                                        format!(
+                                            "struct `{struct_name}` has no field `{field_name}`"
+                                        ),
+                                        stmt.span.clone(),
+                                    );
+                                }
+                            }
+                        } else {
+                            self.error(
+                                ErrorCode::E0305,
+                                format!("unknown struct `{struct_name}`"),
+                                stmt.span.clone(),
+                            );
+                        }
+                    }
+                    Ty::Error => {
+                        // Suppress cascading errors — define all fields as error type
+                        for field_name in fields {
+                            self.define_var(
+                                field_name,
+                                VarInfo {
+                                    ty: Ty::Error,
+                                    mutable: *mutable,
+                                },
+                                &stmt.span,
+                            );
+                        }
+                    }
+                    _ => {
+                        self.error(
+                            ErrorCode::E0110,
+                            format!(
+                                "cannot destructure non-struct type `{val_ty}`"
+                            ),
+                            stmt.span.clone(),
+                        );
+                    }
+                }
+            }
         }
     }
 }

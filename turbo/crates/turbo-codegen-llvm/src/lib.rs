@@ -432,6 +432,12 @@ fn collect_free_vars_llvm(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<S
                         collect_free_vars_llvm(&value.node, bound, free);
                         bound.push(name.clone());
                     }
+                    Stmt::LetDestructure { fields, value, .. } => {
+                        collect_free_vars_llvm(&value.node, bound, free);
+                        for field_name in fields {
+                            bound.push(field_name.clone());
+                        }
+                    }
                     Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Defer(e) => {
                         collect_free_vars_llvm(&e.node, bound, free);
                     }
@@ -582,7 +588,9 @@ fn extract_closures_from_expr_llvm<'a>(
         Expr::Block { stmts, tail_expr } => {
             for stmt in stmts {
                 match &stmt.node {
-                    Stmt::Let { value, .. } | Stmt::Expr(value) => {
+                    Stmt::Let { value, .. }
+                    | Stmt::LetDestructure { value, .. }
+                    | Stmt::Expr(value) => {
                         extract_closures_from_expr_llvm(value, out, counter);
                     }
                     Stmt::Return(Some(e)) | Stmt::Defer(e) => {
@@ -742,7 +750,9 @@ fn extract_spawn_sites_from_expr_llvm(
         Expr::Block { stmts, tail_expr } => {
             for stmt in stmts {
                 match &stmt.node {
-                    Stmt::Let { value, .. } | Stmt::Expr(value) => {
+                    Stmt::Let { value, .. }
+                    | Stmt::LetDestructure { value, .. }
+                    | Stmt::Expr(value) => {
                         extract_spawn_sites_from_expr_llvm(value, out, counter);
                     }
                     Stmt::Return(Some(e)) | Stmt::Defer(e) => {
@@ -3357,6 +3367,10 @@ fn compile_stmt<'a, 'ctx>(
         }
         Stmt::Defer(_) => {
             // Handled at block level
+            Ok(())
+        }
+        Stmt::LetDestructure { .. } => {
+            // TODO: implement struct destructuring for LLVM backend
             Ok(())
         }
     }
