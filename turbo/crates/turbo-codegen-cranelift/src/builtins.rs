@@ -2716,6 +2716,38 @@ pub(crate) fn compile_builtin_hashmap_remove<M: Module>(
     Ok(None)
 }
 
+// ── Map literal compilation ────────────────────────────────────────
+
+/// Compile a map literal: {"key": "value", ...}
+/// Creates a new hashmap and inserts all entries.
+pub(crate) fn compile_map_lit<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    entries: &[(Spanned<Expr>, Spanned<Expr>)],
+) -> Result<MaybeTyped, CodegenError> {
+    // Call rt_hashmap_new
+    let new_fid = cx.rt_fns["rt_hashmap_new"];
+    let new_fref = cx.module.declare_func_in_func(new_fid, cx.builder.func);
+    let new_call = cx.builder.ins().call(new_fref, &[]);
+    let map_val = cx.builder.inst_results(new_call)[0];
+
+    // For each entry, call rt_hashmap_set
+    let set_fid = cx.rt_fns["rt_hashmap_set"];
+    let set_fref = cx.module.declare_func_in_func(set_fid, cx.builder.func);
+    for (key, value) in entries {
+        let (key_val, _) = compile_expr(cx, key)?.ok_or_else(|| CodegenError {
+            code: ErrorCode::E0405,
+            message: "map key must return a value".to_string(),
+        })?;
+        let (val_val, _) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
+            code: ErrorCode::E0405,
+            message: "map value must return a value".to_string(),
+        })?;
+        cx.builder.ins().call(set_fref, &[map_val, key_val, val_val]);
+    }
+
+    Ok(Some((map_val, TurboTy::Int)))
+}
+
 // ── Unsafe builtins — raw pointer operations ────────────────────────
 
 /// deref(addr: i64) -> i64 — load an i64 from the given memory address

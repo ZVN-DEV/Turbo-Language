@@ -1,0 +1,6 @@
+fn main() {
+    let m = {"name": "Alice", "city": "NYC"}
+    print(hashmap_get(m, "name"))
+    print(hashmap_get(m, "city"))
+    print(hashmap_len(m))
+}

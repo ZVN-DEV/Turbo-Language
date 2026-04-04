@@ -509,6 +509,12 @@ fn collect_free_vars_llvm(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<S
                 collect_free_vars_llvm(&e.node, bound, free);
             }
         }
+        Expr::MapLit(entries) => {
+            for (k, v) in entries {
+                collect_free_vars_llvm(&k.node, bound, free);
+                collect_free_vars_llvm(&v.node, bound, free);
+            }
+        }
         Expr::Match { subject, arms } => {
             collect_free_vars_llvm(&subject.node, bound, free);
             for arm in arms {
@@ -682,6 +688,12 @@ fn extract_closures_from_expr_llvm<'a>(
                 extract_closures_from_expr_llvm(e, out, counter);
             }
         }
+        Expr::MapLit(entries) => {
+            for (k, v) in entries {
+                extract_closures_from_expr_llvm(k, out, counter);
+                extract_closures_from_expr_llvm(v, out, counter);
+            }
+        }
         Expr::Match { subject, arms } => {
             extract_closures_from_expr_llvm(subject, out, counter);
             for arm in arms {
@@ -818,6 +830,12 @@ fn extract_spawn_sites_from_expr_llvm(
             extract_spawn_sites_from_expr_llvm(subject, out, counter);
             for arm in arms {
                 extract_spawn_sites_from_expr_llvm(&arm.body, out, counter);
+            }
+        }
+        Expr::MapLit(entries) => {
+            for (k, v) in entries {
+                extract_spawn_sites_from_expr_llvm(k, out, counter);
+                extract_spawn_sites_from_expr_llvm(v, out, counter);
             }
         }
         _ => {}
@@ -3292,6 +3310,16 @@ fn compile_expr<'a, 'ctx>(
                 cx.builder.position_at_end(dead_block);
             }
             Ok(None)
+        }
+
+        Expr::MapLit(entries) => {
+            let map = cx.rt_call("rt_hashmap_new", &[]).unwrap();
+            for (key, value) in entries {
+                let (k, _) = compile_expr(cx, key)?.unwrap();
+                let (v, _) = compile_expr(cx, value)?.unwrap();
+                cx.rt_call("rt_hashmap_set", &[map.into(), k.into(), v.into()]);
+            }
+            Ok(Some((map, TurboTy::Int)))
         }
     }
 }

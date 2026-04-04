@@ -4622,6 +4622,28 @@ impl Checker {
                 Ty::Unit
             }
 
+            Expr::MapLit(entries) => {
+                for (key, value) in entries {
+                    let key_ty = self.check_expr(key);
+                    let val_ty = self.check_expr(value);
+                    if !key_ty.is_error() && key_ty != Ty::Str {
+                        self.error(
+                            ErrorCode::E0100,
+                            format!("map literal keys must be strings, found `{key_ty}`"),
+                            key.span.clone(),
+                        );
+                    }
+                    if !val_ty.is_error() && val_ty != Ty::Str {
+                        self.error(
+                            ErrorCode::E0100,
+                            format!("map literal values must be strings, found `{val_ty}`"),
+                            value.span.clone(),
+                        );
+                    }
+                }
+                Ty::I64 // hashmap is opaque i64 pointer
+            }
+
             Expr::NullCoalesce { value, default } => {
                 let val_ty = self.check_expr(value);
                 let def_ty = self.check_expr(default);

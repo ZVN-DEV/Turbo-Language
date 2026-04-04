@@ -372,6 +372,8 @@ pub enum Expr {
     Break,
     /// Continue to the next iteration of the innermost loop
     Continue,
+    /// Map literal: {"key": "value", ...}
+    MapLit(Vec<(Spanned<Expr>, Spanned<Expr>)>),
 }
 
 /// Statements (things that don't produce values in statement position)

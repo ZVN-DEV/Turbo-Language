@@ -563,6 +563,9 @@ fn has_return(expr: &Expr) -> bool {
                 false
             }
         }),
+        Expr::MapLit(entries) => entries
+            .iter()
+            .any(|(k, v)| has_return(&k.node) || has_return(&v.node)),
         _ => false,
     }
 }
@@ -776,6 +779,12 @@ fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String
         Expr::Await(inner) | Expr::Spawn(inner) | Expr::Try(inner) => {
             collect_free_vars(&inner.node, bound, free);
         }
+        Expr::MapLit(entries) => {
+            for (k, v) in entries {
+                collect_free_vars(&k.node, bound, free);
+                collect_free_vars(&v.node, bound, free);
+            }
+        }
         Expr::EnumVariant { .. }
         | Expr::IntLit(_)
         | Expr::FloatLit(_)
@@ -937,6 +946,12 @@ fn extract_closures_from_expr<'a>(
         }
         Expr::OptionalChain { object, .. } => {
             extract_closures_from_expr(object, out, counter);
+        }
+        Expr::MapLit(entries) => {
+            for (k, v) in entries {
+                extract_closures_from_expr(k, out, counter);
+                extract_closures_from_expr(v, out, counter);
+            }
         }
         _ => {} // Literals, Ident, Unit, NoneExpr, etc. -- no sub-expressions with closures
     }
@@ -1117,6 +1132,12 @@ fn extract_spawn_sites_from_expr(
                 if let InterpolPart::Expr(e) = part {
                     extract_spawn_sites_from_expr(e, out, counter);
                 }
+            }
+        }
+        Expr::MapLit(entries) => {
+            for (k, v) in entries {
+                extract_spawn_sites_from_expr(k, out, counter);
+                extract_spawn_sites_from_expr(v, out, counter);
             }
         }
         _ => {}
@@ -3865,6 +3886,10 @@ pub(crate) fn compile_expr<M: Module>(
 
         Expr::OptionalChain { object, field } => {
             compile_optional_chain(cx, object, field)
+        }
+
+        Expr::MapLit(entries) => {
+            compile_map_lit(cx, entries)
         }
     }
 }

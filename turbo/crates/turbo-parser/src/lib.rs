@@ -759,6 +759,24 @@ impl Parser {
 
     // === Block ===
 
+    fn parse_map_literal(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let start = self.peek_span().start;
+        self.expect(&Token::LBrace)?;
+        let mut entries = Vec::new();
+        while !matches!(self.peek(), Some(Token::RBrace) | None) {
+            let key = self.parse_expr()?;
+            self.expect(&Token::Colon)?;
+            let value = self.parse_expr()?;
+            entries.push((key, value));
+            if matches!(self.peek(), Some(Token::Comma)) {
+                self.advance();
+            }
+        }
+        let end = self.peek_span().end;
+        self.expect(&Token::RBrace)?;
+        Ok(Spanned::new(Expr::MapLit(entries), start..end))
+    }
+
     fn parse_block(&mut self) -> Result<Spanned<Expr>, ParseError> {
         self.enter_nesting()?;
         let start = self.peek_span().start;
@@ -1428,7 +1446,38 @@ impl Parser {
             Some(Token::While) => self.parse_while_expr(),
             Some(Token::For) => self.parse_for_in(),
             Some(Token::Match) => self.parse_match_expr(),
-            Some(Token::LBrace) => self.parse_block(),
+            Some(Token::LBrace) => {
+                // Disambiguate: map literal vs block
+                let save_pos = self.pos;
+                let start = self.peek_span().start;
+                self.advance(); // consume {
+
+                // Empty braces = empty map
+                if matches!(self.peek(), Some(Token::RBrace)) {
+                    let end = self.peek_span().end;
+                    self.advance(); // consume }
+                    return Ok(Spanned::new(Expr::MapLit(vec![]), start..end));
+                }
+
+                // Check if it's a map literal: string literal followed by ':'
+                let is_map = if matches!(self.peek(), Some(Token::String(_))) {
+                    let save2 = self.pos;
+                    self.advance(); // consume string
+                    let result = matches!(self.peek(), Some(Token::Colon));
+                    self.pos = save2; // backtrack
+                    result
+                } else {
+                    false
+                };
+
+                self.pos = save_pos; // backtrack to before {
+
+                if is_map {
+                    self.parse_map_literal()
+                } else {
+                    self.parse_block()
+                }
+            }
             Some(Token::Break) => {
                 let span = self.advance().span.clone();
                 Ok(Spanned::new(Expr::Break, span))
