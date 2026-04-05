@@ -935,11 +935,11 @@ dependencies = [
 
 [[package]]
 name = "turbo-ast"
-version = "0.3.1"
+version = "0.3.2"
 
 [[package]]
 name = "turbo-cli"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "ariadne",
  "clap",
@@ -954,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-codegen-cranelift"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "cranelift",
  "cranelift-codegen",
@@ -972,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-codegen-llvm"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "inkwell",
  "turbo-ast",
@@ -980,14 +980,14 @@ dependencies = [
 
 [[package]]
 name = "turbo-lexer"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "logos",
 ]
 
 [[package]]
 name = "turbo-lsp"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "lsp-server",
  "lsp-types",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-parser"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "turbo-ast",
  "turbo-lexer",
@@ -1008,7 +1008,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-sema"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "turbo-ast",
  "turbo-lexer",

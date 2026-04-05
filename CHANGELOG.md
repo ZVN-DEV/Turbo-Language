@@ -5,6 +5,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-04-05
+
 ### Added
 - Trailing comma support in arrays and function calls
 - Optional values now print as `some(42)` / `none` instead of `[optional]`
@@ -14,6 +16,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - REPL readline support with history (via rustyline)
 - `--quiet` flag for `turbolang bench`
 - Complete standard library reference (`docs/stdlib.md`) covering all 64 built-in functions
+- Comprehensive release checklist (`docs/RELEASE.md`)
 
 ### Changed
 - Formatter now adds spaces around `=` in assignments
@@ -24,6 +27,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 - Unused variable false positives on match bindings, callback params, and if-let patterns
+- Test runner stderr handling for warning compatibility
+
+### Tests
+- 266 unit tests, 155 integration tests (417 total, all passing)
 
 ## [0.3.1] - 2026-04-04
 
