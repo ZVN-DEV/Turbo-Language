@@ -7,7 +7,7 @@
 A compiled, type-safe programming language with familiar syntax, native performance, and first-class AI agent primitives. Compiles to machine code via Cranelift -- no VM, no garbage collector, no overhead.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-407%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-417%20passing-brightgreen.svg)](#testing)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 
@@ -95,8 +95,8 @@ Strong static typing with inference, generics, traits, and algebraic data types.
 struct Point<T> { x: T, y: T }
 
 type Result<T> {
-    Ok(T)
-    Err(str)
+    ok(T)
+    err(str)
 }
 
 trait Printable {
@@ -252,6 +252,24 @@ fn main() {
 }
 ```
 
+### Standard Library
+
+64 built-in functions with no imports required. Method syntax works via UFCS -- `s.trim()` is equivalent to `trim(s)`.
+
+| Category | Highlights |
+|----------|------------|
+| **I/O** | `print(value)`, `read_file(path)`, `write_file(path, data)` |
+| **Strings** | `s.trim()`, `s.upper()`, `s.split(",")`, `s.contains("x")`, `s.replace("a", "b")` |
+| **Arrays** | `arr.len()`, `arr.push(elem)`, `arr.map(fn)`, `arr.filter(fn)` |
+| **Math** | `abs(n)`, `min(a, b)`, `max(a, b)`, `pow(base, exp)`, `sqrt(x)` |
+| **HashMap** | `hashmap()`, `hashmap_set(m, k, v)`, `hashmap_get(m, k)`, `hashmap_keys(m)` |
+| **JSON** | `json_get(json, key)`, `to_json(struct)`, `to_json_array(arr)` |
+| **HTTP** | `http_get(url)`, `http_post(url, body)`, `http_server(port)`, `route(...)` |
+| **Concurrency** | `channel()`, `send(ch, v)`, `recv(ch)`, `mutex(val)`, `sleep(ms)`, `clone(s)` |
+| **Testing** | `assert(cond)`, `assert_eq(a, b)`, `assert_ne(a, b)`, `panic(msg)` |
+
+Full reference with examples: [`docs/stdlib.md`](docs/stdlib.md)
+
 ## Examples
 
 Three runnable example projects demonstrate real-world Turbo code.
@@ -310,7 +328,7 @@ See [`examples/web-dashboard/main.tb`](examples/web-dashboard/main.tb)
 
 ## Error Codes
 
-Every compiler diagnostic has a unique, searchable error code (E0001--E0513). Look up any code from the command line:
+Every compiler diagnostic has a unique, searchable error code (E0001--E0515). Look up any code from the command line:
 
 ```bash
 turbolang explain E0100
@@ -369,7 +387,7 @@ cd turbo && ./tests/run_tests.sh
 turbolang run turbo/tests/phase1/fibonacci.tb
 ```
 
-407+ tests across unit and integration suites.
+417+ tests across unit and integration suites (266 unit + 151 integration).
 
 ## LLVM Backend
 

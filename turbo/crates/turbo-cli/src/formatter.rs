@@ -219,6 +219,22 @@ fn normalize_line_spacing(line: &str) -> String {
             }
         }
 
+        // Single `=` (assignment): ensure spaces around it.
+        // Two-char operators (==, =>) were already handled above with `continue`.
+        if c == '=' {
+            if !result.is_empty() && !result.ends_with(' ') {
+                result.push(' ');
+            }
+            result.push('=');
+            while chars.peek() == Some(&' ') {
+                chars.next();
+            }
+            if chars.peek().is_some() {
+                result.push(' ');
+            }
+            continue;
+        }
+
         // Single-char `<` and `>`: distinguish generics from comparisons.
         // For `<`: if the preceding word starts with an uppercase letter
         // (e.g. `Vec<i64>`, `Option<str>`), treat as generic opener.

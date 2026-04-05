@@ -133,10 +133,30 @@ impl Parser {
 
     // === Top-level parsing ===
 
+    /// Collect consecutive `///` doc comment tokens and return them as a single
+    /// joined string. Returns `None` if no doc comments are present.
+    fn collect_doc_comments(&mut self) -> Option<String> {
+        let mut lines = Vec::new();
+        while let Some(Token::DocComment(text)) = self.peek() {
+            lines.push(text.clone());
+            self.advance();
+        }
+        if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n"))
+        }
+    }
+
     fn parse_module(&mut self) -> Module {
         let mut items = Vec::new();
         while !self.at_end() {
-            match self.parse_item() {
+            // Collect doc comments before items
+            let doc = self.collect_doc_comments();
+            if self.at_end() {
+                break;
+            }
+            match self.parse_item_with_doc(doc) {
                 Ok(item) => items.push(item),
                 Err(e) => {
                     self.errors.push(e);
@@ -156,6 +176,7 @@ impl Parser {
                                 | Some(Token::Agent)
                                 | Some(Token::Const)
                                 | Some(Token::At)
+                                | Some(Token::DocComment(_))
                         )
                     {
                         self.pos += 1;
@@ -164,6 +185,20 @@ impl Parser {
             }
         }
         Module { items }
+    }
+
+    fn parse_item_with_doc(&mut self, doc: Option<String>) -> Result<Spanned<Item>, ParseError> {
+        let mut item = self.parse_item()?;
+        // Attach doc comments to the appropriate item type
+        if doc.is_some() {
+            match &mut item.node {
+                Item::Function(f) => f.doc = doc,
+                Item::Struct(s) => s.doc = doc,
+                Item::Enum(e) => e.doc = doc,
+                _ => {} // other items don't support doc comments yet
+            }
+        }
+        Ok(item)
     }
 
     fn parse_item(&mut self) -> Result<Spanned<Item>, ParseError> {
@@ -405,6 +440,7 @@ impl Parser {
             type_params,
             derives: Vec::new(),
             fields,
+            doc: None,
         })
     }
 
@@ -449,6 +485,7 @@ impl Parser {
             name,
             type_params,
             variants,
+            doc: None,
         })
     }
 
@@ -632,6 +669,7 @@ impl Parser {
             params,
             return_type,
             body,
+            doc: None,
         })
     }
 
@@ -1430,6 +1468,10 @@ impl Parser {
             args.push(self.parse_expr()?);
             if matches!(self.peek(), Some(Token::Comma)) {
                 self.advance();
+                // Allow trailing comma before `)`
+                if matches!(self.peek(), Some(Token::RParen)) {
+                    break;
+                }
             } else {
                 break;
             }
@@ -1562,6 +1604,10 @@ impl Parser {
                         elements.push(self.parse_expr()?);
                         if matches!(self.peek(), Some(Token::Comma)) {
                             self.advance();
+                            // Allow trailing comma before `]`
+                            if matches!(self.peek(), Some(Token::RBracket)) {
+                                break;
+                            }
                         } else {
                             break;
                         }

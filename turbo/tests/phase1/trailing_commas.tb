@@ -1,0 +1,16 @@
+fn main() {
+    let arr = [1, 2, 3,]
+    let arr2 = [
+        10,
+        20,
+        30,
+    ]
+    print(arr[0])
+    print(arr[2])
+    print(arr2[1])
+    print(add(3, 4,))
+}
+
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}

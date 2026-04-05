@@ -188,6 +188,10 @@ pub enum Token {
     At,
 
     // --- Comments & whitespace ---
+    /// A `///` doc comment. The payload is the text after `///` (trimmed).
+    #[regex(r"///[^\n]*", lex_doc_comment)]
+    DocComment(String),
+
     #[regex(r"//[^\n]*", logos::skip)]
     LineComment,
 
@@ -196,6 +200,16 @@ pub enum Token {
 
     #[token("\n")]
     Newline,
+}
+
+fn lex_doc_comment(lex: &mut logos::Lexer<Token>) -> String {
+    let slice = lex.slice();
+    // Strip the leading `///` and trim leading whitespace from the content
+    slice
+        .strip_prefix("///")
+        .unwrap_or("")
+        .trim_start()
+        .to_string()
 }
 
 fn lex_block_comment(lex: &mut logos::Lexer<Token>) -> logos::FilterResult<(), ()> {
@@ -457,6 +471,7 @@ impl fmt::Display for Token {
             Token::Colon => write!(f, ":"),
             Token::Semi => write!(f, ";"),
             Token::At => write!(f, "@"),
+            Token::DocComment(text) => write!(f, "/// {text}"),
             Token::LineComment => write!(f, "// comment"),
             Token::BlockComment => write!(f, "/* comment */"),
             Token::Newline => write!(f, "\\n"),

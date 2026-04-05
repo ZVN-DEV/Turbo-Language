@@ -5,6 +5,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- Trailing comma support in arrays and function calls
+- Optional values now print as `some(42)` / `none` instead of `[optional]`
+- Unused variable warnings (E0515) for `let` bindings
+- Enhanced `turbolang explain` with code examples for 12 error codes
+- Doc comment extraction (`///`) attached to functions, structs, and enums
+- REPL readline support with history (via rustyline)
+- `--quiet` flag for `turbolang bench`
+- Complete standard library reference (`docs/stdlib.md`) covering all 64 built-in functions
+
+### Changed
+- Formatter now adds spaces around `=` in assignments
+- `turbolang init` template includes struct methods, enum pattern matching, and Result examples
+- README Result type example uses lowercase `ok(T)`/`err(str)` matching actual syntax
+- SYNTAX.md arrow functions marked `[Implemented]`
+- Showcase docs page updated to show actual flat built-in functions (not fictional namespaced modules)
+
+### Fixed
+- Unused variable false positives on match bindings, callback params, and if-let patterns
+
 ## [0.3.1] - 2026-04-04
 
 ### Added
@@ -22,7 +42,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Multi-threaded HTTP server with keep-alive (5x throughput improvement)
 
 ### Tests
-- 148 integration tests passing (up from 146)
+- 151 integration tests passing (up from 148)
 
 ## [0.3.0] - 2026-04-03
 
@@ -37,7 +57,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - **String interpolation nesting**: fixed lexer to handle nested quotes inside `{...}` blocks
 - **Formatter improvements**: operator spacing (`==`, `!=`, `<=`, `>=`, `&&`, `||`) and brace spacing (`else {`)
 - 8 new integration test files covering all new features
-- 259 unit tests, 144+ integration tests all passing
+- 259 unit tests, 151 integration tests all passing
 
 ### Fixed
 - String interpolation lexer now correctly handles `"hello {get_name("world")}"` with nested quotes

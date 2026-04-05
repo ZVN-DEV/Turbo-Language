@@ -97,6 +97,10 @@ enum Commands {
         /// Number of iterations to run (default: 3)
         #[arg(long, short = 'n', default_value = "3")]
         iterations: u32,
+
+        /// Suppress program stdout, only show timing results
+        #[arg(long, short)]
+        quiet: bool,
     },
     /// Explain an error code (e.g. turbolang explain E0100)
     Explain {
@@ -144,7 +148,11 @@ fn main() {
         }
         Commands::Lsp => start_lsp(),
         Commands::Test { file } => test_file(file),
-        Commands::Bench { file, iterations } => bench_file(file, iterations),
+        Commands::Bench {
+            file,
+            iterations,
+            quiet,
+        } => bench_file(file, iterations, quiet),
         Commands::Explain { code } => explain_error(&code),
         Commands::TestRunFn { file, func } => test_run_fn(&file, &func),
     }
@@ -243,14 +251,101 @@ fn init_project(name: &str) {
     // src/main.tb
     std::fs::write(
         dir.join("src/main.tb"),
-        format!("fn main() {{\n    print(\"Hello from {pkg_name}!\")\n}}\n"),
+        format!(
+            r#"/// A counter that tracks a value
+struct Counter {{
+    count: i64,
+}}
+
+impl Counter {{
+    fn increment(self) -> Counter {{
+        Counter {{ count: self.count + 1 }}
+    }}
+
+    fn value(self) -> i64 {{
+        self.count
+    }}
+}}
+
+/// Shapes with area calculation
+type Shape {{
+    Circle(f64),
+    Rectangle(f64, f64),
+}}
+
+fn area(shape: Shape) -> f64 {{
+    match shape {{
+        Circle(r) => 3.14159 * r * r
+        Rectangle(w, h) => w * h
+    }}
+}}
+
+fn main() {{
+    print("Hello from {pkg_name}!")
+
+    // Struct with methods
+    let mut c = Counter {{ count: 0 }}
+    c = c.increment()
+    c = c.increment()
+    c = c.increment()
+    print("Counter: " + to_str(c.value()))
+
+    // Enum + pattern matching
+    let circle = Shape.Circle(5.0)
+    let rect = Shape.Rectangle(4.0, 6.0)
+    print("Circle area: " + to_str(area(circle)))
+    print("Rectangle area: " + to_str(area(rect)))
+}}
+"#
+        ),
     )
     .unwrap();
 
     // tests/main_test.tb
     std::fs::write(
         dir.join("tests/main_test.tb"),
-        "@test fn test_math() {\n    assert(1 + 1 == 2, \"basic math works\")\n}\n\n@test fn test_greeting() {\n    let name = \"Turbo\"\n    assert(name == \"Turbo\", \"greeting is correct\")\n}\n",
+        r#"struct Counter {
+    count: i64,
+}
+
+impl Counter {
+    fn increment(self) -> Counter {
+        Counter { count: self.count + 1 }
+    }
+
+    fn value(self) -> i64 {
+        self.count
+    }
+}
+
+type Shape {
+    Circle(f64),
+    Rectangle(f64, f64),
+}
+
+fn area(shape: Shape) -> f64 {
+    match shape {
+        Circle(r) => 3.14159 * r * r
+        Rectangle(w, h) => w * h
+    }
+}
+
+@test fn test_counter() {
+    let c = Counter { count: 0 }
+    assert(c.value() == 0, "new counter starts at 0")
+    let c2 = c.increment()
+    assert(c2.value() == 1, "increment adds 1")
+}
+
+@test fn test_area() {
+    let rect = Shape.Rectangle(3.0, 4.0)
+    assert(area(rect) == 12.0, "rectangle area is w * h")
+}
+
+@test fn test_math() {
+    assert(1 + 1 == 2, "basic math works")
+}
+"#,
     )
     .unwrap();
 
@@ -1051,7 +1146,7 @@ fn test_file(file: Option<PathBuf>) {
 /// Run benchmark files and report timing.
 /// If a file is given, benchmark that file. Otherwise, look for bench_*.tb
 /// files in a `benchmarks/` directory.
-fn bench_file(file: Option<PathBuf>, iterations: u32) {
+fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
     let files: Vec<PathBuf> = if let Some(f) = file {
         if f.is_dir() {
             collect_bench_files(&f)
@@ -1145,12 +1240,20 @@ fn bench_file(file: Option<PathBuf>, iterations: u32) {
         if !jit_times.is_empty() {
             jit_times.sort();
             let median = jit_times[jit_times.len() / 2];
-            eprintln!(
-                "  \x1b[33mJIT:\x1b[0m  {} \x1b[90m({:.3}s median, {} runs)\x1b[0m",
-                jit_output,
-                median.as_secs_f64(),
-                jit_times.len()
-            );
+            if quiet {
+                eprintln!(
+                    "  \x1b[33mJIT:\x1b[0m  \x1b[90m{:.3}s median ({} runs)\x1b[0m",
+                    median.as_secs_f64(),
+                    jit_times.len()
+                );
+            } else {
+                eprintln!(
+                    "  \x1b[33mJIT:\x1b[0m  {} \x1b[90m({:.3}s median, {} runs)\x1b[0m",
+                    jit_output,
+                    median.as_secs_f64(),
+                    jit_times.len()
+                );
+            }
         }
 
         // AOT mode: build then run N iterations, report median
@@ -1188,12 +1291,20 @@ fn bench_file(file: Option<PathBuf>, iterations: u32) {
                 if !aot_times.is_empty() {
                     aot_times.sort();
                     let median = aot_times[aot_times.len() / 2];
-                    eprintln!(
-                        "  \x1b[33mAOT:\x1b[0m  {} \x1b[90m({:.3}s median, {} runs)\x1b[0m",
-                        aot_output,
-                        median.as_secs_f64(),
-                        aot_times.len()
-                    );
+                    if quiet {
+                        eprintln!(
+                            "  \x1b[33mAOT:\x1b[0m  \x1b[90m{:.3}s median ({} runs)\x1b[0m",
+                            median.as_secs_f64(),
+                            aot_times.len()
+                        );
+                    } else {
+                        eprintln!(
+                            "  \x1b[33mAOT:\x1b[0m  {} \x1b[90m({:.3}s median, {} runs)\x1b[0m",
+                            aot_output,
+                            median.as_secs_f64(),
+                            aot_times.len()
+                        );
+                    }
                 }
 
                 // Check if outputs match
@@ -1778,12 +1889,134 @@ fn extract_backtick_name(message: &str) -> Option<&str> {
 // turbolang explain -- Print description for an error code
 // =============================================================================
 
+/// Returns a detailed explanation with code example for well-known error codes.
+fn detailed_explanation(code: ErrorCode) -> Option<&'static str> {
+    match code {
+        ErrorCode::E0001 => Some(
+            "The parser encountered a token it did not expect at this position.\n\n\
+             Example that triggers this error:\n\n\
+             \x1b[90m    fn main() {\n\
+             \x1b[90m        let x = +\n\
+             \x1b[90m    }\x1b[0m\n\n\
+             How to fix: check for typos, missing operands, or mismatched \
+             delimiters near the reported location.",
+        ),
+        ErrorCode::E0002 => Some(
+            "An identifier (variable name, function name, type name) was expected \
+             but something else was found.\n\n\
+             Example that triggers this error:\n\n\
+             \x1b[90m    fn 123bad() { }\x1b[0m\n\n\
+             How to fix: use a valid identifier. Identifiers must start with a \
+             letter or underscore and contain only letters, digits, and underscores.",
+        ),
+        ErrorCode::E0003 => Some(
+            "Expressions or blocks are nested too deeply, exceeding the parser's \
+             maximum depth limit. This usually indicates accidentally recursive or \
+             deeply nested code.\n\n\
+             How to fix: refactor deeply nested expressions into helper functions \
+             or intermediate variables.",
+        ),
+        ErrorCode::E0100 => Some(
+            "Two types were expected to match but they differ.\n\n\
+             Example that triggers this error:\n\n\
+             \x1b[90m    fn greet() -> str {\n\
+             \x1b[90m        42  // expected str, found i64\n\
+             \x1b[90m    }\x1b[0m\n\n\
+             How to fix: ensure the value's type matches the expected type. Use \
+             `to_str()` for string conversions, or adjust the type annotation.",
+        ),
+        ErrorCode::E0101 => Some(
+            "Arithmetic operators (+, -, *, /, %) require numeric operands \
+             (i32, i64, u32, u64, f32, f64).\n\n\
+             Example that triggers this error:\n\n\
+             \x1b[90m    fn main() {\n\
+             \x1b[90m        let x = true + 1  // bool is not numeric\n\
+             \x1b[90m    }\x1b[0m\n\n\
+             How to fix: convert the value to a number first, or use a different \
+             operation appropriate for the type.",
+        ),
+        ErrorCode::E0102 => Some(
+            "Both sides of an arithmetic operation must have the same type.\n\n\
+             Example that triggers this error:\n\n\
+             \x1b[90m    fn main() {\n\
+             \x1b[90m        let x: i32 = 10\n\
+             \x1b[90m        let y: i64 = 20\n\
+             \x1b[90m        let z = x + y  // i32 + i64 mismatch\n\
+             \x1b[90m    }\x1b[0m\n\n\
+             How to fix: ensure both operands are the same numeric type.",
+        ),
+        ErrorCode::E0103 => Some(
+            "Comparison operators (==, !=, <, >, <=, >=) require compatible types \
+             on both sides.\n\n\
+             Example that triggers this error:\n\n\
+             \x1b[90m    fn main() {\n\
+             \x1b[90m        let x = 42 == \"hello\"  // i64 vs str\n\
+             \x1b[90m    }\x1b[0m\n\n\
+             How to fix: compare values of the same type.",
+        ),
+        ErrorCode::E0200 => Some(
+            "A `match` expression must cover all possible values of the matched \
+             type. For enums, every variant must have a corresponding arm (or use \
+             a wildcard `_` arm).\n\n\
+             Example that triggers this error:\n\n\
+             \x1b[90m    type Color { Red  Green  Blue }\n\
+             \x1b[90m    fn name(c: Color) -> str {\n\
+             \x1b[90m        match c {\n\
+             \x1b[90m            Color::Red => \"red\"\n\
+             \x1b[90m            Color::Green => \"green\"\n\
+             \x1b[90m            // missing Blue!\n\
+             \x1b[90m        }\n\
+             \x1b[90m    }\x1b[0m\n\n\
+             How to fix: add the missing variant arms, or add a `_ => ...` \
+             wildcard arm to handle all remaining cases.",
+        ),
+        ErrorCode::E0201 => Some(
+            "A `match` expression must have at least one arm.\n\n\
+             Example that triggers this error:\n\n\
+             \x1b[90m    fn main() {\n\
+             \x1b[90m        match x { }\n\
+             \x1b[90m    }\x1b[0m\n\n\
+             How to fix: add at least one pattern arm to the match expression.",
+        ),
+        ErrorCode::E0300 => Some(
+            "A variable was referenced that has not been defined in the current \
+             scope or any enclosing scope.\n\n\
+             Example that triggers this error:\n\n\
+             \x1b[90m    fn main() {\n\
+             \x1b[90m        print(x)  // x is not defined\n\
+             \x1b[90m    }\x1b[0m\n\n\
+             How to fix: define the variable with `let` before using it, or \
+             check for typos in the variable name.",
+        ),
+        ErrorCode::E0400 => Some(
+            "An internal error occurred during code generation. This usually \
+             indicates a compiler bug.\n\n\
+             How to fix: please report this issue with the source code that \
+             triggered it.",
+        ),
+        ErrorCode::E0401 => Some(
+            "A variable was referenced during code generation but was not found \
+             in the compiled symbol table.\n\n\
+             This can happen if semantic analysis missed an error. Please report \
+             the issue if you see this.",
+        ),
+        _ => None,
+    }
+}
+
 fn explain_error(code_str: &str) {
     if let Some(code) = ErrorCode::parse(code_str) {
-        println!("{}: {}", code.as_str(), code.description());
+        println!(
+            "\x1b[1;33m{}\x1b[0m: \x1b[1m{}\x1b[0m\n",
+            code.as_str(),
+            code.description()
+        );
+        if let Some(detail) = detailed_explanation(code) {
+            println!("{detail}");
+        }
     } else {
         eprintln!("\x1b[1;31merror\x1b[0m: unknown error code `{code_str}`");
-        eprintln!("  Error codes range from E0001 to E0513.");
+        eprintln!("  Error codes range from E0001 to E0515.");
         eprintln!("  Example: turbolang explain E0100");
         std::process::exit(1);
     }
@@ -2234,13 +2467,17 @@ fn doc_file(path: &std::path::Path) {
         out.push_str("\n## Functions\n");
 
         if let Some(ref module) = ast_functions {
-            // Use AST for accurate signatures
+            // Use AST for accurate signatures and doc comments
             for item in &module.items {
                 if let turbo_ast::Item::Function(f) = &item.node {
                     let sig = format_fn_signature(f);
-                    // Find the line number for this function to get doc comments
-                    let fn_line = source[..item.span.start].matches('\n').count();
-                    let doc = doc_comments.get(&fn_line).cloned().unwrap_or_default();
+                    // Prefer AST doc field, fall back to source-scanned doc comments
+                    let doc = if let Some(ref d) = f.doc {
+                        vec![d.clone()]
+                    } else {
+                        let fn_line = source[..item.span.start].matches('\n').count();
+                        doc_comments.get(&fn_line).cloned().unwrap_or_default()
+                    };
 
                     out.push_str(&format!("\n### `{}`\n", sig));
                     if !doc.is_empty() {
@@ -2275,8 +2512,12 @@ fn doc_file(path: &std::path::Path) {
         for item in &module.items {
             if let turbo_ast::Item::Struct(s) = &item.node {
                 out.push_str(&format!("\n### `struct {}`\n", s.name));
-                let struct_line = source[..item.span.start].matches('\n').count();
-                let doc = doc_comments.get(&struct_line).cloned().unwrap_or_default();
+                let doc = if let Some(ref d) = s.doc {
+                    vec![d.clone()]
+                } else {
+                    let struct_line = source[..item.span.start].matches('\n').count();
+                    doc_comments.get(&struct_line).cloned().unwrap_or_default()
+                };
                 if !doc.is_empty() {
                     out.push_str(&format!("{}\n", doc.join("\n")));
                 }

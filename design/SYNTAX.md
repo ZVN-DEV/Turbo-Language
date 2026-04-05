@@ -186,7 +186,7 @@ async fn fetch(url: str) -> Response ! Error {
 }
 ```
 
-### Arrow Functions `[Planned]`
+### Arrow Functions `[Implemented]`
 Arrow functions work just like JavaScript — concise syntax for lambdas and callbacks.
 
 ```
@@ -713,7 +713,7 @@ let ids: {u64} = {1, 2, 3}               // set of u64
 | Pattern match | `match x { ... }` | Rust | Implemented |
 | if let | `if let some(v) = expr { }` | Swift | Implemented |
 | guard let | `guard let x = expr else { }` | Swift | Planned |
-| Arrow function (preferred) | `(x) => x + 1` | JavaScript | Planned |
+| Arrow function (preferred) | `(x) => x + 1` | JavaScript | Implemented |
 | Lambda (pipe, shorthand) | `\|x\| x + 1` | Rust | Implemented |
 | Destructuring | `let { a, b } = obj` | JavaScript | Implemented |
 | Optional chaining | `x?.y?.z` | TypeScript | Implemented |

@@ -216,6 +216,8 @@ pub enum ErrorCode {
     E0513,
     /// Unused return value of pure function
     E0514,
+    /// Unused variable
+    E0515,
 }
 
 impl ErrorCode {
@@ -326,6 +328,7 @@ impl ErrorCode {
             ErrorCode::E0512 => "E0512",
             ErrorCode::E0513 => "E0513",
             ErrorCode::E0514 => "E0514",
+            ErrorCode::E0515 => "E0515",
         }
     }
 
@@ -436,6 +439,7 @@ impl ErrorCode {
             ErrorCode::E0512 => "only named function calls are supported",
             ErrorCode::E0513 => "builtin function argument count error",
             ErrorCode::E0514 => "unused return value of pure function",
+            ErrorCode::E0515 => "unused variable",
         }
     }
 
@@ -546,6 +550,7 @@ impl ErrorCode {
             ErrorCode::E0512,
             ErrorCode::E0513,
             ErrorCode::E0514,
+            ErrorCode::E0515,
         ]
     }
 }

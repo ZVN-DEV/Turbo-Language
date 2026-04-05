@@ -1,4 +1,5 @@
-use std::io::{self, BufRead, Write};
+use rustyline::error::ReadlineError;
+use rustyline::DefaultEditor;
 
 pub fn run_repl() {
     let version = env!("CARGO_PKG_VERSION");
@@ -8,23 +9,44 @@ pub fn run_repl() {
     );
     println!();
 
-    let stdin = io::stdin();
+    let mut rl = DefaultEditor::new().unwrap_or_else(|e| {
+        eprintln!("warning: could not initialize line editor: {e}");
+        // Fall back to a basic editor
+        DefaultEditor::new().expect("failed to create editor")
+    });
+
+    // Load history from ~/.turbo_history
+    let history_path = dirs_path();
+    let _ = rl.load_history(&history_path);
+
     let mut accumulated_items: Vec<String> = Vec::new(); // fn definitions, structs, etc.
     let mut accumulated_vars: Vec<String> = Vec::new(); // let bindings
 
     loop {
-        print!(">>> ");
-        io::stdout().flush().unwrap();
-
-        let mut line = String::new();
-        if stdin.lock().read_line(&mut line).unwrap() == 0 {
-            break; // EOF
-        }
+        let readline = rl.readline(">>> ");
+        let line = match readline {
+            Ok(line) => line,
+            Err(ReadlineError::Interrupted) => {
+                // Ctrl-C: clear current line, continue
+                continue;
+            }
+            Err(ReadlineError::Eof) => {
+                // Ctrl-D: exit
+                break;
+            }
+            Err(err) => {
+                eprintln!("error: {err}");
+                break;
+            }
+        };
         let line = line.trim();
 
         if line.is_empty() {
             continue;
         }
+
+        // Add to history
+        let _ = rl.add_history_entry(line);
 
         // REPL commands
         if line == ":quit" || line == ":q" || line == ":exit" || line == "exit" || line == "quit" {
@@ -68,16 +90,16 @@ pub fn run_repl() {
             let mut brace_count: i32 =
                 full.matches('{').count() as i32 - full.matches('}').count() as i32;
             while brace_count > 0 {
-                print!("... ");
-                io::stdout().flush().unwrap();
-                let mut more = String::new();
-                if stdin.lock().read_line(&mut more).unwrap() == 0 {
-                    break;
+                match rl.readline("... ") {
+                    Ok(more) => {
+                        let more = more.trim_end();
+                        brace_count +=
+                            more.matches('{').count() as i32 - more.matches('}').count() as i32;
+                        full.push('\n');
+                        full.push_str(more);
+                    }
+                    Err(_) => break,
                 }
-                let more = more.trim_end();
-                brace_count += more.matches('{').count() as i32 - more.matches('}').count() as i32;
-                full.push('\n');
-                full.push_str(more);
             }
             accumulated_items.push(full);
             continue; // silently accept item definitions
@@ -193,5 +215,19 @@ pub fn run_repl() {
                 }
             }
         }
+    }
+
+    // Save history
+    let _ = rl.save_history(&history_path);
+}
+
+/// Get the path to the REPL history file (~/.turbo_history).
+fn dirs_path() -> String {
+    if let Some(home) = std::env::var_os("HOME") {
+        let mut path = std::path::PathBuf::from(home);
+        path.push(".turbo_history");
+        path.to_string_lossy().to_string()
+    } else {
+        ".turbo_history".to_string()
     }
 }

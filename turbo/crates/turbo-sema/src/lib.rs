@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use turbo_ast::*;
 
 #[derive(Debug, Clone)]
@@ -230,6 +230,12 @@ fn resolve_type_expr_with_params(
 struct VarInfo {
     ty: Ty,
     mutable: bool,
+    /// Span of the let binding (for unused variable warnings)
+    span: Span,
+    /// Whether this variable was introduced by a `let` statement (as opposed to
+    /// function/closure params, match bindings, for-in vars, etc.).
+    /// Only `let` bindings emit E0515 unused variable warnings.
+    from_let: bool,
 }
 
 /// Function signature
@@ -248,6 +254,8 @@ struct FnSig {
 /// Scope for variable tracking
 struct Scope {
     vars: HashMap<String, VarInfo>,
+    /// Names of variables that have been referenced in this or child scopes
+    used_vars: HashSet<String>,
 }
 
 /// Registered agent info for semantic checking
@@ -411,27 +419,77 @@ impl Checker {
     fn push_scope(&mut self) {
         self.scopes.push(Scope {
             vars: HashMap::new(),
+            used_vars: HashSet::new(),
         });
     }
 
     fn pop_scope(&mut self) {
-        self.scopes.pop();
+        if let Some(popped) = self.scopes.pop() {
+            // Emit unused variable warnings for let bindings in this scope
+            for (name, info) in &popped.vars {
+                if name.starts_with('_') || name == "self" {
+                    continue;
+                }
+                if info.ty.is_error() || info.span == (0..0) {
+                    continue;
+                }
+                // Only warn for `let` bindings — not for function/closure params,
+                // match destructure bindings, if-let bindings, or for-in vars.
+                if !info.from_let {
+                    continue;
+                }
+                if !popped.used_vars.contains(name.as_str()) {
+                    self.warnings.push(SemaWarning {
+                        code: ErrorCode::E0515,
+                        message: format!(
+                            "unused variable `{name}` — if this is intentional, prefix with an underscore: `_{name}`"
+                        ),
+                        span: info.span.clone(),
+                    });
+                }
+            }
+            // Propagate used_vars to the parent scope so that variables defined
+            // in the parent are counted as "used" even if referenced from a child scope.
+            if let Some(parent) = self.scopes.last_mut() {
+                for name in popped.used_vars {
+                    parent.used_vars.insert(name);
+                }
+            }
+        }
     }
 
-    fn define_var(&mut self, name: &str, info: VarInfo, _span: &Span) {
+    /// Pop a scope and emit warnings for any unused variables defined in it.
+    /// This is used for function-level scopes. The actual warning logic is in `pop_scope`.
+    fn pop_scope_with_unused_warnings(&mut self, _fn_name: &str) {
+        self.pop_scope();
+    }
+
+    fn define_var(&mut self, name: &str, info: VarInfo, span: &Span) {
         // Check current scope for redefinition (shadowing is OK across scopes)
         if let Some(scope) = self.scopes.last_mut() {
+            let mut info = info;
+            if info.span.is_empty() {
+                info.span = span.clone();
+            }
             scope.vars.insert(name.to_string(), info);
         }
     }
 
-    fn lookup_var(&self, name: &str) -> Option<&VarInfo> {
+    fn lookup_var(&mut self, name: &str) -> Option<VarInfo> {
+        let mut found = None;
         for scope in self.scopes.iter().rev() {
             if let Some(info) = scope.vars.get(name) {
-                return Some(info);
+                found = Some(info.clone());
+                break;
             }
         }
-        None
+        if found.is_some() {
+            // Mark variable as used in the current (innermost) scope
+            if let Some(scope) = self.scopes.last_mut() {
+                scope.used_vars.insert(name.to_string());
+            }
+        }
+        found
     }
 
     // === Check module ===
@@ -1207,7 +1265,16 @@ impl Checker {
             .map(|(n, t)| (n.clone(), t.clone()))
             .collect();
         for (name, ty) in consts {
-            self.define_var(&name, VarInfo { ty, mutable: false }, &(0..0));
+            self.define_var(
+                &name,
+                VarInfo {
+                    ty,
+                    mutable: false,
+                    span: 0..0,
+                    from_let: false,
+                },
+                &(0..0),
+            );
         }
     }
 
@@ -1231,12 +1298,19 @@ impl Checker {
         self.inject_constants();
 
         // Define parameters
-        for (name, ty) in &sig.params {
+        for (i, (name, ty)) in sig.params.iter().enumerate() {
+            let param_span = if i < f.params.len() {
+                f.params[i].span.clone()
+            } else {
+                0..0
+            };
             self.define_var(
                 name,
                 VarInfo {
                     ty: ty.clone(),
                     mutable: false,
+                    span: param_span,
+                    from_let: false,
                 },
                 &(0..0),
             );
@@ -1272,7 +1346,7 @@ impl Checker {
             );
         }
 
-        self.pop_scope();
+        self.pop_scope_with_unused_warnings(&f.name);
         self.in_unsafe_context = prev_unsafe;
     }
 
@@ -1286,12 +1360,19 @@ impl Checker {
         // Inject module-level constants
         self.inject_constants();
 
-        for (name, ty) in &sig.params {
+        for (i, (name, ty)) in sig.params.iter().enumerate() {
+            let param_span = if i < f.params.len() {
+                f.params[i].span.clone()
+            } else {
+                0..0
+            };
             self.define_var(
                 name,
                 VarInfo {
                     ty: ty.clone(),
                     mutable: false,
+                    span: param_span,
+                    from_let: false,
                 },
                 &(0..0),
             );
@@ -1322,7 +1403,7 @@ impl Checker {
             );
         }
 
-        self.pop_scope();
+        self.pop_scope_with_unused_warnings(&f.name);
     }
 
     // === Expression type checking ===
@@ -3113,7 +3194,7 @@ impl Checker {
                     }
 
                     // Check if callee is a variable with fn type (closure call)
-                    if let Some(info) = self.lookup_var(name).cloned() {
+                    if let Some(info) = self.lookup_var(name) {
                         if let Ty::Fn(ref param_tys, ref ret_ty) = info.ty {
                             if args.len() != param_tys.len() {
                                 self.error(
@@ -3491,6 +3572,8 @@ impl Checker {
                             VarInfo {
                                 ty: inner_ty,
                                 mutable: false,
+                                span: 0..0,
+                                from_let: false,
                             },
                             &pattern.span,
                         );
@@ -3533,6 +3616,8 @@ impl Checker {
                             VarInfo {
                                 ty: ok_ty,
                                 mutable: false,
+                                span: 0..0,
+                                from_let: false,
                             },
                             &pattern.span,
                         );
@@ -3559,6 +3644,8 @@ impl Checker {
                             VarInfo {
                                 ty: err_ty,
                                 mutable: false,
+                                span: 0..0,
+                                from_let: false,
                             },
                             &pattern.span,
                         );
@@ -3604,7 +3691,7 @@ impl Checker {
             Expr::Assign { target, value } => {
                 let val_ty = self.check_expr(value);
 
-                if let Some(info) = self.lookup_var(target).cloned() {
+                if let Some(info) = self.lookup_var(target) {
                     if !info.mutable {
                         self.error(
                             ErrorCode::E0501,
@@ -3656,7 +3743,7 @@ impl Checker {
                     }
                 };
 
-                if let Some(info) = self.lookup_var(target).cloned() {
+                if let Some(info) = self.lookup_var(target) {
                     if !info.mutable {
                         self.error(
                             ErrorCode::E0501,
@@ -3916,6 +4003,8 @@ impl Checker {
                     VarInfo {
                         ty: elem_ty,
                         mutable: false,
+                        span: 0..0,
+                        from_let: false,
                     },
                     &expr.span,
                 );
@@ -4279,6 +4368,8 @@ impl Checker {
                                 VarInfo {
                                     ty: ok_ty,
                                     mutable: false,
+                                    span: 0..0,
+                                    from_let: false,
                                 },
                                 &arm.pattern.span,
                             );
@@ -4308,6 +4399,8 @@ impl Checker {
                                 VarInfo {
                                     ty: err_ty,
                                     mutable: false,
+                                    span: 0..0,
+                                    from_let: false,
                                 },
                                 &arm.pattern.span,
                             );
@@ -4337,6 +4430,8 @@ impl Checker {
                                 VarInfo {
                                     ty: inner_ty,
                                     mutable: false,
+                                    span: 0..0,
+                                    from_let: false,
                                 },
                                 &arm.pattern.span,
                             );
@@ -4380,7 +4475,12 @@ impl Checker {
                                             };
                                             self.define_var(
                                                 binding,
-                                                VarInfo { ty, mutable: false },
+                                                VarInfo {
+                                                    ty,
+                                                    mutable: false,
+                                                    span: 0..0,
+                                                    from_let: false,
+                                                },
                                                 &arm.pattern.span,
                                             );
                                         }
@@ -4409,6 +4509,8 @@ impl Checker {
                                 VarInfo {
                                     ty: subject_ty.clone(),
                                     mutable: false,
+                                    span: 0..0,
+                                    from_let: false,
                                 },
                                 &arm.pattern.span,
                             );
@@ -4621,6 +4723,8 @@ impl Checker {
                         VarInfo {
                             ty: ty.clone(),
                             mutable: false,
+                            span: 0..0,
+                            from_let: false,
                         },
                         &param.span,
                     );
@@ -4938,6 +5042,8 @@ impl Checker {
                     VarInfo {
                         ty: declared_ty,
                         mutable: *mutable,
+                        span: 0..0,
+                        from_let: true,
                     },
                     &stmt.span,
                 );
@@ -4949,14 +5055,35 @@ impl Checker {
                     if let Expr::Call { ref callee, .. } = e.node {
                         if let Expr::Ident(ref fn_name) = callee.node {
                             const PURE_BUILTINS: &[&str] = &[
-                                "len", "abs", "min", "max", "pow", "sqrt",
-                                "to_str", "starts_with", "ends_with", "contains",
-                                "char_at", "index_of", "join", "reduce", "clone",
-                                "hashmap_get", "hashmap_has", "hashmap_len", "hashmap_size",
-                                "hashmap_keys", "read_line", "read_file",
-                                "json_get", "json_stringify",
-                                "request_body", "request_method", "request_path",
-                                "request_query", "request_header",
+                                "len",
+                                "abs",
+                                "min",
+                                "max",
+                                "pow",
+                                "sqrt",
+                                "to_str",
+                                "starts_with",
+                                "ends_with",
+                                "contains",
+                                "char_at",
+                                "index_of",
+                                "join",
+                                "reduce",
+                                "clone",
+                                "hashmap_get",
+                                "hashmap_has",
+                                "hashmap_len",
+                                "hashmap_size",
+                                "hashmap_keys",
+                                "read_line",
+                                "read_file",
+                                "json_get",
+                                "json_stringify",
+                                "request_body",
+                                "request_method",
+                                "request_path",
+                                "request_query",
+                                "request_header",
                             ];
                             if PURE_BUILTINS.contains(&fn_name.as_str()) {
                                 self.warn(
@@ -5014,6 +5141,8 @@ impl Checker {
                                         VarInfo {
                                             ty: field_ty.clone(),
                                             mutable: *mutable,
+                                            span: 0..0,
+                                            from_let: true,
                                         },
                                         &stmt.span,
                                     );
@@ -5043,6 +5172,8 @@ impl Checker {
                                 VarInfo {
                                     ty: Ty::Error,
                                     mutable: *mutable,
+                                    span: 0..0,
+                                    from_let: true,
                                 },
                                 &stmt.span,
                             );
@@ -5571,5 +5702,74 @@ fn main() { }"#,
         // Returning `none` from a function that returns `i64?` should not
         // produce `<error>?` in any diagnostic message.
         assert_no_errors("fn get_val() -> i64? { none }\nfn main() { let x = get_val() }");
+    }
+
+    // === Unused variable warnings (E0515) ===
+
+    fn check_warnings(source: &str) -> Vec<SemaWarning> {
+        let (tokens, _) = turbo_lexer::tokenize(source);
+        let (module, _) = turbo_parser::parse(tokens);
+        check(&module).warnings
+    }
+
+    fn assert_has_warning(source: &str, expected_msg: &str) {
+        let warnings = check_warnings(source);
+        assert!(
+            warnings.iter().any(|w| w.message.contains(expected_msg)),
+            "Expected warning containing '{}', got: {:?}",
+            expected_msg,
+            warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
+        );
+    }
+
+    fn assert_no_warnings(source: &str) {
+        let warnings = check_warnings(source);
+        assert!(
+            warnings.is_empty(),
+            "Expected no warnings, got: {:?}",
+            warnings.iter().map(|w| &w.message).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_unused_param_no_warning() {
+        // Function parameters should NOT produce unused variable warnings
+        assert_no_warnings("fn foo(x: i64) -> i64 { 42 }\nfn main() { foo(1) }");
+    }
+
+    #[test]
+    fn test_unused_variable_underscore_suppressed() {
+        // Variables starting with _ should not trigger unused warnings
+        assert_no_warnings("fn foo(_x: i64) -> i64 { 42 }\nfn main() { foo(1) }");
+    }
+
+    #[test]
+    fn test_used_variable_no_warning() {
+        assert_no_warnings("fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { add(1, 2) }");
+    }
+
+    #[test]
+    fn test_unused_let_binding_warning() {
+        assert_has_warning("fn main() { let y = 42 }", "unused variable `y`");
+    }
+
+    #[test]
+    fn test_used_let_binding_no_warning() {
+        assert_no_warnings(
+            r#"fn main() { let y = 42
+            print(y) }"#,
+        );
+    }
+
+    #[test]
+    fn test_unused_closure_param_no_warning() {
+        // Closure parameters should NOT produce unused variable warnings
+        assert_no_warnings("fn main() { let f = (x: i64) -> i64 => { 42 }\nf(1) }");
+    }
+
+    #[test]
+    fn test_unused_for_var_no_warning() {
+        // For-in loop variables should NOT produce unused variable warnings
+        assert_no_warnings("fn main() { for i in range(0, 3) { print(\"hello\") } }");
     }
 }

@@ -1301,104 +1301,97 @@ bench_sort     1,247 ns/iter (+/- 42)     [800,256 iter/s]</pre>
 
 <section class="doc-section">
   <div class="container">
-    <p class="section-intro">Turbo ships with a comprehensive standard library covering file I/O, HTTP, logging, JSON, metrics, testing, and cryptography. Everything you need for production applications without reaching for third-party packages.</p>
+    <p class="section-intro">62+ built-in functions available everywhere &mdash; no imports needed. All functions that take a value as their first argument support method syntax via UFCS: <code>trim(s)</code> and <code>s.trim()</code> are equivalent.</p>
 
     <div class="stdlib-grid">
       <div class="stdlib-card">
-        <div class="stdlib-name">turbo/io</div>
-        <div class="stdlib-desc">File system operations, stdin/stdout, buffered readers and writers, path manipulation, directory traversal, and file watching.</div>
-        <div class="stdlib-funcs">fs.read &middot; fs.write &middot; fs.exists &middot; stdin &middot; stdout &middot; BufReader &middot; BufWriter</div>
+        <div class="stdlib-name">I/O</div>
+        <div class="stdlib-desc">Print to stdout, read from stdin, read and write files. Accepts any type for output.</div>
+        <div class="stdlib-funcs">print &middot; read_line &middot; read_file &middot; write_file</div>
       </div>
       <div class="stdlib-card">
-        <div class="stdlib-name">turbo/http</div>
-        <div class="stdlib-desc">HTTP client and server. Make requests with a fluent API. Build servers with routing, middleware, and SSE support. WebSocket included.</div>
-        <div class="stdlib-funcs">http.get &middot; http.post &middot; Server.new &middot; Response.json &middot; Response.sse</div>
+        <div class="stdlib-name">Strings</div>
+        <div class="stdlib-desc">Full string manipulation with method syntax. Trim, transform case, split, search, replace, and more.</div>
+        <div class="stdlib-funcs">len &middot; trim &middot; upper &middot; lower &middot; split &middot; contains &middot; starts_with &middot; ends_with &middot; replace &middot; index_of &middot; char_at &middot; repeat &middot; join &middot; to_str</div>
       </div>
       <div class="stdlib-card">
-        <div class="stdlib-name">turbo/log</div>
-        <div class="stdlib-desc">Structured JSON logging with log levels, contextual spans, and trace propagation across async boundaries. Zero-cost when compiled out.</div>
-        <div class="stdlib-funcs">log.info &middot; log.debug &middot; log.warn &middot; log.error &middot; trace()</div>
+        <div class="stdlib-name">Arrays &amp; Functional</div>
+        <div class="stdlib-desc">Array length, push with COW semantics, plus map, filter, and reduce with closure support.</div>
+        <div class="stdlib-funcs">len &middot; push &middot; map &middot; filter &middot; reduce</div>
       </div>
       <div class="stdlib-card">
-        <div class="stdlib-name">turbo/json</div>
-        <div class="stdlib-desc">Parse and serialize JSON. Type-safe deserialization into structs with <code>@derive(Serialize, Deserialize)</code>. Streaming parser for large payloads.</div>
-        <div class="stdlib-funcs">json.parse &middot; json.stringify &middot; .json&lt;T&gt;()</div>
+        <div class="stdlib-name">Math</div>
+        <div class="stdlib-desc">Core math operations for integers and floats. Absolute value, min/max, exponentiation, and square root.</div>
+        <div class="stdlib-funcs">abs &middot; min &middot; max &middot; pow &middot; sqrt</div>
       </div>
       <div class="stdlib-card">
-        <div class="stdlib-name">turbo/metrics</div>
-        <div class="stdlib-desc">Built-in counters, gauges, and histograms. OpenTelemetry-compatible export. Type-checked label keys at compile time. Prometheus endpoint included.</div>
-        <div class="stdlib-funcs">counter &middot; histogram &middot; gauge &middot; metrics.serve</div>
+        <div class="stdlib-name">HashMap</div>
+        <div class="stdlib-desc">Create hash maps, set and get values by string key, check existence, list keys, and remove entries.</div>
+        <div class="stdlib-funcs">hashmap &middot; hashmap_set &middot; hashmap_get &middot; hashmap_has &middot; hashmap_len &middot; hashmap_keys &middot; hashmap_remove</div>
       </div>
       <div class="stdlib-card">
-        <div class="stdlib-name">turbo/test</div>
-        <div class="stdlib-desc">Testing framework with assertions, snapshot testing, parameterized tests, and mocking utilities. Powers <code>turbo test</code>.</div>
-        <div class="stdlib-funcs">assert &middot; assert_eq &middot; assert_ne &middot; assert_matches &middot; assert_snapshot</div>
+        <div class="stdlib-name">JSON</div>
+        <div class="stdlib-desc">Extract values from JSON strings, create JSON, and serialize structs and struct arrays to JSON.</div>
+        <div class="stdlib-funcs">json_get &middot; json_stringify &middot; to_json &middot; to_json_array</div>
       </div>
       <div class="stdlib-card">
-        <div class="stdlib-name">turbo/crypto</div>
-        <div class="stdlib-desc">Hashing (SHA-256, SHA-512, BLAKE3), HMAC, symmetric encryption (AES-256-GCM), and key derivation (Argon2, PBKDF2). Constant-time comparisons.</div>
-        <div class="stdlib-funcs">sha256 &middot; sha512 &middot; blake3 &middot; hmac &middot; aes_encrypt &middot; argon2</div>
+        <div class="stdlib-name">HTTP</div>
+        <div class="stdlib-desc">HTTP client for GET/POST requests, plus a multi-threaded HTTP server with routing, request parsing, and response building.</div>
+        <div class="stdlib-funcs">http_get &middot; http_post &middot; http_server &middot; route &middot; http_listen &middot; respond &middot; request_body &middot; request_method &middot; request_path &middot; request_query &middot; request_header</div>
       </div>
       <div class="stdlib-card">
-        <div class="stdlib-name">turbo/collections</div>
-        <div class="stdlib-desc">HashMap, HashSet, BTreeMap, BTreeSet, VecDeque, PriorityQueue, and more. All with consistent, idiomatic APIs.</div>
-        <div class="stdlib-funcs">HashMap &middot; HashSet &middot; BTreeMap &middot; VecDeque &middot; PriorityQueue</div>
+        <div class="stdlib-name">Concurrency &amp; Testing</div>
+        <div class="stdlib-desc">Channels, mutexes, sleep, and deep clone for concurrency. Assert, assert_eq, assert_ne, and panic for testing.</div>
+        <div class="stdlib-funcs">channel &middot; send &middot; recv &middot; mutex &middot; mutex_get &middot; mutex_set &middot; sleep &middot; clone &middot; assert &middot; assert_eq &middot; assert_ne &middot; panic</div>
       </div>
     </div>
 
     <h3>Example: HTTP Server</h3>
     <div class="code-block">
-      <div class="code-block-header"><span class="dot turbo"></span> src/main.tb</div>
-      <pre><span class="kw">import</span> { <span class="type">Server</span>, <span class="type">Response</span> } <span class="kw">from</span> <span class="str">"turbo/http"</span>
-<span class="kw">import</span> { log } <span class="kw">from</span> <span class="str">"turbo/log"</span>
+      <div class="code-block-header"><span class="dot turbo"></span> main.tb</div>
+      <pre><span class="kw">fn</span> <span class="fn-name">main</span>() {
+  <span class="kw">let</span> app = <span class="fn-name">http_server</span>(<span class="num">8080</span>)
 
-<span class="kw">let</span> app = <span class="type">Server</span>.<span class="fn-name">new</span>()
+  <span class="fn-name">route</span>(app, <span class="str">"GET"</span>, <span class="str">"/"</span>, |req: <span class="type">str</span>| -> <span class="type">str</span> {
+    <span class="fn-name">respond</span>(<span class="num">200</span>, <span class="str">"Hello from Turbo!"</span>)
+  })
 
-app.<span class="fn-name">get</span>(<span class="str">"/"</span>, <span class="kw">async</span> (req) => {
-  <span class="type">Response</span>.<span class="fn-name">json</span>({ message: <span class="str">"Hello from Turbo!"</span> })
-})
+  <span class="fn-name">route</span>(app, <span class="str">"POST"</span>, <span class="str">"/api/echo"</span>, |req: <span class="type">str</span>| -> <span class="type">str</span> {
+    <span class="kw">let</span> body = <span class="fn-name">request_body</span>(req)
+    <span class="fn-name">respond</span>(<span class="num">200</span>, body)
+  })
 
-app.<span class="fn-name">get</span>(<span class="str">"/users/:id"</span>, <span class="kw">async</span> (req) => {
-  <span class="kw">let</span> id = req.params.id.<span class="fn-name">parse</span>&lt;<span class="type">u64</span>&gt;()<span class="op">?</span>
-  <span class="kw">let</span> user = <span class="kw">await</span> db.<span class="fn-name">find_user</span>(id)<span class="op">?</span>
-  <span class="type">Response</span>.<span class="fn-name">json</span>(user)
-})
-
-log.<span class="fn-name">info</span>(<span class="str">"Server starting on port 3000"</span>)
-<span class="kw">await</span> app.<span class="fn-name">listen</span>(<span class="num">3000</span>)</pre>
-    </div>
-
-    <h3>Example: Structured Logging</h3>
-    <div class="code-block">
-      <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
-      <pre><span class="kw">import</span> { log } <span class="kw">from</span> <span class="str">"turbo/log"</span>
-
-<span class="kw">fn</span> <span class="fn-name">process_request</span>(req: <span class="type">Request</span>) -> <span class="type">Response</span> {
-  log.<span class="fn-name">info</span>(<span class="str">"Processing request"</span>, { method: req.method, path: req.path })
-
-  <span class="kw">let</span> result = <span class="fn-name">trace</span>(<span class="str">"db_query"</span>) {
-    <span class="kw">await</span> db.<span class="fn-name">query</span>(req.params)
-  }
-
-  log.<span class="fn-name">debug</span>(<span class="str">"Query complete"</span>, { rows: result.<span class="fn-name">len</span>() })
-  <span class="type">Response</span>.<span class="fn-name">ok</span>(result)
+  <span class="fn-name">http_listen</span>(app)
 }</pre>
     </div>
 
-    <h3>Example: Metrics</h3>
+    <h3>Example: Strings &amp; Functional</h3>
     <div class="code-block">
       <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
-      <pre><span class="kw">import</span> { counter, histogram } <span class="kw">from</span> <span class="str">"turbo/metrics"</span>
+      <pre><span class="kw">fn</span> <span class="fn-name">main</span>() {
+  <span class="kw">let</span> text = <span class="str">"  Hello, Turbo!  "</span>
+  <span class="kw">let</span> cleaned = text.<span class="fn-name">trim</span>().<span class="fn-name">lower</span>()
+  <span class="fn-name">print</span>(<span class="str">"cleaned: {cleaned}"</span>)
 
-<span class="kw">let</span> request_count = <span class="fn-name">counter</span>(<span class="str">"http_requests_total"</span>)
-<span class="kw">let</span> response_time = <span class="fn-name">histogram</span>(<span class="str">"http_response_duration_ms"</span>)
+  <span class="kw">let</span> nums = [<span class="num">1</span>, <span class="num">2</span>, <span class="num">3</span>, <span class="num">4</span>, <span class="num">5</span>]
+  <span class="kw">let</span> doubled = nums.<span class="fn-name">map</span>(|x: <span class="type">i64</span>| -> <span class="type">i64</span> { x * <span class="num">2</span> })
+  <span class="kw">let</span> big = nums.<span class="fn-name">filter</span>(|x: <span class="type">i64</span>| -> <span class="type">bool</span> { x > <span class="num">3</span> })
+  <span class="kw">let</span> sum = <span class="fn-name">reduce</span>(nums, <span class="num">0</span>, |acc: <span class="type">i64</span>, x: <span class="type">i64</span>| -> <span class="type">i64</span> { acc + x })
+  <span class="fn-name">print</span>(<span class="str">"sum: {sum}"</span>)
+}</pre>
+    </div>
 
-<span class="kw">fn</span> <span class="fn-name">handle</span>(req: <span class="type">Request</span>) -> <span class="type">Response</span> {
-  request_count.<span class="fn-name">inc</span>({ method: req.method, path: req.path })
-  <span class="kw">let</span> timer = response_time.<span class="fn-name">start</span>()
-  <span class="kw">let</span> result = <span class="fn-name">process</span>(req)
-  timer.<span class="fn-name">observe</span>()
-  result
+    <h3>Example: HashMap &amp; JSON</h3>
+    <div class="code-block">
+      <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
+      <pre><span class="kw">fn</span> <span class="fn-name">main</span>() {
+  <span class="kw">let</span> m = <span class="fn-name">hashmap</span>()
+  <span class="fn-name">hashmap_set</span>(m, <span class="str">"name"</span>, <span class="str">"Turbo"</span>)
+  <span class="fn-name">hashmap_set</span>(m, <span class="str">"version"</span>, <span class="str">"0.3"</span>)
+  <span class="fn-name">print</span>(<span class="fn-name">hashmap_get</span>(m, <span class="str">"name"</span>))
+
+  <span class="kw">let</span> json = <span class="fn-name">json_stringify</span>(<span class="str">"status"</span>, <span class="str">"ok"</span>)
+  <span class="fn-name">print</span>(json)
 }</pre>
     </div>
   </div>

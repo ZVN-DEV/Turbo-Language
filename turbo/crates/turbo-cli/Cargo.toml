@@ -16,6 +16,7 @@ turbo-codegen-llvm = { path = "../turbo-codegen-llvm", optional = true }
 turbo-sema = { path = "../turbo-sema" }
 clap = { workspace = true }
 ariadne = { workspace = true }
+rustyline = "15"
 
 [features]
 default = []

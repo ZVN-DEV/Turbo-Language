@@ -20,11 +20,11 @@ run_test() {
 
     local expected
     expected=$(cat "$expected_file")
-    local actual
-    actual=$($TURBO run "$tb_file" 2>&1) || true
 
-    # Check if this is an expected-error test
+    # Check if this is an expected-error test (need stderr for error matching)
     if echo "$expected" | head -1 | grep -q "^ERROR:"; then
+        local actual
+        actual=$($TURBO run "$tb_file" 2>&1) || true
         local error_pattern
         error_pattern=$(echo "$expected" | head -1 | sed 's/^ERROR://')
         if echo "$actual" | grep -qi "$error_pattern"; then
@@ -38,6 +38,8 @@ run_test() {
             ERRORS="$ERRORS\n  - $test_name"
         fi
     else
+        local actual
+        actual=$($TURBO run "$tb_file" 2>/dev/null) || true
         if [ "$actual" = "$expected" ]; then
             printf "  PASS  %s\n" "$test_name"
             PASS=$((PASS + 1))

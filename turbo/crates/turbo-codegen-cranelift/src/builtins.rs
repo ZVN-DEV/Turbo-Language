@@ -99,9 +99,53 @@ pub(crate) fn compile_print<M: Module>(
                 let ptr = cx.create_string("[result]")?;
                 cx.rt_call("rt_print_str", &[ptr]);
             }
-            TurboTy::Optional(_) => {
-                let ptr = cx.create_string("[optional]")?;
-                cx.rt_call("rt_print_str", &[ptr]);
+            TurboTy::Optional(ref inner) => {
+                // Print "some(<value>)" or "none" based on the tag
+                let tag_fid = cx.rt_fns["rt_option_tag"];
+                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+                let tag_call = cx.builder.ins().call(tag_fref, &[v]);
+                let tag = cx.builder.inst_results(tag_call)[0];
+
+                let one = cx.builder.ins().iconst(types::I64, 1);
+                let is_some = cx.builder.ins().icmp(IntCC::Equal, tag, one);
+
+                let some_block = cx.builder.create_block();
+                let none_block = cx.builder.create_block();
+                let merge_block = cx.builder.create_block();
+
+                cx.builder
+                    .ins()
+                    .brif(is_some, some_block, &[], none_block, &[]);
+
+                // Some path: print "some(<value>)"
+                cx.builder.switch_to_block(some_block);
+                cx.builder.seal_block(some_block);
+                let val_fid = cx.rt_fns["rt_option_value"];
+                let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
+                let val_call = cx.builder.ins().call(val_fref, &[v]);
+                let inner_val = cx.builder.inst_results(val_call)[0];
+                let inner_str = convert_to_str(cx, inner_val, inner)?;
+                let prefix = cx.create_string("some(")?;
+                let suffix = cx.create_string(")")?;
+                let concat_fid = cx.rt_fns["rt_str_concat"];
+                let concat_fref = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
+                let call1 = cx.builder.ins().call(concat_fref, &[prefix, inner_str]);
+                let partial = cx.builder.inst_results(call1)[0];
+                let call2 = cx.builder.ins().call(concat_fref, &[partial, suffix]);
+                let some_str = cx.builder.inst_results(call2)[0];
+                cx.rt_call("rt_print_str", &[some_str]);
+                cx.builder.ins().jump(merge_block, &[]);
+
+                // None path: print "none"
+                cx.builder.switch_to_block(none_block);
+                cx.builder.seal_block(none_block);
+                let none_str = cx.create_string("none")?;
+                cx.rt_call("rt_print_str", &[none_str]);
+                cx.builder.ins().jump(merge_block, &[]);
+
+                // Merge
+                cx.builder.switch_to_block(merge_block);
+                cx.builder.seal_block(merge_block);
             }
             TurboTy::Agent(ref name) => {
                 let ptr = cx.create_string(&format!("[agent {}]", name))?;
@@ -1958,7 +2002,54 @@ pub(crate) fn convert_to_str<M: Module>(
         }
         TurboTy::Fn(_, _) => cx.create_string("[function]"),
         TurboTy::Result(_, _) => cx.create_string("[result]"),
-        TurboTy::Optional(_) => cx.create_string("[optional]"),
+        TurboTy::Optional(ref inner) => {
+            // Return "some(<value>)" or "none" string based on the tag
+            let tag_fid = cx.rt_fns["rt_option_tag"];
+            let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+            let tag_call = cx.builder.ins().call(tag_fref, &[val]);
+            let tag = cx.builder.inst_results(tag_call)[0];
+
+            let one = cx.builder.ins().iconst(types::I64, 1);
+            let is_some = cx.builder.ins().icmp(IntCC::Equal, tag, one);
+
+            let some_block = cx.builder.create_block();
+            let none_block = cx.builder.create_block();
+            let merge_block = cx.builder.create_block();
+
+            cx.builder
+                .ins()
+                .brif(is_some, some_block, &[], none_block, &[]);
+
+            // Some path
+            cx.builder.switch_to_block(some_block);
+            cx.builder.seal_block(some_block);
+            let val_fid = cx.rt_fns["rt_option_value"];
+            let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
+            let val_call = cx.builder.ins().call(val_fref, &[val]);
+            let inner_val = cx.builder.inst_results(val_call)[0];
+            let inner_str = convert_to_str(cx, inner_val, inner)?;
+            let prefix = cx.create_string("some(")?;
+            let suffix = cx.create_string(")")?;
+            let concat_fid = cx.rt_fns["rt_str_concat"];
+            let concat_fref = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
+            let call1 = cx.builder.ins().call(concat_fref, &[prefix, inner_str]);
+            let partial = cx.builder.inst_results(call1)[0];
+            let call2 = cx.builder.ins().call(concat_fref, &[partial, suffix]);
+            let some_str = cx.builder.inst_results(call2)[0];
+            cx.builder.ins().jump(merge_block, &[some_str]);
+
+            // None path
+            cx.builder.switch_to_block(none_block);
+            cx.builder.seal_block(none_block);
+            let none_str = cx.create_string("none")?;
+            cx.builder.ins().jump(merge_block, &[none_str]);
+
+            // Merge
+            cx.builder.append_block_param(merge_block, cx.ptr_type);
+            cx.builder.switch_to_block(merge_block);
+            cx.builder.seal_block(merge_block);
+            Ok(cx.builder.block_params(merge_block)[0])
+        }
         TurboTy::Agent(ref name) => cx.create_string(&format!("[agent {}]", name)),
         TurboTy::Future(_) => cx.create_string("[future]"),
     }

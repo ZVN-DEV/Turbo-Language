@@ -99,6 +99,8 @@ pub struct EnumDef {
     pub name: String,
     pub type_params: Vec<TypeParam>,
     pub variants: Vec<EnumVariantDef>,
+    /// Doc comment text (from `///` comments preceding the enum)
+    pub doc: Option<String>,
 }
 
 impl EnumDef {
@@ -128,6 +130,8 @@ pub struct StructDef {
     /// Derived trait names from `@derive(Eq, Clone, ...)` attribute
     pub derives: Vec<String>,
     pub fields: Vec<FieldDef>,
+    /// Doc comment text (from `///` comments preceding the struct)
+    pub doc: Option<String>,
 }
 
 /// Struct field definition
@@ -172,6 +176,8 @@ pub struct FnDef {
     pub params: Vec<Param>,
     pub return_type: Option<Spanned<TypeExpr>>,
     pub body: Spanned<Expr>,
+    /// Doc comment text (from `///` comments preceding the function)
+    pub doc: Option<String>,
 }
 
 impl FnDef {

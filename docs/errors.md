@@ -128,3 +128,5 @@ Every compiler diagnostic includes a unique error code (e.g. `E0100`). Use `turb
 | E0511 | Agent does not accept field initializers |
 | E0512 | Only named function calls are supported |
 | E0513 | Builtin function argument count error |
+| E0514 | Unused return value of pure function |
+| E0515 | Unused variable |

@@ -4690,7 +4690,11 @@ mod tests {
         let (module, parse_errors) = turbo_parser::parse(tokens);
         assert!(parse_errors.is_empty(), "Parse errors: {:?}", parse_errors);
         let sema_result = turbo_sema::check(&module);
-        assert!(sema_result.errors.is_empty(), "Sema errors: {:?}", sema_result.errors);
+        assert!(
+            sema_result.errors.is_empty(),
+            "Sema errors: {:?}",
+            sema_result.errors
+        );
         jit_run(&module).expect("JIT compilation/execution failed");
     }
 
