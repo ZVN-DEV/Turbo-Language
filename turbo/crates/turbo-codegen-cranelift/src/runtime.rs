@@ -759,6 +759,9 @@ pub(crate) type RouteHandler = extern "C" fn(*const u8, *const u8) -> *const u8;
 
 pub(crate) struct HttpServer {
     port: u16,
+    /// Interface to bind to. Defaults to "127.0.0.1"; `rt_http_server_public`
+    /// sets this to "0.0.0.0" for opt-in external exposure.
+    bind_host: &'static str,
     routes: Vec<(String, String, RouteHandler, *const u8)>, // (method, path, handler_fn, env_ptr)
 }
 
@@ -766,10 +769,25 @@ unsafe impl Send for HttpServer {}
 
 pub(crate) static HTTP_SERVERS: Mutex<Vec<HttpServer>> = Mutex::new(Vec::new());
 
-/// Create a new HTTP server. Returns a server id (index).
+/// Create a new HTTP server bound to localhost. Returns a server id (index).
 pub(crate) extern "C" fn rt_http_server(port: i64) -> i64 {
     let server = HttpServer {
         port: port as u16,
+        bind_host: "127.0.0.1",
+        routes: Vec::new(),
+    };
+    let mut servers = HTTP_SERVERS.lock().unwrap();
+    let id = servers.len() as i64;
+    servers.push(server);
+    id
+}
+
+/// Create a new HTTP server bound to all interfaces (0.0.0.0). Callers
+/// opt in explicitly; meant for deliberately public services.
+pub(crate) extern "C" fn rt_http_server_public(port: i64) -> i64 {
+    let server = HttpServer {
+        port: port as u16,
+        bind_host: "0.0.0.0",
         routes: Vec::new(),
     };
     let mut servers = HTTP_SERVERS.lock().unwrap();
@@ -965,16 +983,17 @@ pub(crate) extern "C" fn rt_http_listen(server_id: i64) {
     use std::net::TcpListener;
     use std::sync::Arc;
 
-    let (port, routes) = {
+    let (host, port, routes) = {
         let servers = HTTP_SERVERS.lock().unwrap();
         let server = &servers[server_id as usize];
+        let host = server.bind_host;
         let port = server.port;
         let routes: Vec<(String, String, RouteHandler, *const u8)> = server.routes.clone();
-        (port, routes)
+        (host, port, routes)
     };
 
     let routes = Arc::new(SendableRoutes(routes));
-    let addr = format!("0.0.0.0:{}", port);
+    let addr = format!("{}:{}", host, port);
     let listener = TcpListener::bind(&addr).expect("failed to bind HTTP server");
 
     for stream in listener.incoming().flatten() {

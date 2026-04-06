@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <pthread.h>
 #include <math.h>
@@ -425,6 +426,23 @@ const char* rt_str_repeat(const char *s, long long count) {
         return empty;
     }
     size_t len = strlen(s);
+    /* Overflow check: len * count must fit in size_t and leave room for
+     * the trailing NUL. Previously this wrapped silently and the malloc
+     * would succeed with a much smaller size than the subsequent strcat
+     * loop needed, producing a heap overflow. */
+    if (len == 0) {
+        char *empty = (char *)turbo_alloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
+    if ((size_t)count > (SIZE_MAX - 1) / len) {
+        fprintf(stderr,
+                "[rt_str_repeat] overflow: len=%zu * count=%lld exceeds SIZE_MAX\n",
+                len, count);
+        char *empty = (char *)turbo_alloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
     size_t total = len * (size_t)count;
     char *result = (char *)turbo_alloc(total + 1);
     result[0] = '\0';
@@ -1083,6 +1101,9 @@ typedef struct {
 
 typedef struct {
     unsigned short port;
+    /* Bind address in network byte order. Defaults to 127.0.0.1 for
+     * rt_http_server; rt_http_server_public sets this to INADDR_ANY. */
+    unsigned int bind_addr;
     Route routes[64];
     int route_count;
 } HttpServerC;
@@ -1094,6 +1115,21 @@ long long rt_http_server(long long port) {
     if (http_server_count >= 16) { fprintf(stderr, "error: max 16 HTTP servers\n"); exit(1); }
     int id = http_server_count++;
     http_servers[id].port = (unsigned short)port;
+    /* Secure default: listen only on the loopback interface. Users who
+     * need external access must opt in via rt_http_server_public. */
+    http_servers[id].bind_addr = htonl(INADDR_LOOPBACK);
+    http_servers[id].route_count = 0;
+    return id;
+}
+
+/* Like rt_http_server, but binds INADDR_ANY — exposes the server on all
+ * interfaces. Callers are expected to know what they are doing and to
+ * front this with a reverse proxy in production. */
+long long rt_http_server_public(long long port) {
+    if (http_server_count >= 16) { fprintf(stderr, "error: max 16 HTTP servers\n"); exit(1); }
+    int id = http_server_count++;
+    http_servers[id].port = (unsigned short)port;
+    http_servers[id].bind_addr = htonl(INADDR_ANY);
     http_servers[id].route_count = 0;
     return id;
 }
@@ -1332,7 +1368,10 @@ void rt_http_listen(long long server_id) {
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
+    /* Bind address was chosen at server-creation time:
+     *   rt_http_server        -> 127.0.0.1
+     *   rt_http_server_public -> 0.0.0.0 */
+    addr.sin_addr.s_addr = srv->bind_addr;
     addr.sin_port = htons(srv->port);
 
     if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {

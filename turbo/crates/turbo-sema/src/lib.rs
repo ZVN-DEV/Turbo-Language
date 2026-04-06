@@ -601,6 +601,7 @@ impl Checker {
                 | "json_get"
                 | "json_stringify"
                 | "http_server"
+                | "http_server_public"
                 | "route"
                 | "http_listen"
                 | "respond"
@@ -2480,13 +2481,14 @@ impl Checker {
                     }
 
                     // ── HTTP server builtins ──────────────────────────
-                    // http_server(port: i64) -> i64
-                    if name == "http_server" {
+                    // http_server(port: i64) -> i64          (binds 127.0.0.1)
+                    // http_server_public(port: i64) -> i64   (binds 0.0.0.0)
+                    if name == "http_server" || name == "http_server_public" {
                         if args.len() != 1 {
                             self.error(
                                 ErrorCode::E0100,
                                 format!(
-                                    "http_server() takes exactly 1 argument, got {}",
+                                    "{name}() takes exactly 1 argument, got {}",
                                     args.len()
                                 ),
                                 callee.span.clone(),
@@ -2497,7 +2499,7 @@ impl Checker {
                         if !port_ty.is_error() && !port_ty.is_integer() {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("http_server() expects integer port, found `{port_ty}`"),
+                                format!("{name}() expects integer port, found `{port_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
