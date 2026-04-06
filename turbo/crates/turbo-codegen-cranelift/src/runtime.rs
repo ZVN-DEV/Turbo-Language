@@ -556,12 +556,24 @@ pub(crate) extern "C" fn rt_str_join(arr: *const u8, sep: *const u8) -> *const u
 
 /// repeat(s, n) -> str — repeat string n times
 pub(crate) extern "C" fn rt_str_repeat(s: *const u8, n: i64) -> *const u8 {
+    // Mirrors `rt_str_repeat` in turbo_rt.c — rejects non-positive counts,
+    // zero-length inputs, and length*count overflow before allocating.
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    let repeated = s.repeat(n.max(0) as usize);
-    let cs = std::ffi::CString::new(repeated).unwrap();
-    cs.into_raw() as *const u8
+    if n <= 0 || s.is_empty() {
+        return rt_empty_cstr();
+    }
+    let count = n as usize;
+    let len = s.len();
+    if count > (usize::MAX - 1) / len {
+        eprintln!("[rt_str_repeat] overflow: len={} count={}", len, count);
+        return rt_empty_cstr();
+    }
+    let repeated = s.repeat(count);
+    std::ffi::CString::new(repeated)
+        .unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
+        .into_raw() as *const u8
 }
 
 pub(crate) extern "C" fn rt_read_line() -> *const u8 {
@@ -618,14 +630,62 @@ pub(crate) extern "C" fn rt_sqrt(x: f64) -> f64 {
 
 // ── HTTP + JSON runtime functions ───────────────────────────────────
 
+/// Maximum HTTP request body we will accept from a client, in bytes.
+/// Mirrors `RT_HTTP_MAX_BODY` in the C runtime (`turbo_rt.c`).
+const RT_HTTP_MAX_BODY: usize = 32 * 1024 * 1024;
+
+/// Allocate an empty C string, used as a safe return value from error paths
+/// in string/HTTP helpers. Never panics.
+fn rt_empty_cstr() -> *const u8 {
+    std::ffi::CString::new("")
+        .expect("empty CString never has interior NUL")
+        .into_raw() as *const u8
+}
+
+/// Validate that `url` is a well-formed http:// or https:// URL safe to hand
+/// to curl. Mirrors `rt_url_is_http` in the C runtime — reject anything that
+/// could be interpreted as a curl flag or a non-http(s) scheme (file://,
+/// gopher://, dict://, etc.). This is the JIT-side twin of the hardening in
+/// `turbo_rt.c`.
+fn rt_url_is_http(url: &str) -> bool {
+    if url.is_empty() {
+        return false;
+    }
+    // Anything that looks like a flag gets rejected — curl would otherwise
+    // interpret it as an argument even with -- in some historical builds.
+    if url.starts_with('-') {
+        return false;
+    }
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
 /// HTTP GET via system curl. Returns response body as a C string.
+/// Hardened: rejects non-http(s) schemes and flag-shaped inputs, pins the
+/// protocol allowlist, bounds total time, and uses `--` to prevent flag
+/// injection. Keep in sync with `rt_http_get` in `turbo_rt.c`.
 pub(crate) extern "C" fn rt_http_get(url: *const u8) -> *const u8 {
+    if url.is_null() {
+        eprintln!("[rt_http] blocked non-http(s) URL: (null)");
+        return rt_empty_cstr();
+    }
     let url = unsafe { std::ffi::CStr::from_ptr(url as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
+    if !rt_url_is_http(url) {
+        eprintln!("[rt_http] blocked non-http(s) URL: {}", url);
+        return rt_empty_cstr();
+    }
     let output = std::process::Command::new("curl")
         .arg("-s")
         .arg("-L")
+        .arg("--proto")
+        .arg("=http,https")
+        .arg("--max-time")
+        .arg("30")
+        .arg("--max-redirs")
+        .arg("5")
+        .arg("--")
         .arg(url)
         .output();
     match output {
@@ -636,29 +696,50 @@ pub(crate) extern "C" fn rt_http_get(url: *const u8) -> *const u8 {
             cs.into_raw() as *const u8
         }
         Err(e) => {
-            let cs = std::ffi::CString::new(format!("error: {}", e)).unwrap();
-            cs.into_raw() as *const u8
+            eprintln!("[rt_http] curl exec failed: {}", e);
+            rt_empty_cstr()
         }
     }
 }
 
 /// HTTP POST via system curl. Takes URL and body, returns response body as a C string.
+/// Hardened with the same scheme validation, protocol pinning, and flag-injection
+/// guards as `rt_http_get`. Keep in sync with `rt_http_post` in `turbo_rt.c`.
 pub(crate) extern "C" fn rt_http_post(url: *const u8, body: *const u8) -> *const u8 {
+    if url.is_null() {
+        eprintln!("[rt_http] blocked non-http(s) URL: (null)");
+        return rt_empty_cstr();
+    }
     let url = unsafe { std::ffi::CStr::from_ptr(url as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    let body_str = unsafe { std::ffi::CStr::from_ptr(body as *const std::ffi::c_char) }
-        .to_str()
-        .unwrap_or("");
+    if !rt_url_is_http(url) {
+        eprintln!("[rt_http] blocked non-http(s) URL: {}", url);
+        return rt_empty_cstr();
+    }
+    let body_str = if body.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(body as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
     let output = std::process::Command::new("curl")
         .arg("-s")
         .arg("-L")
+        .arg("--proto")
+        .arg("=http,https")
+        .arg("--max-time")
+        .arg("30")
+        .arg("--max-redirs")
+        .arg("5")
         .arg("-X")
         .arg("POST")
         .arg("-H")
         .arg("Content-Type: application/json")
         .arg("-d")
         .arg(body_str)
+        .arg("--")
         .arg(url)
         .output();
     match output {
@@ -669,8 +750,8 @@ pub(crate) extern "C" fn rt_http_post(url: *const u8, body: *const u8) -> *const
             cs.into_raw() as *const u8
         }
         Err(e) => {
-            let cs = std::ffi::CString::new(format!("error: {}", e)).unwrap();
-            cs.into_raw() as *const u8
+            eprintln!("[rt_http] curl exec failed: {}", e);
+            rt_empty_cstr()
         }
     }
 }
@@ -878,13 +959,25 @@ fn handle_http_connection(
             }
             let lower = line.to_lowercase();
             if lower.starts_with("content-length:") {
-                content_length = line
+                // Parse as i64 first so we can cleanly reject negative values
+                // and overflow instead of silently collapsing to usize::MAX
+                // or OOM'ing on a later `vec![0u8; N]`. Mirrors the
+                // strtoll + bounds logic in `turbo_rt.c`.
+                let raw: i64 = line
                     .split(':')
                     .nth(1)
                     .unwrap_or("0")
                     .trim()
                     .parse()
-                    .unwrap_or(0);
+                    .unwrap_or(-1);
+                if raw < 0 || raw as u64 > RT_HTTP_MAX_BODY as u64 {
+                    eprintln!("[rt_http] rejecting Content-Length: {}", raw);
+                    let _ = writer.write_all(
+                        b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    return;
+                }
+                content_length = raw as usize;
             }
             if lower.starts_with("connection:") {
                 let val = line.split(':').nth(1).unwrap_or("").trim().to_lowercase();
