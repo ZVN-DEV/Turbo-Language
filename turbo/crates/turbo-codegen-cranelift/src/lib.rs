@@ -226,10 +226,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_json_stringify", rt_json_stringify as *const u8);
     // HTTP server builtins
     jit_builder.symbol("rt_http_server", rt_http_server as *const u8);
-    jit_builder.symbol(
-        "rt_http_server_public",
-        rt_http_server_public as *const u8,
-    );
+    jit_builder.symbol("rt_http_server_public", rt_http_server_public as *const u8);
     jit_builder.symbol("rt_http_route", rt_http_route as *const u8);
     jit_builder.symbol("rt_http_listen", rt_http_listen as *const u8);
     jit_builder.symbol("rt_respond", rt_respond as *const u8);
@@ -363,10 +360,7 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_json_get", rt_json_get as *const u8);
     jit_builder.symbol("rt_json_stringify", rt_json_stringify as *const u8);
     jit_builder.symbol("rt_http_server", rt_http_server as *const u8);
-    jit_builder.symbol(
-        "rt_http_server_public",
-        rt_http_server_public as *const u8,
-    );
+    jit_builder.symbol("rt_http_server_public", rt_http_server_public as *const u8);
     jit_builder.symbol("rt_http_route", rt_http_route as *const u8);
     jit_builder.symbol("rt_http_listen", rt_http_listen as *const u8);
     jit_builder.symbol("rt_respond", rt_respond as *const u8);
@@ -5435,9 +5429,9 @@ mod tests {
 
     #[test]
     fn test_rt_f64_to_str() {
-        let result = rt_f64_to_str(3.14);
+        let result = rt_f64_to_str(2.5);
         let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
-        assert_eq!(s.to_str().unwrap(), "3.14");
+        assert_eq!(s.to_str().unwrap(), "2.5");
     }
 
     #[test]
