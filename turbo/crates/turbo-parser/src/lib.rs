@@ -388,10 +388,17 @@ impl Parser {
                         Ok(Spanned::new(Item::Function(f), start..end))
                     }
                     "unsafe" => {
-                        let mut f = self.parse_fn_def(false)?;
-                        f.is_unsafe = true;
-                        let end = f.body.span.end;
-                        Ok(Spanned::new(Item::Function(f), start..end))
+                        if matches!(self.peek(), Some(Token::Extern)) {
+                            let extern_block = self.parse_extern_block()?;
+                            let end = self.tokens.get(self.pos.saturating_sub(1))
+                                .map(|t| t.span.end).unwrap_or(start);
+                            Ok(Spanned::new(Item::Extern(extern_block), start..end))
+                        } else {
+                            let mut f = self.parse_fn_def(false)?;
+                            f.is_unsafe = true;
+                            let end = f.body.span.end;
+                            Ok(Spanned::new(Item::Function(f), start..end))
+                        }
                     }
                     _ => Err(ParseError {
                         code: ErrorCode::E0001,
@@ -399,6 +406,14 @@ impl Parser {
                         span: attr_span,
                     }),
                 }
+            }
+            Some(Token::Extern) => {
+                let span = self.peek_span();
+                Err(ParseError {
+                    code: ErrorCode::E0007,
+                    message: "extern blocks require `@unsafe`; use `@unsafe extern \"C\" { ... }`".to_string(),
+                    span,
+                })
             }
             _ => {
                 let span = self.peek_span();
@@ -413,6 +428,58 @@ impl Parser {
                 })
             }
         }
+    }
+
+    fn parse_extern_block(&mut self) -> Result<ExternBlock, ParseError> {
+        self.expect(&Token::Extern)?;
+
+        // Expect ABI string: "C"
+        let abi = match self.peek() {
+            Some(Token::String(s)) => {
+                let abi = s.clone();
+                self.advance();
+                abi
+            }
+            _ => {
+                let span = self.peek_span();
+                return Err(ParseError {
+                    code: ErrorCode::E0001,
+                    message: "expected ABI string (e.g. \"C\") after `extern`".to_string(),
+                    span,
+                });
+            }
+        };
+
+        self.expect(&Token::LBrace)?;
+
+        let mut functions = Vec::new();
+        while !matches!(self.peek(), Some(Token::RBrace) | None) {
+            let fn_start = self.peek_span().start;
+            self.expect(&Token::Fn)?;
+            let (name, _) = self.expect_ident()?;
+            self.expect(&Token::LParen)?;
+            let params = self.parse_params()?;
+            self.expect(&Token::RParen)?;
+
+            let return_type = if matches!(self.peek(), Some(Token::Arrow)) {
+                self.advance();
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+
+            let fn_end = self.tokens.get(self.pos.saturating_sub(1))
+                .map(|t| t.span.end).unwrap_or(fn_start);
+
+            functions.push(Spanned::new(
+                ExternFnSig { name, params, return_type },
+                fn_start..fn_end,
+            ));
+        }
+
+        self.expect(&Token::RBrace)?;
+
+        Ok(ExternBlock { abi, functions })
     }
 
     fn parse_struct_def(&mut self) -> Result<StructDef, ParseError> {

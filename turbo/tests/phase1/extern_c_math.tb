@@ -1,0 +1,12 @@
+@unsafe
+extern "C" {
+    fn floor(x: f64) -> f64
+    fn ceil(x: f64) -> f64
+}
+
+fn main() {
+    let f = floor(3.7)
+    print(f)
+    let c = ceil(3.2)
+    print(c)
+}

@@ -1,0 +1,8 @@
+@unsafe
+extern "Rust" {
+    fn floor(x: f64) -> f64
+}
+
+fn main() {
+    print(1)
+}

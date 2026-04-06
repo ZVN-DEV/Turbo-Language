@@ -7,7 +7,7 @@
 A compiled, type-safe programming language with familiar syntax, native performance, and first-class AI agent primitives. Compiles to machine code via Cranelift -- no VM, no garbage collector, no overhead.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-435%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-437%20passing-brightgreen.svg)](#testing)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 
@@ -86,6 +86,8 @@ Turbo compiles directly to machine code. Programs start instantly and run at nat
 - **JIT execution** via `turbolang run` for rapid development (Cranelift)
 - **AOT compilation** via `turbolang build` for production binaries (Cranelift)
 - **Optimized AOT** via `turbolang build --llvm` for maximum performance (LLVM 18)
+- **WASM** via `turbolang build --target wasm` for WebAssembly output
+- **Cross-compilation** via `turbolang build --target linux-arm64` from macOS
 
 ### Type System
 
@@ -218,6 +220,28 @@ fn main() {
 }
 ```
 
+### C FFI
+
+Call C library functions directly from Turbo.
+
+```turbo
+@unsafe
+extern "C" {
+    fn floor(x: f64) -> f64
+    fn ceil(x: f64) -> f64
+    fn puts(s: str) -> i32
+}
+
+fn main() {
+    print(floor(3.7))
+    puts("Hello from C!")
+}
+```
+
+```bash
+turbolang build --link m app.tb    # link additional libraries
+```
+
 ### Derive Attributes & Testing
 
 ```turbo
@@ -313,6 +337,9 @@ See [`examples/web-dashboard/main.tb`](examples/web-dashboard/main.tb)
 | `turbolang run <file.tb>` | Compile and run via JIT |
 | `turbolang build <file.tb>` | Compile to native binary (Cranelift) |
 | `turbolang build --llvm <file.tb>` | Compile with LLVM optimizations |
+| `turbolang build --target wasm <file.tb>` | Compile to WebAssembly |
+| `turbolang build --target linux-arm64 <file.tb>` | Cross-compile for Linux ARM64 |
+| `turbolang build --target linux-x86 <file.tb>` | Cross-compile for Linux x86_64 |
 | `turbolang test <file.tb>` | Run `@test` functions |
 | `turbolang bench <file.tb>` | Benchmark with timing |
 | `turbolang check <file.tb>` | Type-check without compiling |
@@ -387,7 +414,7 @@ cd turbo && ./tests/run_tests.sh
 turbolang run turbo/tests/phase1/fibonacci.tb
 ```
 
-435+ tests across unit and integration suites (275 unit + 160 integration).
+437+ tests across unit and integration suites (275 unit + 162 integration).
 
 ## LLVM Backend
 

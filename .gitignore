@@ -17,6 +17,7 @@ turbo_test_build
 hello
 *.o
 *.d
+*.wasm
 
 # IDE
 .vscode/

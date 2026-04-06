@@ -3,7 +3,23 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.5.0] - 2026-04-06
+
+### Added
+- **WASM compilation target**: `turbolang build --target wasm app.tb` compiles Turbo programs to WebAssembly via C transpilation (AST → C → clang → wasm-ld → .wasm), runs in wasmtime/wasmer
+- **Cross-compilation**: `turbolang build --target linux-arm64` and `--target linux-x86` produce Linux ELF binaries from macOS using Zig cc as cross-linker
+- **C FFI**: `@unsafe extern "C" { fn floor(x: f64) -> f64 }` declares external C functions callable from Turbo code; `--link` flag for additional libraries
+- WASM-compatible runtime (`turbo_rt_wasm.c`) with stubs for unsupported platform features
+- Cross-compiler discovery: env var override → Zig cc → GNU cross-compiler → helpful error
+- Target aliases: `linux-arm64`, `linux-x86`, `macos-arm64`, `macos-x86`, `wasm`
+- FFI type safety validation — only scalar types (i8..i64, u8..u64, f32, f64, bool, str, unit) permitted in extern signatures
+- 6 new integration tests for C FFI (happy path + error cases)
+
+### Changed
+- `cranelift-codegen` now built with `features = ["all-arch"]` for cross-architecture codegen
+
+### Tests
+- 275 unit tests, 166 integration tests (441 total, all passing)
 
 ## [0.4.0] - 2026-04-05
 

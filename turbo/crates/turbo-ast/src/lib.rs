@@ -40,6 +40,23 @@ pub enum Item {
     },
     /// Constant declaration: `const NAME = value`
     Const(ConstDef),
+    /// Extern block: `@unsafe extern "C" { fn foo(...) -> T }`
+    Extern(ExternBlock),
+}
+
+/// Extern function signature (no body — declared in an `extern "C" { ... }` block)
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternFnSig {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Option<Spanned<TypeExpr>>,
+}
+
+/// An `extern "ABI" { ... }` block declaring foreign functions
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternBlock {
+    pub abi: String,
+    pub functions: Vec<Spanned<ExternFnSig>>,
 }
 
 /// Constant definition: `const NAME: type = expr` or `const NAME = expr`

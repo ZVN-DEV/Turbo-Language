@@ -239,6 +239,7 @@ dependencies = [
  "gimli",
  "hashbrown 0.14.5",
  "log",
+ "pulley-interpreter",
  "regalloc2",
  "rustc-hash",
  "smallvec",
@@ -951,6 +952,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pulley-interpreter"
+version = "26.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df33e7f8a43ccc7f93b330fef4baf271764674926f3f4d40f4a196d54de8af26"
+dependencies = [
+ "cranelift-bitset",
+ "log",
+ "sptr",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1150,6 +1162,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
+name = "sptr"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b9b39299b249ad65f3b7e96443bad61c02ca5cd3589f46cb6d610a0fd6c0d6a"
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1213,11 +1231,11 @@ dependencies = [
 
 [[package]]
 name = "turbo-ast"
-version = "0.4.0"
+version = "0.5.0"
 
 [[package]]
 name = "turbo-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ariadne",
  "clap",
@@ -1236,7 +1254,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-codegen-cranelift"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cranelift",
  "cranelift-codegen",
@@ -1254,7 +1272,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-codegen-llvm"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "inkwell",
  "turbo-ast",
@@ -1262,14 +1280,14 @@ dependencies = [
 
 [[package]]
 name = "turbo-lexer"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "logos",
 ]
 
 [[package]]
 name = "turbo-lsp"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "lsp-server",
  "lsp-types",
@@ -1282,7 +1300,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-parser"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "turbo-ast",
  "turbo-lexer",
@@ -1290,7 +1308,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-sema"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "turbo-ast",
  "turbo-lexer",

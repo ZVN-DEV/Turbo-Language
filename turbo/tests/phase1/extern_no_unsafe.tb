@@ -1,0 +1,7 @@
+extern "C" {
+    fn floor(x: f64) -> f64
+}
+
+fn main() {
+    print(floor(3.7))
+}

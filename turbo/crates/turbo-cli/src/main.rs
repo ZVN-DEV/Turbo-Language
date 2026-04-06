@@ -51,6 +51,14 @@ enum Commands {
         /// Use LLVM backend instead of Cranelift
         #[arg(long)]
         llvm: bool,
+
+        /// Compilation target (e.g. "wasm", "linux-arm64", "linux-x86")
+        #[arg(long)]
+        target: Option<String>,
+
+        /// Link additional C libraries (e.g. --link m --link pthread)
+        #[arg(long)]
+        link: Vec<String>,
     },
     /// Initialize a new Turbo project
     Init {
@@ -144,9 +152,11 @@ fn main() {
             output,
             verbose,
             llvm,
+            target,
+            link,
         } => {
             let path = resolve_entry_file(file);
-            build_file(&path, output.as_deref(), verbose, llvm);
+            build_file(&path, output.as_deref(), verbose, llvm, target.as_deref(), &link);
         }
         Commands::Init { name } => init_project(&name),
         Commands::Repl => repl::run_repl(),
@@ -1479,11 +1489,25 @@ fn collect_test_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
+/// Map user-friendly target names to target-lexicon triples.
+fn resolve_target_triple(target: Option<&str>) -> Option<&str> {
+    match target? {
+        "linux-arm64" | "linux-aarch64" => Some("aarch64-unknown-linux-gnu"),
+        "linux-x86" | "linux-x64" | "linux-x86_64" => Some("x86_64-unknown-linux-gnu"),
+        "macos-arm64" => Some("aarch64-apple-darwin"),
+        "macos-x86" | "macos-x64" => Some("x86_64-apple-darwin"),
+        "wasm" | "wasm32-wasi" | "wasm32" => None, // handled by existing wasm path
+        other => Some(other),                       // raw triple passthrough
+    }
+}
+
 fn build_file(
     path: &std::path::Path,
     output: Option<&std::path::Path>,
     verbose: bool,
     use_llvm: bool,
+    target: Option<&str>,
+    link_libs: &[String],
 ) {
     check_file_size(path);
 
@@ -1503,13 +1527,20 @@ fn build_file(
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| "<unknown>".to_string());
 
+    let is_wasm = matches!(target, Some("wasm" | "wasm32-wasi" | "wasm32"));
+
     // Default output: project name from turbo.toml if available, else filename without .tb
     let default_output = if output.is_none() {
-        read_project_name().unwrap_or_else(|| {
+        let base = read_project_name().unwrap_or_else(|| {
             path.file_stem()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("a.out"))
-        })
+        });
+        if is_wasm {
+            base.with_extension("wasm")
+        } else {
+            base
+        }
     } else {
         path.file_stem()
             .map(PathBuf::from)
@@ -1614,29 +1645,50 @@ fn build_file(
         std::process::exit(1);
     }
 
-    // Compile to native binary
+    // Compile
     let codegen_start = std::time::Instant::now();
-    let backend_name = if use_llvm { "LLVM" } else { "Cranelift" };
-    let codegen_result: Result<(), String> = if use_llvm {
+    let (codegen_result, backend_name): (Result<(), String>, &str) = if is_wasm {
+        let use_wasi = !matches!(target, Some("wasm32"));
+        let r = turbo_codegen_cranelift::wasm_compile(&module, output_path, use_wasi)
+            .map_err(|e| e.to_string());
+        (r, "Cranelift/WASM")
+    } else if use_llvm {
         #[cfg(feature = "llvm")]
         {
-            turbo_codegen_llvm::aot_compile(&module, output_path).map_err(|e| e.to_string())
+            let r =
+                turbo_codegen_llvm::aot_compile(&module, output_path).map_err(|e| e.to_string());
+            (r, "LLVM")
         }
         #[cfg(not(feature = "llvm"))]
         {
-            Err("LLVM backend not available — rebuild with --features llvm".to_string())
+            (
+                Err("LLVM backend not available — rebuild with --features llvm".to_string()),
+                "LLVM",
+            )
         }
     } else {
-        turbo_codegen_cranelift::aot_compile(&module, output_path, true).map_err(|e| e.to_string())
+        let cross_target = resolve_target_triple(target);
+        let r = turbo_codegen_cranelift::aot_compile(&module, output_path, true, cross_target, link_libs)
+            .map_err(|e| e.to_string());
+        (r, "Cranelift")
     };
     match codegen_result {
         Ok(()) => {
             let codegen_time = codegen_start.elapsed();
-            eprintln!(
-                "\x1b[32m\u{2713}\x1b[0m Compiled to {} ({})",
-                output_path.display(),
-                backend_name
-            );
+            if let Some(t) = target {
+                eprintln!(
+                    "\x1b[32m\u{2713}\x1b[0m Compiled to {} ({}, target: {})",
+                    output_path.display(),
+                    backend_name,
+                    t
+                );
+            } else {
+                eprintln!(
+                    "\x1b[32m\u{2713}\x1b[0m Compiled to {} ({})",
+                    output_path.display(),
+                    backend_name
+                );
+            }
             if verbose {
                 eprintln!("\n--- Timing ---");
                 eprintln!("  Lex:     {:.2?}", lex_time);

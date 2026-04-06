@@ -111,14 +111,6 @@ impl Ty {
         )
     }
 
-    fn is_signed_integer(&self) -> bool {
-        matches!(self, Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64)
-    }
-
-    fn is_unsigned_integer(&self) -> bool {
-        matches!(self, Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
-    }
-
     fn is_float(&self) -> bool {
         matches!(self, Ty::F32 | Ty::F64)
     }
@@ -196,6 +188,17 @@ fn types_compatible(expected: &Ty, actual: &Ty) -> bool {
         }
         _ => false,
     }
+}
+
+/// Check if a type is safe to use across the C FFI boundary.
+fn is_ffi_safe_type(ty: &Ty) -> bool {
+    matches!(
+        ty,
+        Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64
+            | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64
+            | Ty::F32 | Ty::F64
+            | Ty::Bool | Ty::Str | Ty::Unit | Ty::Error
+    )
 }
 
 fn resolve_type_expr(
@@ -902,6 +905,76 @@ impl Checker {
                         item.span.clone(),
                     );
                 }
+            }
+        }
+
+        // Pass 1a: register extern function signatures
+        for item in &module.items {
+            let Item::Extern(ext) = &item.node else { continue; };
+
+            if ext.abi != "C" {
+                self.error(
+                    ErrorCode::E0001,
+                    format!("unsupported ABI \"{}\"; only \"C\" is supported", ext.abi),
+                    item.span.clone(),
+                );
+                continue;
+            }
+
+            for fn_sig in &ext.functions {
+                let f = &fn_sig.node;
+
+                // Check for duplicate definitions (user functions or builtins)
+                if self.functions.contains_key(&f.name) || Self::is_builtin_function(&f.name) {
+                    self.error(
+                        ErrorCode::E0313,
+                        format!("cannot define extern function `{}`: name is already defined or is a builtin", f.name),
+                        fn_sig.span.clone(),
+                    );
+                    continue;
+                }
+
+                let mut params = Vec::new();
+                for param in &f.params {
+                    let ty = resolve_type_expr(&param.ty.node, Some(&self.structs), Some(&self.enums))
+                        .unwrap_or(Ty::Error);
+                    if !is_ffi_safe_type(&ty) {
+                        self.error(
+                            ErrorCode::E0100,
+                            format!("type `{ty}` is not FFI-safe; extern functions only support scalar types (int, float, i32, i64, f32, f64, u8, u16, u32, u64, bool, str)"),
+                            param.ty.span.clone(),
+                        );
+                    }
+                    params.push((param.name.clone(), ty));
+                }
+
+                let ret = if let Some(ret_type) = &f.return_type {
+                    let ty = resolve_type_expr(&ret_type.node, Some(&self.structs), Some(&self.enums))
+                        .unwrap_or(Ty::Error);
+                    if !is_ffi_safe_type(&ty) {
+                        self.error(
+                            ErrorCode::E0100,
+                            format!("return type `{ty}` is not FFI-safe; extern functions only support scalar types"),
+                            ret_type.span.clone(),
+                        );
+                    }
+                    ty
+                } else {
+                    Ty::Unit
+                };
+
+                self.functions.insert(
+                    f.name.clone(),
+                    FnSig {
+                        type_params: vec![],
+                        type_param_bounds: HashMap::new(),
+                        params,
+                        ret,
+                        is_async: false,
+                        is_tool: false,
+                        is_unsafe: false,
+                    },
+                );
             }
         }
 

@@ -1,0 +1,8 @@
+@unsafe
+extern "C" {
+    fn bad_func(data: [i32]) -> i32
+}
+
+fn main() {
+    print(1)
+}
