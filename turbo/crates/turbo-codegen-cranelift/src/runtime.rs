@@ -554,10 +554,18 @@ pub(crate) extern "C" fn rt_str_join(arr: *const u8, sep: *const u8) -> *const u
     cs.into_raw() as *const u8
 }
 
+/// Practical cap on a single repeat() allocation. 256 MB is larger than any
+/// legitimate string use-case but keeps a hostile input from aborting the
+/// process via allocator panic.
+const RT_STR_REPEAT_MAX_BYTES: usize = 256 * 1024 * 1024;
+
 /// repeat(s, n) -> str — repeat string n times
 pub(crate) extern "C" fn rt_str_repeat(s: *const u8, n: i64) -> *const u8 {
     // Mirrors `rt_str_repeat` in turbo_rt.c — rejects non-positive counts,
-    // zero-length inputs, and length*count overflow before allocating.
+    // zero-length inputs, length*count overflow, and unreasonably large
+    // totals before allocating. Rust's Vec allocator aborts on
+    // capacity_overflow; since this function is extern "C" (unwind-forbidden)
+    // the abort would take down the whole JIT process, so we cap up-front.
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
@@ -568,6 +576,14 @@ pub(crate) extern "C" fn rt_str_repeat(s: *const u8, n: i64) -> *const u8 {
     let len = s.len();
     if count > (usize::MAX - 1) / len {
         eprintln!("[rt_str_repeat] overflow: len={} count={}", len, count);
+        return rt_empty_cstr();
+    }
+    let total = len * count;
+    if total > RT_STR_REPEAT_MAX_BYTES {
+        eprintln!(
+            "[rt_str_repeat] refusing allocation: len={} count={} total={} > cap {}",
+            len, count, total, RT_STR_REPEAT_MAX_BYTES
+        );
         return rt_empty_cstr();
     }
     let repeated = s.repeat(count);

@@ -444,6 +444,17 @@ const char* rt_str_repeat(const char *s, long long count) {
         return empty;
     }
     size_t total = len * (size_t)count;
+    /* Practical cap: 256 MB. Larger totals usually indicate a bug or attack
+     * and would exhaust memory; mirror the Rust JIT runtime cap. */
+    const size_t RT_STR_REPEAT_MAX_BYTES = 256ULL * 1024ULL * 1024ULL;
+    if (total > RT_STR_REPEAT_MAX_BYTES) {
+        fprintf(stderr,
+                "[rt_str_repeat] refusing allocation: total=%zu > cap %zu\n",
+                total, RT_STR_REPEAT_MAX_BYTES);
+        char *empty = (char *)turbo_alloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
     char *result = (char *)turbo_alloc(total + 1);
     result[0] = '\0';
     for (long long i = 0; i < count; i++) {
