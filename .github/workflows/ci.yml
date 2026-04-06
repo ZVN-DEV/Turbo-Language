@@ -111,3 +111,17 @@ jobs:
 
       - name: Build
         run: cargo build --release --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+
+  c-runtime-tests:
+    name: C runtime tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run C runtime tests
+        run: bash tests.sh
+        working-directory: turbo/crates/turbo-codegen-cranelift/runtime

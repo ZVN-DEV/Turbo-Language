@@ -1528,9 +1528,16 @@ void rt_release(void *data_ptr) {
     }
 }
 
-/* Entry point: calls Turbo's main and returns 0 */
+/* Entry point: calls Turbo's main and returns 0.
+ *
+ * Suppressed under RT_TEST_BUILD so the C runtime test harness
+ * (runtime/tests/test_rt.c) can link against turbo_rt.c without
+ * pulling in the unresolved `turbo_main` symbol or colliding with
+ * the harness's own `main`. */
+#ifndef RT_TEST_BUILD
 extern void turbo_main(void);
 int main(void) {
     turbo_main();
     return 0;
 }
+#endif
