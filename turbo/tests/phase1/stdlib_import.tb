@@ -1,0 +1,9 @@
+import { trim, upper } from "std/string"
+import { abs, max } from "std/math"
+
+fn main() {
+    let s = "  hello  "
+    print(trim(s).upper())
+    print(abs(-42))
+    print(max(3, 7))
+}

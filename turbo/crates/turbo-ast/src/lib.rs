@@ -1,4 +1,5 @@
 pub mod errors;
+pub mod stdlib_modules;
 pub use errors::ErrorCode;
 
 /// A span in source code: byte offset range [start, end)

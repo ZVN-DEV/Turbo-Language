@@ -29,8 +29,12 @@ pub struct SemaResult {
 /// Internal type representation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
+    I8,
+    I16,
     I32,
     I64,
+    U8,
+    U16,
     U32,
     U64,
     F32,
@@ -63,12 +67,16 @@ pub enum Ty {
 impl std::fmt::Display for Ty {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Ty::I8 => write!(f, "i8"),
+            Ty::I16 => write!(f, "i16"),
             Ty::I32 => write!(f, "i32"),
-            Ty::I64 => write!(f, "i64"),
+            Ty::I64 => write!(f, "int"),
+            Ty::U8 => write!(f, "u8"),
+            Ty::U16 => write!(f, "u16"),
             Ty::U32 => write!(f, "u32"),
             Ty::U64 => write!(f, "u64"),
             Ty::F32 => write!(f, "f32"),
-            Ty::F64 => write!(f, "f64"),
+            Ty::F64 => write!(f, "float"),
             Ty::Bool => write!(f, "bool"),
             Ty::Str => write!(f, "str"),
             Ty::Unit => write!(f, "()"),
@@ -97,7 +105,18 @@ impl std::fmt::Display for Ty {
 
 impl Ty {
     fn is_integer(&self) -> bool {
-        matches!(self, Ty::I32 | Ty::I64 | Ty::U32 | Ty::U64)
+        matches!(
+            self,
+            Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64
+        )
+    }
+
+    fn is_signed_integer(&self) -> bool {
+        matches!(self, Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64)
+    }
+
+    fn is_unsigned_integer(&self) -> bool {
+        matches!(self, Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
     }
 
     fn is_float(&self) -> bool {
@@ -125,6 +144,37 @@ impl Ty {
             }
             _ => false,
         }
+    }
+}
+
+/// Extract the integer literal value from an expression, handling both
+/// `IntLit(n)` and `UnaryOp { Neg, IntLit(n) }` (which is how `-128` is parsed).
+fn extract_int_literal(expr: &Expr) -> Option<i64> {
+    match expr {
+        Expr::IntLit(n) => Some(*n),
+        Expr::UnaryOp {
+            op: UnaryOp::Neg,
+            expr: inner,
+        } => {
+            if let Expr::IntLit(n) = &inner.node {
+                Some(-*n)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Check if an integer literal value fits in the given target type.
+fn int_literal_fits_in_type(n: i64, target: &Ty) -> bool {
+    match target {
+        Ty::U8 => n >= 0 && n <= 255,
+        Ty::U16 => n >= 0 && n <= 65535,
+        Ty::U32 | Ty::U64 => n >= 0,
+        Ty::I8 => n >= -128 && n <= 127,
+        Ty::I16 => n >= -32768 && n <= 32767,
+        _ => true,
     }
 }
 
@@ -169,12 +219,16 @@ fn resolve_type_expr_with_params(
                 return Some(Ty::TypeParam(name.clone()));
             }
             match name.as_str() {
+                "i8" => Some(Ty::I8),
+                "i16" => Some(Ty::I16),
                 "i32" => Some(Ty::I32),
-                "i64" => Some(Ty::I64),
+                "int" | "i64" => Some(Ty::I64),
+                "u8" => Some(Ty::U8),
+                "u16" => Some(Ty::U16),
                 "u32" => Some(Ty::U32),
-                "u64" => Some(Ty::U64),
+                "u64" | "usize" => Some(Ty::U64),
                 "f32" => Some(Ty::F32),
-                "f64" => Some(Ty::F64),
+                "float" | "f64" => Some(Ty::F64),
                 "bool" => Some(Ty::Bool),
                 "str" => Some(Ty::Str),
                 _ => {
@@ -1164,15 +1218,11 @@ impl Checker {
                             && !types_compatible(&t, &inferred_ty)
                             && t != inferred_ty
                         {
-                            // Allow integer literal coercion: i64 literal -> i32, u32, u64
+                            // Allow integer literal coercion: i64 literal -> narrower int types
                             let is_int_literal_coercion = inferred_ty == Ty::I64
-                                && matches!(t, Ty::I32 | Ty::U32 | Ty::U64)
-                                && matches!(&c.value.node, Expr::IntLit(n) if
-                                    match t {
-                                        Ty::U32 | Ty::U64 => *n >= 0,
-                                        _ => true,
-                                    }
-                                );
+                                && matches!(t, Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
+                                && extract_int_literal(&c.value.node)
+                                    .is_some_and(|n| int_literal_fits_in_type(n, &t));
                             if !is_int_literal_coercion {
                                 self.error(
                                     ErrorCode::E0110,
@@ -1336,14 +1386,27 @@ impl Checker {
             && !types_compatible(&sig.ret, &body_ty)
             && !body_has_return
         {
-            self.error(
-                ErrorCode::E0109,
-                format!(
-                    "function `{}` should return `{}` but body returns `{}`",
-                    f.name, sig.ret, body_ty
-                ),
-                f.body.span.clone(),
-            );
+            // Allow integer literal coercion for tail expression (e.g., fn foo() -> u8 { 42 })
+            let tail_expr = if let Expr::Block { tail_expr, .. } = &f.body.node {
+                tail_expr.as_ref().map(|t| &t.node)
+            } else {
+                None
+            };
+            let is_return_coercion = body_ty == Ty::I64
+                && matches!(sig.ret, Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
+                && tail_expr
+                    .and_then(|e| extract_int_literal(e))
+                    .is_some_and(|n| int_literal_fits_in_type(n, &sig.ret));
+            if !is_return_coercion {
+                self.error(
+                    ErrorCode::E0109,
+                    format!(
+                        "function `{}` should return `{}` but body returns `{}`",
+                        f.name, sig.ret, body_ty
+                    ),
+                    f.body.span.clone(),
+                );
+            }
         }
 
         self.pop_scope_with_unused_warnings(&f.name);
@@ -1393,14 +1456,27 @@ impl Checker {
             && !types_compatible(&sig.ret, &body_ty)
             && !body_has_return
         {
-            self.error(
-                ErrorCode::E0109,
-                format!(
-                    "method `{}` should return `{}` but body returns `{}`",
-                    f.name, sig.ret, body_ty
-                ),
-                f.body.span.clone(),
-            );
+            // Allow integer literal coercion for tail expression
+            let tail_expr = if let Expr::Block { tail_expr, .. } = &f.body.node {
+                tail_expr.as_ref().map(|t| &t.node)
+            } else {
+                None
+            };
+            let is_return_coercion = body_ty == Ty::I64
+                && matches!(sig.ret, Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
+                && tail_expr
+                    .and_then(|e| extract_int_literal(e))
+                    .is_some_and(|n| int_literal_fits_in_type(n, &sig.ret));
+            if !is_return_coercion {
+                self.error(
+                    ErrorCode::E0109,
+                    format!(
+                        "method `{}` should return `{}` but body returns `{}`",
+                        f.name, sig.ret, body_ty
+                    ),
+                    f.body.span.clone(),
+                );
+            }
         }
 
         self.pop_scope_with_unused_warnings(&f.name);
@@ -3296,15 +3372,11 @@ impl Checker {
                                 && !types_compatible(&concrete_param_ty, arg_ty)
                                 && *arg_ty != concrete_param_ty
                             {
-                                // Allow integer literal coercion: i64 literal -> i32, u32, u64
+                                // Allow integer literal coercion: i64 literal -> narrower int types
                                 let is_int_literal_coercion = *arg_ty == Ty::I64
-                                    && matches!(concrete_param_ty, Ty::I32 | Ty::U32 | Ty::U64)
-                                    && matches!(&arg.node, Expr::IntLit(n) if
-                                        match concrete_param_ty {
-                                            Ty::U32 | Ty::U64 => *n >= 0,
-                                            _ => true,
-                                        }
-                                    );
+                                    && matches!(concrete_param_ty, Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
+                                    && extract_int_literal(&arg.node)
+                                        .is_some_and(|n| int_literal_fits_in_type(n, &concrete_param_ty));
                                 if !is_int_literal_coercion {
                                     self.error(ErrorCode::E0100,
                                         format!(
@@ -4998,15 +5070,11 @@ impl Checker {
                                 && !types_compatible(&t, &val_ty)
                                 && t != val_ty
                             {
-                                // Allow integer literal coercion: i64 literal -> i32, u32, u64
+                                // Allow integer literal coercion: i64 literal -> narrower int types
                                 let is_int_literal_coercion = val_ty == Ty::I64
-                                    && matches!(t, Ty::I32 | Ty::U32 | Ty::U64)
-                                    && matches!(&value.node, Expr::IntLit(n) if
-                                        match t {
-                                            Ty::U32 | Ty::U64 => *n >= 0,
-                                            _ => true,
-                                        }
-                                    );
+                                    && matches!(t, Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
+                                    && extract_int_literal(&value.node)
+                                        .is_some_and(|n| int_literal_fits_in_type(n, &t));
                                 // Allow float literal coercion: f64 literal -> f32
                                 let is_float_literal_coercion = val_ty == Ty::F64
                                     && t == Ty::F32
@@ -5109,14 +5177,23 @@ impl Checker {
                     && !types_compatible(&self.current_return_type, &ret_ty)
                     && ret_ty != self.current_return_type
                 {
-                    self.error(
-                        ErrorCode::E0109,
-                        format!(
-                            "return type `{ret_ty}` doesn't match function return type `{}`",
-                            self.current_return_type
-                        ),
-                        stmt.span.clone(),
-                    );
+                    // Allow integer literal coercion for return values
+                    let is_return_coercion = ret_ty == Ty::I64
+                        && matches!(self.current_return_type, Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
+                        && value
+                            .as_ref()
+                            .and_then(|v| extract_int_literal(&v.node))
+                            .is_some_and(|n| int_literal_fits_in_type(n, &self.current_return_type));
+                    if !is_return_coercion {
+                        self.error(
+                            ErrorCode::E0109,
+                            format!(
+                                "return type `{ret_ty}` doesn't match function return type `{}`",
+                                self.current_return_type
+                            ),
+                            stmt.span.clone(),
+                        );
+                    }
                 }
             }
             Stmt::Defer(expr) => {
@@ -5300,7 +5377,7 @@ mod tests {
         assert_has_error(
             r#"fn double(x: i64) -> i64 { x * 2 }
 fn main() { double("hello") }"#,
-            "argument `x` expects `i64`, found `str`",
+            "argument `x` expects `int`, found `str`",
         );
     }
 
@@ -5308,7 +5385,7 @@ fn main() { double("hello") }"#,
     fn test_return_type_mismatch() {
         assert_has_error(
             r#"fn foo() -> i64 { "hello" }"#,
-            "should return `i64` but body returns `str`",
+            "should return `int` but body returns `str`",
         );
     }
 
@@ -5560,7 +5637,7 @@ fn main() { let r = identity("hello") }"#,
         assert_has_error(
             r#"fn first<T>(a: T, b: T) -> T { a }
 fn main() { first(1, "hello") }"#,
-            "type parameter `T` inferred as `i64` but argument has type `str`",
+            "type parameter `T` inferred as `int` but argument has type `str`",
         );
     }
 
@@ -5584,7 +5661,7 @@ fn main() { first(1, "hello") }"#,
         assert_has_error(
             r#"async fn bad() -> i64 { "hello" }
 fn main() { }"#,
-            "should return `i64` but body returns `str`",
+            "should return `int` but body returns `str`",
         );
     }
 
@@ -5617,7 +5694,7 @@ fn main() { search("hello") }"#,
         assert_has_error(
             r#"tool fn search(q: str) -> str { "results" }
 fn main() { search(42) }"#,
-            "argument `q` expects `str`, found `i64`",
+            "argument `q` expects `str`, found `int`",
         );
     }
 

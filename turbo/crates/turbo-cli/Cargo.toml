@@ -1,6 +1,6 @@
 [package]
 name = "turbo-cli"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
 
 [[bin]]
@@ -17,6 +17,10 @@ turbo-sema = { path = "../turbo-sema" }
 clap = { workspace = true }
 ariadne = { workspace = true }
 rustyline = "15"
+notify = { workspace = true }
+notify-debouncer-mini = { workspace = true }
+ctrlc = { workspace = true }
+libc = { workspace = true }
 
 [features]
 default = []

@@ -25,7 +25,11 @@ impl std::error::Error for CodegenError {}
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
 pub(crate) enum TurboTy {
+    I8,
+    I16,
     Int,
+    U8,
+    U16,
     Float,
     Bool,
     Str,
@@ -65,8 +69,12 @@ pub(crate) fn turbo_ty_from_type_expr_with_params(
                 return TurboTy::Int;
             }
             match name.as_str() {
-                "i32" | "i64" | "u32" | "u64" => TurboTy::Int,
-                "f32" | "f64" => TurboTy::Float,
+                "i8" => TurboTy::I8,
+                "i16" => TurboTy::I16,
+                "u8" => TurboTy::U8,
+                "u16" => TurboTy::U16,
+                "int" | "i32" | "i64" | "u32" | "u64" | "usize" => TurboTy::Int,
+                "float" | "f32" | "f64" => TurboTy::Float,
                 "bool" => TurboTy::Bool,
                 "str" => TurboTy::Str,
                 _ => {

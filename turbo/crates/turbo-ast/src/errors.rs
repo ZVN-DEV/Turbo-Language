@@ -218,6 +218,10 @@ pub enum ErrorCode {
     E0514,
     /// Unused variable
     E0515,
+    /// Unknown standard library module
+    E0520,
+    /// Name not found in standard library module
+    E0521,
 }
 
 impl ErrorCode {
@@ -329,6 +333,8 @@ impl ErrorCode {
             ErrorCode::E0513 => "E0513",
             ErrorCode::E0514 => "E0514",
             ErrorCode::E0515 => "E0515",
+            ErrorCode::E0520 => "E0520",
+            ErrorCode::E0521 => "E0521",
         }
     }
 
@@ -440,6 +446,8 @@ impl ErrorCode {
             ErrorCode::E0513 => "builtin function argument count error",
             ErrorCode::E0514 => "unused return value of pure function",
             ErrorCode::E0515 => "unused variable",
+            ErrorCode::E0520 => "unknown standard library module",
+            ErrorCode::E0521 => "name not exported by standard library module",
         }
     }
 
@@ -551,6 +559,8 @@ impl ErrorCode {
             ErrorCode::E0513,
             ErrorCode::E0514,
             ErrorCode::E0515,
+            ErrorCode::E0520,
+            ErrorCode::E0521,
         ]
     }
 }

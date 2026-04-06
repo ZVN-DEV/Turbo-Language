@@ -1,0 +1,37 @@
+fn main() {
+    // int alias
+    let a: int = 42
+    print(a)
+
+    // float alias
+    let b: float = 3.14
+    print(b)
+
+    // u8
+    let c: u8 = 255
+    print(c)
+
+    // i8
+    let d: i8 = -128
+    print(d)
+
+    // i16
+    let e: i16 = -32000
+    print(e)
+
+    // u16
+    let f: u16 = 65535
+    print(f)
+
+    // usize
+    let g: usize = 100
+    print(g)
+
+    // int and i64 are interchangeable
+    let h: i64 = 50
+    print(h)
+
+    // float and f64 are interchangeable
+    let i: f64 = 2.718
+    print(i)
+}

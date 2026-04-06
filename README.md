@@ -7,7 +7,7 @@
 A compiled, type-safe programming language with familiar syntax, native performance, and first-class AI agent primitives. Compiles to machine code via Cranelift -- no VM, no garbage collector, no overhead.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-417%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-435%20passing-brightgreen.svg)](#testing)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 
@@ -106,7 +106,7 @@ trait Printable {
 fn identity<T>(x: T) -> T { x }
 ```
 
-Types: `i32`, `i64`, `u32`, `u64`, `f32`, `f64`, `bool`, `str`, `()`, `[T]`, `T?`, `T ! E`, `Future<T>`.
+Types: `int`, `float`, `bool`, `str`, `()`, `[T]`, `T?`, `T ! E`, `Future<T>`. Also: `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `usize` for low-level control.
 
 ### Pattern Matching
 
@@ -328,7 +328,7 @@ See [`examples/web-dashboard/main.tb`](examples/web-dashboard/main.tb)
 
 ## Error Codes
 
-Every compiler diagnostic has a unique, searchable error code (E0001--E0515). Look up any code from the command line:
+Every compiler diagnostic has a unique, searchable error code (E0001--E0521). Look up any code from the command line:
 
 ```bash
 turbolang explain E0100
@@ -387,7 +387,7 @@ cd turbo && ./tests/run_tests.sh
 turbolang run turbo/tests/phase1/fibonacci.tb
 ```
 
-417+ tests across unit and integration suites (266 unit + 151 integration).
+435+ tests across unit and integration suites (275 unit + 160 integration).
 
 ## LLVM Backend
 

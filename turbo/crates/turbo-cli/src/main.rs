@@ -7,6 +7,7 @@ use turbo_ast::{ErrorCode, Item, Module};
 mod formatter;
 mod playground;
 mod repl;
+mod watch;
 
 #[derive(Parser)]
 #[command(
@@ -29,6 +30,10 @@ enum Commands {
         /// Show verbose output (tokens, AST, timing)
         #[arg(long, short)]
         verbose: bool,
+
+        /// Watch for file changes and auto-reload
+        #[arg(long, short)]
+        watch: bool,
     },
     /// Compile a Turbo source file to a native binary
     Build {
@@ -122,9 +127,17 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { file, verbose } => {
+        Commands::Run {
+            file,
+            verbose,
+            watch,
+        } => {
             let path = resolve_entry_file(file);
-            run_file(&path, verbose);
+            if watch {
+                watch::run_watch(&path, verbose);
+            } else {
+                run_file(&path, verbose);
+            }
         }
         Commands::Build {
             file,
@@ -1711,6 +1724,39 @@ fn resolve_imports(
 
     for item in &module.items {
         if let Item::Import { names, path } = &item.node {
+            // Virtual stdlib import -- validate module and names, then skip.
+            // The builtins are always available globally; this import is
+            // purely for validation and self-documentation.
+            if turbo_ast::stdlib_modules::is_stdlib_path(path) {
+                match turbo_ast::stdlib_modules::find_stdlib_module(path) {
+                    Some(module) => {
+                        for name in names {
+                            if !module.functions.contains(&name.as_str()) {
+                                return Err(format!(
+                                    "`{}` is not exported by module `{}`. Available: {}",
+                                    name,
+                                    path,
+                                    module.functions.join(", ")
+                                ));
+                            }
+                        }
+                    }
+                    None => {
+                        return Err(format!(
+                            "unknown standard library module `{}`. Available modules: {}",
+                            path,
+                            turbo_ast::stdlib_modules::STDLIB_MODULES
+                                .iter()
+                                .map(|m| m.path)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                }
+                // Don't try to load a file -- just skip this import.
+                continue;
+            }
+
             let resolved_path = resolve_import_path(base_dir, path);
             let canonical = resolved_path.canonicalize().map_err(|e| {
                 format!(

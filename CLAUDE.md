@@ -77,10 +77,10 @@ Codegen (turbo-codegen-cranelift)  →  JIT execution  or  AOT .o file
 - `TypeExpr` — type syntax: `Named`, `Unit`, `Array`, `FnType`, `Result`, `Optional`, `Future`, `Inferred`.
 
 **turbo-ast**:
-- `ErrorCode` — unique error code enum (E0001-E0515). Defined in `turbo-ast/src/errors.rs`. Used by all error types. See `docs/errors.md` for the full table.
+- `ErrorCode` — unique error code enum (E0001-E0521). Defined in `turbo-ast/src/errors.rs`. Used by all error types. See `docs/errors.md` for the full table.
 
 **turbo-sema**:
-- `Ty` — internal type representation: `I32`, `I64`, `U32`, `U64`, `F32`, `F64`, `Bool`, `Str`, `Unit`, `Array(Box<Ty>)`, `Struct(String)`, `Enum(String)`, `Fn(Vec<Ty>, Box<Ty>)`, `Result`, `Optional`, `Future`, `TypeParam`, `Agent`, `Error`.
+- `Ty` — internal type representation: `I8`, `I16`, `I32`, `I64`, `U8`, `U16`, `U32`, `U64`, `F32`, `F64`, `Bool`, `Str`, `Unit`, `Array(Box<Ty>)`, `Struct(String)`, `Enum(String)`, `Fn(Vec<Ty>, Box<Ty>)`, `Result`, `Optional`, `Future`, `TypeParam`, `Agent`, `Error`. `int` is an alias for `I64`, `float` for `F64`, `usize` for `U64`.
 - `SemaError` — `{ code: ErrorCode, message: String, span: Span }`.
 
 **turbo-codegen-cranelift**:

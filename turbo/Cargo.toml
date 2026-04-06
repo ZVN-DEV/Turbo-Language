@@ -32,6 +32,10 @@ cranelift-object = "0.113"
 target-lexicon = "0.12"
 ariadne = "0.4"
 clap = { version = "4", features = ["derive"] }
+notify = "7"
+notify-debouncer-mini = "0.5"
+ctrlc = "3"
+libc = "0.2"
 
 [profile.dev]
 opt-level = 0

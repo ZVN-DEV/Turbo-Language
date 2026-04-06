@@ -1,0 +1,5 @@
+import { not_a_function } from "std/string"
+
+fn main() {
+    print("hello")
+}

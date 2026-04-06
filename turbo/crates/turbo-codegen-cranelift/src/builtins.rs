@@ -37,6 +37,16 @@ pub(crate) fn compile_print<M: Module>(
                 };
                 cx.rt_call("rt_print_bool", &[v]);
             }
+            TurboTy::I8 | TurboTy::I16 => {
+                // Sign-extend to i64 for printing
+                let v = cx.builder.ins().sextend(types::I64, v);
+                cx.rt_call("rt_print_i64", &[v]);
+            }
+            TurboTy::U8 | TurboTy::U16 => {
+                // Zero-extend to i64 for printing
+                let v = cx.builder.ins().uextend(types::I64, v);
+                cx.rt_call("rt_print_i64", &[v]);
+            }
             TurboTy::Int => {
                 let ty = cx.builder.func.dfg.value_type(v);
                 let v = if ty.bits() < 64 {
@@ -1939,6 +1949,22 @@ pub(crate) fn convert_to_str<M: Module>(
 ) -> Result<Value, CodegenError> {
     match tty {
         TurboTy::Str => Ok(val),
+        TurboTy::I8 | TurboTy::I16 => {
+            // Sign-extend to i64 for string conversion
+            let val = cx.builder.ins().sextend(types::I64, val);
+            let fid = cx.rt_fns["rt_i64_to_str"];
+            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+            let call = cx.builder.ins().call(fref, &[val]);
+            Ok(cx.builder.inst_results(call)[0])
+        }
+        TurboTy::U8 | TurboTy::U16 => {
+            // Zero-extend to i64 for string conversion
+            let val = cx.builder.ins().uextend(types::I64, val);
+            let fid = cx.rt_fns["rt_i64_to_str"];
+            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+            let call = cx.builder.ins().call(fref, &[val]);
+            Ok(cx.builder.inst_results(call)[0])
+        }
         TurboTy::Int => {
             let ty = cx.builder.func.dfg.value_type(val);
             let val = if ty.bits() < 64 {

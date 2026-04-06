@@ -1,0 +1,29 @@
+fn double_u8(x: u8) -> u8 {
+    x + x
+}
+
+fn negate_i16(x: i16) -> i16 {
+    -x
+}
+
+fn main() {
+    let a: u8 = 10
+    let b: u8 = 20
+    let c: u8 = a + b
+    print(c)
+
+    let d = double_u8(5)
+    print(d)
+
+    let e: i16 = 100
+    let f: i16 = 200
+    let g: i16 = e + f
+    print(g)
+
+    let h = negate_i16(42)
+    print(h)
+
+    // Interpolation with narrow types
+    let x: u8 = 77
+    print("value is {x}")
+}

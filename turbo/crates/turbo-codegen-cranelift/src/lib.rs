@@ -583,6 +583,8 @@ fn has_return(expr: &Expr) -> bool {
 /// Convert a TurboTy to a Cranelift types::Type
 pub(crate) fn turbo_ty_to_cl_type(tty: &TurboTy, ptr_type: types::Type) -> types::Type {
     match tty {
+        TurboTy::I8 | TurboTy::U8 => types::I8,
+        TurboTy::I16 | TurboTy::U16 => types::I16,
         TurboTy::Int => types::I64,
         TurboTy::Float => types::F64,
         TurboTy::Bool => types::I8,
@@ -596,6 +598,38 @@ pub(crate) fn turbo_ty_to_cl_type(tty: &TurboTy, ptr_type: types::Type) -> types
         TurboTy::Optional(_) => ptr_type,
         TurboTy::Agent(_) => ptr_type, // heap-allocated struct pointer
         TurboTy::Future(_) => ptr_type, // thread handle pointer
+    }
+}
+
+/// Coerce a value from one TurboTy to another, inserting narrowing or widening
+/// instructions as needed. Returns the coerced value and the target type.
+pub(crate) fn coerce_value<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    val: Value,
+    from: &TurboTy,
+    to: &TurboTy,
+) -> (Value, TurboTy) {
+    if from == to {
+        return (val, from.clone());
+    }
+    match (from, to) {
+        // Narrowing from Int (i64) to smaller types
+        (TurboTy::Int, TurboTy::I8) | (TurboTy::Int, TurboTy::U8) => {
+            (cx.builder.ins().ireduce(types::I8, val), to.clone())
+        }
+        (TurboTy::Int, TurboTy::I16) | (TurboTy::Int, TurboTy::U16) => {
+            (cx.builder.ins().ireduce(types::I16, val), to.clone())
+        }
+        // Widening from smaller types to Int (i64) - sign-extend for signed
+        (TurboTy::I8, TurboTy::Int) | (TurboTy::I16, TurboTy::Int) => {
+            (cx.builder.ins().sextend(types::I64, val), TurboTy::Int)
+        }
+        // Widening from smaller types to Int (i64) - zero-extend for unsigned
+        (TurboTy::U8, TurboTy::Int) | (TurboTy::U16, TurboTy::Int) => {
+            (cx.builder.ins().uextend(types::I64, val), TurboTy::Int)
+        }
+        // No coercion available / same size
+        _ => (val, from.clone()),
     }
 }
 
@@ -2157,8 +2191,12 @@ fn compile_module<M: Module>(
             let result = compile_expr(&mut cx, &f.body)?;
 
             if !cx.builder.is_unreachable() {
-                if f.return_type.is_some() {
-                    if let Some((val, _)) = result {
+                if let Some(ret_ty_expr) = &f.return_type {
+                    if let Some((val, val_tty)) = result {
+                        // Coerce return value to match the declared return type
+                        let ret_tty =
+                            turbo_ty_from_type_expr(&ret_ty_expr.node, &enum_variants);
+                        let (val, _) = coerce_value(&mut cx, val, &val_tty, &ret_tty);
                         cx.builder.ins().return_(&[val]);
                     } else {
                         // Function claims to return a value but body returns unit.
@@ -2281,8 +2319,11 @@ fn compile_module<M: Module>(
                 let result = compile_expr(&mut cx, &method.body)?;
 
                 if !cx.builder.is_unreachable() {
-                    if method.return_type.is_some() {
-                        if let Some((val, _)) = result {
+                    if let Some(ret_ty_expr) = &method.return_type {
+                        if let Some((val, val_tty)) = result {
+                            let ret_tty =
+                                turbo_ty_from_type_expr(&ret_ty_expr.node, &enum_variants);
+                            let (val, _) = coerce_value(&mut cx, val, &val_tty, &ret_tty);
                             cx.builder.ins().return_(&[val]);
                         } else {
                             cx.builder.ins().trap(TrapCode::unwrap_user(1));
@@ -2865,12 +2906,16 @@ fn resolve_cl_type_inner(
                 return Ok(types::I64);
             }
             match name.as_str() {
+                "i8" => Ok(types::I8),
+                "i16" => Ok(types::I16),
                 "i32" => Ok(types::I32),
-                "i64" => Ok(types::I64),
+                "int" | "i64" => Ok(types::I64),
+                "u8" => Ok(types::I8),
+                "u16" => Ok(types::I16),
                 "u32" => Ok(types::I32),
-                "u64" => Ok(types::I64),
+                "u64" | "usize" => Ok(types::I64),
                 "f32" => Ok(types::F32),
-                "f64" => Ok(types::F64),
+                "float" | "f64" => Ok(types::F64),
                 "bool" => Ok(types::I8),
                 "str" => Ok(ptr_type),
                 _ => {
@@ -3160,6 +3205,15 @@ pub(crate) fn compile_expr<M: Module>(
         } => {
             let (arr, _arr_tty) = compile_expr(cx, object)?.unwrap();
             let (idx, _) = compile_expr(cx, index)?.unwrap();
+            // Widen narrow integer indices to i64 for the runtime call
+            let idx = {
+                let idx_ty = cx.builder.func.dfg.value_type(idx);
+                if idx_ty.is_int() && idx_ty.bits() < 64 {
+                    cx.builder.ins().uextend(types::I64, idx)
+                } else {
+                    idx
+                }
+            };
             let (val, _) = compile_expr(cx, value)?.unwrap();
 
             // Widen smaller types to 64-bit for uniform storage
@@ -3401,6 +3455,15 @@ pub(crate) fn compile_expr<M: Module>(
         Expr::Index { object, index } => {
             let (arr, arr_tty) = compile_expr(cx, object)?.unwrap();
             let (idx, _) = compile_expr(cx, index)?.unwrap();
+            // Widen narrow integer indices to i64 for the runtime call
+            let idx = {
+                let idx_ty = cx.builder.func.dfg.value_type(idx);
+                if idx_ty.is_int() && idx_ty.bits() < 64 {
+                    cx.builder.ins().uextend(types::I64, idx)
+                } else {
+                    idx
+                }
+            };
 
             let get_fid = cx.rt_fns["rt_array_get"];
             let get_ref = cx.module.declare_func_in_func(get_fid, cx.builder.func);
@@ -3937,7 +4000,9 @@ pub(crate) fn compile_expr<M: Module>(
 
 fn compile_stmt<M: Module>(cx: &mut Ctx<'_, M>, stmt: &Spanned<Stmt>) -> Result<(), CodegenError> {
     match &stmt.node {
-        Stmt::Let { name, value, .. } => {
+        Stmt::Let {
+            name, value, ty, ..
+        } => {
             // Clear any stale concrete fields from a previous struct lit
             cx.last_struct_lit_concrete_fields = None;
             // Check if the RHS is a variable reference (for COW retain)
@@ -3949,7 +4014,15 @@ fn compile_stmt<M: Module>(cx: &mut Ctx<'_, M>, stmt: &Spanned<Stmt>) -> Result<
                     .insert(name.clone(), concrete_fields);
             }
             let (cl_ty, turbo_ty, val) = if let Some((v, tty)) = result {
-                (cx.builder.func.dfg.value_type(v), tty, Some(v))
+                // If there's a type annotation, check if we need to coerce (e.g., int -> u8)
+                if let Some(ty_ann) = ty {
+                    let target_tty = turbo_ty_from_type_expr(&ty_ann.node, cx.enum_variants);
+                    let (coerced_val, coerced_tty) = coerce_value(cx, v, &tty, &target_tty);
+                    let coerced_cl = cx.builder.func.dfg.value_type(coerced_val);
+                    (coerced_cl, coerced_tty, Some(coerced_val))
+                } else {
+                    (cx.builder.func.dfg.value_type(v), tty, Some(v))
+                }
             } else {
                 (types::I64, TurboTy::Unit, None)
             };
@@ -6069,7 +6142,7 @@ mod tests {
     #[test]
     fn test_turbo_ty_all_int_aliases() {
         let empty_enum: HashMap<String, Vec<String>> = HashMap::new();
-        for name in &["i32", "i64", "u32", "u64"] {
+        for name in &["int", "i32", "i64", "u32", "u64", "usize"] {
             let ty = turbo_ty_from_type_expr(&TypeExpr::Named(name.to_string()), &empty_enum);
             assert_eq!(ty, TurboTy::Int, "{} should map to TurboTy::Int", name);
         }
@@ -6078,10 +6151,23 @@ mod tests {
     #[test]
     fn test_turbo_ty_float_aliases() {
         let empty_enum: HashMap<String, Vec<String>> = HashMap::new();
-        for name in &["f32", "f64"] {
+        for name in &["float", "f32", "f64"] {
             let ty = turbo_ty_from_type_expr(&TypeExpr::Named(name.to_string()), &empty_enum);
             assert_eq!(ty, TurboTy::Float, "{} should map to TurboTy::Float", name);
         }
+    }
+
+    #[test]
+    fn test_turbo_ty_narrow_types() {
+        let empty_enum: HashMap<String, Vec<String>> = HashMap::new();
+        let i8_ty = turbo_ty_from_type_expr(&TypeExpr::Named("i8".to_string()), &empty_enum);
+        assert_eq!(i8_ty, TurboTy::I8, "i8 should map to TurboTy::I8");
+        let i16_ty = turbo_ty_from_type_expr(&TypeExpr::Named("i16".to_string()), &empty_enum);
+        assert_eq!(i16_ty, TurboTy::I16, "i16 should map to TurboTy::I16");
+        let u8_ty = turbo_ty_from_type_expr(&TypeExpr::Named("u8".to_string()), &empty_enum);
+        assert_eq!(u8_ty, TurboTy::U8, "u8 should map to TurboTy::U8");
+        let u16_ty = turbo_ty_from_type_expr(&TypeExpr::Named("u16".to_string()), &empty_enum);
+        assert_eq!(u16_ty, TurboTy::U16, "u16 should map to TurboTy::U16");
     }
 
     #[test]

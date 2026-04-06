@@ -1,0 +1,16 @@
+fn takes_u8(x: u8) -> u8 { x }
+fn takes_i16(x: i16) -> i16 { x }
+
+fn main() {
+    // Literal coercion to narrow types
+    let a = takes_u8(42)
+    print(a)
+
+    let b = takes_i16(-100)
+    print(b)
+
+    // Array indexing with narrow type
+    let arr = [10, 20, 30, 40, 50]
+    let idx: u8 = 2
+    print(arr[idx])
+}

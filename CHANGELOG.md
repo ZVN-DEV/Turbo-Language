@@ -5,6 +5,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-05
+
+### Added
+- **Watch mode**: `turbolang run --watch` / `turbolang run -w` auto-recompiles on file changes with 300ms debounce, screen clearing, and child process management for long-running programs
+- **Numeric types with progressive disclosure**: `int` and `float` aliases for `i64`/`f64`, plus narrow types `u8`, `i8`, `i16`, `u16`, and `usize` for when you need control
+- **Standard library modules**: `import { trim } from "std/string"` with virtual module validation — 12 modules covering all 64 builtins
+- Integer literal coercion with range checking (`let x: u8 = 255` works, `let x: u8 = 256` errors)
+- Error codes E0520 (unknown std module) and E0521 (unknown name in std module)
+
+### Changed
+- `Ty::I64` displays as `int` and `Ty::F64` displays as `float` in error messages (progressive disclosure UX)
+- Type names `int`, `float`, `usize` accepted as aliases in type annotations
+
+### Tests
+- 275 unit tests, 160 integration tests (435 total, all passing)
+
 ## [0.3.2] - 2026-04-05
 
 ### Added

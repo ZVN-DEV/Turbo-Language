@@ -1,0 +1,5 @@
+fn main() {
+    let s = trim("  works  ")
+    print(s)
+    print(abs(-10))
+}
