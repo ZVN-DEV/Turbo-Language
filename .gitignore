@@ -25,5 +25,10 @@ hello
 
 # Temporary
 *.tmp
-findings.md
 docs/superpowers/
+
+# Internal planning docs (should never be committed)
+/findings.md
+/PLAN-*.md
+/INDEX.md
+/turbo/cow-bug-audit.md
