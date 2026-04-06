@@ -586,8 +586,34 @@ static char *read_fd_to_string(int fd) {
     return buf;
 }
 
+/* Returns 1 if url starts with "http://" or "https://" (case-insensitive),
+ * 0 otherwise. Rejects NULL/empty. Used to gate rt_http_get/rt_http_post
+ * against SSRF via file://, gopher://, ftp://, etc., and to reject any
+ * string that would be interpreted by curl as a flag. */
+static int rt_url_is_http(const char *url) {
+    if (!url || url[0] == '\0') return 0;
+    /* Explicitly reject anything that looks like a flag. curl treats a
+     * leading '-' as a flag even when passed as a positional argument
+     * unless preceded by `--`, but we belt-and-suspenders this anyway. */
+    if (url[0] == '-') return 0;
+    if (strncasecmp(url, "http://", 7) == 0) return 1;
+    if (strncasecmp(url, "https://", 8) == 0) return 1;
+    return 0;
+}
+
+static const char *rt_http_empty_response(void) {
+    char *empty = (char *)turbo_alloc(1);
+    empty[0] = '\0';
+    return empty;
+}
+
 /* http_get(url) -> str — HTTP GET via fork+exec (no shell interpolation) */
 const char *rt_http_get(const char *url) {
+    if (!rt_url_is_http(url)) {
+        fprintf(stderr, "[rt_http] blocked non-http(s) URL: %s\n",
+                url ? url : "(null)");
+        return rt_http_empty_response();
+    }
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         return strdup("error: cannot create pipe");
@@ -599,11 +625,21 @@ const char *rt_http_get(const char *url) {
         return strdup("error: cannot fork");
     }
     if (pid == 0) {
-        /* Child: redirect stdout to pipe, exec curl */
+        /* Child: redirect stdout to pipe, exec curl.
+         * Notes:
+         *   --proto =http,https  lock to http(s) even after redirects
+         *   --max-time 30        hard timeout for DoS protection
+         *   --max-redirs 5       cap redirect chain
+         *   --                   terminate flags so a URL like "--help"
+         *                        cannot be re-interpreted */
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);
-        execlp("curl", "curl", "-s", "-L", url, (char *)NULL);
+        execlp("curl", "curl", "-s", "-L",
+               "--proto", "=http,https",
+               "--max-time", "30",
+               "--max-redirs", "5",
+               "--", url, (char *)NULL);
         _exit(1);
     }
     /* Parent: read from pipe */
@@ -617,6 +653,11 @@ const char *rt_http_get(const char *url) {
 
 /* http_post(url, body) -> str — HTTP POST via fork+exec (no shell interpolation) */
 const char *rt_http_post(const char *url, const char *body) {
+    if (!rt_url_is_http(url)) {
+        fprintf(stderr, "[rt_http] blocked non-http(s) URL: %s\n",
+                url ? url : "(null)");
+        return rt_http_empty_response();
+    }
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         return strdup("error: cannot create pipe");
@@ -634,7 +675,11 @@ const char *rt_http_post(const char *url, const char *body) {
         close(pipefd[1]);
         execlp("curl", "curl", "-s", "-L", "-X", "POST",
                "-H", "Content-Type: application/json",
-               "-d", body, url, (char *)NULL);
+               "--proto", "=http,https",
+               "--max-time", "30",
+               "--max-redirs", "5",
+               "-d", body ? body : "",
+               "--", url, (char *)NULL);
         _exit(1);
     }
     /* Parent: read from pipe */
