@@ -2,41 +2,78 @@
 
 ## Supported Versions
 
-| Version | Supported |
-|---------|-----------|
-| 0.3.x   | Yes       |
-| 0.2.x   | Yes       |
-| 0.1.x   | No        |
-| < 0.1   | No        |
+| Version | Status         |
+|---------|----------------|
+| 0.5.x   | Current — supported with security fixes |
+| 0.4.x   | End of life    |
+| 0.3.x   | End of life    |
+| < 0.3   | Not supported  |
 
 ## Reporting a Vulnerability
 
 **Do NOT open a public issue for security vulnerabilities.**
 
-To report a security vulnerability, use one of the following channels:
+To report a vulnerability, use one of these private channels:
 
-- **Email:** security@zvn.dev
+- **Email:** `security@turbolang.org` *(TODO: update this address before
+  publishing — the project maintainer should swap in a real disclosure
+  inbox)*
 - **GitHub:** [Private vulnerability reporting](https://github.com/ZVN-DEV/Turbo-Language/security/advisories/new)
 
-Include as much detail as possible: steps to reproduce, affected versions, and any potential impact.
+Please include:
+- A clear description of the issue and its impact
+- A minimal reproducer (a `.tb` source file is ideal)
+- The affected version (`turbolang --version`)
+- Your assessment of severity, if you have one
 
 ## Response Timeline
 
-- **Acknowledgment:** within 48 hours of receipt
-- **Critical fixes:** within 7 days
-- **Non-critical fixes:** addressed in the next scheduled release
+- **Acknowledgment:** within **48 hours** of receipt
+- **Critical fixes:** target **7 days** from acknowledgment
+- **Non-critical fixes:** rolled into the next scheduled release
 
-You will be kept informed of progress toward a fix and full announcement. We may ask for additional information or guidance during the process.
+You will be kept informed of progress and credited (unless you request
+anonymity) once a fix ships.
 
-## Known Limitations
+## Scope
 
-Turbo is pre-1.0 software. The following areas have known limitations and are actively being hardened:
+**In scope:**
+- The Turbo compiler (`turbo-cli`, `turbo-parser`, `turbo-sema`,
+  `turbo-codegen-cranelift`)
+- The C runtime (`turbo/crates/turbo-codegen-cranelift/runtime/turbo_rt.c`)
+- The LSP server (`turbo-lsp`)
+- The install script and Homebrew formula
+- Any feature documented as stable in `README.md` or `docs/`
 
-- **Array bounds checking:** Out-of-bounds array access may not be caught in all code paths at runtime.
-- **Allocation validation:** The C runtime (`turbo_rt.c`) performs checked allocation (exits on OOM) but does not guard against all classes of invalid size or overflow inputs.
-- **Unsafe blocks:** Code inside `@unsafe` blocks bypasses normal safety checks by design. Review unsafe code carefully.
-- **No sandboxing:** Compiled Turbo binaries run with full system access. There is no capability-based restriction model.
+**Out of scope:**
+- Experimental features explicitly flagged in `CHANGELOG.md` as unstable
+  or experimental (currently: `tool fn` agent primitives, the WASM
+  target, and the LLVM backend)
+- Crashes triggered only by `@unsafe` code or raw pointer arithmetic —
+  by design these bypass safety checks
+- Issues in third-party dependencies (please report upstream)
+
+## Known Hardening Limits
+
+The following are documented limitations rather than vulnerabilities;
+fixing them is tracked in `CHANGELOG.md` and `TODO.md`:
+
+- **HTTP server primitives are experimental.** `http_server` /
+  `http_listen` are intended for development and demos. They are not
+  hardened for direct exposure to untrusted networks. As of v0.5.1
+  the default bind is `127.0.0.1`; the explicit
+  `http_server_public(port)` opt-in binds `0.0.0.0`. **Always put a
+  reverse proxy (nginx, Caddy) in front of a public deployment.**
+- **No reference counting yet.** `rt_release` is currently a no-op,
+  so long-running services leak memory at allocation rate (~2.5 KB
+  per request on the example HTTP server). Real ARC is planned for
+  v0.6 — see `TODO.md`.
+- **Compiled binaries run with full system privileges.** Turbo has no
+  capability/sandbox model. Treat compiled `.tb` programs the same way
+  you would any compiled C program.
 
 ## Disclosure Policy
 
-We follow coordinated disclosure. Once a fix is released, we will credit reporters (unless anonymity is requested) and publish a brief advisory describing the issue and remediation.
+We follow coordinated disclosure. Once a fix is released, we publish a
+brief advisory describing the issue, affected versions, the fix, and
+credit to the reporter (unless anonymity was requested).
