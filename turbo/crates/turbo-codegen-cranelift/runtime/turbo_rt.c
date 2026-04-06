@@ -1062,7 +1062,15 @@ void rt_hashmap_remove(void *map_ptr, const char *key) {
 
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
+#include <errno.h>
+#include <limits.h>
+
+/* Hard cap on request body size. Anything larger gets 400 Bad Request.
+ * 32 MB is already generous for a language-level HTTP server primitive;
+ * the user should front this with a real proxy for production. */
+#define RT_HTTP_MAX_BODY (32 * 1024 * 1024)
 
 typedef const char* (*route_handler_fn)(const void*, const char*);
 
@@ -1167,16 +1175,45 @@ static void *handle_http_conn(void *arg) {
             headers_len = hdr_end - headers_raw;
         }
 
-        /* Determine content-length */
-        int content_length = 0;
+        /* Determine content-length.
+         *
+         * The previous implementation used atoi(), which returned 0 on
+         * parse failure and silently accepted negative numbers — a
+         * negative value would then be interpreted as a huge size_t and
+         * fed into memcpy(), crashing the server. We now use strtoll
+         * with ERANGE detection and reject anything out of [0, RT_HTTP_MAX_BODY]. */
+        long long content_length = 0;
+        int content_length_invalid = 0;
         {
             const char *cl = headers_raw;
             for (size_t i = 0; i + 15 < headers_len; i++) {
                 if (strncasecmp(cl + i, "content-length:", 15) == 0) {
-                    content_length = atoi(cl + i + 15);
+                    const char *vstart = cl + i + 15;
+                    /* Skip leading whitespace */
+                    while (*vstart == ' ' || *vstart == '\t') vstart++;
+                    char *endptr = NULL;
+                    errno = 0;
+                    long long val = strtoll(vstart, &endptr, 10);
+                    if (errno == ERANGE || endptr == vstart || val < 0 ||
+                        val > (long long)RT_HTTP_MAX_BODY) {
+                        content_length_invalid = 1;
+                    } else {
+                        content_length = val;
+                    }
                     break;
                 }
             }
+        }
+
+        if (content_length_invalid) {
+            /* Reject the request entirely — do NOT pass a bad length
+             * into memcpy(). Close after replying. */
+            const char *bad =
+                "HTTP/1.1 400 Bad Request\r\n"
+                "Content-Length: 0\r\n"
+                "Connection: close\r\n\r\n";
+            write(fd, bad, strlen(bad));
+            break;
         }
 
         /* Check keep-alive (HTTP/1.1 default is keep-alive) */
@@ -1196,7 +1233,7 @@ static void *handle_http_conn(void *arg) {
         /* Body starts after \r\n\r\n */
         char *body_start = hdr_end + 4;
         int body_available = buf_len - (int)(body_start - buf);
-        if (body_available < content_length) continue; /* Need more data */
+        if ((long long)body_available < content_length) continue; /* Need more data */
 
         /* Build structured request: METHOD\x01PATH\x01QUERY\x01HEADERS\x01BODY */
         size_t mlen = strlen(method);
@@ -1264,7 +1301,7 @@ static void *handle_http_conn(void *arg) {
         }
 
         /* Consume processed bytes from buffer */
-        int consumed = (int)(body_start - buf) + content_length;
+        int consumed = (int)(body_start - buf) + (int)content_length;
         int remaining = buf_len - consumed;
         if (remaining > 0) {
             memmove(buf, buf + consumed, remaining);
