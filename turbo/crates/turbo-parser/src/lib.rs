@@ -390,8 +390,11 @@ impl Parser {
                     "unsafe" => {
                         if matches!(self.peek(), Some(Token::Extern)) {
                             let extern_block = self.parse_extern_block()?;
-                            let end = self.tokens.get(self.pos.saturating_sub(1))
-                                .map(|t| t.span.end).unwrap_or(start);
+                            let end = self
+                                .tokens
+                                .get(self.pos.saturating_sub(1))
+                                .map(|t| t.span.end)
+                                .unwrap_or(start);
                             Ok(Spanned::new(Item::Extern(extern_block), start..end))
                         } else {
                             let mut f = self.parse_fn_def(false)?;
@@ -411,7 +414,8 @@ impl Parser {
                 let span = self.peek_span();
                 Err(ParseError {
                     code: ErrorCode::E0007,
-                    message: "extern blocks require `@unsafe`; use `@unsafe extern \"C\" { ... }`".to_string(),
+                    message: "extern blocks require `@unsafe`; use `@unsafe extern \"C\" { ... }`"
+                        .to_string(),
                     span,
                 })
             }
@@ -468,11 +472,18 @@ impl Parser {
                 None
             };
 
-            let fn_end = self.tokens.get(self.pos.saturating_sub(1))
-                .map(|t| t.span.end).unwrap_or(fn_start);
+            let fn_end = self
+                .tokens
+                .get(self.pos.saturating_sub(1))
+                .map(|t| t.span.end)
+                .unwrap_or(fn_start);
 
             functions.push(Spanned::new(
-                ExternFnSig { name, params, return_type },
+                ExternFnSig {
+                    name,
+                    params,
+                    return_type,
+                },
                 fn_start..fn_end,
             ));
         }

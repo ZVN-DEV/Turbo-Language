@@ -123,13 +123,17 @@ impl CEmitter {
                         "str" | "to_string" | "str_concat" | "str_upper" | "str_lower"
                         | "str_trim" | "str_replace" | "str_char_at" | "str_repeat"
                         | "str_join" | "read_line" | "read_file" | "rt_i64_to_str"
-                        | "rt_f64_to_str" | "rt_bool_to_str" | "rt_str_concat"
-                        | "json_get" | "json_stringify" | "http_get" | "http_post" => "str".to_string(),
-                        "len" | "str_len" | "str_index_of" | "pow" | "hashmap_len" => "int".to_string(),
+                        | "rt_f64_to_str" | "rt_bool_to_str" | "rt_str_concat" | "json_get"
+                        | "json_stringify" | "http_get" | "http_post" => "str".to_string(),
+                        "len" | "str_len" | "str_index_of" | "pow" | "hashmap_len" => {
+                            "int".to_string()
+                        }
                         "sqrt" => "float".to_string(),
-                        "str_contains" | "str_starts_with" | "str_ends_with"
-                        | "hashmap_has" | "str_eq" => "bool".to_string(),
-                        "hashmap_new" | "hashmap_keys" | "str_split" | "array_alloc" => "void*".to_string(),
+                        "str_contains" | "str_starts_with" | "str_ends_with" | "hashmap_has"
+                        | "str_eq" => "bool".to_string(),
+                        "hashmap_new" | "hashmap_keys" | "str_split" | "array_alloc" => {
+                            "void*".to_string()
+                        }
                         _ => "int".to_string(),
                     }
                 } else {
@@ -138,20 +142,40 @@ impl CEmitter {
             }
             Expr::BinaryOp { left, op, .. } => {
                 match op {
-                    BinOp::Eq | BinOp::NotEq | BinOp::Less | BinOp::LessEq
-                    | BinOp::Greater | BinOp::GreaterEq | BinOp::And | BinOp::Or => "bool".to_string(),
+                    BinOp::Eq
+                    | BinOp::NotEq
+                    | BinOp::Less
+                    | BinOp::LessEq
+                    | BinOp::Greater
+                    | BinOp::GreaterEq
+                    | BinOp::And
+                    | BinOp::Or => "bool".to_string(),
                     BinOp::Add => {
                         // String concatenation produces string
                         let left_tag = self.infer_type_tag(&left.node);
-                        if left_tag == "str" { "str".to_string() } else if left_tag == "float" { "float".to_string() } else { "int".to_string() }
+                        if left_tag == "str" {
+                            "str".to_string()
+                        } else if left_tag == "float" {
+                            "float".to_string()
+                        } else {
+                            "int".to_string()
+                        }
                     }
                     BinOp::Div => {
                         let left_tag = self.infer_type_tag(&left.node);
-                        if left_tag == "float" { "float".to_string() } else { "int".to_string() }
+                        if left_tag == "float" {
+                            "float".to_string()
+                        } else {
+                            "int".to_string()
+                        }
                     }
                     _ => {
                         let left_tag = self.infer_type_tag(&left.node);
-                        if left_tag == "float" { "float".to_string() } else { "int".to_string() }
+                        if left_tag == "float" {
+                            "float".to_string()
+                        } else {
+                            "int".to_string()
+                        }
                     }
                 }
             }
@@ -229,7 +253,13 @@ impl CEmitter {
                 }
             }
             Expr::StringLit(s) => Self::escape_c_string(s),
-            Expr::BoolLit(b) => if *b { "1".to_string() } else { "0".to_string() },
+            Expr::BoolLit(b) => {
+                if *b {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                }
+            }
             Expr::Unit => "0".to_string(),
             Expr::Ident(name) => {
                 // Map Turbo identifiers to C, handling reserved words
@@ -266,10 +296,12 @@ impl CEmitter {
                     UnaryOp::Not => format!("(!{e})"),
                 }
             }
-            Expr::Call { callee, args } => {
-                self.emit_call(callee, args)
-            }
-            Expr::If { condition, then_branch, else_branch } => {
+            Expr::Call { callee, args } => self.emit_call(callee, args),
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
                 // For expressions in value position, use ternary if simple,
                 // otherwise use a block with a temp var.
                 let cond = self.emit_expr(&condition.node);
@@ -348,10 +380,18 @@ impl CEmitter {
                 // This needs to be in statement context; for expression context,
                 // wrap in a GCC statement expression
                 let mut inner = String::new();
-                write!(&mut inner, "long long *{tmp} = (long long*)rt_array_alloc({len}LL);").unwrap();
+                write!(
+                    &mut inner,
+                    "long long *{tmp} = (long long*)rt_array_alloc({len}LL);"
+                )
+                .unwrap();
                 for (i, elem) in elems.iter().enumerate() {
                     let v = self.emit_expr(&elem.node);
-                    write!(&mut inner, " ((long long*){tmp})[1 + {i}] = (long long)({v});").unwrap();
+                    write!(
+                        &mut inner,
+                        " ((long long*){tmp})[1 + {i}] = (long long)({v});"
+                    )
+                    .unwrap();
                 }
                 write!(&mut inner, " (void*){tmp};").unwrap();
                 format!("({{ {inner} }})")
@@ -367,8 +407,10 @@ impl CEmitter {
                 // For now, use a generic field access via slot offset
                 // We'll need to know the struct type to determine the field index
                 // Fallback: treat as method-like access
-                format!("((long long*){obj})[{field_idx}]",
-                    field_idx = self.get_field_index_str(&obj, field))
+                format!(
+                    "((long long*){obj})[{field_idx}]",
+                    field_idx = self.get_field_index_str(&obj, field)
+                )
             }
             // Method calls are represented as Call { callee: FieldAccess { ... }, args }
             // and handled in emit_call()
@@ -376,7 +418,11 @@ impl CEmitter {
                 let num_fields = fields.len();
                 let tmp = self.fresh_tmp();
                 let mut inner = String::new();
-                write!(&mut inner, "long long *{tmp} = (long long*)rt_struct_alloc({num_fields}LL);").unwrap();
+                write!(
+                    &mut inner,
+                    "long long *{tmp} = (long long*)rt_struct_alloc({num_fields}LL);"
+                )
+                .unwrap();
                 // Look up the struct layout to emit fields in the correct order
                 if let Some(layout) = self.struct_fields.get(name).cloned() {
                     for (i, (fname, _fty)) in layout.iter().enumerate() {
@@ -400,7 +446,11 @@ impl CEmitter {
                 let body_c = self.emit_expr(&body.node);
                 format!("({{ while ({cond}) {{ {body_c}; }} 0; }})")
             }
-            Expr::ForIn { var_name, iterable, body } => {
+            Expr::ForIn {
+                var_name,
+                iterable,
+                body,
+            } => {
                 let iter = self.emit_expr(&iterable.node);
                 let body_c = self.emit_expr(&body.node);
                 let len_tmp = self.fresh_tmp();
@@ -465,13 +515,21 @@ impl CEmitter {
                 parts.push(format!("{ternary};"));
                 format!("({{ {} }})", parts.join(" "))
             }
-            Expr::FieldAssign { object, field, value } => {
+            Expr::FieldAssign {
+                object,
+                field,
+                value,
+            } => {
                 let obj = self.emit_expr(&object.node);
                 let val = self.emit_expr(&value.node);
                 let field_idx = self.get_field_index_str(&obj, field);
                 format!("(((long long*){obj})[{field_idx}] = (long long)({val}))")
             }
-            Expr::IndexAssign { object, index, value } => {
+            Expr::IndexAssign {
+                object,
+                index,
+                value,
+            } => {
                 let obj = self.emit_expr(&object.node);
                 let idx = self.emit_expr(&index.node);
                 let val = self.emit_expr(&value.node);
@@ -623,7 +681,9 @@ impl CEmitter {
                 }
                 Pattern::StringLit(s) => {
                     let escaped = Self::escape_c_string(s);
-                    result.push_str(&format!("(rt_str_eq((const char*){subj_tmp}, {escaped}) ? {body} : "));
+                    result.push_str(&format!(
+                        "(rt_str_eq((const char*){subj_tmp}, {escaped}) ? {body} : "
+                    ));
                     depth += 1;
                 }
                 _ => {
@@ -655,7 +715,9 @@ impl CEmitter {
     /// Emit a statement, returning it as a String.
     fn emit_stmt_to_string(&mut self, stmt: &Stmt) -> String {
         match stmt {
-            Stmt::Let { name, value, ty, .. } => {
+            Stmt::Let {
+                name, value, ty, ..
+            } => {
                 // Record the variable type for later print/interpolation dispatch
                 let type_tag = if let Some(t) = ty {
                     Self::type_expr_to_tag(&t.node)
@@ -673,16 +735,14 @@ impl CEmitter {
                 };
                 format!("{c_type} {name} = ({c_type})({v});")
             }
-            Stmt::Expr(expr) => {
-                match &expr.node {
-                    Expr::Break => "break;".to_string(),
-                    Expr::Continue => "continue;".to_string(),
-                    _ => {
-                        let e = self.emit_expr(&expr.node);
-                        format!("{e};")
-                    }
+            Stmt::Expr(expr) => match &expr.node {
+                Expr::Break => "break;".to_string(),
+                Expr::Continue => "continue;".to_string(),
+                _ => {
+                    let e = self.emit_expr(&expr.node);
+                    format!("{e};")
                 }
-            }
+            },
             Stmt::Return(Some(expr)) => {
                 let e = self.emit_expr(&expr.node);
                 format!("return {e};")
@@ -740,12 +800,12 @@ impl CEmitter {
                         "str" | "to_string" | "str_concat" | "str_upper" | "str_lower"
                         | "str_trim" | "str_replace" | "str_char_at" | "str_repeat"
                         | "str_join" | "read_line" | "read_file" | "rt_i64_to_str"
-                        | "rt_f64_to_str" | "rt_bool_to_str" | "rt_str_concat"
-                        | "json_get" | "json_stringify" | "http_get" | "http_post" => "const char*",
+                        | "rt_f64_to_str" | "rt_bool_to_str" | "rt_str_concat" | "json_get"
+                        | "json_stringify" | "http_get" | "http_post" => "const char*",
                         "len" | "str_len" | "str_index_of" | "pow" | "hashmap_len" => "long long",
                         "sqrt" => "double",
-                        "str_contains" | "str_starts_with" | "str_ends_with"
-                        | "hashmap_has" | "str_eq" => "char",
+                        "str_contains" | "str_starts_with" | "str_ends_with" | "hashmap_has"
+                        | "str_eq" => "char",
                         "hashmap_new" | "hashmap_keys" | "str_split" | "array_alloc" => "void*",
                         _ => "long long",
                     }
@@ -753,13 +813,17 @@ impl CEmitter {
                     "long long"
                 }
             }
-            Expr::BinaryOp { left, op, .. } => {
-                match op {
-                    BinOp::Eq | BinOp::NotEq | BinOp::Less | BinOp::LessEq
-                    | BinOp::Greater | BinOp::GreaterEq | BinOp::And | BinOp::Or => "char",
-                    _ => self.infer_c_type(&left.node),
-                }
-            }
+            Expr::BinaryOp { left, op, .. } => match op {
+                BinOp::Eq
+                | BinOp::NotEq
+                | BinOp::Less
+                | BinOp::LessEq
+                | BinOp::Greater
+                | BinOp::GreaterEq
+                | BinOp::And
+                | BinOp::Or => "char",
+                _ => self.infer_c_type(&left.node),
+            },
             Expr::OkExpr(_) | Expr::ErrExpr(_) => "void*",
             Expr::SomeExpr(_) | Expr::NoneExpr => "void*",
             _ => "long long",
@@ -801,7 +865,9 @@ impl CEmitter {
     /// `is_void` indicates whether we're in a void context (don't return values).
     fn emit_stmt(&mut self, buf: &mut String, stmt: &Stmt, is_void: bool) {
         match stmt {
-            Stmt::Let { name, value, ty, .. } => {
+            Stmt::Let {
+                name, value, ty, ..
+            } => {
                 // Record the variable type for later print/interpolation dispatch
                 let type_tag = if let Some(t) = ty {
                     Self::type_expr_to_tag(&t.node)
@@ -816,11 +882,20 @@ impl CEmitter {
                 } else {
                     self.infer_c_type(&value.node)
                 };
-                writeln!(buf, "{}{c_type} {name} = ({c_type})({v});", self.indent_str()).unwrap();
+                writeln!(
+                    buf,
+                    "{}{c_type} {name} = ({c_type})({v});",
+                    self.indent_str()
+                )
+                .unwrap();
             }
             Stmt::Expr(expr) => {
                 match &expr.node {
-                    Expr::If { condition, then_branch, else_branch } => {
+                    Expr::If {
+                        condition,
+                        then_branch,
+                        else_branch,
+                    } => {
                         let cond = self.emit_expr(&condition.node);
                         writeln!(buf, "{}if ({cond}) {{", self.indent_str()).unwrap();
                         self.indent += 1;
@@ -843,7 +918,11 @@ impl CEmitter {
                         self.indent -= 1;
                         writeln!(buf, "{}}}", self.indent_str()).unwrap();
                     }
-                    Expr::ForIn { var_name, iterable, body } => {
+                    Expr::ForIn {
+                        var_name,
+                        iterable,
+                        body,
+                    } => {
                         let len_tmp = self.fresh_tmp();
                         let i_tmp = self.fresh_tmp();
                         let arr_tmp = self.fresh_tmp();
@@ -856,8 +935,14 @@ impl CEmitter {
                         } else {
                             let iter = self.emit_expr(&iterable.node);
                             writeln!(buf, "{}{{", self.indent_str()).unwrap();
-                            writeln!(buf, "{}    void *{arr_tmp} = {iter};", self.indent_str()).unwrap();
-                            writeln!(buf, "{}    long long {len_tmp} = rt_array_len({arr_tmp});", self.indent_str()).unwrap();
+                            writeln!(buf, "{}    void *{arr_tmp} = {iter};", self.indent_str())
+                                .unwrap();
+                            writeln!(
+                                buf,
+                                "{}    long long {len_tmp} = rt_array_len({arr_tmp});",
+                                self.indent_str()
+                            )
+                            .unwrap();
                             writeln!(buf, "{}    for (long long {i_tmp} = 0; {i_tmp} < {len_tmp}; {i_tmp}++) {{",
                                 self.indent_str()).unwrap();
                             writeln!(buf, "{}        long long {var_name} = rt_array_get({arr_tmp}, {i_tmp});",
@@ -876,7 +961,12 @@ impl CEmitter {
                         let subj = self.emit_expr(&subject.node);
                         let subj_tmp = self.fresh_tmp();
                         writeln!(buf, "{}{{", self.indent_str()).unwrap();
-                        writeln!(buf, "{}    long long {subj_tmp} = (long long)({subj});", self.indent_str()).unwrap();
+                        writeln!(
+                            buf,
+                            "{}    long long {subj_tmp} = (long long)({subj});",
+                            self.indent_str()
+                        )
+                        .unwrap();
                         let mut first = true;
                         for arm in arms {
                             match &arm.pattern.node {
@@ -894,7 +984,12 @@ impl CEmitter {
                                 }
                                 Pattern::IntLit(n) => {
                                     let keyword = if first { "if" } else { "else if" };
-                                    writeln!(buf, "{}    {keyword} ({subj_tmp} == {n}LL) {{", self.indent_str()).unwrap();
+                                    writeln!(
+                                        buf,
+                                        "{}    {keyword} ({subj_tmp} == {n}LL) {{",
+                                        self.indent_str()
+                                    )
+                                    .unwrap();
                                     self.indent += 2;
                                     self.emit_block_body(&arm.body.node, buf, true);
                                     self.indent -= 2;
@@ -903,7 +998,12 @@ impl CEmitter {
                                 Pattern::BoolLit(b) => {
                                     let keyword = if first { "if" } else { "else if" };
                                     let cond_val = if *b { "1" } else { "0" };
-                                    writeln!(buf, "{}    {keyword} ({subj_tmp} == {cond_val}) {{", self.indent_str()).unwrap();
+                                    writeln!(
+                                        buf,
+                                        "{}    {keyword} ({subj_tmp} == {cond_val}) {{",
+                                        self.indent_str()
+                                    )
+                                    .unwrap();
                                     self.indent += 2;
                                     self.emit_block_body(&arm.body.node, buf, true);
                                     self.indent -= 2;
@@ -920,25 +1020,47 @@ impl CEmitter {
                                     writeln!(buf, "{}    }}", self.indent_str()).unwrap();
                                 }
                                 _ => {
-                                    writeln!(buf, "{}    /* unsupported match pattern */", self.indent_str()).unwrap();
+                                    writeln!(
+                                        buf,
+                                        "{}    /* unsupported match pattern */",
+                                        self.indent_str()
+                                    )
+                                    .unwrap();
                                 }
                             }
                             first = false;
                         }
                         writeln!(buf, "{}}}", self.indent_str()).unwrap();
                     }
-                    Expr::FieldAssign { object, field, value } => {
+                    Expr::FieldAssign {
+                        object,
+                        field,
+                        value,
+                    } => {
                         let obj = self.emit_expr(&object.node);
                         let val = self.emit_expr(&value.node);
                         let field_idx = self.get_field_index_str(&obj, field);
-                        writeln!(buf, "{}((long long*){obj})[{field_idx}] = (long long)({val});",
-                            self.indent_str()).unwrap();
+                        writeln!(
+                            buf,
+                            "{}((long long*){obj})[{field_idx}] = (long long)({val});",
+                            self.indent_str()
+                        )
+                        .unwrap();
                     }
-                    Expr::IndexAssign { object, index, value } => {
+                    Expr::IndexAssign {
+                        object,
+                        index,
+                        value,
+                    } => {
                         let obj = self.emit_expr(&object.node);
                         let idx = self.emit_expr(&index.node);
                         let val = self.emit_expr(&value.node);
-                        writeln!(buf, "{}rt_array_set({obj}, {idx}, {val});", self.indent_str()).unwrap();
+                        writeln!(
+                            buf,
+                            "{}rt_array_set({obj}, {idx}, {val});",
+                            self.indent_str()
+                        )
+                        .unwrap();
                     }
                     Expr::Break => {
                         writeln!(buf, "{}break;", self.indent_str()).unwrap();
@@ -966,12 +1088,22 @@ impl CEmitter {
                 writeln!(buf, "{}return;", self.indent_str()).unwrap();
             }
             Stmt::Defer(_) => {
-                writeln!(buf, "{}/* defer not supported in wasm */", self.indent_str()).unwrap();
+                writeln!(
+                    buf,
+                    "{}/* defer not supported in wasm */",
+                    self.indent_str()
+                )
+                .unwrap();
             }
             Stmt::LetDestructure { fields, value, .. } => {
                 let v = self.emit_expr(&value.node);
                 let tmp = self.fresh_tmp();
-                writeln!(buf, "{}long long *{tmp} = (long long*)({v});", self.indent_str()).unwrap();
+                writeln!(
+                    buf,
+                    "{}long long *{tmp} = (long long*)({v});",
+                    self.indent_str()
+                )
+                .unwrap();
                 for (i, field) in fields.iter().enumerate() {
                     writeln!(buf, "{}long long {field} = {tmp}[{i}];", self.indent_str()).unwrap();
                 }
@@ -1005,15 +1137,19 @@ impl CEmitter {
             }
         }
 
-        let params: Vec<String> = fndef.params.iter().map(|p| {
-            let c_type = Self::type_to_c(&p.ty.node);
-            // Handle "self" parameter
-            if p.name == "self" {
-                format!("void *self")
-            } else {
-                format!("{c_type} {}", p.name)
-            }
-        }).collect();
+        let params: Vec<String> = fndef
+            .params
+            .iter()
+            .map(|p| {
+                let c_type = Self::type_to_c(&p.ty.node);
+                // Handle "self" parameter
+                if p.name == "self" {
+                    format!("void *self")
+                } else {
+                    format!("{c_type} {}", p.name)
+                }
+            })
+            .collect();
 
         let params_str = if params.is_empty() {
             "void".to_string()
@@ -1022,7 +1158,8 @@ impl CEmitter {
         };
 
         // Forward declaration
-        self.fn_decls.push(format!("{ret} {fn_name}({params_str});"));
+        self.fn_decls
+            .push(format!("{ret} {fn_name}({params_str});"));
 
         // Function body
         let is_void = ret == "void";
@@ -1041,21 +1178,22 @@ impl CEmitter {
         for item in &module.items {
             match &item.node {
                 Item::Struct(s) => {
-                    let fields: Vec<(String, TypeExpr)> = s.fields.iter()
+                    let fields: Vec<(String, TypeExpr)> = s
+                        .fields
+                        .iter()
                         .map(|f| (f.name.clone(), f.ty.node.clone()))
                         .collect();
                     self.struct_fields.insert(s.name.clone(), fields);
                 }
                 Item::Enum(e) => {
-                    let variants: Vec<String> = e.variants.iter()
-                        .map(|v| v.name.clone())
-                        .collect();
+                    let variants: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
                     self.enum_variants.insert(e.name.clone(), variants);
                 }
                 Item::Impl(imp) => {
                     let type_name = imp.type_name.clone();
                     for method in &imp.methods {
-                        let entry = self.impl_methods
+                        let entry = self
+                            .impl_methods
                             .entry(type_name.clone())
                             .or_insert_with(Vec::new);
                         entry.push((method.node.name.clone(), method.node.clone()));
@@ -1119,7 +1257,8 @@ impl CEmitter {
                     } else {
                         self.infer_c_type(&c.value.node)
                     };
-                    self.fn_decls.push(format!("static {c_type} {} = ({c_type})({v});", c.name));
+                    self.fn_decls
+                        .push(format!("static {c_type} {} = ({c_type})({v});", c.name));
                 }
                 _ => {} // structs, enums, etc. handled in first pass
             }
@@ -1127,7 +1266,11 @@ impl CEmitter {
 
         // Assemble the output
         let mut output = String::with_capacity(8192);
-        writeln!(&mut output, "/* Generated by Turbo Compiler — WASM target */").unwrap();
+        writeln!(
+            &mut output,
+            "/* Generated by Turbo Compiler — WASM target */"
+        )
+        .unwrap();
         writeln!(&mut output).unwrap();
 
         // Runtime function declarations
@@ -1138,17 +1281,37 @@ impl CEmitter {
         writeln!(&mut output, "void rt_print_bool(char b);").unwrap();
         writeln!(&mut output, "void rt_panic(const char *msg);").unwrap();
         writeln!(&mut output, "void rt_assert_fail(const char *msg);").unwrap();
-        writeln!(&mut output, "void rt_assert_eq_fail(long long dummy, const char *left, const char *right);").unwrap();
+        writeln!(
+            &mut output,
+            "void rt_assert_eq_fail(long long dummy, const char *left, const char *right);"
+        )
+        .unwrap();
         writeln!(&mut output, "void rt_div_by_zero(void);").unwrap();
         writeln!(&mut output, "void rt_int_overflow(void);").unwrap();
-        writeln!(&mut output, "const char* rt_str_concat(const char *a, const char *b);").unwrap();
+        writeln!(
+            &mut output,
+            "const char* rt_str_concat(const char *a, const char *b);"
+        )
+        .unwrap();
         writeln!(&mut output, "char rt_str_eq(const char *a, const char *b);").unwrap();
         writeln!(&mut output, "long long rt_str_len(const char *s);").unwrap();
         writeln!(&mut output, "void* rt_array_alloc(long long len);").unwrap();
-        writeln!(&mut output, "long long rt_array_get(const void *arr, long long index);").unwrap();
-        writeln!(&mut output, "void* rt_array_set(void *arr, long long index, long long value);").unwrap();
+        writeln!(
+            &mut output,
+            "long long rt_array_get(const void *arr, long long index);"
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
+            "void* rt_array_set(void *arr, long long index, long long value);"
+        )
+        .unwrap();
         writeln!(&mut output, "long long rt_array_len(const void *arr);").unwrap();
-        writeln!(&mut output, "void* rt_array_push(void *arr, long long value);").unwrap();
+        writeln!(
+            &mut output,
+            "void* rt_array_push(void *arr, long long value);"
+        )
+        .unwrap();
         writeln!(&mut output, "void* rt_struct_alloc(long long num_fields);").unwrap();
         writeln!(&mut output, "const char* rt_i64_to_str(long long n);").unwrap();
         writeln!(&mut output, "const char* rt_f64_to_str(double n);").unwrap();
@@ -1156,35 +1319,103 @@ impl CEmitter {
         writeln!(&mut output, "void* rt_result_ok(long long value);").unwrap();
         writeln!(&mut output, "void* rt_result_err(long long value);").unwrap();
         writeln!(&mut output, "long long rt_result_tag(const void *result);").unwrap();
-        writeln!(&mut output, "long long rt_result_value(const void *result);").unwrap();
+        writeln!(
+            &mut output,
+            "long long rt_result_value(const void *result);"
+        )
+        .unwrap();
         writeln!(&mut output, "void* rt_option_some(long long value);").unwrap();
         writeln!(&mut output, "void* rt_option_none(void);").unwrap();
         writeln!(&mut output, "long long rt_option_tag(const void *opt);").unwrap();
         writeln!(&mut output, "long long rt_option_value(const void *opt);").unwrap();
-        writeln!(&mut output, "void* rt_str_split(const char *s, const char *sep);").unwrap();
+        writeln!(
+            &mut output,
+            "void* rt_str_split(const char *s, const char *sep);"
+        )
+        .unwrap();
         writeln!(&mut output, "const char* rt_str_trim(const char *s);").unwrap();
         writeln!(&mut output, "const char* rt_str_upper(const char *s);").unwrap();
         writeln!(&mut output, "const char* rt_str_lower(const char *s);").unwrap();
-        writeln!(&mut output, "char rt_str_starts_with(const char *s, const char *prefix);").unwrap();
-        writeln!(&mut output, "char rt_str_ends_with(const char *s, const char *suffix);").unwrap();
-        writeln!(&mut output, "const char* rt_str_replace(const char *s, const char *from, const char *to);").unwrap();
-        writeln!(&mut output, "const char* rt_str_char_at(const char *s, long long index);").unwrap();
-        writeln!(&mut output, "char rt_str_contains(const char *s, const char *sub);").unwrap();
-        writeln!(&mut output, "const char* rt_str_repeat(const char *s, long long count);").unwrap();
-        writeln!(&mut output, "long long rt_str_index_of(const char *s, const char *sub);").unwrap();
-        writeln!(&mut output, "const char* rt_str_join(const char *arr_ptr, const char *sep);").unwrap();
+        writeln!(
+            &mut output,
+            "char rt_str_starts_with(const char *s, const char *prefix);"
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
+            "char rt_str_ends_with(const char *s, const char *suffix);"
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
+            "const char* rt_str_replace(const char *s, const char *from, const char *to);"
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
+            "const char* rt_str_char_at(const char *s, long long index);"
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
+            "char rt_str_contains(const char *s, const char *sub);"
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
+            "const char* rt_str_repeat(const char *s, long long count);"
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
+            "long long rt_str_index_of(const char *s, const char *sub);"
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
+            "const char* rt_str_join(const char *arr_ptr, const char *sep);"
+        )
+        .unwrap();
         writeln!(&mut output, "const char* rt_read_line(void);").unwrap();
         writeln!(&mut output, "const char* rt_read_file(const char *path);").unwrap();
-        writeln!(&mut output, "void rt_write_file(const char *path, const char *content);").unwrap();
-        writeln!(&mut output, "long long rt_pow(long long base, long long exp);").unwrap();
+        writeln!(
+            &mut output,
+            "void rt_write_file(const char *path, const char *content);"
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
+            "long long rt_pow(long long base, long long exp);"
+        )
+        .unwrap();
         writeln!(&mut output, "double rt_sqrt(double x);").unwrap();
         writeln!(&mut output, "void* rt_hashmap_new(void);").unwrap();
-        writeln!(&mut output, "void rt_hashmap_set(void *map_ptr, const char *key, const char *value);").unwrap();
-        writeln!(&mut output, "const char* rt_hashmap_get(const void *map_ptr, const char *key);").unwrap();
-        writeln!(&mut output, "char rt_hashmap_has(const void *map_ptr, const char *key);").unwrap();
-        writeln!(&mut output, "long long rt_hashmap_len(const void *map_ptr);").unwrap();
+        writeln!(
+            &mut output,
+            "void rt_hashmap_set(void *map_ptr, const char *key, const char *value);"
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
+            "const char* rt_hashmap_get(const void *map_ptr, const char *key);"
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
+            "char rt_hashmap_has(const void *map_ptr, const char *key);"
+        )
+        .unwrap();
+        writeln!(
+            &mut output,
+            "long long rt_hashmap_len(const void *map_ptr);"
+        )
+        .unwrap();
         writeln!(&mut output, "void* rt_hashmap_keys(const void *map_ptr);").unwrap();
-        writeln!(&mut output, "void rt_hashmap_remove(void *map_ptr, const char *key);").unwrap();
+        writeln!(
+            &mut output,
+            "void rt_hashmap_remove(void *map_ptr, const char *key);"
+        )
+        .unwrap();
         writeln!(&mut output, "void rt_retain(void *data_ptr);").unwrap();
         writeln!(&mut output, "void rt_release(void *data_ptr);").unwrap();
         writeln!(&mut output).unwrap();
@@ -1198,10 +1429,16 @@ impl CEmitter {
                         Some(t) => Self::type_to_c(&t.node),
                         None => "void",
                     };
-                    let params_c: Vec<String> = f.params.iter().map(|p| {
-                        format!("{} {}", Self::type_to_c(&p.ty.node), p.name)
-                    }).collect();
-                    let params_str = if params_c.is_empty() { "void".to_string() } else { params_c.join(", ") };
+                    let params_c: Vec<String> = f
+                        .params
+                        .iter()
+                        .map(|p| format!("{} {}", Self::type_to_c(&p.ty.node), p.name))
+                        .collect();
+                    let params_str = if params_c.is_empty() {
+                        "void".to_string()
+                    } else {
+                        params_c.join(", ")
+                    };
                     writeln!(&mut output, "extern {ret_c} {}({params_str});", f.name).unwrap();
                 }
             }

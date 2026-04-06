@@ -194,10 +194,20 @@ fn types_compatible(expected: &Ty, actual: &Ty) -> bool {
 fn is_ffi_safe_type(ty: &Ty) -> bool {
     matches!(
         ty,
-        Ty::I8 | Ty::I16 | Ty::I32 | Ty::I64
-            | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64
-            | Ty::F32 | Ty::F64
-            | Ty::Bool | Ty::Str | Ty::Unit | Ty::Error
+        Ty::I8
+            | Ty::I16
+            | Ty::I32
+            | Ty::I64
+            | Ty::U8
+            | Ty::U16
+            | Ty::U32
+            | Ty::U64
+            | Ty::F32
+            | Ty::F64
+            | Ty::Bool
+            | Ty::Str
+            | Ty::Unit
+            | Ty::Error
     )
 }
 
@@ -910,7 +920,9 @@ impl Checker {
 
         // Pass 1a: register extern function signatures
         for item in &module.items {
-            let Item::Extern(ext) = &item.node else { continue; };
+            let Item::Extern(ext) = &item.node else {
+                continue;
+            };
 
             if ext.abi != "C" {
                 self.error(
@@ -936,8 +948,9 @@ impl Checker {
 
                 let mut params = Vec::new();
                 for param in &f.params {
-                    let ty = resolve_type_expr(&param.ty.node, Some(&self.structs), Some(&self.enums))
-                        .unwrap_or(Ty::Error);
+                    let ty =
+                        resolve_type_expr(&param.ty.node, Some(&self.structs), Some(&self.enums))
+                            .unwrap_or(Ty::Error);
                     if !is_ffi_safe_type(&ty) {
                         self.error(
                             ErrorCode::E0100,
@@ -949,8 +962,9 @@ impl Checker {
                 }
 
                 let ret = if let Some(ret_type) = &f.return_type {
-                    let ty = resolve_type_expr(&ret_type.node, Some(&self.structs), Some(&self.enums))
-                        .unwrap_or(Ty::Error);
+                    let ty =
+                        resolve_type_expr(&ret_type.node, Some(&self.structs), Some(&self.enums))
+                            .unwrap_or(Ty::Error);
                     if !is_ffi_safe_type(&ty) {
                         self.error(
                             ErrorCode::E0100,
@@ -1293,7 +1307,16 @@ impl Checker {
                         {
                             // Allow integer literal coercion: i64 literal -> narrower int types
                             let is_int_literal_coercion = inferred_ty == Ty::I64
-                                && matches!(t, Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
+                                && matches!(
+                                    t,
+                                    Ty::I8
+                                        | Ty::I16
+                                        | Ty::I32
+                                        | Ty::U8
+                                        | Ty::U16
+                                        | Ty::U32
+                                        | Ty::U64
+                                )
                                 && extract_int_literal(&c.value.node)
                                     .is_some_and(|n| int_literal_fits_in_type(n, &t));
                             if !is_int_literal_coercion {
@@ -1466,7 +1489,10 @@ impl Checker {
                 None
             };
             let is_return_coercion = body_ty == Ty::I64
-                && matches!(sig.ret, Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
+                && matches!(
+                    sig.ret,
+                    Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64
+                )
                 && tail_expr
                     .and_then(|e| extract_int_literal(e))
                     .is_some_and(|n| int_literal_fits_in_type(n, &sig.ret));
@@ -1536,7 +1562,10 @@ impl Checker {
                 None
             };
             let is_return_coercion = body_ty == Ty::I64
-                && matches!(sig.ret, Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
+                && matches!(
+                    sig.ret,
+                    Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64
+                )
                 && tail_expr
                     .and_then(|e| extract_int_literal(e))
                     .is_some_and(|n| int_literal_fits_in_type(n, &sig.ret));
@@ -3447,9 +3476,19 @@ impl Checker {
                             {
                                 // Allow integer literal coercion: i64 literal -> narrower int types
                                 let is_int_literal_coercion = *arg_ty == Ty::I64
-                                    && matches!(concrete_param_ty, Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
-                                    && extract_int_literal(&arg.node)
-                                        .is_some_and(|n| int_literal_fits_in_type(n, &concrete_param_ty));
+                                    && matches!(
+                                        concrete_param_ty,
+                                        Ty::I8
+                                            | Ty::I16
+                                            | Ty::I32
+                                            | Ty::U8
+                                            | Ty::U16
+                                            | Ty::U32
+                                            | Ty::U64
+                                    )
+                                    && extract_int_literal(&arg.node).is_some_and(|n| {
+                                        int_literal_fits_in_type(n, &concrete_param_ty)
+                                    });
                                 if !is_int_literal_coercion {
                                     self.error(ErrorCode::E0100,
                                         format!(
@@ -5145,7 +5184,16 @@ impl Checker {
                             {
                                 // Allow integer literal coercion: i64 literal -> narrower int types
                                 let is_int_literal_coercion = val_ty == Ty::I64
-                                    && matches!(t, Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
+                                    && matches!(
+                                        t,
+                                        Ty::I8
+                                            | Ty::I16
+                                            | Ty::I32
+                                            | Ty::U8
+                                            | Ty::U16
+                                            | Ty::U32
+                                            | Ty::U64
+                                    )
                                     && extract_int_literal(&value.node)
                                         .is_some_and(|n| int_literal_fits_in_type(n, &t));
                                 // Allow float literal coercion: f64 literal -> f32
@@ -5252,11 +5300,16 @@ impl Checker {
                 {
                     // Allow integer literal coercion for return values
                     let is_return_coercion = ret_ty == Ty::I64
-                        && matches!(self.current_return_type, Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64)
+                        && matches!(
+                            self.current_return_type,
+                            Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64
+                        )
                         && value
                             .as_ref()
                             .and_then(|v| extract_int_literal(&v.node))
-                            .is_some_and(|n| int_literal_fits_in_type(n, &self.current_return_type));
+                            .is_some_and(|n| {
+                                int_literal_fits_in_type(n, &self.current_return_type)
+                            });
                     if !is_return_coercion {
                         self.error(
                             ErrorCode::E0109,

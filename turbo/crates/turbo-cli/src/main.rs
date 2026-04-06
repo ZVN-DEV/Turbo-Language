@@ -156,7 +156,14 @@ fn main() {
             link,
         } => {
             let path = resolve_entry_file(file);
-            build_file(&path, output.as_deref(), verbose, llvm, target.as_deref(), &link);
+            build_file(
+                &path,
+                output.as_deref(),
+                verbose,
+                llvm,
+                target.as_deref(),
+                &link,
+            );
         }
         Commands::Init { name } => init_project(&name),
         Commands::Repl => repl::run_repl(),
@@ -1497,7 +1504,7 @@ fn resolve_target_triple(target: Option<&str>) -> Option<&str> {
         "macos-arm64" => Some("aarch64-apple-darwin"),
         "macos-x86" | "macos-x64" => Some("x86_64-apple-darwin"),
         "wasm" | "wasm32-wasi" | "wasm32" => None, // handled by existing wasm path
-        other => Some(other),                       // raw triple passthrough
+        other => Some(other),                      // raw triple passthrough
     }
 }
 
@@ -1668,8 +1675,14 @@ fn build_file(
         }
     } else {
         let cross_target = resolve_target_triple(target);
-        let r = turbo_codegen_cranelift::aot_compile(&module, output_path, true, cross_target, link_libs)
-            .map_err(|e| e.to_string());
+        let r = turbo_codegen_cranelift::aot_compile(
+            &module,
+            output_path,
+            true,
+            cross_target,
+            link_libs,
+        )
+        .map_err(|e| e.to_string());
         (r, "Cranelift")
     };
     match codegen_result {

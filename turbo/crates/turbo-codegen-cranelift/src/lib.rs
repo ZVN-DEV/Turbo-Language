@@ -527,21 +527,23 @@ pub fn aot_compile(
 // ── Cross-compilation helpers ──────────────────────────────────────
 
 /// Determine the C compiler + flags for a given target.
-fn resolve_cross_compiler(
-    target: Option<&str>,
-) -> Result<(String, Vec<String>), CodegenError> {
+fn resolve_cross_compiler(target: Option<&str>) -> Result<(String, Vec<String>), CodegenError> {
     let target = match target {
         None => return Ok(("cc".to_string(), vec![])),
         Some(t) => t,
     };
 
     let (zig_target, gnu_cc, env_key) = match target {
-        t if t.contains("aarch64") && t.contains("linux") => {
-            ("aarch64-linux-gnu", "aarch64-linux-gnu-gcc", "TURBO_CC_LINUX_ARM64")
-        }
-        t if t.contains("x86_64") && t.contains("linux") => {
-            ("x86_64-linux-gnu", "x86_64-linux-gnu-gcc", "TURBO_CC_LINUX_X86")
-        }
+        t if t.contains("aarch64") && t.contains("linux") => (
+            "aarch64-linux-gnu",
+            "aarch64-linux-gnu-gcc",
+            "TURBO_CC_LINUX_ARM64",
+        ),
+        t if t.contains("x86_64") && t.contains("linux") => (
+            "x86_64-linux-gnu",
+            "x86_64-linux-gnu-gcc",
+            "TURBO_CC_LINUX_X86",
+        ),
         _ => return Ok(("cc".to_string(), vec![])), // native or macOS cross — try system cc
     };
 
@@ -554,10 +556,10 @@ fn resolve_cross_compiler(
 
     // 2. Check for Zig
     if which_exists("zig") {
-        return Ok(("zig".to_string(), vec![
-            "cc".to_string(),
-            format!("--target={zig_target}"),
-        ]));
+        return Ok((
+            "zig".to_string(),
+            vec!["cc".to_string(), format!("--target={zig_target}")],
+        ));
     }
 
     // 3. Check for GNU cross-compiler
@@ -608,10 +610,7 @@ fn find_wasm_ld() -> Result<String, CodegenError> {
         }
     }
     // 3. PATH
-    if let Ok(output) = std::process::Command::new("which")
-        .arg("wasm-ld")
-        .output()
-    {
+    if let Ok(output) = std::process::Command::new("which").arg("wasm-ld").output() {
         if output.status.success() {
             let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !p.is_empty() {
@@ -621,7 +620,9 @@ fn find_wasm_ld() -> Result<String, CodegenError> {
     }
     Err(CodegenError {
         code: ErrorCode::E0404,
-        message: "wasm-ld not found. Install LLVM (e.g. `brew install llvm@18`) or set WASM_LD env var.".to_string(),
+        message:
+            "wasm-ld not found. Install LLVM (e.g. `brew install llvm@18`) or set WASM_LD env var."
+                .to_string(),
     })
 }
 
@@ -2187,7 +2188,9 @@ fn compile_module<M: Module>(
 
     // Declare extern (FFI) functions
     for item in &ast_module.items {
-        let Item::Extern(ext) = &item.node else { continue; };
+        let Item::Extern(ext) = &item.node else {
+            continue;
+        };
         for fn_sig_spanned in &ext.functions {
             let f = &fn_sig_spanned.node;
             let mut sig = module.make_signature();
@@ -2203,12 +2206,7 @@ fn compile_module<M: Module>(
             }
 
             let ret_turbo = if let Some(ret_ty) = &f.return_type {
-                let cl = resolve_cl_type(
-                    &ret_ty.node,
-                    ptr_type,
-                    &enum_variants,
-                    &[],
-                )?;
+                let cl = resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?;
                 sig.returns.push(AbiParam::new(cl));
                 turbo_ty_from_type_expr_with_params(&ret_ty.node, &enum_variants, &[])
             } else {
@@ -2563,8 +2561,7 @@ fn compile_module<M: Module>(
                 if let Some(ret_ty_expr) = &f.return_type {
                     if let Some((val, val_tty)) = result {
                         // Coerce return value to match the declared return type
-                        let ret_tty =
-                            turbo_ty_from_type_expr(&ret_ty_expr.node, &enum_variants);
+                        let ret_tty = turbo_ty_from_type_expr(&ret_ty_expr.node, &enum_variants);
                         let (val, _) = coerce_value(&mut cx, val, &val_tty, &ret_tty);
                         cx.builder.ins().return_(&[val]);
                     } else {
