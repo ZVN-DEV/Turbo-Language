@@ -3168,12 +3168,8 @@ fn main() { }
                         3 => out.push_str(&format!("{}", next() % 1000)),
                         _ => {
                             let len = (next() % 10 + 1) as usize;
-                            for j in 0..len {
-                                let c = if j == 0 {
-                                    (b'a' + (next() % 26) as u8) as char
-                                } else {
-                                    (b'a' + (next() % 26) as u8) as char
-                                };
+                            for _ in 0..len {
+                                let c = (b'a' + (next() % 26) as u8) as char;
                                 out.push(c);
                             }
                         }

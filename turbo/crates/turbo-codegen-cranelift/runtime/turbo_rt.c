@@ -8,6 +8,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <pthread.h>
 #include <math.h>
@@ -425,6 +426,23 @@ const char* rt_str_repeat(const char *s, long long count) {
         return empty;
     }
     size_t len = strlen(s);
+    /* Overflow check: len * count must fit in size_t and leave room for
+     * the trailing NUL. Previously this wrapped silently and the malloc
+     * would succeed with a much smaller size than the subsequent strcat
+     * loop needed, producing a heap overflow. */
+    if (len == 0) {
+        char *empty = (char *)turbo_alloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
+    if ((size_t)count > (SIZE_MAX - 1) / len) {
+        fprintf(stderr,
+                "[rt_str_repeat] overflow: len=%zu * count=%lld exceeds SIZE_MAX\n",
+                len, count);
+        char *empty = (char *)turbo_alloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
     size_t total = len * (size_t)count;
     char *result = (char *)turbo_alloc(total + 1);
     result[0] = '\0';
@@ -586,8 +604,34 @@ static char *read_fd_to_string(int fd) {
     return buf;
 }
 
+/* Returns 1 if url starts with "http://" or "https://" (case-insensitive),
+ * 0 otherwise. Rejects NULL/empty. Used to gate rt_http_get/rt_http_post
+ * against SSRF via file://, gopher://, ftp://, etc., and to reject any
+ * string that would be interpreted by curl as a flag. */
+static int rt_url_is_http(const char *url) {
+    if (!url || url[0] == '\0') return 0;
+    /* Explicitly reject anything that looks like a flag. curl treats a
+     * leading '-' as a flag even when passed as a positional argument
+     * unless preceded by `--`, but we belt-and-suspenders this anyway. */
+    if (url[0] == '-') return 0;
+    if (strncasecmp(url, "http://", 7) == 0) return 1;
+    if (strncasecmp(url, "https://", 8) == 0) return 1;
+    return 0;
+}
+
+static const char *rt_http_empty_response(void) {
+    char *empty = (char *)turbo_alloc(1);
+    empty[0] = '\0';
+    return empty;
+}
+
 /* http_get(url) -> str — HTTP GET via fork+exec (no shell interpolation) */
 const char *rt_http_get(const char *url) {
+    if (!rt_url_is_http(url)) {
+        fprintf(stderr, "[rt_http] blocked non-http(s) URL: %s\n",
+                url ? url : "(null)");
+        return rt_http_empty_response();
+    }
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         return strdup("error: cannot create pipe");
@@ -599,11 +643,21 @@ const char *rt_http_get(const char *url) {
         return strdup("error: cannot fork");
     }
     if (pid == 0) {
-        /* Child: redirect stdout to pipe, exec curl */
+        /* Child: redirect stdout to pipe, exec curl.
+         * Notes:
+         *   --proto =http,https  lock to http(s) even after redirects
+         *   --max-time 30        hard timeout for DoS protection
+         *   --max-redirs 5       cap redirect chain
+         *   --                   terminate flags so a URL like "--help"
+         *                        cannot be re-interpreted */
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);
-        execlp("curl", "curl", "-s", "-L", url, (char *)NULL);
+        execlp("curl", "curl", "-s", "-L",
+               "--proto", "=http,https",
+               "--max-time", "30",
+               "--max-redirs", "5",
+               "--", url, (char *)NULL);
         _exit(1);
     }
     /* Parent: read from pipe */
@@ -617,6 +671,11 @@ const char *rt_http_get(const char *url) {
 
 /* http_post(url, body) -> str — HTTP POST via fork+exec (no shell interpolation) */
 const char *rt_http_post(const char *url, const char *body) {
+    if (!rt_url_is_http(url)) {
+        fprintf(stderr, "[rt_http] blocked non-http(s) URL: %s\n",
+                url ? url : "(null)");
+        return rt_http_empty_response();
+    }
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         return strdup("error: cannot create pipe");
@@ -634,7 +693,11 @@ const char *rt_http_post(const char *url, const char *body) {
         close(pipefd[1]);
         execlp("curl", "curl", "-s", "-L", "-X", "POST",
                "-H", "Content-Type: application/json",
-               "-d", body, url, (char *)NULL);
+               "--proto", "=http,https",
+               "--max-time", "30",
+               "--max-redirs", "5",
+               "-d", body ? body : "",
+               "--", url, (char *)NULL);
         _exit(1);
     }
     /* Parent: read from pipe */
@@ -1017,7 +1080,15 @@ void rt_hashmap_remove(void *map_ptr, const char *key) {
 
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
+#include <errno.h>
+#include <limits.h>
+
+/* Hard cap on request body size. Anything larger gets 400 Bad Request.
+ * 32 MB is already generous for a language-level HTTP server primitive;
+ * the user should front this with a real proxy for production. */
+#define RT_HTTP_MAX_BODY (32 * 1024 * 1024)
 
 typedef const char* (*route_handler_fn)(const void*, const char*);
 
@@ -1030,6 +1101,9 @@ typedef struct {
 
 typedef struct {
     unsigned short port;
+    /* Bind address in network byte order. Defaults to 127.0.0.1 for
+     * rt_http_server; rt_http_server_public sets this to INADDR_ANY. */
+    unsigned int bind_addr;
     Route routes[64];
     int route_count;
 } HttpServerC;
@@ -1041,6 +1115,21 @@ long long rt_http_server(long long port) {
     if (http_server_count >= 16) { fprintf(stderr, "error: max 16 HTTP servers\n"); exit(1); }
     int id = http_server_count++;
     http_servers[id].port = (unsigned short)port;
+    /* Secure default: listen only on the loopback interface. Users who
+     * need external access must opt in via rt_http_server_public. */
+    http_servers[id].bind_addr = htonl(INADDR_LOOPBACK);
+    http_servers[id].route_count = 0;
+    return id;
+}
+
+/* Like rt_http_server, but binds INADDR_ANY — exposes the server on all
+ * interfaces. Callers are expected to know what they are doing and to
+ * front this with a reverse proxy in production. */
+long long rt_http_server_public(long long port) {
+    if (http_server_count >= 16) { fprintf(stderr, "error: max 16 HTTP servers\n"); exit(1); }
+    int id = http_server_count++;
+    http_servers[id].port = (unsigned short)port;
+    http_servers[id].bind_addr = htonl(INADDR_ANY);
     http_servers[id].route_count = 0;
     return id;
 }
@@ -1122,16 +1211,45 @@ static void *handle_http_conn(void *arg) {
             headers_len = hdr_end - headers_raw;
         }
 
-        /* Determine content-length */
-        int content_length = 0;
+        /* Determine content-length.
+         *
+         * The previous implementation used atoi(), which returned 0 on
+         * parse failure and silently accepted negative numbers — a
+         * negative value would then be interpreted as a huge size_t and
+         * fed into memcpy(), crashing the server. We now use strtoll
+         * with ERANGE detection and reject anything out of [0, RT_HTTP_MAX_BODY]. */
+        long long content_length = 0;
+        int content_length_invalid = 0;
         {
             const char *cl = headers_raw;
             for (size_t i = 0; i + 15 < headers_len; i++) {
                 if (strncasecmp(cl + i, "content-length:", 15) == 0) {
-                    content_length = atoi(cl + i + 15);
+                    const char *vstart = cl + i + 15;
+                    /* Skip leading whitespace */
+                    while (*vstart == ' ' || *vstart == '\t') vstart++;
+                    char *endptr = NULL;
+                    errno = 0;
+                    long long val = strtoll(vstart, &endptr, 10);
+                    if (errno == ERANGE || endptr == vstart || val < 0 ||
+                        val > (long long)RT_HTTP_MAX_BODY) {
+                        content_length_invalid = 1;
+                    } else {
+                        content_length = val;
+                    }
                     break;
                 }
             }
+        }
+
+        if (content_length_invalid) {
+            /* Reject the request entirely — do NOT pass a bad length
+             * into memcpy(). Close after replying. */
+            const char *bad =
+                "HTTP/1.1 400 Bad Request\r\n"
+                "Content-Length: 0\r\n"
+                "Connection: close\r\n\r\n";
+            write(fd, bad, strlen(bad));
+            break;
         }
 
         /* Check keep-alive (HTTP/1.1 default is keep-alive) */
@@ -1151,7 +1269,7 @@ static void *handle_http_conn(void *arg) {
         /* Body starts after \r\n\r\n */
         char *body_start = hdr_end + 4;
         int body_available = buf_len - (int)(body_start - buf);
-        if (body_available < content_length) continue; /* Need more data */
+        if ((long long)body_available < content_length) continue; /* Need more data */
 
         /* Build structured request: METHOD\x01PATH\x01QUERY\x01HEADERS\x01BODY */
         size_t mlen = strlen(method);
@@ -1219,7 +1337,7 @@ static void *handle_http_conn(void *arg) {
         }
 
         /* Consume processed bytes from buffer */
-        int consumed = (int)(body_start - buf) + content_length;
+        int consumed = (int)(body_start - buf) + (int)content_length;
         int remaining = buf_len - consumed;
         if (remaining > 0) {
             memmove(buf, buf + consumed, remaining);
@@ -1250,7 +1368,10 @@ void rt_http_listen(long long server_id) {
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
+    /* Bind address was chosen at server-creation time:
+     *   rt_http_server        -> 127.0.0.1
+     *   rt_http_server_public -> 0.0.0.0 */
+    addr.sin_addr.s_addr = srv->bind_addr;
     addr.sin_port = htons(srv->port);
 
     if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
@@ -1407,9 +1528,16 @@ void rt_release(void *data_ptr) {
     }
 }
 
-/* Entry point: calls Turbo's main and returns 0 */
+/* Entry point: calls Turbo's main and returns 0.
+ *
+ * Suppressed under RT_TEST_BUILD so the C runtime test harness
+ * (runtime/tests/test_rt.c) can link against turbo_rt.c without
+ * pulling in the unresolved `turbo_main` symbol or colliding with
+ * the harness's own `main`. */
+#ifndef RT_TEST_BUILD
 extern void turbo_main(void);
 int main(void) {
     turbo_main();
     return 0;
 }
+#endif

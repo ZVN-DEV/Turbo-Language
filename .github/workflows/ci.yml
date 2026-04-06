@@ -11,15 +11,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: Lint
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --manifest-path turbo/Cargo.toml --all -- --check
+
+  clippy:
+    name: Clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
       - uses: actions/cache@v4
         with:
@@ -27,21 +38,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             turbo/target
-          key: ${{ runner.os }}-cargo-check-${{ hashFiles('turbo/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-check-
-            ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('turbo/Cargo.lock') }}
 
-      - name: Format
-        run: cargo fmt --all --check --manifest-path turbo/Cargo.toml
-
-      - name: Clippy
-        run: cargo clippy --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml -- -D warnings
+      - name: cargo clippy
+        run: cargo clippy --manifest-path turbo/Cargo.toml --workspace --exclude turbo-codegen-llvm --all-targets -- -D warnings
 
   test:
-    name: Test (${{ matrix.os }})
+    name: Unit tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
@@ -56,12 +62,36 @@ jobs:
             ~/.cargo/git
             turbo/target
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('turbo/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-test-
-            ${{ runner.os }}-cargo-
 
-      - name: Test
+      - name: cargo test
         run: cargo test --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+
+  integration:
+    name: Integration tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            turbo/target
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('turbo/Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+
+      - name: Run integration tests
+        run: ./tests/run_tests.sh
+        working-directory: turbo
 
   build:
     name: Build (release)
@@ -78,9 +108,44 @@ jobs:
             ~/.cargo/git
             turbo/target
           key: ${{ runner.os }}-cargo-build-${{ hashFiles('turbo/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-build-
-            ${{ runner.os }}-cargo-
 
       - name: Build
         run: cargo build --release --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+
+  c-runtime-tests:
+    name: C runtime tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run C runtime tests
+        run: bash tests.sh
+        working-directory: turbo/crates/turbo-codegen-cranelift/runtime
+
+  fuzz-smoke:
+    name: Fuzz smoke (codegen)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            turbo/fuzz/target
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('turbo/fuzz/Cargo.toml') }}
+
+      - name: Build codegen fuzz binary
+        run: cargo build --release --bin codegen-fuzz --manifest-path turbo/fuzz/Cargo.toml
+
+      - name: Run codegen fuzz smoke (200 iters)
+        run: cargo run --release --bin codegen-fuzz --manifest-path turbo/fuzz/Cargo.toml
+        env:
+          TURBO_FUZZ_ITERS: "200"

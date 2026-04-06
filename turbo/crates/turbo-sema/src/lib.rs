@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use turbo_ast::*;
 
+mod suggest;
+
 #[derive(Debug, Clone)]
 pub struct SemaError {
     pub code: ErrorCode,
@@ -601,6 +603,7 @@ impl Checker {
                 | "json_get"
                 | "json_stringify"
                 | "http_server"
+                | "http_server_public"
                 | "route"
                 | "http_listen"
                 | "respond"
@@ -1614,11 +1617,16 @@ impl Checker {
                 if let Some(info) = self.lookup_var(name) {
                     info.ty.clone()
                 } else {
-                    self.error(
-                        ErrorCode::E0300,
-                        format!("undefined variable `{name}`"),
-                        expr.span.clone(),
-                    );
+                    let in_scope: Vec<&str> = self
+                        .scopes
+                        .iter()
+                        .flat_map(|s| s.vars.keys().map(String::as_str))
+                        .collect();
+                    let msg = match suggest::suggest_for(name, in_scope.iter().copied()) {
+                        Some(hit) => format!("undefined variable `{name}`. did you mean `{hit}`?"),
+                        None => format!("undefined variable `{name}`"),
+                    };
+                    self.error(ErrorCode::E0300, msg, expr.span.clone());
                     Ty::Error
                 }
             }
@@ -2480,15 +2488,13 @@ impl Checker {
                     }
 
                     // ── HTTP server builtins ──────────────────────────
-                    // http_server(port: i64) -> i64
-                    if name == "http_server" {
+                    // http_server(port: i64) -> i64          (binds 127.0.0.1)
+                    // http_server_public(port: i64) -> i64   (binds 0.0.0.0)
+                    if name == "http_server" || name == "http_server_public" {
                         if args.len() != 1 {
                             self.error(
                                 ErrorCode::E0100,
-                                format!(
-                                    "http_server() takes exactly 1 argument, got {}",
-                                    args.len()
-                                ),
+                                format!("{name}() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -2497,7 +2503,7 @@ impl Checker {
                         if !port_ty.is_error() && !port_ty.is_integer() {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("http_server() expects integer port, found `{port_ty}`"),
+                                format!("{name}() expects integer port, found `{port_ty}`"),
                                 args[0].span.clone(),
                             );
                         }

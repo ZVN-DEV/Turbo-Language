@@ -226,6 +226,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_json_stringify", rt_json_stringify as *const u8);
     // HTTP server builtins
     jit_builder.symbol("rt_http_server", rt_http_server as *const u8);
+    jit_builder.symbol("rt_http_server_public", rt_http_server_public as *const u8);
     jit_builder.symbol("rt_http_route", rt_http_route as *const u8);
     jit_builder.symbol("rt_http_listen", rt_http_listen as *const u8);
     jit_builder.symbol("rt_respond", rt_respond as *const u8);
@@ -359,6 +360,7 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_json_get", rt_json_get as *const u8);
     jit_builder.symbol("rt_json_stringify", rt_json_stringify as *const u8);
     jit_builder.symbol("rt_http_server", rt_http_server as *const u8);
+    jit_builder.symbol("rt_http_server_public", rt_http_server_public as *const u8);
     jit_builder.symbol("rt_http_route", rt_http_route as *const u8);
     jit_builder.symbol("rt_http_listen", rt_http_listen as *const u8);
     jit_builder.symbol("rt_respond", rt_respond as *const u8);
@@ -1853,6 +1855,13 @@ fn compile_module<M: Module>(
         module,
         &mut rt_fns,
         "rt_http_server",
+        &[types::I64],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_http_server_public",
         &[types::I64],
         Some(types::I64),
     )?;
@@ -4781,6 +4790,7 @@ fn compile_call<M: Module>(
         "json_stringify" => compile_builtin_json_stringify(cx, args),
         // HTTP server builtins
         "http_server" => compile_builtin_http_server(cx, args),
+        "http_server_public" => compile_builtin_http_server_public(cx, args),
         "route" => compile_builtin_route(cx, args),
         "http_listen" => compile_builtin_http_listen(cx, args),
         "respond" => compile_builtin_respond(cx, args),
@@ -5419,9 +5429,9 @@ mod tests {
 
     #[test]
     fn test_rt_f64_to_str() {
-        let result = rt_f64_to_str(3.14);
+        let result = rt_f64_to_str(2.5);
         let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
-        assert_eq!(s.to_str().unwrap(), "3.14");
+        assert_eq!(s.to_str().unwrap(), "2.5");
     }
 
     #[test]

@@ -673,13 +673,28 @@ pub(crate) fn compile_builtin_json_stringify<M: Module>(
 
 // ── HTTP server builtins ────────────────────────────────────────────
 
-/// http_server(port) -> i64 (server id)
+/// http_server(port) -> i64 (server id). Binds to 127.0.0.1 by default —
+/// use http_server_public to listen on all interfaces.
 pub(crate) fn compile_builtin_http_server<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
     let (port_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let fid = cx.rt_fns["rt_http_server"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[port_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// http_server_public(port) -> i64 (server id). Opt-in public bind to
+/// INADDR_ANY. Callers are expected to front the server with a proxy.
+pub(crate) fn compile_builtin_http_server_public<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (port_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_http_server_public"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[port_val]);
     let result = cx.builder.inst_results(call)[0];

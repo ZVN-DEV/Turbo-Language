@@ -3,6 +3,77 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Security
+- **`rt_http_get` / `rt_http_post` SSRF + arg-injection hardening.**
+  Both functions now reject any URL whose scheme isn't `http://` or
+  `https://` (case-insensitive), reject NULL/empty/`-`-prefixed input,
+  and pass `--` to curl before the URL so flag-shaped values can no
+  longer be re-interpreted as flags. The curl invocation is also
+  pinned to `--proto =http,https`, capped at `--max-time 30`, and
+  limited to `--max-redirs 5`. Closes the `http_get("file:///etc/hosts")`
+  and `http_get("--help")` exploits.
+- **HTTP server Content-Length DoS fix.** The request parser used
+  `atoi()`, which silently returned 0 on parse failure and silently
+  accepted negative values — a `Content-Length: -1` header would
+  crash the server when the negative int was reinterpreted as a huge
+  `size_t` and fed into `memcpy`. Now we use `strtoll` with `ERANGE`
+  detection and reject anything outside `[0, RT_HTTP_MAX_BODY]`
+  (32 MiB). Invalid requests get `400 Bad Request` and the connection
+  closes; we never pass a bad length to `memcpy`.
+- **HTTP server now binds `127.0.0.1` by default.** `http_server(port)`
+  used to bind `INADDR_ANY` with no opt-out, exposing development
+  servers to the network on first run. The new default is loopback
+  only. A new explicit `http_server_public(port)` opt-in binds
+  `0.0.0.0` for callers who deliberately need external exposure.
+- **`rt_str_repeat` integer-overflow fix.** The previous implementation
+  computed `len * count` without checking for wraparound. A large
+  count would silently produce a tiny allocation that the subsequent
+  `strcat` loop wrote past. Now we check `count > (SIZE_MAX - 1) / len`
+  before the multiply and return an empty string with a stderr
+  diagnostic on overflow.
+
+### Added
+- `SECURITY.md` with disclosure process, scope, response SLA
+  (48-hour ack, 7-day critical fix target), and known hardening limits.
+- `CHANGELOG.md` (this file). Backfilled entries from v0.1 to v0.5.
+- C runtime test harness at
+  `turbo/crates/turbo-codegen-cranelift/runtime/tests/` with a
+  matching `tests.sh` runner. Covers `rt_str_repeat` overflow,
+  HTTP scheme rejection, flag-injection rejection, and basic
+  string ops. Wired into a new `c-runtime-tests` CI job.
+- Codegen fuzz target — extends the existing fuzz harness with a
+  `codegen` mode that runs lex → parse → sema → JIT-compile through
+  `panic::catch_unwind`. Default 200 iterations, override via
+  `TURBO_FUZZ_ITERS`.
+- `rt_http_server_public(port)` builtin for opt-in public binds.
+- "Did you mean?" suggestions for unresolved identifiers in sema,
+  computed via a hand-rolled Levenshtein distance (no new deps).
+
+### Changed
+- CI now runs the integration test suite
+  (`turbo/tests/run_tests.sh`) on both `ubuntu-latest` and
+  `macos-latest`, plus separate `fmt`, `clippy`, and `c-runtime-tests`
+  jobs. `actions/cache@v4` keys are pinned via `hashFiles` only —
+  no `restore-keys` so stale caches can't poison a build.
+- `README.md` carries a prominent **Known Limitations** callout
+  about the runtime memory leak and the experimental HTTP server.
+
+### Removed
+- Stale internal planning docs deleted from the public repo:
+  `findings.md`, `INDEX.md`, `PLAN-2025-03-31.md`, and
+  `turbo/cow-bug-audit.md`. These patterns are now in `.gitignore`
+  so they cannot accidentally come back.
+
+### Known Issues
+- **Runtime memory leak.** `rt_release` is currently a no-op, so
+  long-running servers and hot loops that allocate repeatedly will
+  leak memory (~2.5 KB/request on the example HTTP server). Real
+  reference counting is planned for **v0.6**. Tracked in `TODO.md`.
+- **HTTP server is experimental.** Use behind a reverse proxy.
+  See `SECURITY.md` for the threat model.
+
 ## [0.5.0] - 2026-04-06
 
 ### Added
