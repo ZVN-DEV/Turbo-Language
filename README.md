@@ -47,6 +47,12 @@ turbolang build hello.tb      # AOT — produce a native binary
 ./hello
 ```
 
+### Known Limitations (v0.5.x)
+
+> **Warning — runtime memory leak:** The runtime does not yet perform reference counting. `rt_release` is currently a no-op, so long-running servers and hot loops that allocate repeatedly will leak memory (~2.5 KB/request on the example HTTP server). Real ARC is planned for v0.6. For short-running CLI programs this is not a problem.
+>
+> **Warning — HTTP server is experimental:** The built-in HTTP server binds to `127.0.0.1` by default and is not hardened for direct exposure to untrusted networks. Put it behind a reverse proxy (nginx, Caddy) in production. See [`SECURITY.md`](SECURITY.md) for the full threat model.
+
 ### A Taste of Turbo
 
 ```turbo

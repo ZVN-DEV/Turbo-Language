@@ -1,5 +1,18 @@
 # Turbo Language — TODO
 
+## Reference counting (Priority: Critical, v0.6)
+The runtime currently does not reference-count heap allocations: `rt_release`
+is a no-op. This produces a ~2.5 KB/request leak on the example HTTP server
+and makes long-running services impractical. Real ARC is planned for v0.6
+and is tracked as the top P1 follow-up from the v0.5.1 hardening sprint.
+
+Scope:
+- Per-allocation refcount header (already allocated in `turbo_alloc`)
+- `rt_retain` / `rt_release` that atomically inc/dec the count
+- Codegen insertion of retains on assignment and releases at scope exit
+- Deep release for array/hashmap element types
+- Re-enable the leak test that was disabled while this is a no-op
+
 ## Visual Library (Priority: High)
 Turbo needs a visual output library so programs can produce graphics, charts, and UI.
 
