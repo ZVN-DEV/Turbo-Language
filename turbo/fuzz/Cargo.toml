@@ -12,3 +12,14 @@ turbo-lexer = { path = "../crates/turbo-lexer" }
 turbo-parser = { path = "../crates/turbo-parser" }
 turbo-sema = { path = "../crates/turbo-sema" }
 turbo-ast = { path = "../crates/turbo-ast" }
+turbo-codegen-cranelift = { path = "../crates/turbo-codegen-cranelift" }
+
+# Default frontend fuzz binary (lex → parse → sema)
+[[bin]]
+name = "turbo-fuzz"
+path = "src/main.rs"
+
+# Codegen smoke fuzz binary (lex → parse → sema → JIT-compile)
+[[bin]]
+name = "codegen-fuzz"
+path = "src/codegen_fuzz.rs"
