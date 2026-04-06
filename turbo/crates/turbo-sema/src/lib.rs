@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use turbo_ast::*;
 
+mod suggest;
+
 #[derive(Debug, Clone)]
 pub struct SemaError {
     pub code: ErrorCode,
@@ -1615,11 +1617,16 @@ impl Checker {
                 if let Some(info) = self.lookup_var(name) {
                     info.ty.clone()
                 } else {
-                    self.error(
-                        ErrorCode::E0300,
-                        format!("undefined variable `{name}`"),
-                        expr.span.clone(),
-                    );
+                    let in_scope: Vec<&str> = self
+                        .scopes
+                        .iter()
+                        .flat_map(|s| s.vars.keys().map(String::as_str))
+                        .collect();
+                    let msg = match suggest::suggest_for(name, in_scope.iter().copied()) {
+                        Some(hit) => format!("undefined variable `{name}`. did you mean `{hit}`?"),
+                        None => format!("undefined variable `{name}`"),
+                    };
+                    self.error(ErrorCode::E0300, msg, expr.span.clone());
                     Ty::Error
                 }
             }
