@@ -212,7 +212,7 @@ fn normalize_line_spacing(line: &str) -> String {
                 continue;
             }
             // Skip `->` and `=>` (arrows) — don't add operator spacing around them
-            if (c == '-' && next == '>') || (c == '=' && next == '>') {
+            if (c == '=' || c == '-') && next == '>' {
                 result.push(c);
                 result.push(next);
                 chars.next();

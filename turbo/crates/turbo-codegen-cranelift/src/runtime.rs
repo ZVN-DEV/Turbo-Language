@@ -877,10 +877,8 @@ fn handle_http_connection(
 
         // Read body
         let mut body = vec![0u8; content_length];
-        if content_length > 0 {
-            if reader.read_exact(&mut body).is_err() {
-                break;
-            }
+        if content_length > 0 && reader.read_exact(&mut body).is_err() {
+            break;
         }
 
         let conn_header = if keep_alive { "keep-alive" } else { "close" };

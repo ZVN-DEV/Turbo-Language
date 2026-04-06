@@ -161,11 +161,11 @@ fn extract_int_literal(expr: &Expr) -> Option<i64> {
 /// Check if an integer literal value fits in the given target type.
 fn int_literal_fits_in_type(n: i64, target: &Ty) -> bool {
     match target {
-        Ty::U8 => n >= 0 && n <= 255,
-        Ty::U16 => n >= 0 && n <= 65535,
+        Ty::U8 => (0..=255).contains(&n),
+        Ty::U16 => (0..=65535).contains(&n),
         Ty::U32 | Ty::U64 => n >= 0,
-        Ty::I8 => n >= -128 && n <= 127,
-        Ty::I16 => n >= -32768 && n <= 32767,
+        Ty::I8 => (-128..=127).contains(&n),
+        Ty::I16 => (-32768..=32767).contains(&n),
         _ => true,
     }
 }
@@ -1472,7 +1472,7 @@ impl Checker {
         let body_has_return = if let Expr::Block { stmts, .. } = &f.body.node {
             stmts
                 .last()
-                .map_or(false, |s| matches!(s.node, Stmt::Return(_)))
+                .is_some_and(|s| matches!(s.node, Stmt::Return(_)))
         } else {
             false
         };
@@ -1494,7 +1494,7 @@ impl Checker {
                     Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64
                 )
                 && tail_expr
-                    .and_then(|e| extract_int_literal(e))
+                    .and_then(extract_int_literal)
                     .is_some_and(|n| int_literal_fits_in_type(n, &sig.ret));
             if !is_return_coercion {
                 self.error(
@@ -1545,7 +1545,7 @@ impl Checker {
         let body_has_return = if let Expr::Block { stmts, .. } = &f.body.node {
             stmts
                 .last()
-                .map_or(false, |s| matches!(s.node, Stmt::Return(_)))
+                .is_some_and(|s| matches!(s.node, Stmt::Return(_)))
         } else {
             false
         };
@@ -1567,7 +1567,7 @@ impl Checker {
                     Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64
                 )
                 && tail_expr
-                    .and_then(|e| extract_int_literal(e))
+                    .and_then(extract_int_literal)
                     .is_some_and(|n| int_literal_fits_in_type(n, &sig.ret));
             if !is_return_coercion {
                 self.error(
@@ -3766,16 +3766,14 @@ impl Checker {
                         ty
                     }
                     Pattern::None => {
-                        if !val_ty.is_error() {
-                            if !matches!(val_ty, Ty::Optional(_)) {
-                                self.error(
-                                    ErrorCode::E0116,
-                                    format!(
-                                        "`if let none` requires an optional type, found `{val_ty}`"
-                                    ),
-                                    value.span.clone(),
-                                );
-                            }
+                        if !val_ty.is_error() && !matches!(val_ty, Ty::Optional(_)) {
+                            self.error(
+                                ErrorCode::E0116,
+                                format!(
+                                    "`if let none` requires an optional type, found `{val_ty}`"
+                                ),
+                                value.span.clone(),
+                            );
                         }
                         self.check_expr(then_branch)
                     }

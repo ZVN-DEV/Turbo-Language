@@ -303,13 +303,13 @@ fn lex_triple_quote_string(lex: &mut logos::Lexer<Token>) -> Option<std::string:
 /// rather than ending the outer string.
 fn lex_string(lex: &mut logos::Lexer<Token>) -> Option<std::string::String> {
     let remainder = lex.remainder();
-    let mut chars = remainder.char_indices();
+    let chars = remainder.char_indices();
     let mut brace_depth: u32 = 0; // > 0 means we are inside {…} interpolation
     let mut in_inner_string = false; // inside a quoted string within interpolation
     let mut escape_next = false;
     let mut end_offset: Option<usize> = None;
 
-    while let Some((i, c)) = chars.next() {
+    for (i, c) in chars {
         if escape_next {
             escape_next = false;
             continue;

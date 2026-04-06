@@ -2610,7 +2610,7 @@ fn doc_file(path: &std::path::Path) {
     }
 
     // Structs section — prefer AST for accurate field types, fall back to scanner
-    let has_ast_structs = ast_functions.as_ref().map_or(false, |module| {
+    let has_ast_structs = ast_functions.as_ref().is_some_and(|module| {
         module
             .items
             .iter()

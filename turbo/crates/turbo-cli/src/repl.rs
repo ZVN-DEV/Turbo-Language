@@ -137,10 +137,10 @@ pub fn run_repl() {
                 let (module, parse_errs) = turbo_parser::parse(tokens);
                 if parse_errs.is_empty() {
                     let sema_result = turbo_sema::check(&module);
-                    if sema_result.errors.is_empty() {
-                        if turbo_codegen_cranelift::jit_run(&module).is_ok() {
-                            continue;
-                        }
+                    if sema_result.errors.is_empty()
+                        && turbo_codegen_cranelift::jit_run(&module).is_ok()
+                    {
+                        continue;
                     }
                 }
             }

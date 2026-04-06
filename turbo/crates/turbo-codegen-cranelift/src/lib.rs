@@ -496,7 +496,7 @@ pub fn aot_compile(
         .arg(output_path);
 
     // Linux targets need explicit -lpthread
-    if target.map_or(false, |t| t.contains("linux")) {
+    if target.is_some_and(|t| t.contains("linux")) {
         cmd.arg("-lpthread");
     }
 

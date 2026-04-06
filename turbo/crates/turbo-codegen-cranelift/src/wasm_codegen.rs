@@ -536,9 +536,7 @@ impl CEmitter {
                 format!("(rt_array_set({obj}, {idx}, {val}), {val})")
             }
             // Catch-all for unsupported expressions
-            _ => {
-                format!("0 /* unsupported expr */")
-            }
+            _ => "0 /* unsupported expr */".to_string(),
         }
     }
 
@@ -587,7 +585,7 @@ impl CEmitter {
                 } else if args.len() == 2 {
                     format!("if (!({0})) rt_assert_fail({1})", arg_strs[0], arg_strs[1])
                 } else {
-                    format!("rt_assert_fail(\"bad assert\")")
+                    "rt_assert_fail(\"bad assert\")".to_string()
                 }
             }
             "assert_eq" => {
@@ -595,7 +593,7 @@ impl CEmitter {
                     format!("if (({0}) != ({1})) rt_assert_eq_fail(0, rt_i64_to_str({0}), rt_i64_to_str({1}))",
                         arg_strs[0], arg_strs[1])
                 } else {
-                    format!("rt_assert_fail(\"bad assert_eq\")")
+                    "rt_assert_fail(\"bad assert_eq\")".to_string()
                 }
             }
             "len" => format!("rt_array_len({args_joined})"),
@@ -638,7 +636,7 @@ impl CEmitter {
         // For now, we can't always determine the struct type at this point,
         // so we'll use a generic approach
         // TODO: Type-aware field resolution
-        for (_sname, fields) in &self.struct_fields {
+        for fields in self.struct_fields.values() {
             for (i, (fname, _)) in fields.iter().enumerate() {
                 if fname == field {
                     return format!("{i}");
@@ -690,7 +688,7 @@ impl CEmitter {
                     // Unsupported pattern type (enum destructure, Ok/Err/Some/None)
                     // For v1, emit a comment and skip
                     if is_last {
-                        result.push_str(&format!("0 /* unsupported match pattern */"));
+                        result.push_str("0 /* unsupported match pattern */");
                     } else {
                         result.push_str(&format!("(0 /* unsupported match pattern */ ? {body} : "));
                         depth += 1;
@@ -700,7 +698,7 @@ impl CEmitter {
 
             // If this is the last arm and we haven't hit a wildcard, add a fallback
             if is_last && !matches!(&arm.pattern.node, Pattern::Wildcard | Pattern::Ident(_)) {
-                result.push_str("0");
+                result.push('0');
             }
         }
 
@@ -1144,7 +1142,7 @@ impl CEmitter {
                 let c_type = Self::type_to_c(&p.ty.node);
                 // Handle "self" parameter
                 if p.name == "self" {
-                    format!("void *self")
+                    "void *self".to_string()
                 } else {
                     format!("{c_type} {}", p.name)
                 }
@@ -1192,10 +1190,7 @@ impl CEmitter {
                 Item::Impl(imp) => {
                     let type_name = imp.type_name.clone();
                     for method in &imp.methods {
-                        let entry = self
-                            .impl_methods
-                            .entry(type_name.clone())
-                            .or_insert_with(Vec::new);
+                        let entry = self.impl_methods.entry(type_name.clone()).or_default();
                         entry.push((method.node.name.clone(), method.node.clone()));
                     }
                 }
@@ -1212,7 +1207,7 @@ impl CEmitter {
                 }
             }
         }
-        for (_type_name, methods) in &self.impl_methods {
+        for methods in self.impl_methods.values() {
             for (_method_name, method) in methods {
                 if let Some(ret_ty) = &method.return_type {
                     let ret_tag = Self::type_expr_to_tag(&ret_ty.node);
