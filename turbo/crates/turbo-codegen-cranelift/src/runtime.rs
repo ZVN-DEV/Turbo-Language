@@ -1057,12 +1057,17 @@ pub(crate) extern "C" fn rt_agent_ask(agent_ptr: *const u8, prompt: *const u8) -
             "system" => system,
             "schema" => output_schema,
             "structured" => {
-                let clean = prompt.split("\nReturn only valid JSON for output type").next().unwrap_or(&prompt);
+                let clean = prompt
+                    .split("\nReturn only valid JSON for output type")
+                    .next()
+                    .unwrap_or(&prompt);
                 format!("{{\"mock\":\"{}\"}}", rt_json_escape(clean))
             }
-            "structured_str" => {
-                prompt.split("\nReturn only valid JSON for output type").next().unwrap_or(&prompt).to_string()
-            }
+            "structured_str" => prompt
+                .split("\nReturn only valid JSON for output type")
+                .next()
+                .unwrap_or(&prompt)
+                .to_string(),
             tool_name if tool_name.starts_with("tool:") => {
                 let requested = tool_name.trim_start_matches("tool:");
                 if let Some(index) = tool_wrapper_names.iter().position(|name| name == requested) {

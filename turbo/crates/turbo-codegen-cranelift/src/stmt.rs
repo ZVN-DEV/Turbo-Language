@@ -7,7 +7,10 @@ use super::*;
 
 // ── Statement compilation ───────────────────────────────────────────
 
-pub(crate) fn compile_stmt<M: Module>(cx: &mut Ctx<'_, M>, stmt: &Spanned<Stmt>) -> Result<(), CodegenError> {
+pub(crate) fn compile_stmt<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    stmt: &Spanned<Stmt>,
+) -> Result<(), CodegenError> {
     match &stmt.node {
         Stmt::Let {
             name, value, ty, ..

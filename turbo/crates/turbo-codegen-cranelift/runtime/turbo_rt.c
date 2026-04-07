@@ -7,19 +7,39 @@
  */
 
 /* Feature test macros — must come before any system header.
- * _POSIX_C_SOURCE 200809L: nanosleep, strdup
- * _DEFAULT_SOURCE: strncasecmp (BSD extension on glibc) */
+ *
+ * Under -std=c11 the system headers default to strict POSIX/C11, which
+ * hides BSD extensions we depend on (strcasecmp/strncasecmp, INADDR_LOOPBACK).
+ *
+ * - _POSIX_C_SOURCE 200809L: nanosleep, strdup
+ * - _DEFAULT_SOURCE / _BSD_SOURCE: BSD extensions on glibc
+ * - _GNU_SOURCE: GNU extensions on glibc (broadest umbrella)
+ * - _DARWIN_C_SOURCE: BSD extensions on macOS (including INADDR_LOOPBACK)
+ *
+ * Defining macros for the wrong platform is harmless — the compiler
+ * silently ignores them.
+ */
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
 #ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE
 #endif
+#ifndef _BSD_SOURCE
+#define _BSD_SOURCE
+#endif
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <strings.h>   /* strcasecmp, strncasecmp (BSD/POSIX) */
 #include <pthread.h>
 #include <math.h>
 #include <time.h>
