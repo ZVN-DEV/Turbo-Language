@@ -6,6 +6,16 @@
  * but compiled as real symbols for the system linker to resolve.
  */
 
+/* Feature test macros — must come before any system header.
+ * _POSIX_C_SOURCE 200809L: nanosleep, strdup
+ * _DEFAULT_SOURCE: strncasecmp (BSD extension on glibc) */
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
