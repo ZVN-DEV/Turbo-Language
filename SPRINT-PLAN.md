@@ -138,7 +138,7 @@ All line numbers below are **approximate** — the agent MUST open the file, gre
 
 **TASK-08 (P0): Add SECURITY.md at repo root**
 - New file `SECURITY.md` with:
-  - Disclosure channel: ask the user what email they want (default to `security@turbolang.org` as placeholder with a clear TODO comment saying "update this before publishing this file")
+  - Disclosure channel: ask the user what email they want (default to `security@turbolang.dev` as placeholder with a clear TODO comment saying "update this before publishing this file")
   - Supported versions table (v0.5.x: current)
   - Explicit scope: "The Turbo C runtime (`turbo_rt.c`) is in scope. Experimental features flagged in CHANGELOG are out of scope."
   - 48-hour ack SLA, 7-day critical fix target
@@ -230,6 +230,6 @@ Each commit message should reference the TASK-NN numbers it closes.
 
 ## Manual Actions for the User (outside this sprint)
 
-- Replace the placeholder `security@turbolang.org` in `SECURITY.md` with a real disclosure address
+- Replace the placeholder `security@turbolang.dev` in `SECURITY.md` with a real disclosure address
 - Review the CHANGELOG `[Unreleased]` section before cutting v0.5.1
 - Follow up in a separate sprint: real ARC (P1 #9), splitting god files (P2), LLVM backend in CI (P2), Homebrew SHA automation (P2)

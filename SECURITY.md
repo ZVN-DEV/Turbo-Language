@@ -15,9 +15,7 @@
 
 To report a vulnerability, use one of these private channels:
 
-- **Email:** `security@turbolang.org` *(TODO: update this address before
-  publishing — the project maintainer should swap in a real disclosure
-  inbox)*
+- **Email:** `security@turbolang.dev`
 - **GitHub:** [Private vulnerability reporting](https://github.com/ZVN-DEV/Turbo-Language/security/advisories/new)
 
 Please include:
