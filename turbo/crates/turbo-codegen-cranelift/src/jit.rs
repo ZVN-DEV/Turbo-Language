@@ -5,6 +5,53 @@
 
 use super::*;
 
+// libm symbols for user `extern "C"` declarations (floor, ceil, sqrt, etc.).
+// On Linux, Cranelift's process-symbol lookup may not find these because
+// Rust binaries don't always pull libm symbols into the dynamic export table.
+// Declaring them here forces the linker to resolve them, then `register_libm_symbols`
+// hands them to the JIT builder explicitly so user code can call them.
+unsafe extern "C" {
+    fn floor(x: f64) -> f64;
+    fn ceil(x: f64) -> f64;
+    fn round(x: f64) -> f64;
+    fn trunc(x: f64) -> f64;
+    fn sqrt(x: f64) -> f64;
+    fn fabs(x: f64) -> f64;
+    fn sin(x: f64) -> f64;
+    fn cos(x: f64) -> f64;
+    fn tan(x: f64) -> f64;
+    fn asin(x: f64) -> f64;
+    fn acos(x: f64) -> f64;
+    fn atan(x: f64) -> f64;
+    fn atan2(y: f64, x: f64) -> f64;
+    fn log(x: f64) -> f64;
+    fn log2(x: f64) -> f64;
+    fn log10(x: f64) -> f64;
+    fn exp(x: f64) -> f64;
+    fn pow(base: f64, exponent: f64) -> f64;
+}
+
+fn register_libm_symbols(jit_builder: &mut JITBuilder) {
+    jit_builder.symbol("floor", floor as *const u8);
+    jit_builder.symbol("ceil", ceil as *const u8);
+    jit_builder.symbol("round", round as *const u8);
+    jit_builder.symbol("trunc", trunc as *const u8);
+    jit_builder.symbol("sqrt", sqrt as *const u8);
+    jit_builder.symbol("fabs", fabs as *const u8);
+    jit_builder.symbol("sin", sin as *const u8);
+    jit_builder.symbol("cos", cos as *const u8);
+    jit_builder.symbol("tan", tan as *const u8);
+    jit_builder.symbol("asin", asin as *const u8);
+    jit_builder.symbol("acos", acos as *const u8);
+    jit_builder.symbol("atan", atan as *const u8);
+    jit_builder.symbol("atan2", atan2 as *const u8);
+    jit_builder.symbol("log", log as *const u8);
+    jit_builder.symbol("log2", log2 as *const u8);
+    jit_builder.symbol("log10", log10 as *const u8);
+    jit_builder.symbol("exp", exp as *const u8);
+    jit_builder.symbol("pow", pow as *const u8);
+}
+
 // ── Public entry points ─────────────────────────────────────────────
 
 pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
@@ -132,6 +179,8 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     // ARC runtime
     jit_builder.symbol("rt_retain", rt_retain as *const u8);
     jit_builder.symbol("rt_release", rt_release as *const u8);
+    // libm for user extern "C" declarations
+    register_libm_symbols(&mut jit_builder);
 
     let mut module = JITModule::new(jit_builder);
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
@@ -272,6 +321,8 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_hashmap_remove", rt_hashmap_remove as *const u8);
     jit_builder.symbol("rt_retain", rt_retain as *const u8);
     jit_builder.symbol("rt_release", rt_release as *const u8);
+    // libm for user extern "C" declarations
+    register_libm_symbols(&mut jit_builder);
 
     let mut module = JITModule::new(jit_builder);
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
