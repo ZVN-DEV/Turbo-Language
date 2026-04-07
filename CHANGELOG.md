@@ -3,7 +3,10 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.5.1] - 2026-04-06
+
+Security backport release. All sprint findings are landed; no breaking
+API changes. Addresses 6 confirmed live exploits in the runtime.
 
 ### Security
 - **`rt_http_get` / `rt_http_post` SSRF + arg-injection hardening.**
@@ -13,7 +16,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   longer be re-interpreted as flags. The curl invocation is also
   pinned to `--proto =http,https`, capped at `--max-time 30`, and
   limited to `--max-redirs 5`. Closes the `http_get("file:///etc/hosts")`
-  and `http_get("--help")` exploits.
+  and `http_get("--help")` exploits. **Both the C AOT runtime
+  (`turbo_rt.c`) and the Rust JIT runtime (`runtime.rs`) are hardened**
+  — earlier patches missed the JIT path used by `turbolang run`.
 - **HTTP server Content-Length DoS fix.** The request parser used
   `atoi()`, which silently returned 0 on parse failure and silently
   accepted negative values — a `Content-Length: -1` header would
@@ -32,7 +37,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   count would silently produce a tiny allocation that the subsequent
   `strcat` loop wrote past. Now we check `count > (SIZE_MAX - 1) / len`
   before the multiply and return an empty string with a stderr
-  diagnostic on overflow.
+  diagnostic on overflow. We also enforce a practical
+  `RT_STR_REPEAT_MAX_BYTES = 256 MiB` cap so a mathematically valid
+  but absurd request (e.g. `repeat("ab", 9_223_372_036_854_775_000)`)
+  cannot abort the JIT process via Rust's `Vec` capacity-overflow
+  panic. Mirrored in both the C and Rust runtimes.
 
 ### Added
 - `SECURITY.md` with disclosure process, scope, response SLA
