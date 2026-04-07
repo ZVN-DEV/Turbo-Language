@@ -159,25 +159,51 @@ fn main() {
 
 ### AI Agent Primitives
 
-First-class `agent` and `tool fn` keywords for building AI-powered applications.
+First-class `agent`, `tool fn`, `resource`, and `prompt` declarations for
+building AI-powered applications. `resource` and `prompt` are the first step of
+the broader protocol-native agentic roadmap and currently compile like typed
+top-level functions with dedicated language/LSP awareness.
 
 ```turbo
 tool fn analyze(data: str) -> str {
     "Analysis of: {data}"
 }
 
+resource customer_profile(id: str) -> str {
+    "profile for {id}"
+}
+
+prompt refund_review(order_id: str) -> str {
+    "Review refund request for {order_id}"
+}
+
 agent DataAssistant {
     model: "claude-sonnet"
     tools: [analyze]
+    resources: [customer_profile]
+    prompts: [refund_review]
+    output: str
     system: "You are a data analysis assistant."
 }
 
 fn main() {
     let a = DataAssistant {}
     print(a.model)
+    print(len(a.resources))
+    print(len(a.prompts))
+    print(a.output_type)
+    print(a.output_schema)
+    print(a.ask("Hello from Turbo"))
     print(analyze("turbo data"))
 }
 ```
+
+Current runtime support:
+
+- `agent.ask(prompt)` — first-pass provider-backed request execution
+- `agent.ask_structured(prompt)` — schema-guided structured request path that currently returns JSON text
+- `agent.stream(prompt)` — first-pass chunked `[str]` output
+- mock providers for local testing: `mock:echo`, `mock:structured`, `mock:toolloop:<tool>`
 
 ### Closures & Higher-Order Functions
 
@@ -349,8 +375,8 @@ See [`examples/web-dashboard/main.tb`](examples/web-dashboard/main.tb)
 | `turbolang test <file.tb>` | Run `@test` functions |
 | `turbolang bench <file.tb>` | Benchmark with timing |
 | `turbolang check <file.tb>` | Type-check without compiling |
-| `turbolang install` | Install dependencies from turbo.toml |
-| `turbolang update` | Update GitHub dependencies |
+| `turbolang install` | Install `path` and `github` dependencies from `turbo.toml` |
+| `turbolang update` | Update pinned GitHub dependencies and refresh `turbo.lock` |
 | `turbolang playground` | Launch browser-based playground |
 | `turbolang fmt <file.tb>` | Format source code |
 | `turbolang init <name>` | Create a new project |
@@ -358,6 +384,27 @@ See [`examples/web-dashboard/main.tb`](examples/web-dashboard/main.tb)
 | `turbolang repl` | Interactive REPL |
 | `turbolang lsp` | Start Language Server |
 | `turbolang explain <code>` | Explain an error code (e.g. `turbolang explain E0100`) |
+
+### Dependency Installation
+
+`turbolang install` currently supports two installable dependency shapes:
+
+```toml
+[registries]
+turbo-db = "ZVN-DEV/turbo-db"
+
+[dependencies]
+mathlib = { path = "../mathlib" }
+turbo-db = "0.1"
+agent-kit = { github = "owner/agent-kit", rev = "0123456789abcdef" }
+agent-kit-next = { github = "owner/agent-kit", version = "1.2" }
+```
+
+GitHub installs are pinned into `turbo.lock` so repeat installs use the same
+commit. Versioned dependencies resolve through `[registries]` or, for packages
+named `turbo-*`, the default `ZVN-DEV/<package>` GitHub convention. The
+installer resolves the requested version to a matching git tag and locks the
+resulting commit in `turbo.lock`.
 
 ## Error Codes
 
@@ -445,7 +492,7 @@ LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --release -p turbo-cli
 | **Tree-sitter Grammar** | [ZVN-DEV/tree-sitter-turbo](https://github.com/ZVN-DEV/tree-sitter-turbo) |
 | **Homebrew** | `brew tap ZVN-DEV/turbo && brew install turbo-lang` |
 | **Docker** | [`distribution/Dockerfile`](distribution/Dockerfile) |
-| **LSP Server** | `turbolang lsp` -- diagnostics, hover, completions, go-to-definition |
+| **LSP Server** | `turbolang lsp` -- diagnostics, hover, completions, references, document symbols, go-to-definition |
 | **Install Script** | `curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh \| sh` |
 
 ## Contributing

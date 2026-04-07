@@ -594,10 +594,12 @@ const char* rt_str_repeat(const char *s, long long count) {
         return empty;
     }
     char *result = (char *)turbo_alloc(total + 1);
-    result[0] = '\0';
+    size_t off = 0;
     for (long long i = 0; i < count; i++) {
-        strcat(result, s);
+        memcpy(result + off, s, len);
+        off += len;
     }
+    result[off] = '\0';
     return result;
 }
 
@@ -858,6 +860,269 @@ const char *rt_http_post(const char *url, const char *body) {
     return buf;
 }
 
+static char *rt_json_escape_dup(const char *s) {
+    if (!s) {
+        char *empty = (char *)turbo_alloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
+    size_t len = strlen(s);
+    char *out = (char *)turbo_alloc(len * 2 + 1);
+    size_t j = 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+        if (c == '\\' || c == '"') {
+            out[j++] = '\\';
+            out[j++] = c;
+        } else if (c == '\n') {
+            out[j++] = '\\';
+            out[j++] = 'n';
+        } else if (c == '\r') {
+            out[j++] = '\\';
+            out[j++] = 'r';
+        } else {
+            out[j++] = c;
+        }
+    }
+    out[j] = '\0';
+    return out;
+}
+
+static char *rt_extract_after_marker_dup(const char *json, const char *marker) {
+    const char *pos = strstr(json, marker);
+    if (!pos) return NULL;
+    pos += strlen(marker);
+    char *out = (char *)turbo_alloc(strlen(pos) + 1);
+    size_t j = 0;
+    while (*pos) {
+        if (*pos == '\\' && *(pos + 1)) {
+            pos++;
+            switch (*pos) {
+                case 'n': out[j++] = '\n'; break;
+                case 'r': out[j++] = '\r'; break;
+                case 't': out[j++] = '\t'; break;
+                case '"': out[j++] = '"'; break;
+                case '\\': out[j++] = '\\'; break;
+                default: out[j++] = *pos; break;
+            }
+            pos++;
+            continue;
+        }
+        if (*pos == '"') break;
+        out[j++] = *pos++;
+    }
+    out[j] = '\0';
+    return out;
+}
+
+static void rt_detect_provider(const char *model, const char **provider, const char **model_name) {
+    if (!model) {
+        *provider = "mock";
+        *model_name = "echo";
+        return;
+    }
+    if (strncmp(model, "openai:", 7) == 0) {
+        *provider = "openai";
+        *model_name = model + 7;
+    } else if (strncmp(model, "anthropic:", 10) == 0) {
+        *provider = "anthropic";
+        *model_name = model + 10;
+    } else if (strncmp(model, "mock:", 5) == 0) {
+        *provider = "mock";
+        *model_name = model + 5;
+    } else if (strncmp(model, "gpt-", 4) == 0) {
+        *provider = "openai";
+        *model_name = model;
+    } else if (strncmp(model, "claude", 6) == 0) {
+        *provider = "anthropic";
+        *model_name = model;
+    } else {
+        *provider = "mock";
+        *model_name = "echo";
+    }
+}
+
+static char *rt_agent_context_dup(
+    const char *system,
+    const char *tools,
+    const char *resources,
+    const char *prompts,
+    const char *output_type,
+    const char *output_schema,
+    const char *prompt
+) {
+    size_t schema_extra = (output_schema && *output_schema)
+        ? strlen(output_schema) + 64
+        : 0;
+    size_t cap =
+        strlen(system ? system : "") +
+        strlen(tools ? tools : "") +
+        strlen(resources ? resources : "") +
+        strlen(prompts ? prompts : "") +
+        strlen(output_type ? output_type : "") +
+        strlen(prompt ? prompt : "") + 256 + schema_extra;
+    char *buf = (char *)turbo_alloc(cap);
+    snprintf(
+        buf,
+        cap,
+        "%s%s%s%s%s%s%s%s%s%s%s%sUser request:\n%s",
+        system && *system ? system : "",
+        system && *system ? "\n\n" : "",
+        tools && *tools ? "Available tools: " : "",
+        tools && *tools ? tools : "",
+        tools && *tools ? "\n" : "",
+        resources && *resources ? "Available resources: " : "",
+        resources && *resources ? resources : "",
+        resources && *resources ? "\n" : "",
+        prompts && *prompts ? "Available prompts: " : "",
+        prompts && *prompts ? prompts : "",
+        prompts && *prompts ? "\n" : "",
+        output_type && *output_type ? output_type : "",
+        prompt ? prompt : ""
+    );
+    if (output_schema && *output_schema) {
+        size_t used = strlen(buf);
+        snprintf(buf + used, cap - used, "\nExpected output schema JSON: %s", output_schema);
+    }
+    return buf;
+}
+
+static char *rt_join_string_array_dup(const char *arr_ptr) {
+    if (!arr_ptr) return strdup("");
+    long long len = *(const long long *)arr_ptr;
+    if (len <= 0) return strdup("");
+    size_t total = 1;
+    const char **elems = (const char **)(arr_ptr + 8);
+    for (long long i = 0; i < len; i++) {
+        if (elems[i]) total += strlen(elems[i]);
+        if (i + 1 < len) total += 2;
+    }
+    char *out = (char *)turbo_alloc(total);
+    size_t off = 0;
+    for (long long i = 0; i < len; i++) {
+        if (elems[i]) {
+            size_t el = strlen(elems[i]);
+            memcpy(out + off, elems[i], el);
+            off += el;
+        }
+        if (i + 1 < len) {
+            memcpy(out + off, ", ", 2);
+            off += 2;
+        }
+    }
+    out[off] = '\0';
+    return out;
+}
+
+const char *rt_agent_ask(const char *agent_ptr, const char *prompt) {
+    if (!agent_ptr) return strdup("error: null agent");
+
+    const char *model = *(const char **)(agent_ptr + 0);
+    const char *system = *(const char **)(agent_ptr + 8);
+    const char *tools_arr = *(const char **)(agent_ptr + 16);
+    const char *resources_arr = *(const char **)(agent_ptr + 24);
+    const char *prompts_arr = *(const char **)(agent_ptr + 32);
+    const char *output_type = *(const char **)(agent_ptr + 40);
+    const char *output_schema = *(const char **)(agent_ptr + 48);
+    char *tools = rt_join_string_array_dup(tools_arr);
+    char *resources = rt_join_string_array_dup(resources_arr);
+    char *prompts = rt_join_string_array_dup(prompts_arr);
+
+    const char *provider = NULL;
+    const char *model_name = NULL;
+    rt_detect_provider(model, &provider, &model_name);
+
+    if (strcmp(provider, "mock") == 0) {
+        if (strcmp(model_name, "echo") == 0) return strdup(prompt ? prompt : "");
+        if (strcmp(model_name, "system") == 0) return strdup(system ? system : "");
+        if (strcmp(model_name, "schema") == 0) return strdup(output_schema ? output_schema : "");
+        return strdup(prompt ? prompt : "");
+    }
+
+    char *context = rt_agent_context_dup(
+        system, tools, resources, prompts, output_type, output_schema, prompt
+    );
+    char *escaped_model = rt_json_escape_dup(model_name);
+    char *escaped_context = rt_json_escape_dup(context);
+
+    if (strcmp(provider, "openai") == 0) {
+        const char *api_key = getenv("OPENAI_API_KEY");
+        if (!api_key) return strdup("error: missing OPENAI_API_KEY");
+        char auth_header[512];
+        snprintf(auth_header, sizeof(auth_header), "Authorization: Bearer %s", api_key);
+        size_t body_cap = strlen(escaped_model) + strlen(escaped_context) + 256;
+        char *body = (char *)turbo_alloc(body_cap);
+        snprintf(
+            body,
+            body_cap,
+            "{\"model\":\"%s\",\"messages\":[{\"role\":\"system\",\"content\":\"You are a Turbo agent runtime.\"},{\"role\":\"user\",\"content\":\"%s\"}]}",
+            escaped_model,
+            escaped_context
+        );
+        int pipefd[2];
+        if (pipe(pipefd) != 0) return strdup("error: cannot create pipe");
+        pid_t pid = fork();
+        if (pid == 0) {
+            close(pipefd[0]);
+            dup2(pipefd[1], STDOUT_FILENO);
+            close(pipefd[1]);
+            execlp("curl", "curl", "-s",
+                   "https://api.openai.com/v1/chat/completions",
+                   "-H", auth_header,
+                   "-H", "Content-Type: application/json",
+                   "-d", body,
+                   (char *)NULL);
+            _exit(1);
+        }
+        close(pipefd[1]);
+        char *resp = read_fd_to_string(pipefd[0]);
+        close(pipefd[0]);
+        waitpid(pid, NULL, 0);
+        char *content = rt_extract_after_marker_dup(resp, "\"content\":\"");
+        return content ? content : resp;
+    }
+
+    if (strcmp(provider, "anthropic") == 0) {
+        const char *api_key = getenv("ANTHROPIC_API_KEY");
+        if (!api_key) return strdup("error: missing ANTHROPIC_API_KEY");
+        char api_header[512];
+        snprintf(api_header, sizeof(api_header), "x-api-key: %s", api_key);
+        size_t body_cap = strlen(escaped_model) + strlen(escaped_context) + 128;
+        char *body = (char *)turbo_alloc(body_cap);
+        snprintf(
+            body,
+            body_cap,
+            "{\"model\":\"%s\",\"max_tokens\":1024,\"messages\":[{\"role\":\"user\",\"content\":\"%s\"}]}",
+            escaped_model,
+            escaped_context
+        );
+        int pipefd[2];
+        if (pipe(pipefd) != 0) return strdup("error: cannot create pipe");
+        pid_t pid = fork();
+        if (pid == 0) {
+            close(pipefd[0]);
+            dup2(pipefd[1], STDOUT_FILENO);
+            close(pipefd[1]);
+            execlp("curl", "curl", "-s",
+                   "https://api.anthropic.com/v1/messages",
+                   "-H", api_header,
+                   "-H", "anthropic-version: 2023-06-01",
+                   "-H", "content-type: application/json",
+                   "-d", body,
+                   (char *)NULL);
+            _exit(1);
+        }
+        close(pipefd[1]);
+        char *resp = read_fd_to_string(pipefd[0]);
+        close(pipefd[0]);
+        waitpid(pid, NULL, 0);
+        char *content = rt_extract_after_marker_dup(resp, "\"text\":\"");
+        return content ? content : resp;
+    }
+
+    return strdup("error: unsupported provider");
+}
+
 /* json_get(json, key) -> str — extract top-level key value from JSON string */
 const char *rt_json_get(const char *json, const char *key) {
     /* Build search pattern: "key" */
@@ -904,14 +1169,60 @@ const char *rt_json_get(const char *json, const char *key) {
 
 /* json_stringify(key, value) -> str — build {"key":"value"} */
 const char *rt_json_stringify(const char *key, const char *value) {
-    /* Simple: no escaping beyond what's needed */
-    size_t klen = strlen(key);
-    size_t vlen = strlen(value);
-    /* {"key":"value"}\0 — worst case 2x for escaping */
-    size_t cap = klen + vlen + 8;
+    const char *esc_key = rt_json_escape_dup(key);
+    const char *esc_value = rt_json_escape_dup(value);
+    size_t eklen = strlen(esc_key);
+    size_t evlen = strlen(esc_value);
+    size_t cap = eklen + evlen + 8;
     char *buf = (char *)turbo_alloc(cap);
-    snprintf(buf, cap, "{\"%s\":\"%s\"}", key, value);
+    snprintf(buf, cap, "{\"%s\":\"%s\"}", esc_key, esc_value);
     return buf;
+}
+
+const char *rt_json_root(const char *json) {
+    if (!json) return strdup("");
+    while (*json == ' ' || *json == '\n' || *json == '\r' || *json == '\t') json++;
+    size_t len = strlen(json);
+    while (len > 0 && (json[len - 1] == ' ' || json[len - 1] == '\n' || json[len - 1] == '\r' || json[len - 1] == '\t')) len--;
+    if (len >= 2 && json[0] == '"' && json[len - 1] == '"') {
+        char *out = (char *)turbo_alloc(len - 1);
+        size_t j = 0;
+        for (size_t i = 1; i + 1 < len; i++) {
+            if (json[i] == '\\' && i + 1 < len - 1) {
+                i++;
+                switch (json[i]) {
+                    case 'n': out[j++] = '\n'; break;
+                    case 'r': out[j++] = '\r'; break;
+                    case '"': out[j++] = '"'; break;
+                    case '\\': out[j++] = '\\'; break;
+                    default: out[j++] = json[i]; break;
+                }
+            } else {
+                out[j++] = json[i];
+            }
+        }
+        out[j] = '\0';
+        return out;
+    }
+    char *out = (char *)turbo_alloc(len + 1);
+    memcpy(out, json, len);
+    out[len] = '\0';
+    return out;
+}
+
+long long rt_str_to_i64(const char *s) {
+    if (!s) return 0;
+    return strtoll(s, NULL, 10);
+}
+
+double rt_str_to_f64(const char *s) {
+    if (!s) return 0.0;
+    return strtod(s, NULL);
+}
+
+char rt_str_to_bool(const char *s) {
+    if (!s) return 0;
+    return strcasecmp(s, "true") == 0 ? 1 : 0;
 }
 
 /* ── Channel runtime ────────────────────────────────────────────────── */
@@ -1693,12 +2004,15 @@ void rt_retain(void *data_ptr) {
 
 void rt_release(void *data_ptr) {
     if (!data_ptr) return;
+    if (t_current_arena != NULL) {
+        /* Arena-backed request allocations are reclaimed in bulk at
+         * rt_arena_end(); never call free() on arena memory. */
+        return;
+    }
     long long *rc = (long long*)((char*)data_ptr - 8);
     long long prev = __sync_fetch_and_sub(rc, 1);
     if (prev == 1) {
-        /* Refcount reached 0 — memory could be freed here.
-         * TODO: store allocation size in header for proper dealloc.
-         * For now we just let it leak (same as before ARC). */
+        free(rc);
     }
 }
 

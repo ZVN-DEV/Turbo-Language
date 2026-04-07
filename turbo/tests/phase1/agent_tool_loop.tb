@@ -1,0 +1,13 @@
+tool fn echo_tool(text: str) -> str { "TOOL:{text}" }
+
+agent ToolLoopAgent {
+    model: "mock:toolloop:echo_tool"
+    tools: [echo_tool]
+    output: str
+    system: "Use the tool when appropriate."
+}
+
+fn main() {
+    let assistant = ToolLoopAgent {}
+    print(assistant.ask("hello from tool loop"))
+}

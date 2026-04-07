@@ -610,6 +610,8 @@ fn main() {
 }`
 };
 
+const PLAYGROUND_TOKEN = "__PLAYGROUND_TOKEN__";
+
 // ── DOM Elements ──
 const editor = document.getElementById("editor");
 const output = document.getElementById("output");
@@ -706,7 +708,10 @@ async function runCode() {
   try {
     const resp = await fetch("/api/run", {
       method: "POST",
-      headers: { "Content-Type": "text/plain" },
+      headers: {
+        "Content-Type": "text/plain",
+        "X-Playground-Token": PLAYGROUND_TOKEN
+      },
       body: source
     });
 

@@ -1,0 +1,11 @@
+agent StructuredStringAgent {
+    model: "mock:structured_str"
+    output: str
+    system: "Return a JSON string."
+}
+
+fn main() {
+    let assistant = StructuredStringAgent {}
+    let result = assistant.ask_structured("hello string")
+    print(result)
+}

@@ -3,6 +3,65 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.0] - 2026-04-07
+
+Real LLM agent integration, memory management overhaul, codegen refactor,
+and runtime security hardening. This is the first release where `agent`
+definitions can call live LLM APIs (OpenAI, Anthropic) — not just mocks.
+
+### Added
+- **Real LLM provider integration.** Agents can now call OpenAI (`gpt-*`
+  models) and Anthropic (`claude-*` models) APIs via environment variables
+  `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`. Provider is auto-detected from
+  the model name or explicit prefix (`openai:`, `anthropic:`, `mock:`).
+- **Agent tool calling loops.** Agents with tools can execute multi-turn
+  tool-calling loops (up to 4 iterations) via `__CALL_TOOL__` directives.
+- **Agent structured output.** `agent.ask_structured(prompt)` appends
+  JSON schema constraints and validates output against the agent's
+  `output` type definition.
+- **Agent streaming.** `agent.stream(prompt)` returns chunked responses
+  as a string array.
+- **New agent test suite.** 6 new integration tests: `agent_ask`,
+  `agent_ask_structured`, `agent_ask_structured_string`,
+  `agent_ask_structured_typed`, `agent_stream`, `agent_tool_loop`.
+- **LLVM backend CI job.** The LLVM codegen crate is now tested in CI
+  on Ubuntu with LLVM 18. Runs on path changes to `turbo-codegen-llvm/`;
+  `continue-on-error: true` so failures don't block the main pipeline.
+
+### Changed
+- **Codegen refactor.** Split the monolithic `lib.rs` (7,462 lines)
+  into 5 focused modules: `expr.rs` (expression compilation), `stmt.rs`
+  (statement compilation), `jit.rs` (JIT entry), `aot.rs` (AOT/WASM
+  entry), plus the core `lib.rs` (types, context, module compilation).
+  No logic changes — purely structural.
+
+### Fixed
+- **Memory leak resolved.** `rt_release()` now performs real reference-
+  counted freeing instead of being a no-op. Combined with the v0.5.1
+  per-request arena allocator, long-running servers no longer leak.
+- **Buffer overflow in `rt_agent_context_dup()`.** Replaced unsafe
+  `strcat()` after `snprintf()` with bounds-checked `snprintf()` append.
+- **Buffer overflow in `rt_join_string_array_dup()`.** Replaced O(n²)
+  `strcat()` loop with `memcpy` + offset tracking.
+- **Buffer overflow in `rt_str_repeat()`.** Replaced `strcat()` loop
+  with `memcpy` + offset tracking.
+- **Buffer overflow in `rt_json_stringify()`.** Now escapes key and
+  value via `rt_json_escape_dup()` before sizing the buffer, preventing
+  overflow on strings containing quotes or backslashes.
+- **Mock structured output.** Mock providers (`mock:structured`,
+  `mock:structured_str`) now correctly strip schema instructions from
+  echoed responses, fixing `ask_structured` test failures.
+
+### Security
+- **Playground security headers.** All HTTP responses now include
+  `Content-Security-Policy`, `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff`, and
+  `Referrer-Policy: strict-origin-when-cross-origin`.
+- **Eliminated all `strcat()` calls in `turbo_rt.c`.** Every instance
+  replaced with bounds-checked alternatives (`snprintf`, `memcpy` with
+  offset tracking). This closes the CWE-680 class of vulnerabilities
+  identified in the v0.5.1 security audit.
+
 ## [0.5.1] - 2026-04-06
 
 Security backport release. All sprint findings are landed; no breaking

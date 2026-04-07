@@ -1,6 +1,6 @@
 use lsp_server::{Connection, Message, Notification, Response};
 use lsp_types::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 fn main() {
     let (connection, io_threads) = Connection::stdio();
@@ -9,6 +9,9 @@ fn main() {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
+        completion_provider: Some(CompletionOptions::default()),
+        references_provider: Some(OneOf::Left(true)),
+        document_symbol_provider: Some(OneOf::Left(true)),
         ..Default::default()
     };
 
@@ -116,6 +119,67 @@ fn main() {
                     let result = serde_json::to_value(location.map(GotoDefinitionResponse::Scalar))
                         .unwrap_or(serde_json::Value::Null);
                     let _ = send_response(&connection, Response::new_ok(req.id, result));
+                }
+                "textDocument/completion" => {
+                    let params: CompletionParams = match serde_json::from_value(req.params.clone())
+                    {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("turbo-lsp: bad completion params: {e}");
+                            let _ = send_response(
+                                &connection,
+                                Response::new_ok(req.id, serde_json::Value::Null),
+                            );
+                            continue;
+                        }
+                    };
+                    let uri = &params.text_document_position.text_document.uri;
+                    let pos = params.text_document_position.position;
+                    let result = documents
+                        .get(uri)
+                        .map(|text| CompletionResponse::Array(compute_completion_items(text, pos)));
+                    let value = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
+                    let _ = send_response(&connection, Response::new_ok(req.id, value));
+                }
+                "textDocument/references" => {
+                    let params: ReferenceParams = match serde_json::from_value(req.params.clone()) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("turbo-lsp: bad references params: {e}");
+                            let _ = send_response(
+                                &connection,
+                                Response::new_ok(req.id, serde_json::Value::Null),
+                            );
+                            continue;
+                        }
+                    };
+                    let uri = &params.text_document_position.text_document.uri;
+                    let pos = params.text_document_position.position;
+                    let refs = documents.get(uri).map(|text| {
+                        compute_references(text, pos, uri, params.context.include_declaration)
+                    });
+                    let value = serde_json::to_value(refs).unwrap_or(serde_json::Value::Null);
+                    let _ = send_response(&connection, Response::new_ok(req.id, value));
+                }
+                "textDocument/documentSymbol" => {
+                    let params: DocumentSymbolParams =
+                        match serde_json::from_value(req.params.clone()) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!("turbo-lsp: bad documentSymbol params: {e}");
+                                let _ = send_response(
+                                    &connection,
+                                    Response::new_ok(req.id, serde_json::Value::Null),
+                                );
+                                continue;
+                            }
+                        };
+                    let uri = &params.text_document.uri;
+                    let result = documents
+                        .get(uri)
+                        .map(|text| DocumentSymbolResponse::Nested(compute_document_symbols(text)));
+                    let value = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
+                    let _ = send_response(&connection, Response::new_ok(req.id, value));
                 }
                 "shutdown" => {
                     let _ = send_response(
@@ -276,6 +340,12 @@ fn compute_hover(source: &str, pos: Position) -> Option<Hover> {
                 turbo_lexer::Token::Tool => {
                     "keyword: `tool` -- tool function for agents".to_string()
                 }
+                turbo_lexer::Token::Resource => {
+                    "keyword: `resource` -- typed context provider declaration".to_string()
+                }
+                turbo_lexer::Token::Prompt => {
+                    "keyword: `prompt` -- reusable prompt declaration".to_string()
+                }
                 turbo_lexer::Token::True => "boolean literal: `true`".to_string(),
                 turbo_lexer::Token::False => "boolean literal: `false`".to_string(),
                 turbo_lexer::Token::None => "keyword: `none` -- absent optional value".to_string(),
@@ -320,12 +390,20 @@ fn identifier_info(source: &str, name: &str) -> Option<String> {
                     .as_ref()
                     .map(|t| format!(" -> {}", format_type(&t.node)))
                     .unwrap_or_default();
-                let async_prefix = if f.is_async { "async " } else { "" };
-                let tool_prefix = if f.is_tool { "tool " } else { "" };
+                let declaration_prefix = if f.is_tool {
+                    "tool fn ".to_string()
+                } else if f.is_resource {
+                    "resource ".to_string()
+                } else if f.is_prompt {
+                    "prompt ".to_string()
+                } else if f.is_async {
+                    "async fn ".to_string()
+                } else {
+                    "fn ".to_string()
+                };
                 return Some(format!(
-                    "{}{}fn {}({}){ret}",
-                    tool_prefix,
-                    async_prefix,
+                    "{}{}({}){ret}",
+                    declaration_prefix,
                     f.name,
                     params.join(", ")
                 ));
@@ -379,11 +457,19 @@ fn identifier_info(source: &str, name: &str) -> Option<String> {
                 ));
             }
             turbo_ast::Item::Agent(a) if a.name == name => {
+                let output = a
+                    .output_type
+                    .as_ref()
+                    .map(|ty| format_type(&ty.node))
+                    .unwrap_or_else(|| "()".to_string());
                 return Some(format!(
-                    "agent {} {{ model: \"{}\", tools: [{}] }}",
+                    "agent {} {{ model: \"{}\", tools: [{}], resources: [{}], prompts: [{}], output: {} }}",
                     a.name,
                     a.model,
-                    a.tools.join(", ")
+                    a.tools.join(", "),
+                    a.resources.join(", "),
+                    a.prompts.join(", "),
+                    output
                 ));
             }
             _ => {}
@@ -480,6 +566,342 @@ fn compute_definition(source: &str, pos: Position, uri: &Uri) -> Option<Location
                 });
             }
             _ => {}
+        }
+    }
+
+    None
+}
+
+fn identifier_at_position(source: &str, pos: Position) -> Option<String> {
+    let offset = position_to_offset(source, pos)?;
+    let (tokens, lex_errors) = turbo_lexer::tokenize(source);
+    if !lex_errors.is_empty() {
+        return None;
+    }
+    tokens.iter().find_map(|tok| {
+        if tok.span.contains(&offset) {
+            if let turbo_lexer::Token::Ident(name) = &tok.value {
+                return Some(name.clone());
+            }
+        }
+        None
+    })
+}
+
+fn compute_references(
+    source: &str,
+    pos: Position,
+    uri: &Uri,
+    include_declaration: bool,
+) -> Vec<Location> {
+    let Some(target_name) = identifier_at_position(source, pos) else {
+        return Vec::new();
+    };
+
+    let declaration_span = find_top_level_declaration_span(source, &target_name);
+    let (tokens, lex_errors) = turbo_lexer::tokenize(source);
+    if !lex_errors.is_empty() {
+        return Vec::new();
+    }
+
+    let mut refs = Vec::new();
+    for tok in &tokens {
+        if let turbo_lexer::Token::Ident(name) = &tok.value {
+            if name == &target_name {
+                let is_decl = declaration_span.as_ref() == Some(&tok.span);
+                if is_decl && !include_declaration {
+                    continue;
+                }
+                refs.push(Location {
+                    uri: uri.clone(),
+                    range: span_to_range(source, &tok.span),
+                });
+            }
+        }
+    }
+    refs
+}
+
+fn compute_completion_items(source: &str, pos: Position) -> Vec<CompletionItem> {
+    let mut seen = HashSet::new();
+    let prefix = completion_prefix(source, pos).unwrap_or_default();
+    let mut items = Vec::new();
+
+    let keywords = [
+        ("fn", CompletionItemKind::KEYWORD),
+        ("let", CompletionItemKind::KEYWORD),
+        ("mut", CompletionItemKind::KEYWORD),
+        ("const", CompletionItemKind::KEYWORD),
+        ("if", CompletionItemKind::KEYWORD),
+        ("else", CompletionItemKind::KEYWORD),
+        ("while", CompletionItemKind::KEYWORD),
+        ("for", CompletionItemKind::KEYWORD),
+        ("in", CompletionItemKind::KEYWORD),
+        ("return", CompletionItemKind::KEYWORD),
+        ("match", CompletionItemKind::KEYWORD),
+        ("struct", CompletionItemKind::KEYWORD),
+        ("type", CompletionItemKind::KEYWORD),
+        ("trait", CompletionItemKind::KEYWORD),
+        ("impl", CompletionItemKind::KEYWORD),
+        ("async", CompletionItemKind::KEYWORD),
+        ("await", CompletionItemKind::KEYWORD),
+        ("spawn", CompletionItemKind::KEYWORD),
+        ("defer", CompletionItemKind::KEYWORD),
+        ("agent", CompletionItemKind::KEYWORD),
+        ("tool", CompletionItemKind::KEYWORD),
+        ("resource", CompletionItemKind::KEYWORD),
+        ("prompt", CompletionItemKind::KEYWORD),
+        ("import", CompletionItemKind::KEYWORD),
+        ("true", CompletionItemKind::VALUE),
+        ("false", CompletionItemKind::VALUE),
+        ("none", CompletionItemKind::VALUE),
+        ("some", CompletionItemKind::VALUE),
+        ("ok", CompletionItemKind::VALUE),
+        ("err", CompletionItemKind::VALUE),
+    ];
+
+    for (label, kind) in keywords {
+        push_completion_item(&mut items, &mut seen, &prefix, label, kind, None);
+    }
+
+    let (tokens, lex_errors) = turbo_lexer::tokenize(source);
+    if lex_errors.is_empty() {
+        let (module, parse_errors) = turbo_parser::parse(tokens);
+        if parse_errors.is_empty() {
+            for item in &module.items {
+                match &item.node {
+                    turbo_ast::Item::Function(f) => push_completion_item(
+                        &mut items,
+                        &mut seen,
+                        &prefix,
+                        &f.name,
+                        CompletionItemKind::FUNCTION,
+                        Some(if f.is_tool {
+                            "tool fn"
+                        } else if f.is_resource {
+                            "resource"
+                        } else if f.is_prompt {
+                            "prompt"
+                        } else {
+                            "function"
+                        }),
+                    ),
+                    turbo_ast::Item::Struct(s) => push_completion_item(
+                        &mut items,
+                        &mut seen,
+                        &prefix,
+                        &s.name,
+                        CompletionItemKind::STRUCT,
+                        Some("struct"),
+                    ),
+                    turbo_ast::Item::Enum(e) => push_completion_item(
+                        &mut items,
+                        &mut seen,
+                        &prefix,
+                        &e.name,
+                        CompletionItemKind::ENUM,
+                        Some("enum"),
+                    ),
+                    turbo_ast::Item::Trait(t) => push_completion_item(
+                        &mut items,
+                        &mut seen,
+                        &prefix,
+                        &t.name,
+                        CompletionItemKind::INTERFACE,
+                        Some("trait"),
+                    ),
+                    turbo_ast::Item::Agent(a) => push_completion_item(
+                        &mut items,
+                        &mut seen,
+                        &prefix,
+                        &a.name,
+                        CompletionItemKind::CLASS,
+                        Some("agent"),
+                    ),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    items
+}
+
+fn push_completion_item(
+    items: &mut Vec<CompletionItem>,
+    seen: &mut HashSet<String>,
+    prefix: &str,
+    label: &str,
+    kind: CompletionItemKind,
+    detail: Option<&str>,
+) {
+    if !prefix.is_empty() && !label.starts_with(prefix) {
+        return;
+    }
+    if !seen.insert(label.to_string()) {
+        return;
+    }
+    items.push(CompletionItem {
+        label: label.to_string(),
+        kind: Some(kind),
+        detail: detail.map(|s| s.to_string()),
+        ..Default::default()
+    });
+}
+
+fn completion_prefix(source: &str, pos: Position) -> Option<String> {
+    let offset = position_to_offset(source, pos)?;
+    let prefix_chars: String = source[..offset]
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    Some(prefix_chars.chars().rev().collect())
+}
+
+#[allow(deprecated)]
+fn compute_document_symbols(source: &str) -> Vec<DocumentSymbol> {
+    let (tokens, lex_errors) = turbo_lexer::tokenize(source);
+    if !lex_errors.is_empty() {
+        return Vec::new();
+    }
+    let (module, parse_errors) = turbo_parser::parse(tokens);
+    if !parse_errors.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    for item in &module.items {
+        match &item.node {
+            turbo_ast::Item::Function(f) => out.push(DocumentSymbol {
+                name: f.name.clone(),
+                detail: Some(if f.is_async {
+                    "async fn".to_string()
+                } else if f.is_resource {
+                    "resource".to_string()
+                } else if f.is_prompt {
+                    "prompt".to_string()
+                } else if f.is_tool {
+                    "tool fn".to_string()
+                } else {
+                    "fn".to_string()
+                }),
+                kind: SymbolKind::FUNCTION,
+                tags: None,
+                deprecated: None,
+                range: span_to_range(source, &item.span),
+                selection_range: span_to_range(source, &item.span),
+                children: None,
+            }),
+            turbo_ast::Item::Struct(s) => {
+                let children = s
+                    .fields
+                    .iter()
+                    .map(|field| DocumentSymbol {
+                        name: field.name.clone(),
+                        detail: Some(format_type(&field.ty.node)),
+                        kind: SymbolKind::FIELD,
+                        tags: None,
+                        deprecated: None,
+                        range: span_to_range(source, &field.ty.span),
+                        selection_range: span_to_range(source, &field.ty.span),
+                        children: None,
+                    })
+                    .collect();
+                out.push(DocumentSymbol {
+                    name: s.name.clone(),
+                    detail: Some("struct".to_string()),
+                    kind: SymbolKind::STRUCT,
+                    tags: None,
+                    deprecated: None,
+                    range: span_to_range(source, &item.span),
+                    selection_range: span_to_range(source, &item.span),
+                    children: Some(children),
+                });
+            }
+            turbo_ast::Item::Enum(e) => {
+                let children = e
+                    .variants
+                    .iter()
+                    .map(|variant| DocumentSymbol {
+                        name: variant.name.clone(),
+                        detail: Some("variant".to_string()),
+                        kind: SymbolKind::ENUM_MEMBER,
+                        tags: None,
+                        deprecated: None,
+                        range: span_to_range(source, &item.span),
+                        selection_range: span_to_range(source, &item.span),
+                        children: None,
+                    })
+                    .collect();
+                out.push(DocumentSymbol {
+                    name: e.name.clone(),
+                    detail: Some("enum".to_string()),
+                    kind: SymbolKind::ENUM,
+                    tags: None,
+                    deprecated: None,
+                    range: span_to_range(source, &item.span),
+                    selection_range: span_to_range(source, &item.span),
+                    children: Some(children),
+                });
+            }
+            turbo_ast::Item::Trait(t) => out.push(DocumentSymbol {
+                name: t.name.clone(),
+                detail: Some("trait".to_string()),
+                kind: SymbolKind::INTERFACE,
+                tags: None,
+                deprecated: None,
+                range: span_to_range(source, &item.span),
+                selection_range: span_to_range(source, &item.span),
+                children: None,
+            }),
+            turbo_ast::Item::Agent(a) => out.push(DocumentSymbol {
+                name: a.name.clone(),
+                detail: Some("agent".to_string()),
+                kind: SymbolKind::CLASS,
+                tags: None,
+                deprecated: None,
+                range: span_to_range(source, &item.span),
+                selection_range: span_to_range(source, &item.span),
+                children: None,
+            }),
+            _ => {}
+        }
+    }
+
+    out
+}
+
+fn find_top_level_declaration_span(source: &str, name: &str) -> Option<std::ops::Range<usize>> {
+    let (tokens, lex_errors) = turbo_lexer::tokenize(source);
+    if !lex_errors.is_empty() {
+        return None;
+    }
+    let (module, parse_errors) = turbo_parser::parse(tokens.clone());
+    if !parse_errors.is_empty() {
+        return None;
+    }
+
+    for item in &module.items {
+        let matches = match &item.node {
+            turbo_ast::Item::Function(f) => f.name == name,
+            turbo_ast::Item::Struct(s) => s.name == name,
+            turbo_ast::Item::Enum(e) => e.name == name,
+            turbo_ast::Item::Trait(t) => t.name == name,
+            turbo_ast::Item::Agent(a) => a.name == name,
+            _ => false,
+        };
+        if matches {
+            for tok in &tokens {
+                if tok.span.start < item.span.start || tok.span.end > item.span.end {
+                    continue;
+                }
+                if let turbo_lexer::Token::Ident(found) = &tok.value {
+                    if found == name {
+                        return Some(tok.span.clone());
+                    }
+                }
+            }
         }
     }
 
@@ -697,6 +1119,46 @@ mod tests {
         assert!(loc.is_some(), "should find definition of Point");
         let loc = loc.unwrap();
         assert_eq!(loc.range.start.line, 0);
+    }
+
+    #[test]
+    fn test_compute_references_function() {
+        let src = "fn greet() {}\nfn main() {\n  greet()\n  greet()\n}";
+        let uri = "file:///test.tb".parse::<Uri>().unwrap();
+        let refs = compute_references(
+            src,
+            Position {
+                line: 2,
+                character: 2,
+            },
+            &uri,
+            false,
+        );
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].range.start.line, 2);
+        assert_eq!(refs[1].range.start.line, 3);
+    }
+
+    #[test]
+    fn test_compute_completion_items_keyword_prefix() {
+        let src = "fn main() {\n  sp\n}";
+        let items = compute_completion_items(
+            src,
+            Position {
+                line: 1,
+                character: 4,
+            },
+        );
+        assert!(items.iter().any(|item| item.label == "spawn"));
+    }
+
+    #[test]
+    fn test_compute_document_symbols() {
+        let src = "struct Point { x: i32, y: i32 }\nfn main() {}";
+        let symbols = compute_document_symbols(src);
+        assert_eq!(symbols.len(), 2);
+        assert_eq!(symbols[0].name, "Point");
+        assert_eq!(symbols[1].name, "main");
     }
 
     #[test]

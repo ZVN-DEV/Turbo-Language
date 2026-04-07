@@ -174,6 +174,8 @@ impl Parser {
                                 | Some(Token::Impl)
                                 | Some(Token::Tool)
                                 | Some(Token::Agent)
+                                | Some(Token::Resource)
+                                | Some(Token::Prompt)
                                 | Some(Token::Const)
                                 | Some(Token::At)
                                 | Some(Token::DocComment(_))
@@ -256,6 +258,20 @@ impl Parser {
                 let end = f.body.span.end;
                 Ok(Spanned::new(Item::Function(f), start..end))
             }
+            Some(Token::Resource) => {
+                self.advance(); // consume 'resource'
+                let mut f = self.parse_fn_def_inner()?;
+                f.is_resource = true;
+                let end = f.body.span.end;
+                Ok(Spanned::new(Item::Function(f), start..end))
+            }
+            Some(Token::Prompt) => {
+                self.advance(); // consume 'prompt'
+                let mut f = self.parse_fn_def_inner()?;
+                f.is_prompt = true;
+                let end = f.body.span.end;
+                Ok(Spanned::new(Item::Function(f), start..end))
+            }
             Some(Token::Agent) => {
                 self.advance(); // consume 'agent'
                 let (name, _) = self.expect_ident()?;
@@ -263,6 +279,9 @@ impl Parser {
 
                 let mut model = String::new();
                 let mut tools = Vec::new();
+                let mut resources = Vec::new();
+                let mut prompts = Vec::new();
+                let mut output_type = None;
                 let mut system = None;
 
                 while !matches!(self.peek(), Some(Token::RBrace) | None) {
@@ -292,6 +311,31 @@ impl Parser {
                                 }
                             }
                             self.expect(&Token::RBracket)?;
+                        }
+                        "resources" => {
+                            self.expect(&Token::LBracket)?;
+                            while !matches!(self.peek(), Some(Token::RBracket) | None) {
+                                let (resource_name, _) = self.expect_ident()?;
+                                resources.push(resource_name);
+                                if matches!(self.peek(), Some(Token::Comma)) {
+                                    self.advance();
+                                }
+                            }
+                            self.expect(&Token::RBracket)?;
+                        }
+                        "prompts" => {
+                            self.expect(&Token::LBracket)?;
+                            while !matches!(self.peek(), Some(Token::RBracket) | None) {
+                                let (prompt_name, _) = self.expect_ident()?;
+                                prompts.push(prompt_name);
+                                if matches!(self.peek(), Some(Token::Comma)) {
+                                    self.advance();
+                                }
+                            }
+                            self.expect(&Token::RBracket)?;
+                        }
+                        "output" => {
+                            output_type = Some(self.parse_type()?);
                         }
                         "system" => {
                             if let Some(Token::String(s)) = self.peek() {
@@ -324,6 +368,9 @@ impl Parser {
                         name,
                         model,
                         tools,
+                        resources,
+                        prompts,
+                        output_type,
                         system_prompt: system,
                     }),
                     start..end,
@@ -427,7 +474,7 @@ impl Parser {
                     .unwrap_or("end of file".to_string());
                 Err(ParseError {
                     code: ErrorCode::E0001,
-                    message: format!("expected `fn`, `tool`, `agent`, `async fn`, `struct`, `type`, `impl`, `trait`, `import`, `const`, `@derive`, `@test`, or `@unsafe`, found {found}"),
+                    message: format!("expected `fn`, `tool`, `resource`, `prompt`, `agent`, `async fn`, `struct`, `type`, `impl`, `trait`, `import`, `const`, `@derive`, `@test`, or `@unsafe`, found {found}"),
                     span,
                 })
             }
@@ -741,6 +788,8 @@ impl Parser {
             name,
             is_async: false,
             is_tool: false,
+            is_resource: false,
+            is_prompt: false,
             is_test: false,
             is_unsafe: false,
             type_params,
@@ -3008,12 +3057,43 @@ fn main() { search("hello") }"#;
     }
 
     #[test]
+    fn test_resource_declaration() {
+        let source = r#"resource customer_profile(id: str) -> str { id }"#;
+        let module = parse_source(source);
+        assert_eq!(module.items.len(), 1);
+        if let Item::Function(f) = &module.items[0].node {
+            assert_eq!(f.name, "customer_profile");
+            assert!(f.is_resource);
+            assert!(!f.is_prompt);
+        } else {
+            panic!("Expected Function");
+        }
+    }
+
+    #[test]
+    fn test_prompt_declaration() {
+        let source = r#"prompt refund_review(order_id: str) -> str { order_id }"#;
+        let module = parse_source(source);
+        assert_eq!(module.items.len(), 1);
+        if let Item::Function(f) = &module.items[0].node {
+            assert_eq!(f.name, "refund_review");
+            assert!(f.is_prompt);
+            assert!(!f.is_resource);
+        } else {
+            panic!("Expected Function");
+        }
+    }
+
+    #[test]
     fn test_agent_declaration() {
         let source = r#"
 tool fn search(q: str) -> str { "r" }
 agent Helper {
     model: "claude-sonnet"
     tools: [search]
+    resources: [search]
+    prompts: [search]
+    output: str
     system: "You help."
 }
 fn main() { }
@@ -3024,6 +3104,12 @@ fn main() { }
             assert_eq!(agent.name, "Helper");
             assert_eq!(agent.model, "claude-sonnet");
             assert_eq!(agent.tools, vec!["search"]);
+            assert_eq!(agent.resources, vec!["search"]);
+            assert_eq!(agent.prompts, vec!["search"]);
+            assert!(matches!(
+                agent.output_type.as_ref().map(|t| &t.node),
+                Some(TypeExpr::Named(name)) if name == "str"
+            ));
             assert_eq!(agent.system_prompt, Some("You help.".to_string()));
         } else {
             panic!("Expected Agent, got {:?}", module.items[1].node);
@@ -3038,6 +3124,9 @@ tool fn b(x: i64) -> i64 { x }
 agent Bot {
     model: "gpt-4"
     tools: [a, b]
+    resources: [a]
+    prompts: [b]
+    output: str
 }
 fn main() { }
 "#;
@@ -3045,6 +3134,9 @@ fn main() { }
         if let Item::Agent(agent) = &module.items[2].node {
             assert_eq!(agent.name, "Bot");
             assert_eq!(agent.tools, vec!["a", "b"]);
+            assert_eq!(agent.resources, vec!["a"]);
+            assert_eq!(agent.prompts, vec!["b"]);
+            assert!(agent.output_type.is_some());
             assert_eq!(agent.system_prompt, None);
         } else {
             panic!("Expected Agent");
@@ -3063,6 +3155,9 @@ fn main() { }
 "#;
         let module = parse_source(source);
         if let Item::Agent(agent) = &module.items[1].node {
+            assert!(agent.resources.is_empty());
+            assert!(agent.prompts.is_empty());
+            assert!(agent.output_type.is_none());
             assert_eq!(agent.system_prompt, None);
         } else {
             panic!("Expected Agent");

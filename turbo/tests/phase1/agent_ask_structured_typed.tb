@@ -1,0 +1,18 @@
+struct MockPayload {
+    mock: str
+}
+
+tool fn noop(text: str) -> str { text }
+
+agent StructuredAgentTyped {
+    model: "mock:structured"
+    tools: [noop]
+    output: MockPayload
+    system: "Return structured output."
+}
+
+fn main() {
+    let assistant = StructuredAgentTyped {}
+    let result = assistant.ask_structured("hello typed")
+    print(result.mock)
+}

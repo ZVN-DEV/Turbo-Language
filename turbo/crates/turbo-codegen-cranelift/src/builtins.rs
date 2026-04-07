@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use turbo_ast::*;
 
 use crate::turbo_types::{CodegenError, MaybeTyped, TurboTy};
-use crate::{compile_expr, turbo_ty_to_cl_type, Ctx};
+use crate::{compile_expr, retain_if_needed, turbo_ty_to_cl_type, Ctx};
 
 pub(crate) fn compile_print<M: Module>(
     cx: &mut Ctx<'_, M>,
@@ -3053,6 +3053,8 @@ pub(crate) fn compile_optional_chain<M: Module>(
         TurboTy::Bool => cx.builder.ins().sextend(types::I64, field_val),
         _ => field_val,
     };
+
+    retain_if_needed(cx, field_val, &field_tty);
 
     // Wrap field value in some()
     let some_fid = cx.rt_fns["rt_option_some"];
