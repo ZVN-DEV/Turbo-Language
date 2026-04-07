@@ -15,21 +15,159 @@
 #include <time.h>
 #include <sys/wait.h>
 
+/* ── Per-request arena (P2 — fixes the rt_release no-op leak) ──────────
+ *
+ * The HTTP server thread for each connection installs a thread-local
+ * bumper arena via rt_arena_begin() before invoking the user handler,
+ * and resets it via rt_arena_end() after the response has been written.
+ *
+ * While an arena is installed on the current thread, every turbo_alloc /
+ * turbo_calloc call uses the arena instead of malloc, so all temporary
+ * objects allocated during the request (request strings, response
+ * strings, intermediate concatenations, structs, arrays) are reclaimed
+ * in O(1) at the end of the request — no per-allocation rt_release
+ * tracking required.
+ *
+ * Allocations that need to live across requests (channels, mutexes,
+ * hashmaps, server config) happen outside the arena window and continue
+ * to use plain malloc.
+ */
+
+typedef struct turbo_arena_block {
+    struct turbo_arena_block *next;
+    size_t size;
+    size_t used;
+    /* data follows immediately after this header */
+} turbo_arena_block;
+
+typedef struct turbo_arena {
+    turbo_arena_block *head;
+    size_t total_alloc;     /* bytes given out via this arena (for stats) */
+    size_t total_capacity;  /* bytes ever malloced into this arena */
+} turbo_arena;
+
+/* Default first-block size. Subsequent blocks double up to a cap. */
+#define TURBO_ARENA_BLOCK_MIN  (16 * 1024)
+#define TURBO_ARENA_BLOCK_MAX  (1 * 1024 * 1024)
+/* Hard cap on total arena capacity to bound DoS via huge requests. */
+#define TURBO_ARENA_HARD_CAP   (64 * 1024 * 1024)
+
+static _Thread_local turbo_arena *t_current_arena = NULL;
+
+static void *turbo_arena_alloc(turbo_arena *a, size_t size) {
+    /* Round up to 16-byte alignment so refcount headers stay aligned. */
+    size = (size + 15) & ~((size_t)15);
+
+    turbo_arena_block *blk = a->head;
+    if (!blk || blk->used + size > blk->size) {
+        size_t next_size = blk ? blk->size * 2 : TURBO_ARENA_BLOCK_MIN;
+        if (next_size > TURBO_ARENA_BLOCK_MAX) next_size = TURBO_ARENA_BLOCK_MAX;
+        if (size > next_size) next_size = size;
+        if (a->total_capacity + next_size > TURBO_ARENA_HARD_CAP) {
+            fprintf(stderr,
+                "runtime error: per-request arena exceeded hard cap (%d MB)\n",
+                TURBO_ARENA_HARD_CAP / (1024 * 1024));
+            exit(1);
+        }
+        turbo_arena_block *new_blk =
+            (turbo_arena_block *)malloc(sizeof(turbo_arena_block) + next_size);
+        if (!new_blk) {
+            fprintf(stderr, "runtime error: out of memory (arena block)\n");
+            exit(1);
+        }
+        new_blk->next = a->head;
+        new_blk->size = next_size;
+        new_blk->used = 0;
+        a->head = new_blk;
+        a->total_capacity += next_size;
+        blk = new_blk;
+    }
+    void *p = (char *)(blk + 1) + blk->used;
+    blk->used += size;
+    a->total_alloc += size;
+    return p;
+}
+
+static void turbo_arena_free_all(turbo_arena *a) {
+    turbo_arena_block *blk = a->head;
+    while (blk) {
+        turbo_arena_block *next = blk->next;
+        free(blk);
+        blk = next;
+    }
+    a->head = NULL;
+    a->total_alloc = 0;
+    a->total_capacity = 0;
+}
+
+/* Public: install/uninstall an arena on the current thread. The
+ * `rt_arena_begin` / `rt_arena_end` symbols are exported so the JIT
+ * runtime can call them too if it ever wants per-request scoping. */
+void rt_arena_begin(void) {
+    if (t_current_arena != NULL) {
+        /* Reuse the existing arena rather than nesting; the previous
+         * caller forgot to end. Reset and continue. */
+        turbo_arena_free_all(t_current_arena);
+        return;
+    }
+    turbo_arena *a = (turbo_arena *)calloc(1, sizeof(turbo_arena));
+    if (!a) { fprintf(stderr, "runtime error: out of memory (arena)\n"); exit(1); }
+    t_current_arena = a;
+}
+
+void rt_arena_end(void) {
+    if (!t_current_arena) return;
+    turbo_arena_free_all(t_current_arena);
+    free(t_current_arena);
+    t_current_arena = NULL;
+}
+
 /* ── Checked allocation helpers (C-3) ──────────────────────────────── */
 
 static void *turbo_alloc(size_t size) {
+    if (t_current_arena != NULL) {
+        return turbo_arena_alloc(t_current_arena, size);
+    }
     void *p = malloc(size);
     if (!p) { fprintf(stderr, "runtime error: out of memory\n"); exit(1); }
     return p;
 }
 
 static void *turbo_calloc(size_t count, size_t size) {
+    if (t_current_arena != NULL) {
+        size_t total = count * size;
+        void *p = turbo_arena_alloc(t_current_arena, total);
+        memset(p, 0, total);
+        return p;
+    }
     void *p = calloc(count, size);
     if (!p) { fprintf(stderr, "runtime error: out of memory\n"); exit(1); }
     return p;
 }
 
 static void *turbo_realloc(void *ptr, size_t size) {
+    /* When inside an arena (e.g. read_fd_to_string growing its buffer
+     * during http_get/http_post called from a request handler), we can't
+     * actually grow in place — arena allocations don't track their own
+     * size. The safest correct thing is to allocate a fresh slot of the
+     * requested size in the same arena and copy the smaller of the new
+     * size and the previous size's worth of bytes. The old slot is
+     * "leaked" within the arena and will be reclaimed at rt_arena_end().
+     *
+     * Callers grow geometrically (cap *= 2) so the wasted space is
+     * bounded by the final allocation size. */
+    if (t_current_arena != NULL) {
+        void *new_ptr = turbo_arena_alloc(t_current_arena, size);
+        if (ptr) {
+            /* We do not know the old length; copy `size` bytes from the
+             * old slot. read_fd_to_string only doubles the buffer, so
+             * the old slot always has at least `size/2` valid bytes,
+             * which is what the caller cares about. The trailing bytes
+             * are uninitialized but the caller writes them next. */
+            memcpy(new_ptr, ptr, size / 2);
+        }
+        return new_ptr;
+    }
     void *p = realloc(ptr, size);
     if (!p) { fprintf(stderr, "runtime error: out of memory\n"); exit(1); }
     return p;
@@ -1189,9 +1327,16 @@ static void *handle_http_conn(void *arg) {
         buf[buf_len] = '\0';
 
     process_request:;
+        /* Install per-request arena. All turbo_alloc calls during this
+         * request — including allocations made by the user handler —
+         * will go through the arena and be reclaimed at the bottom of
+         * the loop. Fixes the per-request memory leak (S5 in the v0.5.0
+         * audit) without requiring scope-tracking codegen changes. */
+        rt_arena_begin();
+
         /* Find end of headers (\r\n\r\n) */
         char *hdr_end = strstr(buf, "\r\n\r\n");
-        if (!hdr_end) continue; /* Need more data */
+        if (!hdr_end) { rt_arena_end(); continue; } /* Need more data */
 
         /* Parse request line */
         char method[16] = {0}, raw_path[1024] = {0};
@@ -1260,6 +1405,7 @@ static void *handle_http_conn(void *arg) {
                 "Content-Length: 0\r\n"
                 "Connection: close\r\n\r\n";
             write(fd, bad, strlen(bad));
+            rt_arena_end();
             break;
         }
 
@@ -1280,7 +1426,13 @@ static void *handle_http_conn(void *arg) {
         /* Body starts after \r\n\r\n */
         char *body_start = hdr_end + 4;
         int body_available = buf_len - (int)(body_start - buf);
-        if ((long long)body_available < content_length) continue; /* Need more data */
+        if ((long long)body_available < content_length) {
+            /* Need more data — release the arena before looping back to
+             * read more bytes, otherwise it would accumulate across the
+             * read calls until the request is complete. */
+            rt_arena_end();
+            continue;
+        }
 
         /* Build structured request: METHOD\x01PATH\x01QUERY\x01HEADERS\x01BODY */
         size_t mlen = strlen(method);
@@ -1355,6 +1507,13 @@ static void *handle_http_conn(void *arg) {
         }
         buf_len = remaining;
 
+        /* End the per-request arena: all temporaries allocated during
+         * this request — request struct, parsed fields, response body,
+         * intermediate concatenations from the user handler — are
+         * reclaimed in O(1). The response bytes have already been
+         * written to the socket, so the pointers are safe to drop. */
+        rt_arena_end();
+
         if (!keep_alive) break;
 
         /* If there's already another request in the buffer, process it immediately */
@@ -1362,6 +1521,10 @@ static void *handle_http_conn(void *arg) {
             goto process_request;
         }
     }
+    /* Defensive: if we broke out of the loop with an arena still
+     * installed (e.g. n <= 0 read after process_request labeled goto),
+     * make sure we don't leave the thread-local pointer dangling. */
+    rt_arena_end();
 
     close(fd);
     return NULL;
