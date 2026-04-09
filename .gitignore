@@ -32,3 +32,10 @@ docs/superpowers/
 /PLAN-*.md
 /INDEX.md
 /turbo/cow-bug-audit.md
+
+# OMX tooling artifacts (logs, plans, state — local only, never committed)
+/.omx/
+
+# Python bytecode cache
+__pycache__/
+*.pyc

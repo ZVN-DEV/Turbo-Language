@@ -70,27 +70,36 @@ TMPDIR=$(mktemp -d)
 trap 'rm -rf "${TMPDIR}"' EXIT
 
 echo "Downloading from ${URL}..."
-curl -fsSL "${URL}" -o "${TMPDIR}/${TARBALL}"
+curl -fsSL "${URL}" -o "${TMPDIR}/${TARBALL}" || {
+    echo "error: failed to download ${URL}" >&2
+    exit 1
+}
 
 # Download checksums and verify
 echo "Verifying checksum..."
-curl -fsSL "${CHECKSUMS_URL}" -o "${TMPDIR}/checksums.txt"
+curl -fsSL "${CHECKSUMS_URL}" -o "${TMPDIR}/checksums.txt" || {
+    echo "error: failed to download checksums.txt from ${CHECKSUMS_URL} — refusing to install" >&2
+    exit 1
+}
 
-# Extract only the line for our tarball
-EXPECTED=$(grep "${TARBALL}" "${TMPDIR}/checksums.txt" || true)
+# Extract only the line for our exact tarball (column-anchored so a future
+# sibling artifact like "foo.tar.gz.sig" can't accidentally match).
+EXPECTED=$(awk -v f="${TARBALL}" '$2==f {print; exit}' "${TMPDIR}/checksums.txt")
 if [ -z "${EXPECTED}" ]; then
-    echo "Warning: No checksum found for ${TARBALL} in checksums.txt, skipping verification."
-else
-    cd "${TMPDIR}"
-    if command -v sha256sum &> /dev/null; then
-        echo "${EXPECTED}" | sha256sum -c -
-    elif command -v shasum &> /dev/null; then
-        echo "${EXPECTED}" | shasum -a 256 -c -
-    else
-        echo "Warning: Neither sha256sum nor shasum found, skipping checksum verification."
-    fi
-    cd - > /dev/null
+    echo "error: checksum for ${TARBALL} not found in checksums.txt — refusing to install" >&2
+    exit 1
 fi
+
+cd "${TMPDIR}"
+if command -v sha256sum &> /dev/null; then
+    echo "${EXPECTED}" | sha256sum -c -
+elif command -v shasum &> /dev/null; then
+    echo "${EXPECTED}" | shasum -a 256 -c -
+else
+    echo "error: neither sha256sum nor shasum is available on this system — cannot verify download integrity, refusing to install" >&2
+    exit 1
+fi
+cd - > /dev/null
 
 # Extract
 tar xz -C "${TMPDIR}" -f "${TMPDIR}/${TARBALL}"

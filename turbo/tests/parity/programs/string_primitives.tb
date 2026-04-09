@@ -1,0 +1,24 @@
+// Parity: broad coverage of the rt_str_* runtime surface.
+// Exercises rt_str_concat (via `+`), rt_str_repeat, rt_str_len,
+// rt_str_upper, rt_str_lower, rt_str_contains, rt_str_replace,
+// rt_str_trim, rt_str_starts_with, rt_str_ends_with, rt_str_char_at,
+// rt_str_index_of, rt_str_split, and rt_str_join. These are all
+// hand-mirrored in both runtime.rs (JIT) and turbo_rt.c (AOT).
+fn main() {
+    let base = "Hello, Turbo"
+    print(base + "!")
+    print(len(base))
+    print(upper(base))
+    print(lower(base))
+    print(contains(base, "Turbo"))
+    print(replace(base, "Turbo", "World"))
+    print(trim("  spaced  "))
+    print(starts_with(base, "Hello"))
+    print(ends_with(base, "Turbo"))
+    print(char_at("abcde", 2))
+    print(index_of("abcdef", "cd"))
+    print(repeat("ab", 4))
+    let parts = split("a,b,c,d", ",")
+    print(join(parts, "|"))
+    print(len(parts))
+}

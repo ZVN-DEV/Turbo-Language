@@ -1,0 +1,14 @@
+// Parity: recursion (factorial).
+fn fact(n: i64) -> i64 {
+    if n <= 1 {
+        1
+    } else {
+        n * fact(n - 1)
+    }
+}
+
+fn main() {
+    print(fact(1))
+    print(fact(5))
+    print(fact(10))
+}

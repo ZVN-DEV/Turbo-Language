@@ -1,0 +1,16 @@
+# cargo-audit configuration for the Turbo workspace.
+#
+# Each ignore entry MUST include a reason + a tracking note. Do not add
+# blanket ignores — re-evaluate these on every dependency bump.
+
+[advisories]
+ignore = [
+    # `instant` is unmaintained. Pulled in transitively via:
+    #   turbo-cli -> notify-debouncer-mini 0.5 -> notify-types 1.0.1 -> instant
+    # The fix lives upstream in notify-types >= 2.0 (dropped instant for
+    # std::time::Instant / web-time). We can remove this ignore once we can
+    # upgrade `notify` past 7.x and `notify-debouncer-mini` past 0.5.x — that
+    # bump requires notify's new API surface, so it is tracked as a followup
+    # rather than rushed in for a security rollup.
+    "RUSTSEC-2024-0384",
+]

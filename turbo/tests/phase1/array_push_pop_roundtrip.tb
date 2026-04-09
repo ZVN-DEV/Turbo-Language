@@ -1,0 +1,19 @@
+// Exercise array push / len / index round-trip.
+fn main() {
+    let mut xs = [1, 2, 3]
+    print(len(xs))
+    xs.push(4)
+    xs.push(5)
+    xs.push(6)
+    print(len(xs))
+    print(xs[0])
+    print(xs[3])
+    print(xs[5])
+
+    // Iterate over the final array to confirm all elements are reachable.
+    let mut sum = 0
+    for v in xs {
+        sum += v
+    }
+    print(sum)
+}

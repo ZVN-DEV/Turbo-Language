@@ -1,6 +1,36 @@
+//! Turbo Language Server (LSP) binary.
+//!
+//! Implements the editor-side half of the Turbo developer experience. The
+//! server runs over stdio and consumes the same `lexer` → `parser` → `sema`
+//! pipeline as the compiler, then translates compiler diagnostics and AST
+//! information into LSP notifications and responses.
+//!
+//! Capabilities advertised on initialize:
+//! * `textDocument/publishDiagnostics` (push, on every change)
+//! * `textDocument/hover`
+//! * `textDocument/definition`
+//! * `textDocument/completion`
+//! * `textDocument/references`
+//! * `textDocument/documentSymbol`
+//! * `textDocument/rename` + `textDocument/prepareRename`
+//! * `textDocument/codeAction`
+//! * `textDocument/semanticTokens/full`
+//!
+//! ```text
+//! # Run from the workspace root:
+//! cargo run -p turbo-lsp
+//!
+//! # Then point any LSP client at the resulting binary; the VS Code
+//! # extension at editors/vscode/ does this out of the box.
+//! ```
+
 use lsp_server::{Connection, Message, Notification, Response};
 use lsp_types::*;
 use std::collections::{HashMap, HashSet};
+
+mod code_actions;
+mod rename;
+mod semantic_tokens;
 
 fn main() {
     let (connection, io_threads) = Connection::stdio();
@@ -12,6 +42,16 @@ fn main() {
         completion_provider: Some(CompletionOptions::default()),
         references_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
+        rename_provider: rename::rename_capability(),
+        code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+        semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
+            SemanticTokensOptions {
+                work_done_progress_options: Default::default(),
+                legend: semantic_tokens::legend(),
+                range: Some(false),
+                full: Some(SemanticTokensFullOptions::Bool(true)),
+            },
+        )),
         ..Default::default()
     };
 
@@ -179,6 +219,83 @@ fn main() {
                         .get(uri)
                         .map(|text| DocumentSymbolResponse::Nested(compute_document_symbols(text)));
                     let value = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
+                    let _ = send_response(&connection, Response::new_ok(req.id, value));
+                }
+                "textDocument/prepareRename" => {
+                    let params: TextDocumentPositionParams =
+                        match serde_json::from_value(req.params.clone()) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!("turbo-lsp: bad prepareRename params: {e}");
+                                let _ = send_response(
+                                    &connection,
+                                    Response::new_ok(req.id, serde_json::Value::Null),
+                                );
+                                continue;
+                            }
+                        };
+                    let uri = &params.text_document.uri;
+                    let resp = documents
+                        .get(uri)
+                        .and_then(|text| rename::compute_prepare_rename(text, &params));
+                    let value = serde_json::to_value(resp).unwrap_or(serde_json::Value::Null);
+                    let _ = send_response(&connection, Response::new_ok(req.id, value));
+                }
+                "textDocument/rename" => {
+                    let params: RenameParams = match serde_json::from_value(req.params.clone()) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("turbo-lsp: bad rename params: {e}");
+                            let _ = send_response(
+                                &connection,
+                                Response::new_ok(req.id, serde_json::Value::Null),
+                            );
+                            continue;
+                        }
+                    };
+                    let uri = &params.text_document_position.text_document.uri;
+                    let edit = documents
+                        .get(uri)
+                        .and_then(|text| rename::compute_rename(text, &params));
+                    let value = serde_json::to_value(edit).unwrap_or(serde_json::Value::Null);
+                    let _ = send_response(&connection, Response::new_ok(req.id, value));
+                }
+                "textDocument/codeAction" => {
+                    let params: CodeActionParams = match serde_json::from_value(req.params.clone())
+                    {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("turbo-lsp: bad codeAction params: {e}");
+                            let _ = send_response(
+                                &connection,
+                                Response::new_ok(req.id, serde_json::Value::Null),
+                            );
+                            continue;
+                        }
+                    };
+                    let actions = code_actions::compute_code_actions(&params);
+                    let value = serde_json::to_value(actions).unwrap_or(serde_json::Value::Null);
+                    let _ = send_response(&connection, Response::new_ok(req.id, value));
+                }
+                "textDocument/semanticTokens/full" => {
+                    let params: SemanticTokensParams =
+                        match serde_json::from_value(req.params.clone()) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!("turbo-lsp: bad semanticTokens params: {e}");
+                                let _ = send_response(
+                                    &connection,
+                                    Response::new_ok(req.id, serde_json::Value::Null),
+                                );
+                                continue;
+                            }
+                        };
+                    let uri = &params.text_document.uri;
+                    let tokens = documents
+                        .get(uri)
+                        .map(|text| semantic_tokens::compute_semantic_tokens(text))
+                        .map(SemanticTokensResult::Tokens);
+                    let value = serde_json::to_value(tokens).unwrap_or(serde_json::Value::Null);
                     let _ = send_response(&connection, Response::new_ok(req.id, value));
                 }
                 "shutdown" => {

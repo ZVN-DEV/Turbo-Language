@@ -1,0 +1,24 @@
+// Exercise the hashmap built-in surface: insert, overwrite, lookup,
+// presence check, length, and removal.
+fn main() {
+    let m = hashmap()
+    hashmap_set(m, "one", "1")
+    hashmap_set(m, "two", "2")
+    hashmap_set(m, "three", "3")
+    print(hashmap_len(m))
+    print(hashmap_get(m, "two"))
+
+    // Overwrite existing key; length must NOT change.
+    hashmap_set(m, "two", "22")
+    print(hashmap_len(m))
+    print(hashmap_get(m, "two"))
+
+    // Presence checks.
+    print(hashmap_has(m, "one"))
+    print(hashmap_has(m, "missing"))
+
+    // Remove and verify length + absence.
+    hashmap_remove(m, "one")
+    print(hashmap_len(m))
+    print(hashmap_has(m, "one"))
+}

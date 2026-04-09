@@ -3,6 +3,85 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] - 2026-04-08
+
+Compiler-correctness and tooling release. Fixes a class of silent-drop
+bugs around copy-on-write (COW) builtins in every expression context,
+introduces JIT/AOT parity test infrastructure, ships 91 uniquely
+documented error codes with build-time exhaustiveness enforcement,
+adds code actions / rename / semantic tokens to the LSP, and splits
+the semantic analyzer into focused modules.
+
+### Added
+- **Post-parse COW rewrite pass** (`turbo-parser/src/cow_rewrite.rs`).
+  The 9 COW builtins (`push`, `map`, `filter`, `replace`, `upper`,
+  `lower`, `trim`, `repeat`, `split`) are now rewritten to self-assigns
+  only in statement position. In r-value contexts — bare block, if/else,
+  match arm, inferred-return closure body — the call's value now flows
+  through correctly. Regression tests: `cow_tail_expression.tb`,
+  `cow_tail_rvalue_contexts.tb`, `cow_return_unit_fn.tb`.
+- **Unit-fn-aware return rewriting.** `return <cow-call>` inside a
+  unit-return function is now rewritten to a self-assign instead of
+  being treated as value-returning, so the mutation is actually observed.
+- **JIT/AOT parity test harness** (`turbo/tests/parity/`). Runs every
+  program through both backends and diffs stdout + exit code. Sibling
+  files `.expected_exit` / `.expected_stderr` pin failure-mode behavior;
+  new `.expect_divergence` xfail marker flags known-divergent programs
+  (e.g. Unicode whitespace tokenization).
+- **91 documented error codes.** Every `E0NNN` variant now has a unique
+  entry in `turbo-ast::ErrorCode`, a Markdown explanation under
+  `turbo-cli/src/errors/E0NNN.md` (embedded via `include_str!`, served
+  by `turbolang explain E0NNN`), a public mirror at `docs/errors/E0NNN.md`,
+  and a `build.rs` exhaustiveness check that fails the build if any
+  variant is missing its docs file.
+- **LSP: code actions** (`turbo-lsp/src/code_actions.rs`). Quick fixes
+  for common diagnostics.
+- **LSP: workspace-wide rename** (`turbo-lsp/src/rename.rs`).
+- **LSP: semantic tokens** (`turbo-lsp/src/semantic_tokens.rs`). Proper
+  syntax highlighting via the LSP semantic-tokens protocol.
+- **Sema: focused modules.** Exhaustiveness checking, scope/lexical
+  analysis, and type checking moved to their own files
+  (`exhaustiveness.rs`, `scope.rs`, `type_check.rs`).
+- **Nightly LLVM canary CI** (`.github/workflows/nightly.yml`). Builds
+  the LLVM backend nightly to catch upstream LLVM drift early.
+- **Lint hardening: `scripts/check_error_codes.py`.** Two-pass helper
+  detection (taking-code vs not-taking-code), balanced-bracket generics
+  walker, and a `--self-test` mode with 17 assertions. Replaces the
+  fragile regex-based version.
+- **Phase1 regression tests.** Roundtrip + limits tests pinning array
+  push/pop, hashmap CRUD, integer arithmetic edges, math-function
+  edges, string builtins, and UTF-8 concatenation.
+- **Per-example README docs.** Every `examples/` subdirectory now has
+  a README explaining what the example demonstrates.
+- **Formatter/tooling configs.** `turbo/clippy.toml`, `turbo/rustfmt.toml`,
+  `turbo/.cargo/` workspace config, and `turbo/.git-hooks/pre-commit`
+  are now checked in.
+
+### Changed
+- **Error-code exhaustiveness is enforced at build time.**
+  `turbo-cli/build.rs` parses `turbo-ast::ErrorCode` and fails the build
+  if any variant is missing a `docs/errors/` entry. Matches the existing
+  `include_str!` exhaustiveness on the source-of-truth side.
+- **`docs/errors.md`** is now a machine-checked index of all 91 codes.
+
+### Fixed
+- **COW builtins in tail expression context silently discarded their
+  value.** Pre-fix, `fn single_replace(s: str) -> str { replace(s, "a",
+  "b") }` returned `()` and produced a confusing `E0109` at the
+  declaration. The post-parse rewrite pass now preserves the tail value.
+- **`.map(|w| { replace(w, ...) })` failed with E0501** on the immutable
+  closure parameter because the parser rewrote the brace-body tail into
+  `w = replace(w, ...)`. Closure bodies now compile.
+- **`return <cow-call>` in a unit-return function was a silent NOP.**
+  Pre-fix, `fn f() { let mut arr = [1] return push(arr, 2) }` compiled
+  and ran but discarded the pushed array. Now correctly self-assigns.
+- **JIT libm symbol resolution on Linux.** `extern "C"` calls to libm
+  functions now resolve under the JIT on Linux.
+- **C runtime POSIX/BSD feature test macros.** `turbo_rt.c` now declares
+  the POSIX and BSD feature-test macros required for glibc compatibility
+  (`clock_gettime`, `strdup`, BSD extensions), unblocking Linux release
+  builds.
+
 ## [0.6.0] - 2026-04-07
 
 Real LLM agent integration, memory management overhaul, codegen refactor,

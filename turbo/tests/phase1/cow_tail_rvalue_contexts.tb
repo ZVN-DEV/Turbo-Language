@@ -1,0 +1,141 @@
+// Regression test pinning the COW-builtin rewrite behavior across every
+// context where a block can appear either as an r-value (its value is
+// consumed) or in statement position (its value is discarded).
+//
+// Prior to the cow_rewrite post-parse pass the parser silently rewrote every
+// tail COW call into a self-assign regardless of context. That made the four
+// cases below either fail to compile or silently throw away their result:
+//
+//   (1) bare block used as an r-value
+//   (2) if/else used as an r-value
+//   (3) match arm used as an r-value
+//   (4) inferred-return closure body (e.g. xs.map(|w| { replace(...) }))
+//
+// Each case must now return the rewritten value, AND the pre-existing
+// statement-position cases (loops, if-without-else used for its side
+// effects, Unit-return functions) must still rewrite to self-assigns.
+
+// (1) Bare block as r-value — tail COW call's value must flow to `let`.
+fn bare_block_rvalue() -> str {
+    let s = "hello"
+    let r = { replace(s, "h", "H") }
+    r
+}
+
+// (2) if/else as r-value — tail in BOTH branches must flow out.
+fn if_else_rvalue(flag: bool) -> str {
+    let s = "hello"
+    let r = if flag {
+        replace(s, "h", "H")
+    } else {
+        replace(s, "l", "L")
+    }
+    r
+}
+
+// (3) match arm as r-value — tail COW call must flow to the enclosing let.
+fn match_arm_rvalue(n: i64) -> str {
+    let s = "hello"
+    let r = match n {
+        1 => replace(s, "h", "H")
+        2 => replace(s, "l", "L")
+        _ => s
+    }
+    r
+}
+
+// (4) Inferred-return closure body (brace form). Pre-fix this failed to
+// compile with E0501 because the parser rewrote the tail `replace(w, ...)`
+// inside the brace closure body to `w = replace(w, ...)` — and `w` is
+// an immutable closure parameter. Post-fix, the closure compiles and is
+// callable. (We invoke .map for its side of compiling the closure; the
+// returned array element type is intentionally ignored here — string
+// element-type inference for .map is pinned by a separate test.)
+fn closure_brace_body_compiles_and_runs() -> i64 {
+    let s = "hello"
+    let words = [s]
+    let uppered = words.map(|w| { replace(w, "h", "H") })
+    // Observable assertion: the map produced an array of length 1.
+    len(uppered)
+}
+
+// ---- Statement-position pins: these MUST still rewrite to self-assigns. ----
+
+// (A) for-body: push(...) at tail of a for body must mutate the outer array.
+fn for_body_push_mutates() -> [i64] {
+    let mut arr = [1]
+    let xs = [2, 3, 4]
+    for x in xs {
+        push(arr, x)
+    }
+    arr
+}
+
+// (B) if-without-else used for its side effect: push must mutate `arr`.
+fn if_without_else_push_mutates(flag: bool) -> [i64] {
+    let mut arr = [1, 2]
+    if flag {
+        push(arr, 99)
+    }
+    arr
+}
+
+// (C) Unit-return function with a tail COW call operating on a local
+// mutable. The call is in discard position (function return type is
+// unit) and must be rewritten to a self-assign so the observable value
+// of `arr` changes. This is the `fn f() { let mut arr = [...]
+// push(arr, 4) print(arr) }` load-bearing shape.
+fn unit_return_tail_push_mutates_local() {
+    let mut arr = [10, 20]
+    push(arr, 30)
+    print(len(arr))
+    print(arr[0])
+    print(arr[1])
+    print(arr[2])
+}
+
+// (D) Sanity: a non-COW tail call must still flow its value out of a
+// block-as-rvalue — the rewrite pass must not touch non-COW calls.
+fn plain_id(s: str) -> str { s }
+fn non_cow_block_rvalue() -> str {
+    let s = "hello"
+    let r = { plain_id(s) }
+    r
+}
+
+fn main() {
+    // (1) bare block as rvalue
+    print(bare_block_rvalue())
+
+    // (2) if/else as rvalue
+    print(if_else_rvalue(true))
+    print(if_else_rvalue(false))
+
+    // (3) match arm as rvalue
+    print(match_arm_rvalue(1))
+    print(match_arm_rvalue(2))
+    print(match_arm_rvalue(9))
+
+    // (4) inferred-return closure body (brace form) — pre-fix this
+    // did not even compile. Prints the length of the mapped array (1).
+    print(closure_brace_body_compiles_and_runs())
+
+    // (A) for-body push mutates
+    let a = for_body_push_mutates()
+    print(len(a))
+    print(a[0])
+    print(a[1])
+    print(a[2])
+    print(a[3])
+
+    // (B) if-without-else push mutates
+    let b = if_without_else_push_mutates(true)
+    print(len(b))
+    print(b[2])
+
+    // (C) Unit-return function with tail push on a local mutable.
+    unit_return_tail_push_mutates_local()
+
+    // (D) non-COW tail in block-rvalue
+    print(non_cow_block_rvalue())
+}

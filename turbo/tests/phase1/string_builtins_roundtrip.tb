@@ -1,0 +1,24 @@
+// Exercise the string built-in surface: length, upper/lower, starts/ends,
+// contains, replace, and simple empty-string corners.
+fn main() {
+    let s = "Hello, Turbo!"
+
+    print(len(s))
+    print(upper(s))
+    print(lower(s))
+
+    print(starts_with(s, "Hello"))
+    print(starts_with(s, "world"))
+    print(ends_with(s, "!"))
+    print(ends_with(s, "?"))
+
+    print(contains(s, "Turbo"))
+    print(contains(s, "python"))
+
+    print(replace(s, "Turbo", "World"))
+
+    // Empty-string corner cases.
+    let empty = ""
+    print(len(empty))
+    print(contains(empty, ""))
+}

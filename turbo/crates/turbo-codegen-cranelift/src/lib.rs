@@ -1,3 +1,29 @@
+//! Cranelift-based codegen backend for Turbo (JIT + AOT).
+//!
+//! This crate is the final stage of the compiler pipeline. It walks the
+//! validated AST produced by `turbo_sema` and lowers it to Cranelift IR,
+//! then either runs the result in-process (JIT) or emits a relocatable
+//! object file that gets linked with the C runtime (`runtime/turbo_rt.c`)
+//! into a native binary.
+//!
+//! # Pipeline position
+//!
+//! lexer → parser → sema → **codegen** → JIT execution / native binary
+//!
+//! # Public entry points
+//!
+//! * [`jit_run`] — JIT-compile and execute a `Module` end-to-end. Used by
+//!   `turbolang run` and the REPL.
+//! * [`jit_run_function`] — JIT-compile and run one named function (used
+//!   by the test runner).
+//! * [`aot_compile`] — emit a `.o` for a `Module` and link it with the C
+//!   runtime to produce a stand-alone executable.
+//! * [`wasm_compile`] — same as above but targeting WebAssembly.
+//!
+//! Built-in functions (`print`, `len`, `push`, `str_*`, `hashmap_*`, ...)
+//! are dispatched in `compile_call` (in the private `expr` module) which
+//! delegates to the tables in the private `builtins` module.
+
 use cranelift::prelude::isa::CallConv;
 use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};

@@ -1,0 +1,11 @@
+// String concatenation must preserve multi-byte UTF-8 content.
+fn main() {
+    let a = "café "
+    let b = "résumé"
+    print(a + b)
+    print(len(a + b))
+
+    let c = "日本語"
+    let d = " test"
+    print(c + d)
+}

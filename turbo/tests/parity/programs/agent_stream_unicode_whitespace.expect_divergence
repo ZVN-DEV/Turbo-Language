@@ -1,0 +1,1 @@
+rt_agent_stream: JIT uses Unicode split_whitespace, AOT uses ASCII-only; NBSP (U+00A0) pins the mismatch

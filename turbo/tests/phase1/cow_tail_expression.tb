@@ -1,0 +1,48 @@
+// Regression test for the parser bug where COW builtins (replace, trim, lower,
+// upper, repeat, split, map, filter, push) in tail position of a non-Unit
+// function body were silently rewritten into self-assign statements, making
+// the function return `()` and producing a confusing E0109 at the declaration.
+//
+// All four cases below must compile and produce the values shown in
+// cow_tail_expression.expected.
+
+// (a) Single nested replace() in tail position.
+fn single_replace(s: str) -> str {
+    replace(s, "a", "b")
+}
+
+// (b) Triple nested replace() in tail position — the original repro.
+fn clean_word(s: str) -> str {
+    replace(replace(replace(s, ",", ""), ".", ""), "!", "")
+}
+
+// (c) Statement-form COW rewrite must still work.
+// Here `replace(s, ...)` is followed by another statement, so the parser
+// should still rewrite it to `s = replace(s, ...)` and `s` should be
+// observable as the rewritten value when we return a different expression.
+fn statement_form_still_works() -> str {
+    let mut s = "hello world"
+    replace(s, "world", "turbo")
+    let suffix = "!"
+    s + suffix
+}
+
+// (d) push() in tail position must return the new array.
+fn push_tail(arr: [i64]) -> [i64] {
+    push(arr, 4)
+}
+
+fn main() {
+    print(single_replace("banana"))
+    print(clean_word("Hello, world."))
+    print(clean_word("wow!!"))
+    print(statement_form_still_works())
+
+    let base = [1, 2, 3]
+    let extended = push_tail(base)
+    print(len(extended))
+    print(extended[0])
+    print(extended[1])
+    print(extended[2])
+    print(extended[3])
+}

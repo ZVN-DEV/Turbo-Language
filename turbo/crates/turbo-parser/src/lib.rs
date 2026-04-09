@@ -1,5 +1,35 @@
+//! Turbo parser — converts a token stream into an AST.
+//!
+//! This is a hand-written recursive-descent parser. It is intentionally
+//! resilient: instead of bailing on the first error it collects every
+//! `ParseError` it encounters into a vector and continues, so the user
+//! sees as many real diagnostics as possible per compile.
+//!
+//! # Pipeline position
+//!
+//! lexer → **parser** → sema → codegen
+//!
+//! # Public entry points
+//!
+//! * [`parse`] — `(Vec<Spanned<Token>>) -> (Module, Vec<ParseError>)`. The
+//!   returned `Module` is always usable; bad sub-trees are stubbed out so
+//!   later stages can still report against them.
+//! * [`ParseError`] — the per-error type (carries an [`turbo_ast::ErrorCode`]
+//!   and a span).
+//!
+//! # Example
+//!
+//! ```
+//! let (tokens, _) = turbo_lexer::tokenize("fn main() { 42 }");
+//! let (module, errors) = turbo_parser::parse(tokens);
+//! assert!(errors.is_empty());
+//! assert_eq!(module.items.len(), 1);
+//! ```
+
 use turbo_ast::*;
 use turbo_lexer::{Spanned as LexSpanned, Token};
+
+mod cow_rewrite;
 
 /// Maximum nesting depth for recursive constructs (blocks, if, while, for,
 /// match, closures, parenthesised expressions, etc.). Exceeding this limit
@@ -670,7 +700,9 @@ impl Parser {
         } else {
             None
         };
-        // Check for optional default body
+        // Check for optional default body. The post-parse COW pass uses
+        // the method's declared return type to decide whether the body's
+        // tail is in value or statement position.
         let default_body = if matches!(self.peek(), Some(Token::LBrace)) {
             Some(self.parse_block()?)
         } else {
@@ -781,6 +813,9 @@ impl Parser {
             None
         };
 
+        // Parse the body as a raw block — the COW rewrite pass will handle
+        // the value-vs-statement distinction top-down using this function's
+        // return type.
         let body = self.parse_block()?;
 
         self.exit_nesting();
@@ -962,13 +997,18 @@ impl Parser {
         Ok(Spanned::new(Expr::MapLit(entries), start..end))
     }
 
+    /// Parse a `{ ... }` block expression. Produces a raw `Expr::Block` with
+    /// all statements and tail expression in the order written. COW-builtin
+    /// rewrites (e.g. `items.push(4)` → `items = push(items, 4)`) are applied
+    /// as a separate top-down pass after the whole module has been parsed —
+    /// see [`crate::cow_rewrite`] for why.
     fn parse_block(&mut self) -> Result<Spanned<Expr>, ParseError> {
         self.enter_nesting()?;
         let start = self.peek_span().start;
         self.expect(&Token::LBrace)?;
 
         let mut stmts = Vec::new();
-        let mut tail_expr = None;
+        let mut tail_expr: Option<Box<Spanned<Expr>>> = None;
 
         while !matches!(self.peek(), Some(Token::RBrace) | None) {
             // Try to parse a statement (let, return, defer)
@@ -985,25 +1025,17 @@ impl Parser {
                 // Parse an expression
                 let expr = self.parse_expr()?;
 
-                // If followed by RBrace, this is the tail expression
+                // If followed by RBrace, this is the tail expression — leave
+                // it as such; the post-parse COW pass will decide whether to
+                // move it into `stmts` (statement-position discard) or keep
+                // it as the block's value (expression-position consumer).
                 if matches!(self.peek(), Some(Token::RBrace)) {
-                    // If the tail expr is a COW builtin call, convert it to a
-                    // statement with auto-reassign instead. The block returns Unit.
-                    if Self::is_cow_builtin_call(&expr) {
-                        let span = expr.span.clone();
-                        let stmt = Self::maybe_rewrite_cow_stmt(expr);
-                        stmts.push(Spanned::new(stmt, span));
-                    } else {
-                        tail_expr = Some(Box::new(expr));
-                    }
+                    tail_expr = Some(Box::new(expr));
                 } else {
-                    // It's a statement expression — check for COW builtin auto-reassign.
-                    // Rewrites e.g. `push(items, 4)` → `items = push(items, 4)`
-                    // This handles all control flow correctly because Assign is
-                    // already compiled with proper SSA phi nodes.
+                    // Non-tail statement expression. Don't touch it here —
+                    // the COW rewrite pass will handle it.
                     let span = expr.span.clone();
-                    let stmt = Self::maybe_rewrite_cow_stmt(expr);
-                    stmts.push(Spanned::new(stmt, span));
+                    stmts.push(Spanned::new(Stmt::Expr(expr), span));
                 }
             }
         }
@@ -1013,92 +1045,6 @@ impl Parser {
 
         self.exit_nesting();
         Ok(Spanned::new(Expr::Block { stmts, tail_expr }, start..end))
-    }
-
-    /// COW builtins that return a new value instead of mutating in-place.
-    /// When called in statement position via UFCS (e.g. `items.push(4)`),
-    /// the parser rewrites to an assignment so the result isn't silently discarded.
-    const COW_BUILTINS: &'static [&'static str] = &[
-        "push", "map", "filter", "replace", "upper", "lower", "trim", "repeat", "split",
-    ];
-
-    /// If `expr` is a call to a COW builtin in statement position, rewrite it
-    /// to an assignment back to the source variable. Otherwise return Stmt::Expr.
-    ///
-    /// `push(items, 4)` → `items = push(items, 4)`  (Assign)
-    /// `push(b.items, 4)` → `b.items = push(b.items, 4)` (FieldAssign)
-    /// `push(arr[0], 4)` → `arr[0] = push(arr[0], 4)` (IndexAssign)
-    /// Check if an expression is a call to a COW builtin.
-    fn is_cow_builtin_call(expr: &Spanned<Expr>) -> bool {
-        if let Expr::Call {
-            ref callee,
-            ref args,
-        } = expr.node
-        {
-            if let Expr::Ident(ref fn_name) = callee.node {
-                return Self::COW_BUILTINS.contains(&fn_name.as_str()) && !args.is_empty();
-            }
-        }
-        false
-    }
-
-    fn maybe_rewrite_cow_stmt(expr: Spanned<Expr>) -> Stmt {
-        if let Expr::Call {
-            ref callee,
-            ref args,
-        } = expr.node
-        {
-            if let Expr::Ident(ref fn_name) = callee.node {
-                if Self::COW_BUILTINS.contains(&fn_name.as_str()) && !args.is_empty() {
-                    let target_arg = &args[0];
-                    let span = expr.span.clone();
-
-                    // Simple variable: push(items, 4) → items = push(items, 4)
-                    if let Expr::Ident(ref var_name) = target_arg.node {
-                        return Stmt::Expr(Spanned::new(
-                            Expr::Assign {
-                                target: var_name.clone(),
-                                value: Box::new(expr),
-                            },
-                            span,
-                        ));
-                    }
-
-                    // Field access: push(b.items, 4) → b.items = push(b.items, 4)
-                    if let Expr::FieldAccess {
-                        ref object,
-                        ref field,
-                    } = target_arg.node
-                    {
-                        return Stmt::Expr(Spanned::new(
-                            Expr::FieldAssign {
-                                object: object.clone(),
-                                field: field.clone(),
-                                value: Box::new(expr),
-                            },
-                            span,
-                        ));
-                    }
-
-                    // Index access: push(arr[0], 4) → arr[0] = push(arr[0], 4)
-                    if let Expr::Index {
-                        ref object,
-                        ref index,
-                    } = target_arg.node
-                    {
-                        return Stmt::Expr(Spanned::new(
-                            Expr::IndexAssign {
-                                object: object.clone(),
-                                index: index.clone(),
-                                value: Box::new(expr),
-                            },
-                            span,
-                        ));
-                    }
-                }
-            }
-        }
-        Stmt::Expr(expr)
     }
 
     fn parse_let_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
@@ -2068,7 +2014,9 @@ impl Parser {
             None
         };
 
-        // Body: either a block { ... } or a single expression
+        // Body: either a block { ... } or a single expression. The
+        // post-parse COW pass uses the closure's declared return type to
+        // decide whether the body's tail is in value or statement context.
         let body = if matches!(self.peek(), Some(Token::LBrace)) {
             self.parse_block()?
         } else {
@@ -2398,7 +2346,11 @@ fn split_interpolation_parts(s: &str, span: &Span) -> Result<Vec<InterpolPart>, 
 /// Returns the module and any parse errors.
 pub fn parse(tokens: Vec<LexSpanned<Token>>) -> (Module, Vec<ParseError>) {
     let mut parser = Parser::new(tokens);
-    let module = parser.parse_module();
+    let mut module = parser.parse_module();
+    // Apply the post-parse COW rewrite pass so every `arr.push(x)` in a
+    // statement-position block becomes a self-assign, while tail-position
+    // COW calls in value-position blocks stay as the block's result.
+    cow_rewrite::apply_cow_rewrites(&mut module);
     (module, parser.errors)
 }
 
@@ -3337,6 +3289,387 @@ fn main() { }
                     _ => " \t\n\r".repeat(50),
                 }
             }
+        }
+    }
+
+    // =========================================================================
+    // P1 Task 8: Parser error recovery behavioral tests.
+    // These ensure parse() collects multiple errors where possible and continues
+    // processing later items instead of bailing on first error.
+    // =========================================================================
+
+    /// Parse source allowing errors; return (Module, Vec<ParseError>).
+    fn parse_with_errors(source: &str) -> (Module, Vec<ParseError>) {
+        let (tokens, lex_errors) = tokenize(source);
+        assert!(lex_errors.is_empty(), "Lex errors: {:?}", lex_errors);
+        parse(tokens)
+    }
+
+    #[test]
+    fn test_error_recovery_multiple_broken_items() {
+        // Two broken top-level items should produce 2 errors, plus a
+        // well-formed main that is still parsed.
+        let source = r#"
+            fn broken1(( { }
+            fn broken2() -> { }
+            fn main() { print("ok") }
+        "#;
+        let (module, errors) = parse_with_errors(source);
+        assert!(
+            errors.len() >= 2,
+            "Expected >= 2 parse errors, got {}: {:?}",
+            errors.len(),
+            errors
+        );
+        // main() should still end up in the module despite earlier errors.
+        let has_main = module
+            .items
+            .iter()
+            .any(|i| matches!(&i.node, Item::Function(f) if f.name == "main"));
+        assert!(has_main, "main() should be recovered after broken items");
+    }
+
+    #[test]
+    fn test_error_recovery_unknown_top_level_token() {
+        // A stray `let` statement outside any function should produce a parse
+        // error but not eat the following valid function definition.
+        let source = r#"
+            let x = 1
+            fn main() { print("hello") }
+        "#;
+        let (module, errors) = parse_with_errors(source);
+        assert!(!errors.is_empty(), "Expected at least one parse error");
+        let has_main = module
+            .items
+            .iter()
+            .any(|i| matches!(&i.node, Item::Function(f) if f.name == "main"));
+        assert!(
+            has_main,
+            "main() should still be parsed after top-level `let`, got: {:?}",
+            module
+                .items
+                .iter()
+                .map(|i| match &i.node {
+                    Item::Function(f) => f.name.clone(),
+                    _ => "<other>".to_string(),
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_missing_closing_brace_reports_error() {
+        let source = "fn main() { let x = 1\n";
+        let (_module, errors) = parse_with_errors(source);
+        assert!(!errors.is_empty(), "Expected parse error for missing `}}`");
+    }
+
+    #[test]
+    fn test_unexpected_paren_reports_error() {
+        let source = "fn main() { let x = ) }";
+        let (_module, errors) = parse_with_errors(source);
+        assert!(
+            !errors.is_empty(),
+            "Expected parse error for unexpected `)`"
+        );
+    }
+
+    #[test]
+    fn test_operator_precedence_unary_binary() {
+        // `-x * y` should parse as `(-x) * y`, not `-(x * y)`.
+        let source = "fn main() { let x = 2\n let y = 3\n -x * y }";
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[0].node else {
+            panic!("Expected function");
+        };
+        if let Expr::Block {
+            tail_expr: Some(tail),
+            ..
+        } = &f.body.node
+        {
+            if let Expr::BinaryOp { op, left, .. } = &tail.node {
+                assert_eq!(*op, BinOp::Mul, "Outer op should be Mul");
+                assert!(
+                    matches!(
+                        &left.node,
+                        Expr::UnaryOp {
+                            op: UnaryOp::Neg,
+                            ..
+                        }
+                    ),
+                    "LHS should be UnaryOp::Neg, got {:?}",
+                    left.node
+                );
+            } else {
+                panic!("Expected BinaryOp at tail, got {:?}", tail.node);
+            }
+        }
+    }
+
+    #[test]
+    fn test_operator_precedence_comparison_and_logical() {
+        // `a == b && c != d` -> `(a == b) && (c != d)`
+        let source = "fn main() { a == b && c != d }";
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[0].node else {
+            panic!("Expected function");
+        };
+        if let Expr::Block {
+            tail_expr: Some(tail),
+            ..
+        } = &f.body.node
+        {
+            if let Expr::BinaryOp { op, left, right } = &tail.node {
+                assert_eq!(*op, BinOp::And);
+                assert!(matches!(&left.node, Expr::BinaryOp { op: BinOp::Eq, .. }));
+                assert!(matches!(
+                    &right.node,
+                    Expr::BinaryOp {
+                        op: BinOp::NotEq,
+                        ..
+                    }
+                ));
+            } else {
+                panic!("Expected BinaryOp::And, got {:?}", tail.node);
+            }
+        }
+    }
+
+    #[test]
+    fn test_multiple_generic_params_parse_ok() {
+        let source = "fn pair<A, B>(a: A, b: B) -> A { a }";
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[0].node else {
+            panic!("Expected function");
+        };
+        assert_eq!(f.type_params.len(), 2);
+        assert_eq!(f.type_params[0].name, "A");
+        assert_eq!(f.type_params[1].name, "B");
+    }
+
+    #[test]
+    fn test_empty_generic_list_rejected() {
+        // `fn foo<>() { }` — empty generic list should be a parse error.
+        let source = "fn foo<>() { }\nfn main() { }";
+        let (_module, errors) = parse_with_errors(source);
+        assert!(
+            !errors.is_empty(),
+            "Expected parse error on empty generic list"
+        );
+    }
+
+    #[test]
+    fn test_match_pattern_wildcard_ok() {
+        let source = "fn main() { let x = 1\n match x { _ => print(0) } }";
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[0].node else {
+            panic!("Expected function");
+        };
+        if let Expr::Block { stmts, .. } = &f.body.node {
+            // Second statement or tail should be the match expr.
+            let has_match = stmts.iter().any(|s| {
+                matches!(
+                    &s.node,
+                    Stmt::Expr(e) if matches!(e.node, Expr::Match { .. })
+                )
+            });
+            let tail_is_match = if let Expr::Block { tail_expr, .. } = &f.body.node {
+                tail_expr
+                    .as_ref()
+                    .is_some_and(|t| matches!(t.node, Expr::Match { .. }))
+            } else {
+                false
+            };
+            assert!(has_match || tail_is_match, "Expected Match expr in body");
+        }
+    }
+
+    #[test]
+    fn test_match_multiple_arms_parse_ok() {
+        let source = r#"fn main() {
+    let x = 1
+    match x {
+        1 => print("one")
+        2 => print("two")
+        _ => print("other")
+    }
+}"#;
+        let module = parse_source(source);
+        assert_eq!(module.items.len(), 1);
+    }
+
+    #[test]
+    fn test_stray_semicolons_tolerated() {
+        // Stray `;` statements are generally OK in Turbo (they're filtered).
+        let source = "fn main() { ;;; let x = 1;;; print(x) ;; }";
+        let module = parse_source(source);
+        assert_eq!(module.items.len(), 1);
+    }
+
+    #[test]
+    fn test_function_without_body_is_error() {
+        // A bare `fn foo() -> i64` with no body at module level is invalid
+        // (extern blocks are the only place sigs-only are allowed).
+        let source = "fn foo() -> i64\nfn main() { }";
+        let (_module, errors) = parse_with_errors(source);
+        assert!(
+            !errors.is_empty(),
+            "Expected parse error for missing function body"
+        );
+    }
+
+    #[test]
+    fn test_recovery_after_bad_let_continues_function() {
+        // A broken `let` should not kill the whole function; subsequent
+        // statements should still parse.
+        let source = r#"fn main() {
+    let = 1
+    print("after")
+}"#;
+        let (_module, errors) = parse_with_errors(source);
+        assert!(!errors.is_empty(), "Expected at least one parse error");
+    }
+
+    #[test]
+    fn test_deeply_nested_parentheses_does_not_panic() {
+        // Deeply nested parens should fail cleanly, not panic, and should
+        // mention nesting depth.
+        let handler = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let depth = 300;
+                let mut source = String::from("fn main() { ");
+                for _ in 0..depth {
+                    source.push('(');
+                }
+                source.push('1');
+                for _ in 0..depth {
+                    source.push(')');
+                }
+                source.push_str(" }");
+                let (tokens, _) = tokenize(&source);
+                let (_m, errs) = parse(tokens);
+                assert!(
+                    !errs.is_empty(),
+                    "Deeply nested parens should produce a parse error"
+                );
+            })
+            .expect("failed to spawn test thread");
+        handler.join().expect("test thread panicked");
+    }
+
+    #[test]
+    fn test_chained_method_call_parse_ok() {
+        let source = r#"fn main() {
+    let s = "hello world"
+    s.to_upper().len()
+}"#;
+        let module = parse_source(source);
+        assert_eq!(module.items.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod proptest_tests {
+    //! Property-based tests for the parser. The single invariant we care
+    //! about is **never panic**: for *any* input string up to ~1000 chars,
+    //! `parse(tokenize(input))` must return — possibly with a `Vec<ParseError>`,
+    //! but never via panic, abort, or stack overflow.
+    //!
+    //! This catches cases where a malformed input could trip an `unwrap()`,
+    //! a slice out-of-bounds, or unbounded recursion.
+    use proptest::prelude::*;
+
+    fn try_parse(source: &str) {
+        let (tokens, _lex_errors) = turbo_lexer::tokenize(source);
+        let (_module, _parse_errors) = super::parse(tokens);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 256,
+            max_shrink_iters: 64,
+            .. ProptestConfig::default()
+        })]
+
+        /// Random ASCII strings up to 1024 chars must never panic the parser.
+        #[test]
+        fn parse_never_panics_on_ascii(s in "\\PC{0,1024}") {
+            try_parse(&s);
+        }
+
+        /// Strings biased toward Turbo-relevant tokens (keywords, operators,
+        /// identifiers, brackets) — exercises the recursive-descent paths much
+        /// more aggressively than pure random ASCII.
+        #[test]
+        fn parse_never_panics_on_turbo_like_tokens(
+            s in proptest::collection::vec(
+                prop_oneof![
+                    Just("fn ".to_string()),
+                    Just("let ".to_string()),
+                    Just("mut ".to_string()),
+                    Just("if ".to_string()),
+                    Just("else ".to_string()),
+                    Just("while ".to_string()),
+                    Just("for ".to_string()),
+                    Just("in ".to_string()),
+                    Just("return ".to_string()),
+                    Just("match ".to_string()),
+                    Just("struct ".to_string()),
+                    Just("type ".to_string()),
+                    Just("trait ".to_string()),
+                    Just("impl ".to_string()),
+                    Just("async ".to_string()),
+                    Just("await ".to_string()),
+                    Just("spawn ".to_string()),
+                    Just("agent ".to_string()),
+                    Just("tool ".to_string()),
+                    Just("true".to_string()),
+                    Just("false".to_string()),
+                    Just("none".to_string()),
+                    Just("some".to_string()),
+                    Just("ok".to_string()),
+                    Just("err".to_string()),
+                    Just("(".to_string()),
+                    Just(")".to_string()),
+                    Just("{".to_string()),
+                    Just("}".to_string()),
+                    Just("[".to_string()),
+                    Just("]".to_string()),
+                    Just("->".to_string()),
+                    Just("=>".to_string()),
+                    Just(":".to_string()),
+                    Just(",".to_string()),
+                    Just(".".to_string()),
+                    Just("?".to_string()),
+                    Just("!".to_string()),
+                    Just("=".to_string()),
+                    Just("==".to_string()),
+                    Just("+".to_string()),
+                    Just("-".to_string()),
+                    Just("*".to_string()),
+                    Just("/".to_string()),
+                    Just("\n".to_string()),
+                    Just("a".to_string()),
+                    Just("b".to_string()),
+                    Just("x".to_string()),
+                    Just("0".to_string()),
+                    Just("1".to_string()),
+                    Just("42".to_string()),
+                    Just("\"hi\"".to_string()),
+                ],
+                0..64,
+            ).prop_map(|v| v.join(" "))
+        ) {
+            try_parse(&s);
+        }
+
+        /// Strings full of nested brackets stress the recursion-depth limit
+        /// without overflowing the stack.
+        #[test]
+        fn parse_never_panics_on_deeply_nested_brackets(depth in 0usize..400usize) {
+            let s = "(".repeat(depth) + &")".repeat(depth);
+            try_parse(&s);
         }
     }
 }

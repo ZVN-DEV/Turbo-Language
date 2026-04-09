@@ -1,0 +1,43 @@
+// Regression test for the COW-rewrite edge case flagged by both PM
+// reviewers on iter-2: `Stmt::Return(Some(v))` used to be hardcoded to
+// value context regardless of the enclosing function's return type. The
+// fix threads the enclosing fn's value context into `rewrite_stmt` so
+// `return push(arr, x)` behaves correctly in both unit and non-unit fns.
+//
+// Case (a) — VALUE-returning fn: `return push(arr, N)` must keep the
+// COW call in value position so the new array flows out as the return.
+// This is observable at the call site (array length and element).
+fn build_arr() -> [i64] {
+    let mut arr = [1, 2]
+    return push(arr, 3)
+}
+
+// Case (b) — VALUE-returning fn with a direct COW call return (no `let mut`
+// staging), to double-check the reviewer repro shape.
+fn extend(arr: [i64]) -> [i64] {
+    return push(arr, 99)
+}
+
+// Case (c) — UNIT-returning fn with `return push(arr, N)`. Pre-fix this
+// quietly discarded the new array. Post-fix the pass rewrites the
+// returned expression to `arr = push(arr, N)` (which evaluates to unit),
+// so the function compiles and runs. The mutation to `arr` is local and
+// unobservable from the caller because `arr` is a local, but we pin
+// that the file compiles and the subsequent caller behavior is sane.
+fn unit_return_with_cow() {
+    let mut arr = [10]
+    return push(arr, 20)
+}
+
+fn main() {
+    let a = build_arr()
+    print(len(a))
+    print(a[2])
+
+    let b = extend([7, 8])
+    print(len(b))
+    print(b[2])
+
+    unit_return_with_cow()
+    print(0)
+}

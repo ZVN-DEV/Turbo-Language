@@ -1,0 +1,16 @@
+// Parity: assert_eq / assert_ne success path.
+//
+// This test forces the lowered builtin (and the C runtime helper
+// rt_assert_eq_fail) to be referenced by the AOT object, but never
+// actually triggers the failure branch. The point is to confirm the
+// linker can resolve rt_assert_eq_fail at AOT link time — for a long
+// time the symbol was registered in the JIT but missing from the C
+// runtime, which broke any AOT build that used assert_eq/assert_ne.
+fn main() {
+    assert_eq(1 + 1, 2)
+    assert_eq("turbo", "turbo")
+    assert_eq(true, true)
+    assert_ne(1, 2)
+    assert_ne("a", "b")
+    print("ok")
+}

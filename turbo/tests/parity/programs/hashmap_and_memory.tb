@@ -1,0 +1,27 @@
+// Parity: rt_hashmap_* + memory-intensive rt_str_repeat.
+// These are all hand-mirrored between runtime.rs (JIT) and turbo_rt.c (AOT),
+// so a divergence in allocation, arena behavior, or hashmap semantics would
+// be caught here. Network-free and fully deterministic.
+fn main() {
+    // rt_hashmap_new, rt_hashmap_set, rt_hashmap_get,
+    // rt_hashmap_has, rt_hashmap_len, rt_hashmap_remove.
+    let m = hashmap()
+    hashmap_set(m, "lang", "Turbo")
+    hashmap_set(m, "fast", "yes")
+    hashmap_set(m, "safe", "also yes")
+    print(hashmap_get(m, "lang"))
+    print(hashmap_get(m, "fast"))
+    print(hashmap_has(m, "safe"))
+    print(hashmap_has(m, "missing"))
+    print(hashmap_len(m))
+    hashmap_remove(m, "fast")
+    print(hashmap_has(m, "fast"))
+    print(hashmap_len(m))
+
+    // rt_str_repeat with a large buffer stresses rt_alloc / arena behavior.
+    let big = repeat("x", 1024)
+    print(len(big))
+    let bigger = repeat("ab", 512)
+    print(len(bigger))
+    print(contains(bigger, "abab"))
+}

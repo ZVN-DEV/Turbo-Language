@@ -1,4 +1,10 @@
-# task-agent
+# task-agent — Roadmap Spec
+
+> **Status: aspirational.** This example is a design document, not runnable
+> code. It uses syntax and language features (typed `req.json<T>()`,
+> `async fn main() -> () ! Error`, route DSL, middleware, agent literals) that
+> are not yet implemented in the current Turbo compiler. Tracked under the P3
+> backlog.
 
 A complete Task Management API with an AI Agent assistant, built in Turbo.
 

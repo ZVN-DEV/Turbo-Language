@@ -1,3 +1,29 @@
+//! Turbo AST — the shared vocabulary for every stage of the compiler.
+//!
+//! This crate has no logic of its own; it defines the data types that the
+//! parser produces, the semantic checker reads, and the codegen consumes.
+//! Keeping the AST in its own crate prevents cyclic dependencies between
+//! `turbo-parser`, `turbo-sema`, and the codegen backends.
+//!
+//! # Pipeline position
+//!
+//! lexer → parser → **AST** → sema → codegen
+//!
+//! # Key types
+//!
+//! * [`Module`] — root of every parsed file; contains a `Vec<Spanned<Item>>`.
+//! * [`Item`] — top-level: `Function`, `Struct`, `Enum`, `Impl`, `Trait`,
+//!   `Agent`, `Import`, `Const`, `Extern`.
+//! * [`Expr`] — expression nodes (literals, calls, control flow, etc.).
+//! * [`Stmt`] — statement nodes (`let`, `return`, `defer`).
+//! * [`TypeExpr`] — type expressions written by the user.
+//! * [`Pattern`] — patterns used in `match` arms and destructuring.
+//! * [`Span`] / [`Spanned`] — byte-offset spans into the source.
+//! * [`errors::ErrorCode`] — the unique error-code enum (`E0001`-`E0515`).
+//!
+//! Re-exports of `Span`, `Spanned`, and `ErrorCode` make this crate the
+//! single source of truth for cross-crate diagnostics.
+
 pub mod errors;
 pub mod stdlib_modules;
 pub use errors::ErrorCode;
@@ -223,25 +249,25 @@ pub struct Param {
 /// Type expressions
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeExpr {
-    /// Named type: i32, f64, bool, str, ()
+    /// Named type: `i32`, `f64`, `bool`, `str`, `()`
     Named(String),
-    /// Unit type ()
+    /// Unit type `()`
     Unit,
-    /// Array type: [T]
+    /// Array type: `[T]`
     Array(Box<Spanned<TypeExpr>>),
-    /// Function type: fn(T, T) -> T
+    /// Function type: `fn(T, T) -> T`
     FnType {
         params: Vec<Spanned<TypeExpr>>,
         ret: Box<Spanned<TypeExpr>>,
     },
-    /// Result type: T ! E
+    /// Result type: `T ! E`
     Result {
         ok_type: Box<Spanned<TypeExpr>>,
         err_type: Box<Spanned<TypeExpr>>,
     },
-    /// Optional type: T?
+    /// Optional type: `T?`
     Optional(Box<Spanned<TypeExpr>>),
-    /// Future<T> — the result type of an async function / spawn
+    /// `Future<T>` — the result type of an async function / spawn
     Future(Box<Spanned<TypeExpr>>),
     /// Inferred type -- placeholder that sema resolves from calling context
     Inferred,
@@ -316,7 +342,7 @@ pub enum Expr {
         field: String,
         value: Box<Spanned<Expr>>,
     },
-    /// Index assignment: arr[index] = value
+    /// Index assignment: `arr[index] = value`
     IndexAssign {
         object: Box<Spanned<Expr>>,
         index: Box<Spanned<Expr>>,
@@ -340,7 +366,7 @@ pub enum Expr {
     },
     /// Array literal: [expr, expr, ...]
     ArrayLit(Vec<Spanned<Expr>>),
-    /// Index expression: expr[index]
+    /// Index expression: `expr[index]`
     Index {
         object: Box<Spanned<Expr>>,
         index: Box<Spanned<Expr>>,
@@ -412,7 +438,7 @@ pub enum Expr {
 /// Statements (things that don't produce values in statement position)
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    /// Let binding: let [mut] name [: type] = expr
+    /// Let binding: `let [mut] name [: type] = expr`
     Let {
         mutable: bool,
         name: String,
@@ -433,7 +459,7 @@ pub enum Stmt {
     },
 }
 
-/// A match arm: pattern [if guard] => body
+/// A match arm: `pattern [if guard] => body`
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub pattern: Spanned<Pattern>,

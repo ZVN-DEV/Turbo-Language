@@ -238,6 +238,25 @@ void rt_assert_fail(const char *msg) {
     exit(1);
 }
 
+/* assert_eq / assert_ne failure helper.
+ * kind: 0 = assert_eq, 1 = assert_ne
+ * actual / expected are NUL-terminated stringified values.
+ * Mirrors rt_assert_eq_fail in src/runtime.rs so JIT and AOT print
+ * identical diagnostics on failure. */
+void rt_assert_eq_fail(long long kind, const char *actual, const char *expected) {
+    const char *actual_str = actual ? actual : "<null>";
+    const char *expected_str = expected ? expected : "<null>";
+    if (kind == 0) {
+        fprintf(stderr, "assertion failed: assert_eq(%s, %s)\n", actual_str, expected_str);
+        fprintf(stderr, "  left:  %s\n", actual_str);
+        fprintf(stderr, "  right: %s\n", expected_str);
+    } else {
+        fprintf(stderr, "assertion failed: assert_ne(%s, %s)\n", actual_str, expected_str);
+        fprintf(stderr, "  both values are: %s\n", actual_str);
+    }
+    exit(1);
+}
+
 void rt_div_by_zero(void) {
     fprintf(stderr, "runtime error: division by zero\n");
     exit(1);
@@ -1151,6 +1170,92 @@ const char *rt_agent_ask(const char *agent_ptr, const char *prompt) {
     }
 
     return strdup("error: unsupported provider");
+}
+
+/* agent.ask_structured(prompt) — append the agent's output type/schema to
+ * the prompt and dispatch through rt_agent_ask. Mirrors the Rust JIT version
+ * in src/runtime.rs so JIT and AOT produce identical responses.
+ *
+ * The agent struct layout (see rt_agent_ask above):
+ *   +0  model      char*
+ *   +8  system     char*
+ *   +16 tools      char* (array header ptr)
+ *   +24 resources  char* (array header ptr)
+ *   +32 prompts    char* (array header ptr)
+ *   +40 output     char* (output type name)
+ *   +48 schema     char* (output schema JSON)
+ */
+const char *rt_agent_ask_structured(const char *agent_ptr, const char *prompt) {
+    if (!agent_ptr) return strdup("error: null agent");
+    const char *output_type = *(const char **)(agent_ptr + 40);
+    const char *output_schema = *(const char **)(agent_ptr + 48);
+    if (!output_type) output_type = "";
+    if (!output_schema) output_schema = "";
+    const char *user_prompt = prompt ? prompt : "";
+    size_t cap = strlen(user_prompt) + strlen(output_type) + strlen(output_schema) + 96;
+    char *merged = (char *)turbo_alloc(cap);
+    snprintf(
+        merged,
+        cap,
+        "%s\nReturn only valid JSON for output type `%s` matching this schema:\n%s",
+        user_prompt,
+        output_type,
+        output_schema
+    );
+    return rt_agent_ask(agent_ptr, merged);
+}
+
+/* agent.stream(prompt) — call the agent and split its response on
+ * whitespace, returning a turbo array of string chunks. Mirrors the Rust
+ * JIT version in src/runtime.rs.
+ *
+ * The returned pointer is a turbo array data pointer (the +8-byte payload
+ * past the refcount header). The first i64 slot at offset 0 is the length;
+ * elements live at offsets 8, 16, 24, ... and are stored as i64-cast
+ * pointers to NUL-terminated strings, matching rt_array_alloc's layout. */
+/* PARITY-NOTE (rt_agent_stream): the C side uses ASCII whitespace
+ * (' \t\n\r\f\v') while the Rust side at runtime.rs:rt_agent_stream
+ * uses split_whitespace() which is Unicode White_Space. Inputs
+ * containing U+00A0 NBSP, U+2028 LSEP, etc. will tokenize differently
+ * between JIT and AOT. The current parity test uses ASCII-only input
+ * so this divergence is not exercised. Fix: either align Rust to
+ * ASCII or implement a Unicode classifier in C — TODO(P3).
+ */
+void *rt_agent_stream(const char *agent_ptr, const char *prompt) {
+    const char *answer = rt_agent_ask(agent_ptr, prompt);
+    if (!answer) answer = "";
+
+    /* Count whitespace-separated tokens (matches Rust split_whitespace). */
+    long long count = 0;
+    {
+        const char *p = answer;
+        while (*p) {
+            while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '\f' || *p == '\v') p++;
+            if (!*p) break;
+            count++;
+            while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r' && *p != '\f' && *p != '\v') p++;
+        }
+    }
+
+    void *arr = rt_array_alloc(count);
+    if (count == 0) return arr;
+
+    long long *slots = (long long *)arr;
+    long long idx = 0;
+    const char *p = answer;
+    while (*p && idx < count) {
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == '\f' || *p == '\v') p++;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r' && *p != '\f' && *p != '\v') p++;
+        size_t tok_len = (size_t)(p - start);
+        char *tok = (char *)turbo_alloc(tok_len + 1);
+        memcpy(tok, start, tok_len);
+        tok[tok_len] = '\0';
+        slots[1 + idx] = (long long)(size_t)tok;
+        idx++;
+    }
+    return arr;
 }
 
 /* json_get(json, key) -> str — extract top-level key value from JSON string */

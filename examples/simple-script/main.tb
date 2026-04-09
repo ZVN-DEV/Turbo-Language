@@ -23,8 +23,7 @@ fn count_lines(text: str) -> i64 {
 }
 
 fn clean_word(w: str) -> str {
-    let trimmed = w |> trim |> lower
-    replace(replace(replace(replace(trimmed, ",", ""), ".", ""), "!", ""), "?", "")
+    replace(replace(replace(replace(lower(trim(w)), ",", ""), ".", ""), "!", ""), "?", "")
 }
 
 fn find_longest_word(text: str) -> str {
@@ -194,11 +193,15 @@ fn main() {
     let doubled = nums.map(|x: i64| -> i64 { x * 2 })
     let big = nums.filter(|x: i64| -> bool { x > 4 })
     let sum = reduce(nums, 0, |acc: i64, x: i64| -> i64 { acc + x })
-    print("  Numbers:  " + join(["3","1","4","1","5","9","2","6","5","3"], ", "))
-    print("  Sum:      {sum}")
-    print("  Doubled:  " + join(["6","2","8","2","10","18","4","12","10","6"], ", "))
-    print("  Filtered (>4): " + join(["5","9","6","5"], ", "))
-    print("  Count:    {nums.len()}")
+    let doubled_len = doubled.len()
+    let big_len = big.len()
+    print("  Numbers:        " + join(["3","1","4","1","5","9","2","6","5","3"], ", "))
+    print("  Sum:            {sum}")
+    print("  Doubled:        " + join(["6","2","8","2","10","18","4","12","10","6"], ", "))
+    print("  Doubled count:  {doubled_len}")
+    print("  Filtered (>4):  " + join(["5","9","6","5"], ", "))
+    print("  Filtered count: {big_len}")
+    print("  Total count:    {nums.len()}")
     print("")
 
     print(repeat("=", 40))

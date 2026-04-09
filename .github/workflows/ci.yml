@@ -43,6 +43,31 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --manifest-path turbo/Cargo.toml --workspace --exclude turbo-codegen-llvm --all-targets -- -D warnings
 
+  doc:
+    name: Rustdoc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            turbo/target
+          key: ${{ runner.os }}-cargo-doc-${{ hashFiles('turbo/Cargo.lock') }}
+
+      # Build all crate docs with warnings as errors. Catches broken
+      # intra-doc links, invalid HTML in doc comments, and busted Rust
+      # examples in doc-tests. The LLVM backend is excluded to keep this
+      # job hermetic — it has its own dedicated job below.
+      - name: cargo doc
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+
   test:
     name: Unit tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -182,6 +207,95 @@ jobs:
       - name: Skip notice
         if: steps.filter.outputs.llvm != 'true' && github.event_name != 'push'
         run: echo "No LLVM-related files changed — skipping build and test."
+
+  audit:
+    name: Cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned, prebuilt cargo-audit binary — a couple of seconds to install
+      # and decoupled from the project lockfile so the cache doesn't bust on
+      # every unrelated PR. Bump the version deliberately.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.21.2
+
+      - name: Run cargo audit
+        run: cargo audit --deny warnings
+        working-directory: turbo
+
+  lint-error-codes:
+    name: Lint error codes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run check_error_codes.sh
+        run: ./scripts/check_error_codes.sh
+
+  reproducibility:
+    name: Reproducibility (advisory, soft-fail)
+    runs-on: ubuntu-latest
+    # Cargo/rustc reproducibility is brittle even on a single runner —
+    # SOURCE_DATE_EPOCH and `--remap-path-prefix` cover the obvious
+    # variation but a fresh `cargo clean` rebuild can still differ on
+    # debuginfo metadata. Mark soft-fail so a regression here doesn't
+    # block PRs while the root cause is being investigated. The job
+    # name carries `(advisory, soft-fail)` so reviewers can distinguish
+    # an intentional yellow-X from a real regression.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Set SOURCE_DATE_EPOCH from latest git commit
+        run: |
+          SDE=$(git log -1 --pretty=%ct)
+          echo "SOURCE_DATE_EPOCH=${SDE}" >> "$GITHUB_ENV"
+          echo "Using SOURCE_DATE_EPOCH=${SDE}"
+
+      - name: Build #1
+        env:
+          # Strip debuginfo and remap absolute paths to a stable prefix
+          # so the resulting binary doesn't bake in /home/runner/... or
+          # the timestamp of the build host. These are the two most
+          # common sources of build non-determinism.
+          RUSTFLAGS: "-C debuginfo=0 --remap-path-prefix=${{ github.workspace }}=/build"
+        run: |
+          cargo clean --manifest-path turbo/Cargo.toml
+          cargo build --release --manifest-path turbo/Cargo.toml -p turbo-cli --offline || \
+            cargo build --release --manifest-path turbo/Cargo.toml -p turbo-cli
+          sha256sum turbo/target/release/turbolang > hash1.txt
+          cat hash1.txt
+
+      - name: Build #2
+        env:
+          RUSTFLAGS: "-C debuginfo=0 --remap-path-prefix=${{ github.workspace }}=/build"
+        run: |
+          cargo clean --manifest-path turbo/Cargo.toml
+          cargo build --release --manifest-path turbo/Cargo.toml -p turbo-cli --offline || \
+            cargo build --release --manifest-path turbo/Cargo.toml -p turbo-cli
+          sha256sum turbo/target/release/turbolang > hash2.txt
+          cat hash2.txt
+
+      - name: Compare hashes
+        run: |
+          # Compare just the hash columns; sha256sum prints a path which
+          # we don't care about for byte-equality.
+          h1=$(awk '{print $1}' hash1.txt)
+          h2=$(awk '{print $1}' hash2.txt)
+          echo "build1: ${h1}"
+          echo "build2: ${h2}"
+          if [ "${h1}" != "${h2}" ]; then
+            echo "::warning ::turbolang binary is not bit-for-bit reproducible across two clean builds"
+            diff hash1.txt hash2.txt || true
+            exit 1
+          fi
+          echo "OK — both builds produced an identical binary"
 
   fuzz-smoke:
     name: Fuzz smoke (codegen)

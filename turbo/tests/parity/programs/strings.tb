@@ -1,0 +1,10 @@
+// Parity: string operations.
+fn main() {
+    let greeting = "hello"
+    let name = "world"
+    print(greeting)
+    print(name)
+    print(len(greeting))
+    print(upper(greeting))
+    print(contains(greeting, "ell"))
+}

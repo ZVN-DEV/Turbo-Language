@@ -6,7 +6,7 @@
 /// - E0200-E0299: Pattern/match errors (exhaustiveness, unreachable, guards)
 /// - E0300-E0399: Name resolution (undefined var/fn/type, duplicates, scope)
 /// - E0400-E0499: Codegen errors
-/// - E0500-E0599: Misc (wrong arg count, immutability, constraints, etc.)
+/// - E0500-E0599: Misc (immutability, unused, constraints, etc.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
     // ── Parse errors (E0001-E0099) ──────────────────────────────────
@@ -16,16 +16,8 @@ pub enum ErrorCode {
     E0002,
     /// Maximum nesting depth exceeded
     E0003,
-    /// Invalid import syntax
-    E0004,
-    /// Invalid interpolation syntax
-    E0005,
-    /// Unexpected end of file
-    E0006,
     /// Invalid attribute
     E0007,
-    /// Invalid expression
-    E0008,
 
     // ── Type errors (E0100-E0199) ───────────────────────────────────
     /// Type mismatch (general)
@@ -112,10 +104,6 @@ pub enum ErrorCode {
     E0201,
     /// Match guard must be bool
     E0202,
-    /// Variant destructure binding count mismatch
-    E0203,
-    /// Enum variant requires arguments
-    E0204,
 
     // ── Name resolution errors (E0300-E0399) ────────────────────────
     /// Undefined variable
@@ -158,8 +146,6 @@ pub enum ErrorCode {
     E0318,
     /// Unknown derive trait
     E0319,
-    /// Impl block for undefined type
-    E0320,
     /// Undefined tool function in agent
     E0321,
     /// Function in agent is not a tool fn
@@ -186,8 +172,6 @@ pub enum ErrorCode {
     E0406,
 
     // ── Misc errors (E0500-E0599) ───────────────────────────────────
-    /// Wrong number of arguments
-    E0500,
     /// Cannot assign to immutable variable
     E0501,
     /// Cannot assign to immutable field
@@ -218,10 +202,6 @@ pub enum ErrorCode {
     E0514,
     /// Unused variable
     E0515,
-    /// Unknown standard library module
-    E0520,
-    /// Name not found in standard library module
-    E0521,
 }
 
 impl ErrorCode {
@@ -232,11 +212,7 @@ impl ErrorCode {
             ErrorCode::E0001 => "E0001",
             ErrorCode::E0002 => "E0002",
             ErrorCode::E0003 => "E0003",
-            ErrorCode::E0004 => "E0004",
-            ErrorCode::E0005 => "E0005",
-            ErrorCode::E0006 => "E0006",
             ErrorCode::E0007 => "E0007",
-            ErrorCode::E0008 => "E0008",
             // Type
             ErrorCode::E0100 => "E0100",
             ErrorCode::E0101 => "E0101",
@@ -280,8 +256,6 @@ impl ErrorCode {
             ErrorCode::E0200 => "E0200",
             ErrorCode::E0201 => "E0201",
             ErrorCode::E0202 => "E0202",
-            ErrorCode::E0203 => "E0203",
-            ErrorCode::E0204 => "E0204",
             // Name resolution
             ErrorCode::E0300 => "E0300",
             ErrorCode::E0301 => "E0301",
@@ -303,7 +277,6 @@ impl ErrorCode {
             ErrorCode::E0317 => "E0317",
             ErrorCode::E0318 => "E0318",
             ErrorCode::E0319 => "E0319",
-            ErrorCode::E0320 => "E0320",
             ErrorCode::E0321 => "E0321",
             ErrorCode::E0322 => "E0322",
             ErrorCode::E0323 => "E0323",
@@ -317,7 +290,6 @@ impl ErrorCode {
             ErrorCode::E0405 => "E0405",
             ErrorCode::E0406 => "E0406",
             // Misc
-            ErrorCode::E0500 => "E0500",
             ErrorCode::E0501 => "E0501",
             ErrorCode::E0502 => "E0502",
             ErrorCode::E0503 => "E0503",
@@ -333,8 +305,6 @@ impl ErrorCode {
             ErrorCode::E0513 => "E0513",
             ErrorCode::E0514 => "E0514",
             ErrorCode::E0515 => "E0515",
-            ErrorCode::E0520 => "E0520",
-            ErrorCode::E0521 => "E0521",
         }
     }
 
@@ -345,11 +315,7 @@ impl ErrorCode {
             ErrorCode::E0001 => "unexpected token during parsing",
             ErrorCode::E0002 => "expected identifier",
             ErrorCode::E0003 => "maximum nesting depth exceeded",
-            ErrorCode::E0004 => "invalid import syntax",
-            ErrorCode::E0005 => "invalid string interpolation syntax",
-            ErrorCode::E0006 => "unexpected end of file",
             ErrorCode::E0007 => "invalid attribute",
-            ErrorCode::E0008 => "invalid expression",
             // Type
             ErrorCode::E0100 => "type mismatch",
             ErrorCode::E0101 => "cannot perform arithmetic on non-numeric type",
@@ -393,8 +359,6 @@ impl ErrorCode {
             ErrorCode::E0200 => "match expression is not exhaustive",
             ErrorCode::E0201 => "match expression has no arms",
             ErrorCode::E0202 => "match guard must be `bool`",
-            ErrorCode::E0203 => "variant destructure binding count does not match field count",
-            ErrorCode::E0204 => "enum variant requires arguments but none were provided",
             // Name resolution
             ErrorCode::E0300 => "undefined variable",
             ErrorCode::E0301 => "undefined function",
@@ -416,7 +380,6 @@ impl ErrorCode {
             ErrorCode::E0317 => "no such method found on type",
             ErrorCode::E0318 => "missing field in struct literal",
             ErrorCode::E0319 => "unknown derive trait",
-            ErrorCode::E0320 => "impl block for undefined type",
             ErrorCode::E0321 => "undefined tool function referenced in agent",
             ErrorCode::E0322 => "function referenced in agent is not a `tool fn`",
             ErrorCode::E0323 => "unknown type in trait method signature",
@@ -430,7 +393,6 @@ impl ErrorCode {
             ErrorCode::E0405 => "Cranelift backend error",
             ErrorCode::E0406 => "missing function definition",
             // Misc
-            ErrorCode::E0500 => "wrong number of arguments",
             ErrorCode::E0501 => "cannot assign to immutable variable",
             ErrorCode::E0502 => "cannot assign to field of immutable variable",
             ErrorCode::E0503 => "cannot assign to index of immutable variable",
@@ -446,8 +408,6 @@ impl ErrorCode {
             ErrorCode::E0513 => "builtin function argument count error",
             ErrorCode::E0514 => "unused return value of pure function",
             ErrorCode::E0515 => "unused variable",
-            ErrorCode::E0520 => "unknown standard library module",
-            ErrorCode::E0521 => "name not exported by standard library module",
         }
     }
 
@@ -463,11 +423,7 @@ impl ErrorCode {
             ErrorCode::E0001,
             ErrorCode::E0002,
             ErrorCode::E0003,
-            ErrorCode::E0004,
-            ErrorCode::E0005,
-            ErrorCode::E0006,
             ErrorCode::E0007,
-            ErrorCode::E0008,
             ErrorCode::E0100,
             ErrorCode::E0101,
             ErrorCode::E0102,
@@ -509,8 +465,6 @@ impl ErrorCode {
             ErrorCode::E0200,
             ErrorCode::E0201,
             ErrorCode::E0202,
-            ErrorCode::E0203,
-            ErrorCode::E0204,
             ErrorCode::E0300,
             ErrorCode::E0301,
             ErrorCode::E0302,
@@ -531,7 +485,6 @@ impl ErrorCode {
             ErrorCode::E0317,
             ErrorCode::E0318,
             ErrorCode::E0319,
-            ErrorCode::E0320,
             ErrorCode::E0321,
             ErrorCode::E0322,
             ErrorCode::E0323,
@@ -543,7 +496,6 @@ impl ErrorCode {
             ErrorCode::E0404,
             ErrorCode::E0405,
             ErrorCode::E0406,
-            ErrorCode::E0500,
             ErrorCode::E0501,
             ErrorCode::E0502,
             ErrorCode::E0503,
@@ -559,8 +511,6 @@ impl ErrorCode {
             ErrorCode::E0513,
             ErrorCode::E0514,
             ErrorCode::E0515,
-            ErrorCode::E0520,
-            ErrorCode::E0521,
         ]
     }
 }

@@ -1,0 +1,18 @@
+// Parity: rt_json_* runtime surface — hand-mirrored in runtime.rs + turbo_rt.c.
+// Exercises rt_json_get (parse/lookup) and rt_json_stringify (serialize)
+// in both directions: parse an object literal, look up its fields, and
+// construct a JSON object from scratch and look up a field from that.
+fn main() {
+    let raw = "\{\"name\": \"Turbo\", \"version\": \"1.0\", \"fast\": true\}"
+    print(json_get(raw, "name"))
+    print(json_get(raw, "version"))
+    print(json_get(raw, "fast"))
+
+    let built = json_stringify("lang", "Turbo")
+    print(built)
+    print(json_get(built, "lang"))
+
+    // Round-trip: stringify then parse the result back.
+    let built2 = json_stringify("greeting", "hello")
+    print(json_get(built2, "greeting"))
+}

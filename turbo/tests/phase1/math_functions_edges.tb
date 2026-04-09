@@ -1,0 +1,18 @@
+// Math built-in edge cases: sqrt of 0, perfect squares, equal min/max, pow.
+fn main() {
+    // sqrt of 0 and perfect squares.
+    print(sqrt(0.0))
+    print(sqrt(4.0))
+    print(sqrt(144.0))
+
+    // abs of large negative.
+    print(abs(-9223372036854775807))
+    print(abs(0))
+
+    // min/max with equal inputs.
+    print(min(5, 5))
+    print(max(7, 7))
+
+    // 2^10 via pow (integer signature).
+    print(pow(2, 10))
+}

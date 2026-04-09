@@ -20,6 +20,13 @@ default-members = [
 ]
 resolver = "2"
 
+# Shared package metadata. Member crates opt in with
+# `rust-version.workspace = true` so the MSRV is a single source of truth and
+# is actually enforced by `cargo build` / clippy (which reads it via the
+# `msrv` field in clippy.toml plus the package rust-version).
+[workspace.package]
+rust-version = "1.75"
+
 [workspace.dependencies]
 logos = "0.14"
 cranelift = "0.113"

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Pre-commit hook for the Turbo compiler.
+#
+# Enforces the minimum quality gate every commit must pass:
+#   1. `cargo fmt --check` — no formatting drift
+#   2. `cargo clippy -D warnings` on the workspace — no new lints
+#
+# Install with:
+#
+#   git config core.hooksPath turbo/.git-hooks
+#
+set -euo pipefail
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+MANIFEST="$REPO_ROOT/turbo/Cargo.toml"
+
+if [ ! -f "$MANIFEST" ]; then
+    echo "pre-commit: could not find $MANIFEST; skipping hook" >&2
+    exit 0
+fi
+
+printf '\033[1;36m[pre-commit]\033[0m cargo fmt --check ...\n'
+if ! cargo fmt --manifest-path "$MANIFEST" --all -- --check; then
+    printf '\n\033[1;31m[pre-commit] formatting check failed.\033[0m\n'
+    printf '  Run this to fix:\n'
+    printf '    cargo fmt --manifest-path %s --all\n' "$MANIFEST"
+    exit 1
+fi
+
+printf '\033[1;36m[pre-commit]\033[0m cargo clippy -D warnings ...\n'
+if ! cargo clippy \
+    --manifest-path "$MANIFEST" \
+    --workspace \
+    --exclude turbo-codegen-llvm \
+    --all-targets \
+    -- -D warnings; then
+    printf '\n\033[1;31m[pre-commit] clippy failed.\033[0m\n'
+    printf '  Fix the reported warnings, then re-run:\n'
+    printf '    cargo clippy --manifest-path %s --workspace \\\n' "$MANIFEST"
+    printf '      --exclude turbo-codegen-llvm --all-targets -- -D warnings\n'
+    exit 1
+fi
+
+printf '\033[1;32m[pre-commit] OK\033[0m\n'

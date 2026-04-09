@@ -125,6 +125,41 @@ jobs:
           echo "Generated checksums:"
           cat checksums.txt
 
+      # Detached GPG signature for `checksums.txt`. Guarded so that forks
+      # without the signing secrets simply skip this step instead of failing
+      # the release. Verification path is documented in CONTRIBUTING.md
+      # under "Release Verification".
+      - name: Sign checksums.txt with release key
+        if: ${{ secrets.RELEASE_GPG_PRIVATE_KEY != '' }}
+        env:
+          RELEASE_GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+          RELEASE_GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+
+          # Import the private key into a scratch GnuPG home so we don't
+          # leak state into the runner's default home, and so the key
+          # material is wiped at the end of the job.
+          GNUPGHOME="$(mktemp -d)"
+          export GNUPGHOME
+          chmod 700 "${GNUPGHOME}"
+
+          printf '%s' "${RELEASE_GPG_PRIVATE_KEY}" | gpg --batch --import
+
+          # Use loopback pinentry so the passphrase env var is honored
+          # in headless CI. `--yes` makes the sign step non-interactive
+          # if a stale signature already exists.
+          gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "${RELEASE_GPG_PASSPHRASE}" \
+              --armor --detach-sign \
+              --output checksums.txt.sig \
+              checksums.txt
+
+          # Sanity-check the signature we just produced.
+          gpg --verify checksums.txt.sig checksums.txt
+
+          echo "Signed checksums.txt -> checksums.txt.sig"
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
@@ -133,5 +168,115 @@ jobs:
             turbolang-x86_64-apple-darwin/*.tar.gz
             turbolang-x86_64-unknown-linux-gnu/*.tar.gz
             checksums.txt
+            checksums.txt.sig
           draft: false
           prerelease: false
+          fail_on_unmatched_files: false
+
+      # Push an updated Homebrew formula to the ZVN-DEV/homebrew-turbo tap.
+      #
+      # Requires a repository secret named HOMEBREW_TAP_TOKEN — a fine-grained
+      # PAT (or GitHub App installation token) with `contents: write` on the
+      # ZVN-DEV/homebrew-turbo repository. If the secret is missing the step is
+      # skipped so the release itself never fails on a missing token.
+      - name: Update Homebrew tap
+        if: ${{ success() && secrets.HOMEBREW_TAP_TOKEN != '' }}
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f checksums.txt ]; then
+            echo "error: checksums.txt missing — Create Release step did not complete" >&2
+            exit 1
+          fi
+
+          # Strip leading "v" so the formula `version` field stays semver-clean.
+          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${GITHUB_REF_NAME}"
+
+          # Pull each platform's SHA256 out of the just-generated checksums.txt.
+          # Anchor to the exact filename column so a future `foo.tar.gz.sig`
+          # style entry can't substring-match the wrong line.
+          sha_for() {
+            local file="$1"
+            local sha
+            sha=$(awk -v f="${file}" '$2==f {print $1; exit}' checksums.txt)
+            if [ -z "${sha}" ]; then
+              echo "error: missing checksum for ${file} in checksums.txt" >&2
+              exit 1
+            fi
+            echo "${sha}"
+          }
+
+          ARM64_TAR="turbolang-${TAG}-aarch64-apple-darwin.tar.gz"
+          X86_64_DARWIN_TAR="turbolang-${TAG}-x86_64-apple-darwin.tar.gz"
+          X86_64_LINUX_TAR="turbolang-${TAG}-x86_64-unknown-linux-gnu.tar.gz"
+
+          ARM64_SHA=$(sha_for "${ARM64_TAR}")
+          X86_64_DARWIN_SHA=$(sha_for "${X86_64_DARWIN_TAR}")
+          X86_64_LINUX_SHA=$(sha_for "${X86_64_LINUX_TAR}")
+
+          BASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+
+          # Clone the tap, regenerate the formula, push back via the PAT.
+          TAP_DIR="$(mktemp -d)"
+          git clone --depth=1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/ZVN-DEV/homebrew-turbo.git" \
+            "${TAP_DIR}"
+
+          mkdir -p "${TAP_DIR}/Formula"
+          # The YAML `run: |` block already dedents every line by the indent
+          # of the first content line, so the heredoc body below lands in the
+          # bash script with `class TurboLang < Formula` as a flush-left line.
+          cat > "${TAP_DIR}/Formula/turbo-lang.rb" <<EOF
+          class TurboLang < Formula
+            desc "Compiled, type-safe language with TypeScript DX and Rust performance"
+            homepage "https://turbolang.dev"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "${BASE_URL}/${ARM64_TAR}"
+                sha256 "${ARM64_SHA}"
+              end
+              on_intel do
+                url "${BASE_URL}/${X86_64_DARWIN_TAR}"
+                sha256 "${X86_64_DARWIN_SHA}"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "${BASE_URL}/${X86_64_LINUX_TAR}"
+                sha256 "${X86_64_LINUX_SHA}"
+              end
+            end
+
+            def install
+              bin.install "turbolang"
+              bin.install "turbo-lsp" if File.exist?("turbo-lsp")
+            end
+
+            test do
+              assert_match "turbolang ${VERSION}", shell_output("#{bin}/turbolang --version")
+            end
+          end
+          EOF
+
+          cd "${TAP_DIR}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/turbo-lang.rb
+
+          # Idempotent: if nothing changed (re-running the workflow), exit cleanly.
+          if git diff --cached --quiet; then
+            echo "Homebrew tap already up to date for ${TAG}; nothing to push."
+            exit 0
+          fi
+
+          git commit -m "turbo-lang ${VERSION}"
+          git push origin HEAD

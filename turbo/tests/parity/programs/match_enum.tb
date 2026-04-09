@@ -1,0 +1,20 @@
+// Parity: enum match.
+type Color {
+    Red,
+    Green,
+    Blue,
+}
+
+fn name(c: Color) -> str {
+    match c {
+        Red => "red"
+        Green => "green"
+        Blue => "blue"
+    }
+}
+
+fn main() {
+    print(name(Color.Red))
+    print(name(Color.Green))
+    print(name(Color.Blue))
+}

@@ -1,0 +1,14 @@
+// Parity: arrays + for-in.
+fn main() {
+    let mut xs = [1, 2, 3]
+    push(xs, 4)
+    push(xs, 5)
+    print(len(xs))
+    let mut sum = 0
+    for x in xs {
+        sum = sum + x
+    }
+    print(sum)
+    print(xs[0])
+    print(xs[4])
+}

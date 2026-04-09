@@ -1,0 +1,17 @@
+// Exercise integer arithmetic near the signed 64-bit boundary.
+fn main() {
+    let hi = 9223372036854775807  // i64::MAX
+    let lo = -9223372036854775807  // one above i64::MIN (MIN itself doesn't lex)
+    print(hi)
+    print(lo)
+
+    // Division and modulus edge cases that are well-defined.
+    print(10 / 3)
+    print(10 % 3)
+    print(-10 / 3)
+    print(-10 % 3)
+
+    // Zero multiplication.
+    print(hi * 0)
+    print(lo * 0)
+}

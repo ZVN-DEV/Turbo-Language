@@ -1,3 +1,32 @@
+//! Turbo lexer — the first stage of the compiler pipeline.
+//!
+//! Built on the [`logos`] crate, this crate turns a `.tb` source string into
+//! a stream of [`Spanned<Token>`]s that the parser consumes. The lexer is
+//! whitespace-insensitive (newlines/semicolons are emitted as tokens and the
+//! parser filters them) and supports doc comments (`///`), block comments
+//! (`/* */`), single- and triple-quoted strings, integer/float literals
+//! (with `_` separators), identifiers, keywords, and the full operator set.
+//!
+//! # Pipeline position
+//!
+//! `lexer` → parser → sema → codegen
+//!
+//! # Public entry points
+//!
+//! * [`tokenize`] — convert a source string into `(Vec<Spanned<Token>>, Vec<Span>)`
+//!   where the second vector contains spans of unrecognized characters
+//!   (lexer errors).
+//! * [`Token`] — the token enum.
+//! * [`Spanned`] — wraps any token with its byte-range span.
+//!
+//! # Example
+//!
+//! ```
+//! let (tokens, errors) = turbo_lexer::tokenize("fn main() { 42 }");
+//! assert!(errors.is_empty());
+//! assert!(!tokens.is_empty());
+//! ```
+
 use logos::Logos;
 use std::fmt;
 

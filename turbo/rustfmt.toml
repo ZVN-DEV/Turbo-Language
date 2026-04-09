@@ -1,0 +1,10 @@
+# Pinned formatting rules for the Turbo workspace. Enforced by cargo fmt --check in CI.
+edition = "2021"
+max_width = 100
+use_small_heuristics = "Default"
+
+# Note: `imports_granularity` and `group_imports` would also be desirable but
+# they remain unstable in rustfmt 1.8 (Rust 1.89), so we leave them off here so
+# `cargo fmt --check` keeps working on the stable toolchain. Add them via a
+# rustfmt.nightly.toml override or behind `unstable_features = true` if the
+# project ever moves to nightly fmt.
