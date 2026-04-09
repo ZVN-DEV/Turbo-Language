@@ -1,0 +1,24 @@
+// Library file for transitive_fn_main.tb.
+//
+// `greet` is the only thing the user explicitly imports, but it depends
+// on `shout` (which depends on `prefix`) and takes a `Person` struct,
+// which is never mentioned in the user's import clause. All three should
+// be pulled in automatically by transitive-import resolution.
+
+struct Person {
+    name: str,
+}
+
+fn prefix() -> str {
+    ">> "
+}
+
+fn shout(s: str) -> str {
+    let p = prefix()
+    let loud = upper(s)
+    p + loud
+}
+
+fn greet(p: Person) -> str {
+    shout(p.name)
+}

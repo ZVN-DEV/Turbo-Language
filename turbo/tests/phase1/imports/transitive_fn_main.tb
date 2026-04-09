@@ -1,0 +1,18 @@
+// Issue: `fn` → `fn` transitive imports.
+//
+// Before the fix, this test required the user to list every helper by
+// name in the import clause: `import { greet, shout, prefix, Person }
+// from "./transitive_fn_lib"`. After the fix, naming only the entry
+// point `greet` is enough — the import resolver walks `greet`'s body
+// and type signature and pulls in `shout`, `prefix`, and `Person`
+// automatically.
+//
+// This is the direct sequel to Issue #4 (which only handled the
+// `agent → tool fn` case).
+
+import { greet } from "./transitive_fn_lib"
+
+fn main() {
+    let p = Person { name: "carl" }
+    print(greet(p))
+}

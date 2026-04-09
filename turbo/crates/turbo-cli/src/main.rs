@@ -28,7 +28,7 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 use clap::{Parser, Subcommand};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use turbo_ast::{ErrorCode, Item, Module};
+use turbo_ast::{ErrorCode, Expr, InterpolPart, Item, Module, Stmt, TypeExpr};
 
 mod formatter;
 mod playground;
@@ -2437,6 +2437,286 @@ fn resolve_import_path(base_dir: &Path, import_path: &str) -> PathBuf {
     relative_path
 }
 
+/// Walk an expression and collect every identifier / type name / struct name
+/// it references. Used by `resolve_imports()` to pull in transitively
+/// referenced top-level items from the same imported module (so users don't
+/// have to name every helper in their `import { ... }` clause).
+fn collect_names_in_expr(e: &Expr, out: &mut HashSet<String>) {
+    match e {
+        Expr::Ident(name) => {
+            out.insert(name.clone());
+        }
+        Expr::StructLit { name, fields } => {
+            out.insert(name.clone());
+            for (_, v) in fields {
+                collect_names_in_expr(&v.node, out);
+            }
+        }
+        Expr::EnumVariant { enum_name, .. } => {
+            out.insert(enum_name.clone());
+        }
+        Expr::Call { callee, args } => {
+            collect_names_in_expr(&callee.node, out);
+            for a in args {
+                collect_names_in_expr(&a.node, out);
+            }
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            collect_names_in_expr(&left.node, out);
+            collect_names_in_expr(&right.node, out);
+        }
+        Expr::UnaryOp { expr, .. } => collect_names_in_expr(&expr.node, out),
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            collect_names_in_expr(&condition.node, out);
+            collect_names_in_expr(&then_branch.node, out);
+            if let Some(e) = else_branch {
+                collect_names_in_expr(&e.node, out);
+            }
+        }
+        Expr::Block { stmts, tail_expr } => {
+            for s in stmts {
+                collect_names_in_stmt(&s.node, out);
+            }
+            if let Some(t) = tail_expr {
+                collect_names_in_expr(&t.node, out);
+            }
+        }
+        Expr::Assign { value, .. } => collect_names_in_expr(&value.node, out),
+        Expr::CompoundAssign { value, .. } => collect_names_in_expr(&value.node, out),
+        Expr::FieldAssign { object, value, .. } => {
+            collect_names_in_expr(&object.node, out);
+            collect_names_in_expr(&value.node, out);
+        }
+        Expr::IndexAssign {
+            object,
+            index,
+            value,
+        } => {
+            collect_names_in_expr(&object.node, out);
+            collect_names_in_expr(&index.node, out);
+            collect_names_in_expr(&value.node, out);
+        }
+        Expr::While { condition, body } => {
+            collect_names_in_expr(&condition.node, out);
+            collect_names_in_expr(&body.node, out);
+        }
+        Expr::ForIn { iterable, body, .. } => {
+            collect_names_in_expr(&iterable.node, out);
+            collect_names_in_expr(&body.node, out);
+        }
+        Expr::Range { start, end } => {
+            collect_names_in_expr(&start.node, out);
+            collect_names_in_expr(&end.node, out);
+        }
+        Expr::ArrayLit(elements) => {
+            for el in elements {
+                collect_names_in_expr(&el.node, out);
+            }
+        }
+        Expr::Index { object, index } => {
+            collect_names_in_expr(&object.node, out);
+            collect_names_in_expr(&index.node, out);
+        }
+        Expr::FieldAccess { object, .. } => {
+            collect_names_in_expr(&object.node, out);
+        }
+        Expr::Match { subject, arms } => {
+            collect_names_in_expr(&subject.node, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    collect_names_in_expr(&g.node, out);
+                }
+                collect_names_in_expr(&arm.body.node, out);
+            }
+        }
+        Expr::Interpolation(parts) => {
+            for p in parts {
+                if let InterpolPart::Expr(e) = p {
+                    collect_names_in_expr(&e.node, out);
+                }
+            }
+        }
+        Expr::Closure {
+            params,
+            return_type,
+            body,
+        } => {
+            for p in params {
+                collect_names_in_type(&p.ty.node, out);
+            }
+            if let Some(rt) = return_type {
+                collect_names_in_type(&rt.node, out);
+            }
+            collect_names_in_expr(&body.node, out);
+        }
+        Expr::OkExpr(e)
+        | Expr::ErrExpr(e)
+        | Expr::SomeExpr(e)
+        | Expr::Await(e)
+        | Expr::Spawn(e)
+        | Expr::Try(e) => {
+            collect_names_in_expr(&e.node, out);
+        }
+        Expr::NullCoalesce { value, default } => {
+            collect_names_in_expr(&value.node, out);
+            collect_names_in_expr(&default.node, out);
+        }
+        Expr::OptionalChain { object, .. } => {
+            collect_names_in_expr(&object.node, out);
+        }
+        Expr::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_names_in_expr(&value.node, out);
+            collect_names_in_expr(&then_branch.node, out);
+            if let Some(e) = else_branch {
+                collect_names_in_expr(&e.node, out);
+            }
+        }
+        Expr::MapLit(pairs) => {
+            for (k, v) in pairs {
+                collect_names_in_expr(&k.node, out);
+                collect_names_in_expr(&v.node, out);
+            }
+        }
+        // Leaves — no names to collect
+        Expr::IntLit(_)
+        | Expr::FloatLit(_)
+        | Expr::StringLit(_)
+        | Expr::BoolLit(_)
+        | Expr::Unit
+        | Expr::NoneExpr
+        | Expr::Break
+        | Expr::Continue => {}
+    }
+}
+
+fn collect_names_in_stmt(s: &Stmt, out: &mut HashSet<String>) {
+    match s {
+        Stmt::Let { ty, value, .. } => {
+            if let Some(t) = ty {
+                collect_names_in_type(&t.node, out);
+            }
+            collect_names_in_expr(&value.node, out);
+        }
+        Stmt::Expr(e) => collect_names_in_expr(&e.node, out),
+        Stmt::Return(e) => {
+            if let Some(e) = e {
+                collect_names_in_expr(&e.node, out);
+            }
+        }
+        Stmt::Defer(e) => collect_names_in_expr(&e.node, out),
+        Stmt::LetDestructure { value, .. } => collect_names_in_expr(&value.node, out),
+    }
+}
+
+fn collect_names_in_type(t: &TypeExpr, out: &mut HashSet<String>) {
+    match t {
+        TypeExpr::Named(name) => {
+            out.insert(name.clone());
+        }
+        TypeExpr::Array(inner) => collect_names_in_type(&inner.node, out),
+        TypeExpr::FnType { params, ret } => {
+            for p in params {
+                collect_names_in_type(&p.node, out);
+            }
+            collect_names_in_type(&ret.node, out);
+        }
+        TypeExpr::Result { ok_type, err_type } => {
+            collect_names_in_type(&ok_type.node, out);
+            collect_names_in_type(&err_type.node, out);
+        }
+        TypeExpr::Optional(inner) => collect_names_in_type(&inner.node, out),
+        TypeExpr::Future(inner) => collect_names_in_type(&inner.node, out),
+        TypeExpr::Unit | TypeExpr::Inferred => {}
+    }
+}
+
+/// Collect every name referenced in a top-level item's signature and body.
+/// This lets `resolve_imports()` do a fixed-point expansion pulling in any
+/// sibling items the requested items transitively depend on.
+fn collect_names_in_item(item: &Item, out: &mut HashSet<String>) {
+    match item {
+        Item::Function(f) => {
+            for p in &f.params {
+                collect_names_in_type(&p.ty.node, out);
+            }
+            if let Some(rt) = &f.return_type {
+                collect_names_in_type(&rt.node, out);
+            }
+            collect_names_in_expr(&f.body.node, out);
+        }
+        Item::Struct(s) => {
+            for field in &s.fields {
+                collect_names_in_type(&field.ty.node, out);
+            }
+        }
+        Item::Enum(e) => {
+            for variant in &e.variants {
+                for f in &variant.fields {
+                    collect_names_in_type(&f.node, out);
+                }
+            }
+        }
+        Item::Impl(imp) => {
+            out.insert(imp.type_name.clone());
+            for m in &imp.methods {
+                for p in &m.node.params {
+                    collect_names_in_type(&p.ty.node, out);
+                }
+                if let Some(rt) = &m.node.return_type {
+                    collect_names_in_type(&rt.node, out);
+                }
+                collect_names_in_expr(&m.node.body.node, out);
+            }
+        }
+        Item::Agent(a) => {
+            if let Some(ot) = &a.output_type {
+                collect_names_in_type(&ot.node, out);
+            }
+            for t in &a.tools {
+                out.insert(t.clone());
+            }
+            for r in &a.resources {
+                out.insert(r.clone());
+            }
+            for p in &a.prompts {
+                out.insert(p.clone());
+            }
+        }
+        Item::Const(c) => {
+            if let Some(t) = &c.ty {
+                collect_names_in_type(&t.node, out);
+            }
+            collect_names_in_expr(&c.value.node, out);
+        }
+        Item::Trait(_) | Item::Import { .. } | Item::Extern(_) => {}
+    }
+}
+
+/// Return the defining name of a top-level item, if it has one.
+/// Used by `resolve_imports()` to match referenced names against items
+/// available in an imported module.
+fn item_def_name(item: &Item) -> Option<&str> {
+    match item {
+        Item::Function(f) => Some(&f.name),
+        Item::Struct(s) => Some(&s.name),
+        Item::Enum(e) => Some(&e.name),
+        Item::Impl(imp) => Some(&imp.type_name),
+        Item::Agent(a) => Some(&a.name),
+        Item::Const(c) => Some(&c.name),
+        Item::Trait(t) => Some(&t.name),
+        Item::Import { .. } | Item::Extern(_) => None,
+    }
+}
+
 /// Resolve all `import` items in the module by reading, lexing, and parsing
 /// the imported files and inlining the requested items.
 /// `loading` tracks files currently being loaded (for circular import detection).
@@ -2530,60 +2810,76 @@ fn resolve_imports(
 
             loading.remove(&canonical);
 
-            // When importing an `Agent`, any `tool fn` / `resource` / `prompt`
-            // functions it references must be pulled in alongside it — agents
-            // look these up by name during sema, so a dangling reference
-            // produces E0321. See ISSUES.md Issue #4.
-            let mut agent_dep_names: Vec<String> = Vec::new();
-            for imported_item in &imported_module.items {
-                if let Item::Agent(a) = &imported_item.node {
-                    if names.contains(&a.name) {
-                        agent_dep_names.extend(a.tools.iter().cloned());
-                        agent_dep_names.extend(a.resources.iter().cloned());
-                        agent_dep_names.extend(a.prompts.iter().cloned());
+            // Transitive item resolution. The user only has to name the
+            // entry-point items they use — we pull in every sibling item
+            // those items reference, recursively, until fixed point.
+            //
+            // This subsumes the older "agent → tool fn" special case from
+            // Issue #4: an agent's tools/resources/prompts now show up in
+            // the name set via `collect_names_in_item(Item::Agent)`.
+            //
+            // A top-level item in `imported_module.items` is included iff
+            // its defining name is in `wanted`. We seed `wanted` with the
+            // user's explicit import clause, then repeatedly walk each
+            // included item, adding any referenced name that corresponds
+            // to another top-level item in the same module, until no new
+            // names are added. Impl blocks are treated specially: any
+            // impl whose type_name is wanted is pulled in even though
+            // `type_name` is the struct name, not the impl name.
+            let mut wanted: HashSet<String> = names.iter().cloned().collect();
+            loop {
+                let mut new_names: HashSet<String> = HashSet::new();
+                for imported_item in &imported_module.items {
+                    let included = match &imported_item.node {
+                        Item::Impl(imp) => wanted.contains(&imp.type_name),
+                        other => item_def_name(other)
+                            .map(|n| wanted.contains(n))
+                            .unwrap_or(false),
+                    };
+                    if included {
+                        collect_names_in_item(&imported_item.node, &mut new_names);
                     }
+                }
+                let before = wanted.len();
+                for name in new_names {
+                    // Only follow references that correspond to a top-level
+                    // item actually defined in this module. Unknown names
+                    // (e.g. builtins like `print`, or names from other
+                    // imports) are harmless — sema will resolve or reject
+                    // them later.
+                    let defined_here = imported_module.items.iter().any(|it| {
+                        item_def_name(&it.node).map(|n| n == name).unwrap_or(false)
+                    });
+                    if defined_here {
+                        wanted.insert(name);
+                    }
+                }
+                if wanted.len() == before {
+                    break;
                 }
             }
 
-            // Extract the requested items
+            // Extract every item whose name is in the wanted set. Impls
+            // are pulled in whenever their target type is wanted, since
+            // an impl has no name of its own.
             for imported_item in imported_module.items {
-                match &imported_item.node {
-                    Item::Function(f) if names.contains(&f.name) => {
-                        import_items.push(imported_item);
-                    }
-                    // Also pull in any tool/resource/prompt fn referenced by
-                    // an imported agent, even though the user didn't name it.
-                    Item::Function(f)
-                        if (f.is_tool || f.is_resource || f.is_prompt)
-                            && agent_dep_names.contains(&f.name) =>
-                    {
-                        import_items.push(imported_item);
-                    }
-                    Item::Struct(s) if names.contains(&s.name) => {
-                        import_items.push(imported_item);
-                    }
-                    Item::Enum(e) if names.contains(&e.name) => {
-                        import_items.push(imported_item);
-                    }
-                    Item::Impl(imp) if names.contains(&imp.type_name) => {
-                        import_items.push(imported_item);
-                    }
-                    Item::Agent(a) if names.contains(&a.name) => {
-                        import_items.push(imported_item);
-                    }
-                    _ => {}
+                let included = match &imported_item.node {
+                    Item::Impl(imp) => wanted.contains(&imp.type_name),
+                    other => item_def_name(other)
+                        .map(|n| wanted.contains(n))
+                        .unwrap_or(false),
+                };
+                if included {
+                    import_items.push(imported_item);
                 }
             }
 
-            // Check that all requested names were found
+            // Check that all user-requested names were found. We only
+            // validate the explicit clause here — transitively-pulled
+            // names are best-effort and are allowed to be absent.
             for name in names {
-                let found = import_items.iter().any(|item| match &item.node {
-                    Item::Function(f) => &f.name == name,
-                    Item::Struct(s) => &s.name == name,
-                    Item::Enum(e) => &e.name == name,
-                    Item::Impl(imp) => &imp.type_name == name,
-                    Item::Agent(a) => &a.name == name,
-                    _ => false,
+                let found = import_items.iter().any(|item| {
+                    item_def_name(&item.node).map(|n| n == name).unwrap_or(false)
                 });
                 if !found {
                     return Err(format!(
