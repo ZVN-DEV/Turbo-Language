@@ -3,6 +3,44 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.2] - 2026-04-09
+
+Import ergonomics release. The transitive import walker introduced in
+v0.7.0 expanded each imported file in isolation, which meant cross-file
+reference chains (main imports entry from A, A's entry calls helper,
+helper lives in B) couldn't be resolved automatically — the user had
+to name every transitively-used helper in their explicit import clause
+even when the compiler already had the defining file in hand. This
+release makes the walker global.
+
+### Fixed
+- **Cross-module transitive import resolution**
+  (`turbo-cli/src/main.rs::resolve_imports`). Refactored from
+  per-import sequential processing into a three-phase pipeline:
+  gather all imported files first, run a global fixed-point expansion
+  across every imported module at once, then extract. Now a reference
+  in file A to a helper defined in file B is pulled in automatically
+  as long as B is in the host module's import set.
+  Regression: `tests/phase1/imports/transitive_crossmod_{main,a,b}.tb`.
+- **Carl Code import clause shrink.** Proof point for the walker:
+  Carl's `main.tb` shrinks from 35 → 29 explicit import items because
+  the compiler now traces `AgentProfile`, `SquadResult`,
+  `pick_agent_names_for_task`, `resolve_squad`, `print_squad_assembling`,
+  and `print_squad_complete` across the boundary between the host
+  module's imports.
+- **Five Carl-Code-surfaced language papercuts** (landed together in
+  64a6adc): empty array literal inference, soft-keyword identifier
+  parsing (`agent`/`tool`/`resource`/`prompt`), brace escape hints in
+  string interpolation, tool-annotated fn imports, `mut` function
+  parameters.
+- **Single-module transitive import dedup.** When the same helper is
+  reachable through multiple import chains (e.g. two libs both pulling
+  `color_cyan` from `display/output`), resolve_imports now drops
+  duplicates by defining name instead of emitting E0308.
+
+### Added
+- `exec()` and `env_get()` stdlib builtins (landed in abd5186).
+
 ## [0.7.1] - 2026-04-08
 
 Release infrastructure patch. v0.7.0 shipped the compiler improvements
