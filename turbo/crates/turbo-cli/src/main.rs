@@ -2530,10 +2530,33 @@ fn resolve_imports(
 
             loading.remove(&canonical);
 
+            // When importing an `Agent`, any `tool fn` / `resource` / `prompt`
+            // functions it references must be pulled in alongside it — agents
+            // look these up by name during sema, so a dangling reference
+            // produces E0321. See ISSUES.md Issue #4.
+            let mut agent_dep_names: Vec<String> = Vec::new();
+            for imported_item in &imported_module.items {
+                if let Item::Agent(a) = &imported_item.node {
+                    if names.contains(&a.name) {
+                        agent_dep_names.extend(a.tools.iter().cloned());
+                        agent_dep_names.extend(a.resources.iter().cloned());
+                        agent_dep_names.extend(a.prompts.iter().cloned());
+                    }
+                }
+            }
+
             // Extract the requested items
             for imported_item in imported_module.items {
                 match &imported_item.node {
                     Item::Function(f) if names.contains(&f.name) => {
+                        import_items.push(imported_item);
+                    }
+                    // Also pull in any tool/resource/prompt fn referenced by
+                    // an imported agent, even though the user didn't name it.
+                    Item::Function(f)
+                        if (f.is_tool || f.is_resource || f.is_prompt)
+                            && agent_dep_names.contains(&f.name) =>
+                    {
                         import_items.push(imported_item);
                     }
                     Item::Struct(s) if names.contains(&s.name) => {

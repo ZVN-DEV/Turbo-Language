@@ -244,6 +244,10 @@ pub struct Param {
     pub name: String,
     pub ty: Spanned<TypeExpr>,
     pub span: Span,
+    /// `true` if declared with `mut` prefix: `fn foo(mut x: T)`.
+    /// Makes the parameter binding reassignable inside the function body.
+    /// Closure parameters currently always have `mutable: false`.
+    pub mutable: bool,
 }
 
 /// Type expressions

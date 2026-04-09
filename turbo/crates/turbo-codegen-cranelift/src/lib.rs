@@ -636,6 +636,13 @@ pub(crate) fn coerce_value<M: Module>(
         (TurboTy::U8, TurboTy::Int) | (TurboTy::U16, TurboTy::Int) => {
             (cx.builder.ins().uextend(types::I64, val), TurboTy::Int)
         }
+        // Array-to-Array: runtime representation is identical (pointer to a
+        // length-prefixed heap block of 8-byte slots). Trust the declared
+        // element type from the annotation. In practice this path only fires
+        // when the value is an empty `ArrayLit([])` whose element type
+        // codegen couldn't infer — sema catches any real element-type
+        // mismatches before we get here. See ISSUES.md Issue #1.
+        (TurboTy::Array(_), TurboTy::Array(_)) => (val, to.clone()),
         // No coercion available / same size
         _ => (val, from.clone()),
     }

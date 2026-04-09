@@ -1,0 +1,7 @@
+// Issue #4 — only names the agent and the helper fn. The tool fns
+// lib_tool_echo / lib_tool_shout must be pulled in transitively.
+import { EchoBot, run_bot } from "./agent_tool_lib"
+
+fn main() {
+    print(run_bot("hello, world"))
+}

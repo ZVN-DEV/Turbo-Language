@@ -1010,16 +1010,16 @@ impl Checker {
 
         // Define parameters
         for (i, (name, ty)) in sig.params.iter().enumerate() {
-            let param_span = if i < f.params.len() {
-                f.params[i].span.clone()
+            let (param_span, param_mutable) = if i < f.params.len() {
+                (f.params[i].span.clone(), f.params[i].mutable)
             } else {
-                0..0
+                (0..0, false)
             };
             self.define_var(
                 name,
                 VarInfo {
                     ty: ty.clone(),
-                    mutable: false,
+                    mutable: param_mutable,
                     span: param_span,
                     from_let: false,
                 },
@@ -1088,16 +1088,16 @@ impl Checker {
         self.inject_constants();
 
         for (i, (name, ty)) in sig.params.iter().enumerate() {
-            let param_span = if i < f.params.len() {
-                f.params[i].span.clone()
+            let (param_span, param_mutable) = if i < f.params.len() {
+                (f.params[i].span.clone(), f.params[i].mutable)
             } else {
-                0..0
+                (0..0, false)
             };
             self.define_var(
                 name,
                 VarInfo {
                     ty: ty.clone(),
-                    mutable: false,
+                    mutable: param_mutable,
                     span: param_span,
                     from_let: false,
                 },
@@ -4839,7 +4839,25 @@ impl Checker {
                 ty,
                 value,
             } => {
-                let val_ty = self.check_expr(value);
+                // Special case: empty array literal `[]` with a declared array type.
+                // Normally check_expr on an empty ArrayLit emits E0115 ("cannot infer
+                // type of empty array"). When the Let binding has an explicit array
+                // type annotation, use the annotation as the element-type hint instead
+                // of erroring. See ISSUES.md Issue #1.
+                let empty_array_with_annotation = matches!(&value.node, Expr::ArrayLit(v) if v.is_empty())
+                    && ty
+                        .as_ref()
+                        .map(|t| matches!(&t.node, TypeExpr::Array(_)))
+                        .unwrap_or(false);
+
+                let val_ty = if empty_array_with_annotation {
+                    // Resolve the declared type and use it directly.
+                    let ty_expr = ty.as_ref().unwrap();
+                    resolve_type_expr(&ty_expr.node, Some(&self.structs), Some(&self.enums))
+                        .unwrap_or(Ty::Error)
+                } else {
+                    self.check_expr(value)
+                };
 
                 let declared_ty = if let Some(ty_expr) = ty {
                     match resolve_type_expr(&ty_expr.node, Some(&self.structs), Some(&self.enums)) {

@@ -1,0 +1,16 @@
+// Issue #1: Empty array literals should be allowed when a type annotation is present.
+fn main() {
+    let mut items: [i64] = []
+    items = push(items, 42)
+    items = push(items, 99)
+    print(to_str(len(items)))
+    print(to_str(items[0]))
+    print(to_str(items[1]))
+
+    let mut names: [str] = []
+    names = push(names, "alice")
+    names = push(names, "bob")
+    print(to_str(len(names)))
+    print(names[0])
+    print(names[1])
+}

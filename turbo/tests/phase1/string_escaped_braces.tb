@@ -1,0 +1,17 @@
+// Issue #3 — literal curly braces in string literals via \{ and \} escapes.
+// This unblocks patterns like ASCII art, JSON-ish output, and any string
+// that would otherwise collide with {expr} interpolation syntax.
+
+fn main() {
+    // Literal braces, no interpolation
+    print("\{o o\}")
+    print("|\{\}|")
+    print("\{\"key\": 1\}")
+
+    // Interpolation still works alongside escapes
+    let name = "carl"
+    print("\{ name: {name} \}")
+
+    // An empty interpolation-free string with just escapes
+    print("just \{ braces \}")
+}

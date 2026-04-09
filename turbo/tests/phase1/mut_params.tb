@@ -1,0 +1,26 @@
+// Issue #5: Function parameters declared `mut` should be reassignable.
+
+fn double_it(mut n: i64) -> i64 {
+    n = n * 2
+    n
+}
+
+fn increment_all(mut items: [i64]) -> [i64] {
+    let mut i = 0
+    while i < len(items) {
+        items[i] = items[i] + 1
+        i += 1
+    }
+    items
+}
+
+fn main() {
+    print(to_str(double_it(21)))
+    print(to_str(double_it(5)))
+
+    let arr = [10, 20, 30]
+    let bumped = increment_all(arr)
+    print(to_str(bumped[0]))
+    print(to_str(bumped[1]))
+    print(to_str(bumped[2]))
+}

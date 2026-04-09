@@ -142,11 +142,41 @@ impl Parser {
         }
     }
 
+    /// If `tok` is one of the soft-keyword tokens (`agent`, `tool`, `resource`,
+    /// `prompt`), return its identifier spelling. These tokens are only
+    /// *real* keywords at item-declaration sites — anywhere else (let bindings,
+    /// for-loop variables, parameter names, field names, expression references)
+    /// they should be usable as plain identifiers. Issue #2 lived here: users
+    /// writing `for agent in roster` got `expected identifier, found 'agent'`.
+    fn soft_keyword_ident(tok: &Token) -> Option<&'static str> {
+        match tok {
+            Token::Agent => Some("agent"),
+            Token::Tool => Some("tool"),
+            Token::Resource => Some("resource"),
+            Token::Prompt => Some("prompt"),
+            _ => None,
+        }
+    }
+
+    fn peek_is_ident_like(&self) -> bool {
+        match self.peek() {
+            Some(Token::Ident(_)) => true,
+            Some(t) => Self::soft_keyword_ident(t).is_some(),
+            None => false,
+        }
+    }
+
     fn expect_ident(&mut self) -> Result<(String, Span), ParseError> {
         if let Some(Token::Ident(_)) = self.peek() {
             let tok = self.advance();
             if let Token::Ident(name) = &tok.value {
                 return Ok((name.clone(), tok.span.clone()));
+            }
+        }
+        if let Some(tok) = self.peek() {
+            if let Some(name) = Self::soft_keyword_ident(tok) {
+                let tok = self.advance();
+                return Ok((name.to_string(), tok.span.clone()));
             }
         }
         let span = self.peek_span();
@@ -843,6 +873,15 @@ impl Parser {
 
         loop {
             let start = self.peek_span().start;
+
+            // Optional `mut` prefix: `fn foo(mut x: T)` — param becomes reassignable.
+            let mutable = if matches!(self.peek(), Some(Token::Mut)) {
+                self.advance();
+                true
+            } else {
+                false
+            };
+
             let (name, name_span) = self.expect_ident()?;
 
             // Special case: bare `self` parameter (no type annotation)
@@ -854,6 +893,7 @@ impl Parser {
                     name,
                     ty,
                     span: start..end,
+                    mutable,
                 });
             } else {
                 self.expect(&Token::Colon)?;
@@ -863,6 +903,7 @@ impl Parser {
                     name,
                     ty,
                     span: start..end,
+                    mutable,
                 });
             }
 
@@ -1472,9 +1513,9 @@ impl Parser {
                     // Disambiguate: if after `{` we see `ident :`, it's a struct literal
                     let save_pos = self.pos;
                     self.advance(); // consume {
-                    let is_struct_lit = if matches!(self.peek(), Some(Token::Ident(_))) {
+                    let is_struct_lit = if self.peek_is_ident_like() {
                         let save_pos2 = self.pos;
-                        self.advance(); // consume ident
+                        self.advance(); // consume ident (or soft keyword acting as one)
                         let result = matches!(self.peek(), Some(Token::Colon));
                         self.pos = save_pos2;
                         result
@@ -1611,6 +1652,17 @@ impl Parser {
                 } else {
                     unreachable!()
                 }
+            }
+            // Issue #2: soft-keyword tokens (`agent`, `tool`, `resource`,
+            // `prompt`) are usable as bare identifiers in expression position.
+            // Top-level declarations like `agent Foo { }` are still matched
+            // by `parse_item` before we ever reach here.
+            Some(t) if Self::soft_keyword_ident(t).is_some() => {
+                let name = Self::soft_keyword_ident(self.peek().unwrap())
+                    .unwrap()
+                    .to_string();
+                let tok = self.advance();
+                Ok(Spanned::new(Expr::Ident(name), tok.span.clone()))
             }
             Some(Token::LParen) => {
                 // Could be: arrow closure `(params) => body`, parenthesized expr, or unit `()`
@@ -1996,6 +2048,7 @@ impl Parser {
                     name,
                     ty,
                     span: param_start..param_end,
+                    mutable: false,
                 });
                 if matches!(self.peek(), Some(Token::Comma)) {
                     self.advance();
@@ -2076,6 +2129,7 @@ impl Parser {
                     name,
                     ty,
                     span: param_start..param_end,
+                    mutable: false,
                 });
                 if matches!(self.peek(), Some(Token::Comma)) {
                     self.advance();
@@ -2149,7 +2203,9 @@ impl Parser {
                 let span = self.advance().span.clone();
                 Ok(Spanned::new(Pattern::Wildcard, span))
             }
-            Some(Token::Ident(_)) => {
+            Some(t)
+                if matches!(t, Token::Ident(_)) || Self::soft_keyword_ident(t).is_some() =>
+            {
                 let (name, span) = self.expect_ident()?;
                 if matches!(self.peek(), Some(Token::LParen)) {
                     // Variant destructure: Circle(r) or Rectangle(w, h)
@@ -2300,7 +2356,7 @@ fn split_interpolation_parts(s: &str, span: &Span) -> Result<Vec<InterpolPart>, 
             if depth != 0 {
                 return Err(ParseError {
                     code: ErrorCode::E0001,
-                    message: "unterminated interpolation expression in string".to_string(),
+                    message: "unterminated interpolation expression in string (use `\\{` and `\\}` to write literal braces)".to_string(),
                     span: span.clone(),
                 });
             }
@@ -2308,21 +2364,27 @@ fn split_interpolation_parts(s: &str, span: &Span) -> Result<Vec<InterpolPart>, 
             if !lex_errors.is_empty() {
                 return Err(ParseError {
                     code: ErrorCode::E0001,
-                    message: format!("lex error in interpolation expression: `{}`", expr_str),
+                    message: format!(
+                        "lex error in interpolation expression `{{{}}}` (use `\\{{` and `\\}}` to write literal braces)",
+                        expr_str
+                    ),
                     span: span.clone(),
                 });
             }
             let mut sub_parser = Parser::new(tokens);
             let expr = sub_parser.parse_expr().map_err(|e| ParseError {
                 code: ErrorCode::E0001,
-                message: format!("error in interpolation expression: {}", e.message),
+                message: format!(
+                    "error in interpolation expression `{{{}}}`: {} (use `\\{{` and `\\}}` to write literal braces)",
+                    expr_str, e.message
+                ),
                 span: span.clone(),
             })?;
             if !sub_parser.at_end() {
                 return Err(ParseError {
                     code: ErrorCode::E0001,
                     message: format!(
-                        "unexpected tokens after interpolation expression: `{}`",
+                        "unexpected tokens after interpolation expression `{{{}}}` (use `\\{{` and `\\}}` to write literal braces)",
                         expr_str
                     ),
                     span: span.clone(),
