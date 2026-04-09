@@ -1,0 +1,8 @@
+// Library A — defines greet(), which calls shout().
+// shout is NOT imported here; it lives in lib_b. The
+// cross-module walker in resolve_imports() pulls it into
+// the host module via lib_b because greet references it.
+
+fn greet(name: str) -> str {
+    "hello, " + shout(name)
+}

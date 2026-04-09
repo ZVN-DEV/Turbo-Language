@@ -1,0 +1,19 @@
+// Regression: cross-module transitive fn import resolution.
+//
+// main imports `greet` from lib_a and `marker` from lib_b.
+// lib_a's greet() internally calls `shout()` — which is defined
+// only in lib_b and NOT named in lib_a. Before the cross-module
+// walker, resolve_imports() expanded each imported file
+// independently: lib_a's walker couldn't find shout in lib_a
+// and dropped it, so the final module was missing shout and
+// sema rejected it. After the cross-module walker, the
+// fixed-point loop runs globally across every imported module
+// at once and pulls shout into lib_b's wanted set because
+// lib_a's greet references it.
+
+import { greet } from "./transitive_crossmod_a"
+import { marker } from "./transitive_crossmod_b"
+
+fn main() {
+    print(greet("carl") + marker())
+}

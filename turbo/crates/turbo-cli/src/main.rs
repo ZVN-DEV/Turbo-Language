@@ -2717,15 +2717,41 @@ fn item_def_name(item: &Item) -> Option<&str> {
     }
 }
 
+/// An imported file after parse + recursive-resolve, held in memory
+/// while the cross-module walker runs. The walker needs every imported
+/// module simultaneously so that a reference in file A to something
+/// defined in file B can be traced across the boundary.
+struct ImportedFile {
+    resolved_path: PathBuf,
+    module: Module,
+    explicit_names: Vec<String>,
+}
+
 /// Resolve all `import` items in the module by reading, lexing, and parsing
 /// the imported files and inlining the requested items.
 /// `loading` tracks files currently being loaded (for circular import detection).
+///
+/// This runs in three phases:
+///
+/// 1. **Gather** — parse and recursively resolve every import, but defer
+///    item extraction.
+/// 2. **Global fixed-point** — seed per-file `wanted` sets from the
+///    explicit import clauses, then iteratively expand across all
+///    imported modules at once. When a wanted item in file A references
+///    a name defined in file B, that name is added to file B's wanted
+///    set and the loop runs again. This lets a caller name only its
+///    entry point and have every transitively-referenced helper pulled
+///    in automatically, *even across files*.
+/// 3. **Extract + dedupe + validate** — walk each file's final wanted
+///    set, pull the matching items out, dedupe across chains, and check
+///    that every explicit clause name was satisfied.
 fn resolve_imports(
     module: &mut Module,
     base_dir: &Path,
     loading: &mut HashSet<PathBuf>,
 ) -> Result<(), String> {
-    let mut import_items = Vec::new();
+    // ==================== Phase A: Gather ====================
+    let mut imported_files: Vec<ImportedFile> = Vec::new();
 
     for item in &module.items {
         if let Item::Import { names, path } = &item.node {
@@ -2734,14 +2760,14 @@ fn resolve_imports(
             // purely for validation and self-documentation.
             if turbo_ast::stdlib_modules::is_stdlib_path(path) {
                 match turbo_ast::stdlib_modules::find_stdlib_module(path) {
-                    Some(module) => {
+                    Some(stdlib_mod) => {
                         for name in names {
-                            if !module.functions.contains(&name.as_str()) {
+                            if !stdlib_mod.functions.contains(&name.as_str()) {
                                 return Err(format!(
                                     "`{}` is not exported by module `{}`. Available: {}",
                                     name,
                                     path,
-                                    module.functions.join(", ")
+                                    stdlib_mod.functions.join(", ")
                                 ));
                             }
                         }
@@ -2810,85 +2836,107 @@ fn resolve_imports(
 
             loading.remove(&canonical);
 
-            // Transitive item resolution. The user only has to name the
-            // entry-point items they use — we pull in every sibling item
-            // those items reference, recursively, until fixed point.
-            //
-            // This subsumes the older "agent → tool fn" special case from
-            // Issue #4: an agent's tools/resources/prompts now show up in
-            // the name set via `collect_names_in_item(Item::Agent)`.
-            //
-            // A top-level item in `imported_module.items` is included iff
-            // its defining name is in `wanted`. We seed `wanted` with the
-            // user's explicit import clause, then repeatedly walk each
-            // included item, adding any referenced name that corresponds
-            // to another top-level item in the same module, until no new
-            // names are added. Impl blocks are treated specially: any
-            // impl whose type_name is wanted is pulled in even though
-            // `type_name` is the struct name, not the impl name.
-            let mut wanted: HashSet<String> = names.iter().cloned().collect();
-            loop {
-                let mut new_names: HashSet<String> = HashSet::new();
-                for imported_item in &imported_module.items {
-                    let included = match &imported_item.node {
-                        Item::Impl(imp) => wanted.contains(&imp.type_name),
-                        other => item_def_name(other)
-                            .map(|n| wanted.contains(n))
-                            .unwrap_or(false),
-                    };
-                    if included {
-                        collect_names_in_item(&imported_item.node, &mut new_names);
-                    }
-                }
-                let before = wanted.len();
-                for name in new_names {
-                    // Only follow references that correspond to a top-level
-                    // item actually defined in this module. Unknown names
-                    // (e.g. builtins like `print`, or names from other
-                    // imports) are harmless — sema will resolve or reject
-                    // them later.
-                    let defined_here = imported_module.items.iter().any(|it| {
-                        item_def_name(&it.node).map(|n| n == name).unwrap_or(false)
-                    });
-                    if defined_here {
-                        wanted.insert(name);
-                    }
-                }
-                if wanted.len() == before {
-                    break;
-                }
-            }
+            imported_files.push(ImportedFile {
+                resolved_path,
+                module: imported_module,
+                explicit_names: names.clone(),
+            });
+        }
+    }
 
-            // Extract every item whose name is in the wanted set. Impls
-            // are pulled in whenever their target type is wanted, since
-            // an impl has no name of its own.
-            for imported_item in imported_module.items {
+    // ==================== Phase B: Global fixed-point ====================
+    // Seed per-file wanted sets from explicit clauses, then loop across
+    // every imported module until no new names are added. Cross-module
+    // discovery: if file A's wanted body references `helper` and `helper`
+    // is defined in file B, it gets added to B's wanted set.
+    let mut wanted: Vec<HashSet<String>> = imported_files
+        .iter()
+        .map(|f| f.explicit_names.iter().cloned().collect())
+        .collect();
+
+    loop {
+        // Collect every name referenced by items currently wanted in any
+        // file. Attribution to a specific origin file doesn't matter —
+        // name lookup in the next step is global.
+        let mut discovered: HashSet<String> = HashSet::new();
+        for (fi, file) in imported_files.iter().enumerate() {
+            for imported_item in &file.module.items {
                 let included = match &imported_item.node {
-                    Item::Impl(imp) => wanted.contains(&imp.type_name),
+                    Item::Impl(imp) => wanted[fi].contains(&imp.type_name),
                     other => item_def_name(other)
-                        .map(|n| wanted.contains(n))
+                        .map(|n| wanted[fi].contains(n))
                         .unwrap_or(false),
                 };
                 if included {
-                    import_items.push(imported_item);
-                }
-            }
-
-            // Check that all user-requested names were found. We only
-            // validate the explicit clause here — transitively-pulled
-            // names are best-effort and are allowed to be absent.
-            for name in names {
-                let found = import_items.iter().any(|item| {
-                    item_def_name(&item.node).map(|n| n == name).unwrap_or(false)
-                });
-                if !found {
-                    return Err(format!(
-                        "name `{name}` not found in `{}`",
-                        resolved_path.display()
-                    ));
+                    collect_names_in_item(&imported_item.node, &mut discovered);
                 }
             }
         }
+
+        // Route each discovered name to whichever imported file actually
+        // defines it. Unknown names (builtins, host-module refs) are
+        // silently dropped — sema will resolve or reject them later.
+        let mut changed = false;
+        for name in discovered {
+            for (fi, file) in imported_files.iter().enumerate() {
+                if wanted[fi].contains(&name) {
+                    continue;
+                }
+                let defined_here = file.module.items.iter().any(|it| {
+                    item_def_name(&it.node).map(|n| n == name).unwrap_or(false)
+                });
+                if defined_here {
+                    wanted[fi].insert(name.clone());
+                    changed = true;
+                }
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    // ==================== Phase C: Extract ====================
+    let mut import_items: Vec<turbo_ast::Spanned<Item>> = Vec::new();
+
+    for (fi, file) in imported_files.into_iter().enumerate() {
+        let ImportedFile {
+            resolved_path,
+            module: imported_module,
+            explicit_names,
+        } = file;
+        let file_wanted = &wanted[fi];
+
+        let mut found_for_file: Vec<turbo_ast::Spanned<Item>> = Vec::new();
+        for imported_item in imported_module.items {
+            let included = match &imported_item.node {
+                Item::Impl(imp) => file_wanted.contains(&imp.type_name),
+                other => item_def_name(other)
+                    .map(|n| file_wanted.contains(n))
+                    .unwrap_or(false),
+            };
+            if included {
+                found_for_file.push(imported_item);
+            }
+        }
+
+        // Validate explicit clause names. Transitively-pulled names are
+        // best-effort (and may legitimately not exist if the user
+        // over-imported), but explicit names must resolve here.
+        for name in &explicit_names {
+            let found = found_for_file.iter().any(|item| {
+                item_def_name(&item.node).map(|n| n == name).unwrap_or(false)
+            });
+            if !found {
+                return Err(format!(
+                    "name `{name}` not found in `{}`",
+                    resolved_path.display()
+                ));
+            }
+        }
+
+        import_items.extend(found_for_file);
     }
 
     // Deduplicate import_items by defining name. Without this, transitive

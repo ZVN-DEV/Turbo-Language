@@ -1,0 +1,11 @@
+// Library B — defines marker (which main imports explicitly)
+// and shout (which main does NOT name, but the cross-module
+// walker pulls in because lib_a's greet references it).
+
+fn marker() -> str {
+    "!"
+}
+
+fn shout(s: str) -> str {
+    upper(s)
+}
