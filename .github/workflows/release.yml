@@ -125,12 +125,34 @@ jobs:
           echo "Generated checksums:"
           cat checksums.txt
 
+      # GitHub Actions forbids the `secrets` context in step-level `if:`
+      # expressions, so we probe for each secret in a dedicated step and
+      # expose its presence as a step output. Downstream steps then gate
+      # on the output, which is allowed.
+      - name: Probe release secrets
+        id: probe-secrets
+        env:
+          RELEASE_GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${RELEASE_GPG_PRIVATE_KEY:-}" ]; then
+            echo "has_gpg=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_gpg=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "has_tap=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_tap=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # Detached GPG signature for `checksums.txt`. Guarded so that forks
       # without the signing secrets simply skip this step instead of failing
       # the release. Verification path is documented in CONTRIBUTING.md
       # under "Release Verification".
       - name: Sign checksums.txt with release key
-        if: ${{ secrets.RELEASE_GPG_PRIVATE_KEY != '' }}
+        if: steps.probe-secrets.outputs.has_gpg == 'true'
         env:
           RELEASE_GPG_PRIVATE_KEY: ${{ secrets.RELEASE_GPG_PRIVATE_KEY }}
           RELEASE_GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
@@ -180,7 +202,7 @@ jobs:
       # ZVN-DEV/homebrew-turbo repository. If the secret is missing the step is
       # skipped so the release itself never fails on a missing token.
       - name: Update Homebrew tap
-        if: ${{ success() && secrets.HOMEBREW_TAP_TOKEN != '' }}
+        if: success() && steps.probe-secrets.outputs.has_tap == 'true'
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           GITHUB_REF_NAME: ${{ github.ref_name }}

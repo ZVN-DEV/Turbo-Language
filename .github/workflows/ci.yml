@@ -219,7 +219,7 @@ jobs:
       # every unrelated PR. Bump the version deliberately.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-audit@0.21.2
+          tool: cargo-audit@0.22.1
 
       - name: Run cargo audit
         run: cargo audit --deny warnings

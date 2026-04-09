@@ -329,10 +329,7 @@ fn rewrite_stmt(stmt: &mut Stmt, fn_value_ctx: bool) {
             // a unit-producing tail.
             if !fn_value_ctx && is_cow_builtin_call(&v.node) {
                 let span = v.span.clone();
-                let taken = std::mem::replace(
-                    v,
-                    Spanned::new(Expr::Unit, span.clone()),
-                );
+                let taken = std::mem::replace(v, Spanned::new(Expr::Unit, span.clone()));
                 let as_stmt = rewrite_call_to_assign(taken);
                 if let Stmt::Expr(rewritten) = as_stmt {
                     *v = rewritten;
@@ -360,10 +357,7 @@ fn rewrite_stmt(stmt: &mut Stmt, fn_value_ctx: bool) {
             // a bare `Stmt::Expr(call)` node.
             if is_cow_builtin_call(&e.node) {
                 let span = e.span.clone();
-                let replaced = std::mem::replace(
-                    e,
-                    Spanned::new(Expr::Unit, span.clone()),
-                );
+                let replaced = std::mem::replace(e, Spanned::new(Expr::Unit, span.clone()));
                 let new_stmt_inner = rewrite_call_to_assign(replaced);
                 // `rewrite_call_to_assign` always returns a `Stmt::Expr`
                 // wrapping the rewritten call; pull it back out.

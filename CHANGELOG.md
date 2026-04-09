@@ -3,6 +3,31 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.1] - 2026-04-08
+
+Release infrastructure patch. v0.7.0 shipped the compiler improvements
+but the release pipeline itself was broken: the tagged build could not
+produce artifacts because `release.yml` used the `secrets` context in
+step-level `if:` expressions (which GitHub Actions does not allow), and
+CI was red on an unrelated rustfmt nit plus an advisory-db parse error
+in the pinned `cargo-audit 0.21.2`. This release unbreaks all of that
+so v0.7.x can actually ship binaries.
+
+### Fixed
+- **Release workflow validation.** `release.yml` no longer references
+  the `secrets` context directly inside `if:`. A preceding "Probe release
+  secrets" step now exposes GPG-key and Homebrew-tap-token presence as
+  step outputs, and the `Sign checksums.txt` and `Update Homebrew tap`
+  steps gate on those outputs instead. Same fork-safe semantics,
+  GitHub-Actions-legal form.
+- **CI Cargo audit.** Bumped the pinned `cargo-audit` from `0.21.2` to
+  `0.22.1` in `ci.yml`. `0.21.2` cannot parse CVSS 4.0 strings in newer
+  RUSTSEC advisory entries (e.g. `RUSTSEC-2025-0138`), which caused
+  `cargo audit` to fail before it even evaluated the workspace.
+- **rustfmt compliance.** Single-lined two `std::mem::replace` calls in
+  `turbo-parser/src/cow_rewrite.rs` that slipped through v0.7.0 because
+  of a local rustfmt version skew. `cargo fmt --check` is green again.
+
 ## [0.7.0] - 2026-04-08
 
 Compiler-correctness and tooling release. Fixes a class of silent-drop
