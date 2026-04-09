@@ -1,0 +1,8 @@
+// A helper used by two different libraries. When main.tb imports from
+// both libraries and the transitive walker pulls this through both
+// chains, resolve_imports() must deduplicate by name or sema will
+// reject the second copy with E0308 "function already defined".
+
+fn shared_greet(name: str) -> str {
+    ">> " + name
+}

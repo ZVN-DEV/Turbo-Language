@@ -1,0 +1,7 @@
+// Library A uses `shared_greet` from the shared helper module.
+
+import { shared_greet } from "./transitive_dedup_shared"
+
+fn say_hi_a(name: str) -> str {
+    shared_greet(name) + " [from A]"
+}

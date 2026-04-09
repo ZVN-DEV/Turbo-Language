@@ -1,0 +1,16 @@
+// Regression: transitive import resolution must deduplicate helpers
+// that are reachable through multiple import chains.
+//
+// main imports `say_hi_a` from lib A and `say_hi_b` from lib B. Both
+// libraries call `shared_greet` from a common third file. The walker
+// in resolve_imports pulls `shared_greet` through BOTH chains, which
+// used to emit two copies and trip E0308 "function already defined".
+// After the dedup pass, only one copy is kept.
+
+import { say_hi_a } from "./transitive_dedup_a"
+import { say_hi_b } from "./transitive_dedup_b"
+
+fn main() {
+    print(say_hi_a("alice"))
+    print(say_hi_b("bob"))
+}

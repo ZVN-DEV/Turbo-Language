@@ -1,0 +1,9 @@
+// Library B also uses `shared_greet` from the shared helper module.
+// Without dedup in resolve_imports, importing both A and B would
+// result in two copies of `shared_greet` and E0308.
+
+import { shared_greet } from "./transitive_dedup_shared"
+
+fn say_hi_b(name: str) -> str {
+    shared_greet(name) + " [from B]"
+}

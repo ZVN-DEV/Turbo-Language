@@ -2891,11 +2891,38 @@ fn resolve_imports(
         }
     }
 
+    // Deduplicate import_items by defining name. Without this, transitive
+    // resolution creates duplicates when the same helper is pulled in
+    // through multiple import chains (e.g. main.tb imports from both
+    // `./roster` and `./squad`, both of which transitively import
+    // `color_cyan` from `./display/output`). Impls and extern blocks have
+    // no unique def name and are always kept as-is — two impls for the
+    // same struct are legitimate, and sema will catch any real conflicts.
+    let mut seen_names: HashSet<String> = HashSet::new();
+    let mut deduped: Vec<turbo_ast::Spanned<Item>> = Vec::with_capacity(import_items.len());
+    for item in import_items {
+        match &item.node {
+            Item::Impl(_) | Item::Extern(_) => {
+                deduped.push(item);
+            }
+            _ => match item_def_name(&item.node) {
+                Some(name) => {
+                    if seen_names.insert(name.to_string()) {
+                        deduped.push(item);
+                    }
+                }
+                None => {
+                    deduped.push(item);
+                }
+            },
+        }
+    }
+
     // Remove import items and prepend imported items
     module
         .items
         .retain(|item| !matches!(&item.node, Item::Import { .. }));
-    let mut new_items = import_items;
+    let mut new_items = deduped;
     new_items.append(&mut module.items);
     module.items = new_items;
 
