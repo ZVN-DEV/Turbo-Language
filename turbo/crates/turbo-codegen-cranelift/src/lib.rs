@@ -1472,6 +1472,20 @@ fn compile_module<M: Module>(
     declare_rt_fn(
         module,
         &mut rt_fns,
+        "rt_exec",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_env_get",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
         "rt_pow",
         &[types::I64, types::I64],
         Some(types::I64),

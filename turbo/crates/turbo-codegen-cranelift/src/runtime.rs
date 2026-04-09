@@ -629,6 +629,43 @@ pub(crate) extern "C" fn rt_write_file(path: *const u8, content: *const u8) {
     }
 }
 
+pub(crate) extern "C" fn rt_exec(cmd: *const u8) -> *const u8 {
+    let cmd = unsafe { std::ffi::CStr::from_ptr(cmd as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .output();
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let combined = if stderr.is_empty() {
+                stdout.into_owned()
+            } else {
+                format!("{}{}", stdout, stderr)
+            };
+            let cs = std::ffi::CString::new(combined).unwrap();
+            cs.into_raw() as *const u8
+        }
+        Err(e) => {
+            let msg = format!("error: exec failed: {}", e);
+            let cs = std::ffi::CString::new(msg).unwrap();
+            cs.into_raw() as *const u8
+        }
+    }
+}
+
+pub(crate) extern "C" fn rt_env_get(name: *const u8) -> *const u8 {
+    let name = unsafe { std::ffi::CStr::from_ptr(name as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let val = std::env::var(name).unwrap_or_default();
+    let cs = std::ffi::CString::new(val).unwrap();
+    cs.into_raw() as *const u8
+}
+
 pub(crate) extern "C" fn rt_pow(base: i64, exp: i64) -> i64 {
     if exp < 0 {
         return 0;

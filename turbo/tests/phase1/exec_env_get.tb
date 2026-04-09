@@ -1,0 +1,13 @@
+fn main() {
+    // Test exec
+    let result = exec("echo hello_turbo")
+    print(trim(result))
+
+    // Test env_get with a known variable
+    let home = env_get("HOME")
+    print(len(home) > 0)
+
+    // Test env_get with unset variable returns empty string
+    let missing = env_get("TURBO_NONEXISTENT_VAR_12345")
+    print(missing == "")
+}

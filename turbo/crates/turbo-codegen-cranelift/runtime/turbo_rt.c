@@ -909,6 +909,57 @@ const char *rt_http_post(const char *url, const char *body) {
     return buf;
 }
 
+/* exec(cmd) -> str — execute a shell command via fork+exec, capture stdout+stderr */
+const char *rt_exec(const char *cmd) {
+    if (!cmd || cmd[0] == '\0') {
+        const char *empty = (const char *)turbo_alloc(1);
+        ((char *)empty)[0] = '\0';
+        return empty;
+    }
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        return strdup("error: cannot create pipe");
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return strdup("error: cannot fork");
+    }
+    if (pid == 0) {
+        /* Child: redirect stdout+stderr to pipe, exec via /bin/sh -c */
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[1]);
+        execlp("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+        _exit(1);
+    }
+    /* Parent: read from pipe */
+    close(pipefd[1]);
+    char *buf = read_fd_to_string(pipefd[0]);
+    close(pipefd[0]);
+    int status;
+    waitpid(pid, &status, 0);
+    return buf;
+}
+
+/* env_get(name) -> str — get an environment variable, returns "" if not set */
+const char *rt_env_get(const char *name) {
+    if (!name) {
+        const char *empty = (const char *)turbo_alloc(1);
+        ((char *)empty)[0] = '\0';
+        return empty;
+    }
+    const char *val = getenv(name);
+    if (!val) {
+        const char *empty = (const char *)turbo_alloc(1);
+        ((char *)empty)[0] = '\0';
+        return empty;
+    }
+    return strdup(val);
+}
+
 static char *rt_json_escape_dup(const char *s) {
     if (!s) {
         char *empty = (char *)turbo_alloc(1);

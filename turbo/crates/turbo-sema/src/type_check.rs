@@ -65,6 +65,8 @@ impl Checker {
                 | "read_line"
                 | "read_file"
                 | "write_file"
+                | "exec"
+                | "env_get"
                 | "pow"
                 | "sqrt"
                 | "sleep"
@@ -1921,6 +1923,46 @@ impl Checker {
                             self.error(ErrorCode::E0133, format!("write_file() second argument must be str, found `{content_ty}`"), args[1].span.clone());
                         }
                         return Ty::Unit;
+                    }
+
+                    // ── exec / env_get ──────────────────────────────
+                    if name == "exec" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!("exec() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let cmd_ty = self.check_expr(&args[0]);
+                        if !cmd_ty.is_error() && cmd_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("exec() expects str, found `{cmd_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::Str;
+                    }
+                    if name == "env_get" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!("env_get() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let name_ty = self.check_expr(&args[0]);
+                        if !name_ty.is_error() && name_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("env_get() expects str, found `{name_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::Str;
                     }
 
                     // ── Stdlib math functions ────────────────────────
@@ -4890,6 +4932,8 @@ impl Checker {
                                 "hashmap_keys",
                                 "read_line",
                                 "read_file",
+                                "exec",
+                                "env_get",
                                 "json_get",
                                 "json_stringify",
                                 "request_body",

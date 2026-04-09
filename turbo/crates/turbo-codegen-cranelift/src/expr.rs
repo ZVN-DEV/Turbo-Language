@@ -1767,6 +1767,8 @@ fn compile_call<M: Module>(
         "read_line" => compile_stdlib_read_line(cx),
         "read_file" => compile_stdlib_read_file(cx, args),
         "write_file" => compile_stdlib_write_file(cx, args),
+        "exec" => compile_stdlib_exec(cx, args),
+        "env_get" => compile_stdlib_env_get(cx, args),
         // Stdlib math builtins
         "pow" => compile_stdlib_pow(cx, args),
         "sqrt" => compile_stdlib_sqrt(cx, args),

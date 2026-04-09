@@ -123,6 +123,8 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_read_line", rt_read_line as *const u8);
     jit_builder.symbol("rt_read_file", rt_read_file as *const u8);
     jit_builder.symbol("rt_write_file", rt_write_file as *const u8);
+    jit_builder.symbol("rt_exec", rt_exec as *const u8);
+    jit_builder.symbol("rt_env_get", rt_env_get as *const u8);
     jit_builder.symbol("rt_pow", rt_pow as *const u8);
     jit_builder.symbol("rt_sqrt", rt_sqrt as *const u8);
     // Async runtime symbols
@@ -272,6 +274,8 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_read_line", rt_read_line as *const u8);
     jit_builder.symbol("rt_read_file", rt_read_file as *const u8);
     jit_builder.symbol("rt_write_file", rt_write_file as *const u8);
+    jit_builder.symbol("rt_exec", rt_exec as *const u8);
+    jit_builder.symbol("rt_env_get", rt_env_get as *const u8);
     jit_builder.symbol("rt_pow", rt_pow as *const u8);
     jit_builder.symbol("rt_sqrt", rt_sqrt as *const u8);
     jit_builder.symbol("rt_sleep_ms", rt_sleep_ms as *const u8);
