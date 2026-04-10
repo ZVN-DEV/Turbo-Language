@@ -58,7 +58,6 @@ pub enum Item {
     Enum(EnumDef),
     Impl(ImplBlock),
     Trait(TraitDef),
-    Agent(AgentDef),
     /// Import declaration: `import { name1, name2 } from "path"`
     Import {
         names: Vec<String>,
@@ -91,18 +90,6 @@ pub struct ConstDef {
     pub name: String,
     pub ty: Option<Spanned<TypeExpr>>,
     pub value: Spanned<Expr>,
-}
-
-/// Agent definition: a struct-like declaration for AI agents
-#[derive(Debug, Clone, PartialEq)]
-pub struct AgentDef {
-    pub name: String,
-    pub model: String,
-    pub tools: Vec<String>,
-    pub resources: Vec<String>,
-    pub prompts: Vec<String>,
-    pub output_type: Option<Spanned<TypeExpr>>,
-    pub system_prompt: Option<String>,
 }
 
 /// Impl block: methods attached to a struct type
@@ -213,12 +200,6 @@ impl TypeParam {
 pub struct FnDef {
     pub name: String,
     pub is_async: bool,
-    /// Whether this function is a `tool fn` (AI tool with auto-generated schema)
-    pub is_tool: bool,
-    /// Whether this function is declared as a `resource`
-    pub is_resource: bool,
-    /// Whether this function is declared as a `prompt`
-    pub is_prompt: bool,
     /// Whether this function is a `@test fn` (test function)
     pub is_test: bool,
     /// Whether this function is an `@unsafe fn` (can use raw pointer operations)

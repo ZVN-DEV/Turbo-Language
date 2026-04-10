@@ -130,8 +130,6 @@ pub enum ErrorCode {
     E0310,
     /// Constant already defined (duplicate)
     E0311,
-    /// Agent already defined (duplicate)
-    E0312,
     /// Cannot redefine builtin function
     E0313,
     /// No main function found
@@ -146,10 +144,6 @@ pub enum ErrorCode {
     E0318,
     /// Unknown derive trait
     E0319,
-    /// Undefined tool function in agent
-    E0321,
-    /// Function in agent is not a tool fn
-    E0322,
     /// Unknown type in trait method
     E0323,
     /// Unknown return type
@@ -192,8 +186,6 @@ pub enum ErrorCode {
     E0509,
     /// Trait impl return type mismatch
     E0510,
-    /// Agent field initializer error
-    E0511,
     /// Only named function calls supported
     E0512,
     /// Builtin argument count error
@@ -269,7 +261,6 @@ impl ErrorCode {
             ErrorCode::E0309 => "E0309",
             ErrorCode::E0310 => "E0310",
             ErrorCode::E0311 => "E0311",
-            ErrorCode::E0312 => "E0312",
             ErrorCode::E0313 => "E0313",
             ErrorCode::E0314 => "E0314",
             ErrorCode::E0315 => "E0315",
@@ -277,8 +268,6 @@ impl ErrorCode {
             ErrorCode::E0317 => "E0317",
             ErrorCode::E0318 => "E0318",
             ErrorCode::E0319 => "E0319",
-            ErrorCode::E0321 => "E0321",
-            ErrorCode::E0322 => "E0322",
             ErrorCode::E0323 => "E0323",
             ErrorCode::E0324 => "E0324",
             // Codegen
@@ -300,7 +289,6 @@ impl ErrorCode {
             ErrorCode::E0508 => "E0508",
             ErrorCode::E0509 => "E0509",
             ErrorCode::E0510 => "E0510",
-            ErrorCode::E0511 => "E0511",
             ErrorCode::E0512 => "E0512",
             ErrorCode::E0513 => "E0513",
             ErrorCode::E0514 => "E0514",
@@ -372,7 +360,6 @@ impl ErrorCode {
             ErrorCode::E0309 => "trait is already defined",
             ErrorCode::E0310 => "method is already defined for this type",
             ErrorCode::E0311 => "constant is already defined",
-            ErrorCode::E0312 => "agent is already defined",
             ErrorCode::E0313 => "cannot redefine builtin function",
             ErrorCode::E0314 => "no `main` function found",
             ErrorCode::E0315 => "struct has no such field",
@@ -380,8 +367,6 @@ impl ErrorCode {
             ErrorCode::E0317 => "no such method found on type",
             ErrorCode::E0318 => "missing field in struct literal",
             ErrorCode::E0319 => "unknown derive trait",
-            ErrorCode::E0321 => "undefined tool function referenced in agent",
-            ErrorCode::E0322 => "function referenced in agent is not a `tool fn`",
             ErrorCode::E0323 => "unknown type in trait method signature",
             ErrorCode::E0324 => "unknown return type",
             // Codegen
@@ -403,7 +388,6 @@ impl ErrorCode {
             ErrorCode::E0508 => "`continue` can only be used inside a loop",
             ErrorCode::E0509 => "required trait method is not implemented",
             ErrorCode::E0510 => "trait impl method return type does not match trait definition",
-            ErrorCode::E0511 => "agent does not accept field initializers",
             ErrorCode::E0512 => "only named function calls are supported",
             ErrorCode::E0513 => "builtin function argument count error",
             ErrorCode::E0514 => "unused return value of pure function",
@@ -477,7 +461,6 @@ impl ErrorCode {
             ErrorCode::E0309,
             ErrorCode::E0310,
             ErrorCode::E0311,
-            ErrorCode::E0312,
             ErrorCode::E0313,
             ErrorCode::E0314,
             ErrorCode::E0315,
@@ -485,8 +468,6 @@ impl ErrorCode {
             ErrorCode::E0317,
             ErrorCode::E0318,
             ErrorCode::E0319,
-            ErrorCode::E0321,
-            ErrorCode::E0322,
             ErrorCode::E0323,
             ErrorCode::E0324,
             ErrorCode::E0400,
@@ -506,7 +487,6 @@ impl ErrorCode {
             ErrorCode::E0508,
             ErrorCode::E0509,
             ErrorCode::E0510,
-            ErrorCode::E0511,
             ErrorCode::E0512,
             ErrorCode::E0513,
             ErrorCode::E0514,

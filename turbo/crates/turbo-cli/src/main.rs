@@ -2677,20 +2677,6 @@ fn collect_names_in_item(item: &Item, out: &mut HashSet<String>) {
                 collect_names_in_expr(&m.node.body.node, out);
             }
         }
-        Item::Agent(a) => {
-            if let Some(ot) = &a.output_type {
-                collect_names_in_type(&ot.node, out);
-            }
-            for t in &a.tools {
-                out.insert(t.clone());
-            }
-            for r in &a.resources {
-                out.insert(r.clone());
-            }
-            for p in &a.prompts {
-                out.insert(p.clone());
-            }
-        }
         Item::Const(c) => {
             if let Some(t) = &c.ty {
                 collect_names_in_type(&t.node, out);
@@ -2710,7 +2696,6 @@ fn item_def_name(item: &Item) -> Option<&str> {
         Item::Struct(s) => Some(&s.name),
         Item::Enum(e) => Some(&e.name),
         Item::Impl(imp) => Some(&imp.type_name),
-        Item::Agent(a) => Some(&a.name),
         Item::Const(c) => Some(&c.name),
         Item::Trait(t) => Some(&t.name),
         Item::Import { .. } | Item::Extern(_) => None,
@@ -3120,7 +3105,6 @@ fn detailed_explanation(code: ErrorCode) -> Option<&'static str> {
         ErrorCode::E0309 => Some(include_str!("errors/E0309.md")),
         ErrorCode::E0310 => Some(include_str!("errors/E0310.md")),
         ErrorCode::E0311 => Some(include_str!("errors/E0311.md")),
-        ErrorCode::E0312 => Some(include_str!("errors/E0312.md")),
         ErrorCode::E0313 => Some(include_str!("errors/E0313.md")),
         ErrorCode::E0314 => Some(include_str!("errors/E0314.md")),
         ErrorCode::E0315 => Some(include_str!("errors/E0315.md")),
@@ -3128,8 +3112,6 @@ fn detailed_explanation(code: ErrorCode) -> Option<&'static str> {
         ErrorCode::E0317 => Some(include_str!("errors/E0317.md")),
         ErrorCode::E0318 => Some(include_str!("errors/E0318.md")),
         ErrorCode::E0319 => Some(include_str!("errors/E0319.md")),
-        ErrorCode::E0321 => Some(include_str!("errors/E0321.md")),
-        ErrorCode::E0322 => Some(include_str!("errors/E0322.md")),
         ErrorCode::E0323 => Some(include_str!("errors/E0323.md")),
         ErrorCode::E0324 => Some(include_str!("errors/E0324.md")),
         // Codegen errors (E0400-E0499)
@@ -3151,7 +3133,6 @@ fn detailed_explanation(code: ErrorCode) -> Option<&'static str> {
         ErrorCode::E0508 => Some(include_str!("errors/E0508.md")),
         ErrorCode::E0509 => Some(include_str!("errors/E0509.md")),
         ErrorCode::E0510 => Some(include_str!("errors/E0510.md")),
-        ErrorCode::E0511 => Some(include_str!("errors/E0511.md")),
         ErrorCode::E0512 => Some(include_str!("errors/E0512.md")),
         ErrorCode::E0513 => Some(include_str!("errors/E0513.md")),
         ErrorCode::E0514 => Some(include_str!("errors/E0514.md")),
@@ -3235,12 +3216,6 @@ enum DocItem {
         target: String,
         methods: Vec<String>,
     },
-    Agent {
-        name: String,
-        model: Option<String>,
-        tools: Vec<String>,
-        doc: Vec<String>,
-    },
 }
 
 /// Format a TypeExpr to a human-readable string.
@@ -3280,11 +3255,9 @@ fn format_fn_signature(f: &turbo_ast::FnDef) -> String {
     };
 
     let async_prefix = if f.is_async { "async " } else { "" };
-    let tool_prefix = if f.is_tool { "tool " } else { "" };
 
     format!(
-        "{}{}fn {}({}){}",
-        tool_prefix,
+        "{}fn {}({}){}",
         async_prefix,
         f.name,
         params.join(", "),
@@ -3484,63 +3457,6 @@ fn scan_impls(lines: &[&str]) -> Vec<DocItem> {
     items
 }
 
-/// Scan source lines for agent declarations.
-fn scan_agents(lines: &[&str], doc_comments: &HashMap<usize, Vec<String>>) -> Vec<DocItem> {
-    let mut items = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        let trimmed = lines[i].trim();
-        let is_agent = (trimmed.starts_with("agent ") || trimmed.starts_with("pub agent "))
-            && trimmed.contains('{');
-        if is_agent {
-            let name = trimmed
-                .trim_start_matches("pub ")
-                .trim_start_matches("agent ")
-                .split('{')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .to_string();
-
-            let doc = doc_comments.get(&i).cloned().unwrap_or_default();
-            let mut model = None;
-            let mut tools = Vec::new();
-            i += 1;
-            let mut brace_depth = 1;
-            while i < lines.len() && brace_depth > 0 {
-                let agent_line = lines[i].trim();
-                brace_depth += agent_line.matches('{').count();
-                brace_depth -= agent_line.matches('}').count();
-                if agent_line.starts_with("model:") || agent_line.starts_with("model =") {
-                    model = Some(
-                        agent_line
-                            .split([':', '='])
-                            .nth(1)
-                            .unwrap_or("")
-                            .trim()
-                            .trim_matches('"')
-                            .to_string(),
-                    );
-                }
-                if agent_line.starts_with("tool fn ") || agent_line.starts_with("pub tool fn ") {
-                    let sig = agent_line.split('{').next().unwrap_or(agent_line).trim();
-                    tools.push(sig.to_string());
-                }
-                i += 1;
-            }
-
-            items.push(DocItem::Agent {
-                name,
-                model,
-                tools,
-                doc,
-            });
-        }
-        i += 1;
-    }
-    items
-}
-
 /// Scan for top-level `fn` and `async fn` definitions in source text.
 fn scan_functions(lines: &[&str], doc_comments: &HashMap<usize, Vec<String>>) -> Vec<DocItem> {
     let mut items = Vec::new();
@@ -3610,8 +3526,6 @@ fn doc_file(path: &std::path::Path) {
     let enums = scan_enums(&lines, &doc_comments);
     let traits = scan_traits(&lines, &doc_comments);
     let impls = scan_impls(&lines);
-    let agents = scan_agents(&lines, &doc_comments);
-
     // --- Generate markdown ---
     let mut out = String::new();
     out.push_str(&format!("# Documentation for {}\n", filename));
@@ -3759,34 +3673,6 @@ fn doc_file(path: &std::path::Path) {
                 out.push_str("\nMethods:\n");
                 for method in methods {
                     out.push_str(&format!("- `{}`\n", method));
-                }
-            }
-        }
-    }
-
-    // Agents section
-    if !agents.is_empty() {
-        out.push_str("\n## Agents\n");
-        for item in &agents {
-            if let DocItem::Agent {
-                name,
-                model,
-                tools,
-                doc,
-            } = item
-            {
-                out.push_str(&format!("\n### `agent {}`\n", name));
-                if !doc.is_empty() {
-                    out.push_str(&format!("{}\n", doc.join("\n")));
-                }
-                if let Some(m) = model {
-                    out.push_str(&format!("\nModel: `{}`\n", m));
-                }
-                if !tools.is_empty() {
-                    out.push_str("\nTools:\n");
-                    for tool in tools {
-                        out.push_str(&format!("- `{}`\n", tool));
-                    }
                 }
             }
         }

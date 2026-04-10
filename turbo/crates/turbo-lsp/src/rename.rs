@@ -1,7 +1,7 @@
 //! `textDocument/rename` and `textDocument/prepareRename` handlers.
 //!
 //! This implements **intra-file** rename for top-level functions, structs,
-//! enums, traits, agents and *local* identifiers (variables, fields, params)
+//! enums, traits, and *local* identifiers (variables, fields, params)
 //! that share a name with no other binding in the same file.
 //!
 //! Cross-file renames are P3 work. The strategy here is purposely simple:

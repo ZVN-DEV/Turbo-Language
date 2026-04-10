@@ -453,16 +453,6 @@ fn compute_hover(source: &str, pos: Position) -> Option<Hover> {
                     "keyword: `spawn` -- spawn concurrent task".to_string()
                 }
                 turbo_lexer::Token::Defer => "keyword: `defer` -- deferred execution".to_string(),
-                turbo_lexer::Token::Agent => "keyword: `agent` -- AI agent definition".to_string(),
-                turbo_lexer::Token::Tool => {
-                    "keyword: `tool` -- tool function for agents".to_string()
-                }
-                turbo_lexer::Token::Resource => {
-                    "keyword: `resource` -- typed context provider declaration".to_string()
-                }
-                turbo_lexer::Token::Prompt => {
-                    "keyword: `prompt` -- reusable prompt declaration".to_string()
-                }
                 turbo_lexer::Token::True => "boolean literal: `true`".to_string(),
                 turbo_lexer::Token::False => "boolean literal: `false`".to_string(),
                 turbo_lexer::Token::None => "keyword: `none` -- absent optional value".to_string(),
@@ -507,13 +497,7 @@ fn identifier_info(source: &str, name: &str) -> Option<String> {
                     .as_ref()
                     .map(|t| format!(" -> {}", format_type(&t.node)))
                     .unwrap_or_default();
-                let declaration_prefix = if f.is_tool {
-                    "tool fn ".to_string()
-                } else if f.is_resource {
-                    "resource ".to_string()
-                } else if f.is_prompt {
-                    "prompt ".to_string()
-                } else if f.is_async {
+                let declaration_prefix = if f.is_async {
                     "async fn ".to_string()
                 } else {
                     "fn ".to_string()
@@ -571,22 +555,6 @@ fn identifier_info(source: &str, name: &str) -> Option<String> {
                     e.name,
                     type_params,
                     variants.join(",\n")
-                ));
-            }
-            turbo_ast::Item::Agent(a) if a.name == name => {
-                let output = a
-                    .output_type
-                    .as_ref()
-                    .map(|ty| format_type(&ty.node))
-                    .unwrap_or_else(|| "()".to_string());
-                return Some(format!(
-                    "agent {} {{ model: \"{}\", tools: [{}], resources: [{}], prompts: [{}], output: {} }}",
-                    a.name,
-                    a.model,
-                    a.tools.join(", "),
-                    a.resources.join(", "),
-                    a.prompts.join(", "),
-                    output
                 ));
             }
             _ => {}
@@ -676,12 +644,6 @@ fn compute_definition(source: &str, pos: Position, uri: &Uri) -> Option<Location
                     range: span_to_range(source, &item.span),
                 });
             }
-            turbo_ast::Item::Agent(a) if a.name == target_name => {
-                return Some(Location {
-                    uri: uri.clone(),
-                    range: span_to_range(source, &item.span),
-                });
-            }
             _ => {}
         }
     }
@@ -764,10 +726,6 @@ fn compute_completion_items(source: &str, pos: Position) -> Vec<CompletionItem> 
         ("await", CompletionItemKind::KEYWORD),
         ("spawn", CompletionItemKind::KEYWORD),
         ("defer", CompletionItemKind::KEYWORD),
-        ("agent", CompletionItemKind::KEYWORD),
-        ("tool", CompletionItemKind::KEYWORD),
-        ("resource", CompletionItemKind::KEYWORD),
-        ("prompt", CompletionItemKind::KEYWORD),
         ("import", CompletionItemKind::KEYWORD),
         ("true", CompletionItemKind::VALUE),
         ("false", CompletionItemKind::VALUE),
@@ -793,15 +751,7 @@ fn compute_completion_items(source: &str, pos: Position) -> Vec<CompletionItem> 
                         &prefix,
                         &f.name,
                         CompletionItemKind::FUNCTION,
-                        Some(if f.is_tool {
-                            "tool fn"
-                        } else if f.is_resource {
-                            "resource"
-                        } else if f.is_prompt {
-                            "prompt"
-                        } else {
-                            "function"
-                        }),
+                        Some("function"),
                     ),
                     turbo_ast::Item::Struct(s) => push_completion_item(
                         &mut items,
@@ -826,14 +776,6 @@ fn compute_completion_items(source: &str, pos: Position) -> Vec<CompletionItem> 
                         &t.name,
                         CompletionItemKind::INTERFACE,
                         Some("trait"),
-                    ),
-                    turbo_ast::Item::Agent(a) => push_completion_item(
-                        &mut items,
-                        &mut seen,
-                        &prefix,
-                        &a.name,
-                        CompletionItemKind::CLASS,
-                        Some("agent"),
                     ),
                     _ => {}
                 }
@@ -894,12 +836,6 @@ fn compute_document_symbols(source: &str) -> Vec<DocumentSymbol> {
                 name: f.name.clone(),
                 detail: Some(if f.is_async {
                     "async fn".to_string()
-                } else if f.is_resource {
-                    "resource".to_string()
-                } else if f.is_prompt {
-                    "prompt".to_string()
-                } else if f.is_tool {
-                    "tool fn".to_string()
                 } else {
                     "fn".to_string()
                 }),
@@ -972,16 +908,6 @@ fn compute_document_symbols(source: &str) -> Vec<DocumentSymbol> {
                 selection_range: span_to_range(source, &item.span),
                 children: None,
             }),
-            turbo_ast::Item::Agent(a) => out.push(DocumentSymbol {
-                name: a.name.clone(),
-                detail: Some("agent".to_string()),
-                kind: SymbolKind::CLASS,
-                tags: None,
-                deprecated: None,
-                range: span_to_range(source, &item.span),
-                selection_range: span_to_range(source, &item.span),
-                children: None,
-            }),
             _ => {}
         }
     }
@@ -1005,7 +931,6 @@ fn find_top_level_declaration_span(source: &str, name: &str) -> Option<std::ops:
             turbo_ast::Item::Struct(s) => s.name == name,
             turbo_ast::Item::Enum(e) => e.name == name,
             turbo_ast::Item::Trait(t) => t.name == name,
-            turbo_ast::Item::Agent(a) => a.name == name,
             _ => false,
         };
         if matches {

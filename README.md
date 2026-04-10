@@ -4,7 +4,7 @@
 
 **JavaScript's soul. Rust's speed. Built for the AI age.**
 
-A compiled, type-safe programming language with familiar syntax, native performance, and first-class AI agent primitives. Compiles to machine code via Cranelift -- no VM, no garbage collector, no overhead.
+A compiled, type-safe programming language with familiar syntax and native performance. Compiles to machine code via Cranelift -- no VM, no garbage collector, no overhead.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-437%20passing-brightgreen.svg)](#testing)
@@ -156,54 +156,6 @@ fn main() {
     print(result)
 }
 ```
-
-### AI Agent Primitives
-
-First-class `agent`, `tool fn`, `resource`, and `prompt` declarations for
-building AI-powered applications. `resource` and `prompt` are the first step of
-the broader protocol-native agentic roadmap and currently compile like typed
-top-level functions with dedicated language/LSP awareness.
-
-```turbo
-tool fn analyze(data: str) -> str {
-    "Analysis of: {data}"
-}
-
-resource customer_profile(id: str) -> str {
-    "profile for {id}"
-}
-
-prompt refund_review(order_id: str) -> str {
-    "Review refund request for {order_id}"
-}
-
-agent DataAssistant {
-    model: "claude-sonnet"
-    tools: [analyze]
-    resources: [customer_profile]
-    prompts: [refund_review]
-    output: str
-    system: "You are a data analysis assistant."
-}
-
-fn main() {
-    let a = DataAssistant {}
-    print(a.model)
-    print(len(a.resources))
-    print(len(a.prompts))
-    print(a.output_type)
-    print(a.output_schema)
-    print(a.ask("Hello from Turbo"))
-    print(analyze("turbo data"))
-}
-```
-
-Current runtime support:
-
-- `agent.ask(prompt)` — first-pass provider-backed request execution
-- `agent.ask_structured(prompt)` — schema-guided structured request path that currently returns JSON text
-- `agent.stream(prompt)` — first-pass chunked `[str]` output
-- mock providers for local testing: `mock:echo`, `mock:structured`, `mock:toolloop:<tool>`
 
 ### Closures & Higher-Order Functions
 

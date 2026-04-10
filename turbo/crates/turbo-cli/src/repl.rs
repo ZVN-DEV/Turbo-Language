@@ -78,8 +78,6 @@ pub fn run_repl() {
             || line.starts_with("type ")
             || line.starts_with("impl ")
             || line.starts_with("trait ")
-            || line.starts_with("tool ")
-            || line.starts_with("agent ")
             || line.starts_with("async fn ")
             || line.starts_with("enum ")
             || line.starts_with("import ");

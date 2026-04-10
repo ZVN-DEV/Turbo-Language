@@ -88,8 +88,6 @@ pub enum Ty {
     Future(Box<Ty>),
     /// A generic type parameter (e.g., `T`)
     TypeParam(String),
-    /// Agent type (by name) — instantiated agent with model/system/tools fields
-    Agent(String),
     /// Type could not be determined (error recovery)
     Error,
 }
@@ -127,7 +125,6 @@ impl std::fmt::Display for Ty {
             Ty::Optional(inner) => write!(f, "{}?", inner),
             Ty::Future(inner) => write!(f, "Future<{inner}>"),
             Ty::TypeParam(name) => write!(f, "{name}"),
-            Ty::Agent(name) => write!(f, "{}", name),
             Ty::Error => write!(f, "<error>"),
         }
     }
@@ -166,61 +163,6 @@ impl Ty {
             }
             _ => false,
         }
-    }
-}
-
-pub(crate) fn is_agent_serializable_type(
-    ty: &Ty,
-    structs: &HashMap<String, StructInfo>,
-    enums: &HashMap<String, EnumInfo>,
-) -> bool {
-    match ty {
-        Ty::I8
-        | Ty::I16
-        | Ty::I32
-        | Ty::I64
-        | Ty::U8
-        | Ty::U16
-        | Ty::U32
-        | Ty::U64
-        | Ty::F32
-        | Ty::F64
-        | Ty::Bool
-        | Ty::Str
-        | Ty::Unit => true,
-        Ty::Array(inner) | Ty::Optional(inner) => is_agent_serializable_type(inner, structs, enums),
-        Ty::Result(ok, err) => {
-            is_agent_serializable_type(ok, structs, enums)
-                && is_agent_serializable_type(err, structs, enums)
-        }
-        Ty::Struct(name) => structs.get(name).is_some_and(|info| {
-            info.fields
-                .iter()
-                .all(|(_, field_ty)| is_agent_serializable_type(field_ty, structs, enums))
-        }),
-        Ty::Enum(name) => enums.get(name).is_some_and(|info| {
-            info.variants.iter().all(|(_, field_tys)| {
-                field_tys
-                    .iter()
-                    .all(|field_ty| is_agent_serializable_type(field_ty, structs, enums))
-            })
-        }),
-        Ty::Fn(_, _) | Ty::Future(_) | Ty::TypeParam(_) | Ty::Agent(_) | Ty::Error => false,
-    }
-}
-
-pub(crate) fn is_agent_structured_decode_supported(
-    ty: &Ty,
-    structs: &HashMap<String, StructInfo>,
-) -> bool {
-    match ty {
-        Ty::Str | Ty::I64 | Ty::Bool | Ty::F64 => true,
-        Ty::Struct(name) => structs.get(name).is_some_and(|info| {
-            info.fields
-                .iter()
-                .all(|(_, field_ty)| is_agent_structured_decode_supported(field_ty, structs))
-        }),
-        _ => false,
     }
 }
 
@@ -386,22 +328,7 @@ pub(crate) struct FnSig {
     pub(crate) params: Vec<(String, Ty)>,
     pub(crate) ret: Ty,
     pub(crate) is_async: bool,
-    pub(crate) is_tool: bool,
-    pub(crate) is_resource: bool,
-    pub(crate) is_prompt: bool,
     pub(crate) is_unsafe: bool,
-}
-
-/// Registered agent info for semantic checking
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub(crate) struct AgentInfo {
-    pub(crate) model: String,
-    pub(crate) tools: Vec<String>,
-    pub(crate) resources: Vec<String>,
-    pub(crate) prompts: Vec<String>,
-    pub(crate) output_ty: Option<Ty>,
-    pub(crate) system_prompt: Option<String>,
 }
 
 /// Struct field info for the checker
@@ -468,7 +395,6 @@ pub(crate) struct Checker {
     pub(crate) errors: Vec<SemaError>,
     pub(crate) warnings: Vec<SemaWarning>,
     pub(crate) functions: HashMap<String, FnSig>,
-    pub(crate) agents: HashMap<String, AgentInfo>,
     pub(crate) structs: HashMap<String, StructInfo>,
     pub(crate) enums: HashMap<String, EnumInfo>,
     /// Methods: type_name -> method_name -> FnSig
@@ -518,7 +444,6 @@ impl Checker {
             errors: Vec::new(),
             warnings: Vec::new(),
             functions: HashMap::new(),
-            agents: HashMap::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
             methods: HashMap::new(),
@@ -978,62 +903,6 @@ fn main() { search("hello") }"#,
             r#"tool fn search(q: str) -> str { "results" }
 fn main() { search(42) }"#,
             "argument `q` expects `str`, found `int`",
-        );
-    }
-
-    #[test]
-    fn test_agent_valid() {
-        assert_no_errors(
-            r#"tool fn search(q: str) -> str { "r" }
-tool fn calc(x: i64) -> i64 { x * 2 }
-agent Helper {
-    model: "claude-sonnet"
-    tools: [search, calc]
-    system: "You help."
-}
-fn main() { search("hi") }"#,
-        );
-    }
-
-    #[test]
-    fn test_agent_undefined_tool() {
-        assert_has_error(
-            r#"agent Helper {
-    model: "test"
-    tools: [nonexistent]
-}
-fn main() { }"#,
-            "undefined tool function `nonexistent`",
-        );
-    }
-
-    #[test]
-    fn test_agent_non_tool_function() {
-        assert_has_error(
-            r#"fn helper(x: i64) -> i64 { x }
-agent Bot {
-    model: "test"
-    tools: [helper]
-}
-fn main() { }"#,
-            "is not a `tool fn`",
-        );
-    }
-
-    #[test]
-    fn test_duplicate_agent() {
-        assert_has_error(
-            r#"tool fn t(x: i64) -> i64 { x }
-agent A {
-    model: "test"
-    tools: [t]
-}
-agent A {
-    model: "test"
-    tools: [t]
-}
-fn main() { }"#,
-            "agent `A` is already defined",
         );
     }
 

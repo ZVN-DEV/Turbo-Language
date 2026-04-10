@@ -44,8 +44,6 @@ pub(crate) enum TurboTy {
     Result(Box<TurboTy>, Box<TurboTy>),
     /// Optional type (heap-allocated tagged union): inner_type
     Optional(Box<TurboTy>),
-    /// Agent type: heap-allocated struct with model/system/tools fields
-    Agent(String),
     /// Future type: a spawned thread handle (pointer to JoinHandle)
     Future(Box<TurboTy>),
 }

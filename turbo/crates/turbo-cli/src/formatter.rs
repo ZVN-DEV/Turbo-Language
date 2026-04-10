@@ -2,7 +2,7 @@ use std::path::Path;
 
 /// Top-level declarations that trigger blank-line separation.
 const TOP_LEVEL_KEYWORDS: &[&str] = &[
-    "fn ", "struct ", "type ", "impl ", "trait ", "import ", "agent ", "tool ", "extern ",
+    "fn ", "struct ", "type ", "impl ", "trait ", "import ", "extern ",
     "@unsafe",
 ];
 

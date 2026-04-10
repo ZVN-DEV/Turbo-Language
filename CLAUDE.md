@@ -68,8 +68,8 @@ Codegen (turbo-codegen-cranelift)  →  JIT execution  or  AOT .o file
 - `Span` — `Range<usize>`, byte offsets into source.
 - `Spanned<T>` — wraps any node with its `Span`.
 - `Module` — root AST node; contains `Vec<Spanned<Item>>`.
-- `Item` — top-level: `Function(FnDef)`, `Struct(StructDef)`, `Enum(EnumDef)`, `Impl(ImplBlock)`, `Trait(TraitDef)`, `Agent(AgentDef)`, `Import`, `Const`.
-- `FnDef` — function name, params, return type, body, plus flags: `is_async`, `is_tool`, `is_test`, `is_unsafe`.
+- `Item` — top-level: `Function(FnDef)`, `Struct(StructDef)`, `Enum(EnumDef)`, `Impl(ImplBlock)`, `Trait(TraitDef)`, `Import`, `Const`.
+- `FnDef` — function name, params, return type, body, plus flags: `is_async`, `is_test`, `is_unsafe`.
 - `StructDef` — name, type params, derives, fields.
 - `EnumDef` — name, type params, variants (each may carry data fields).
 - `Expr` — expression nodes: literals, `BinaryOp`, `Call`, `If`, `While`, `Match`, `Block`, `FieldAccess`, `MethodCall`, `Closure`, `ArrayLit`, `Index`, `Assign`, `Spawn`, `Await`, etc.
@@ -178,7 +178,7 @@ turbo/
     turbo-parser/         # Recursive descent parser
     turbo-sema/           # Type checking + semantic analysis
     turbo-codegen-cranelift/
-      src/lib.rs            # Codegen entry, function/struct/agent setup
+      src/lib.rs            # Codegen entry, function/struct setup
       src/expr.rs           # Expression compilation incl. compile_call()
       src/builtins.rs       # Built-in function dispatch + JIT symbol table
       src/runtime.rs        # Runtime helpers and Cranelift glue

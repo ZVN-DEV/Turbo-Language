@@ -98,14 +98,6 @@ pub enum Token {
     Spawn,
     #[token("defer")]
     Defer,
-    #[token("tool")]
-    Tool,
-    #[token("agent")]
-    Agent,
-    #[token("resource")]
-    Resource,
-    #[token("prompt")]
-    Prompt,
     #[token("none")]
     None,
     #[token("some")]
@@ -456,10 +448,6 @@ impl fmt::Display for Token {
             Token::Await => write!(f, "await"),
             Token::Spawn => write!(f, "spawn"),
             Token::Defer => write!(f, "defer"),
-            Token::Tool => write!(f, "tool"),
-            Token::Agent => write!(f, "agent"),
-            Token::Resource => write!(f, "resource"),
-            Token::Prompt => write!(f, "prompt"),
             Token::None => write!(f, "none"),
             Token::Some => write!(f, "some"),
             Token::Ok => write!(f, "ok"),
@@ -676,10 +664,6 @@ mod tests {
             ("await", Token::Await),
             ("spawn", Token::Spawn),
             ("defer", Token::Defer),
-            ("tool", Token::Tool),
-            ("agent", Token::Agent),
-            ("resource", Token::Resource),
-            ("prompt", Token::Prompt),
             ("none", Token::None),
             ("some", Token::Some),
             ("ok", Token::Ok),
@@ -719,49 +703,6 @@ mod tests {
         assert!(matches!(&tokens[0].value, Token::Ident(s) if s == "x"));
         assert!(matches!(&tokens[1].value, Token::Plus));
         assert!(matches!(&tokens[2].value, Token::Ident(s) if s == "y"));
-    }
-
-    #[test]
-    fn test_tool_keyword() {
-        let source = "tool fn search(query: str) -> str { }";
-        let (tokens, errors) = tokenize(source);
-        assert!(errors.is_empty());
-        let kinds: Vec<_> = tokens.iter().map(|t| &t.value).collect();
-        assert!(matches!(kinds[0], Token::Tool));
-        assert!(matches!(kinds[1], Token::Fn));
-        assert!(matches!(kinds[2], Token::Ident(s) if s == "search"));
-    }
-
-    #[test]
-    fn test_agent_keyword() {
-        let source = "agent Helper { }";
-        let (tokens, errors) = tokenize(source);
-        assert!(errors.is_empty());
-        let kinds: Vec<_> = tokens.iter().map(|t| &t.value).collect();
-        assert!(matches!(kinds[0], Token::Agent));
-        assert!(matches!(kinds[1], Token::Ident(s) if s == "Helper"));
-        assert!(matches!(kinds[2], Token::LBrace));
-        assert!(matches!(kinds[3], Token::RBrace));
-    }
-
-    #[test]
-    fn test_resource_keyword() {
-        let source = "resource customer(id: str) -> str { id }";
-        let (tokens, errors) = tokenize(source);
-        assert!(errors.is_empty());
-        let kinds: Vec<_> = tokens.iter().map(|t| &t.value).collect();
-        assert!(matches!(kinds[0], Token::Resource));
-        assert!(matches!(kinds[1], Token::Ident(s) if s == "customer"));
-    }
-
-    #[test]
-    fn test_prompt_keyword() {
-        let source = "prompt refund_review(id: str) -> str { id }";
-        let (tokens, errors) = tokenize(source);
-        assert!(errors.is_empty());
-        let kinds: Vec<_> = tokens.iter().map(|t| &t.value).collect();
-        assert!(matches!(kinds[0], Token::Prompt));
-        assert!(matches!(kinds[1], Token::Ident(s) if s == "refund_review"));
     }
 
     #[test]

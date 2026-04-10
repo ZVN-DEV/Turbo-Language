@@ -584,133 +584,6 @@ pub(crate) fn compile_expr<M: Module>(
         }
 
         Expr::StructLit { name, fields } => {
-            // Check if this is an agent instantiation
-            if let Some((
-                model,
-                tools,
-                resources,
-                prompts,
-                output_type,
-                output_schema,
-                system_prompt,
-                tool_wrapper_names,
-                _output_tty,
-            )) = cx.agent_defs.get(name).cloned()
-            {
-                // Allocate a struct with 8 slots:
-                // [model, system, tools, resources, prompts, output_type, output_schema, tool_wrappers]
-                let num_fields_val = cx.builder.ins().iconst(types::I64, 8);
-                let alloc_fid = cx.rt_fns["rt_struct_alloc"];
-                let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
-                let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
-                let ptr = cx.builder.inst_results(call)[0];
-
-                // Slot 0: model string
-                let model_val = cx.create_string(&model)?;
-                cx.builder.ins().store(MemFlags::new(), model_val, ptr, 0);
-
-                // Slot 1: system prompt string
-                let system_str = system_prompt.as_deref().unwrap_or("");
-                let system_val = cx.create_string(system_str)?;
-                cx.builder.ins().store(MemFlags::new(), system_val, ptr, 8);
-
-                // Slot 2: tools array (array of tool name strings)
-                let tools_len = tools.len() as i64;
-                let tools_len_val = cx.builder.ins().iconst(types::I64, tools_len);
-                let arr_alloc_fid = cx.rt_fns["rt_array_alloc"];
-                let arr_alloc_ref = cx
-                    .module
-                    .declare_func_in_func(arr_alloc_fid, cx.builder.func);
-                let arr_call = cx.builder.ins().call(arr_alloc_ref, &[tools_len_val]);
-                let arr_ptr = cx.builder.inst_results(arr_call)[0];
-                for (i, tool_name) in tools.iter().enumerate() {
-                    let tool_str = cx.create_string(tool_name)?;
-                    let offset = cx.builder.ins().iconst(cx.ptr_type, (8 + i * 8) as i64);
-                    let elem_ptr = cx.builder.ins().iadd(arr_ptr, offset);
-                    cx.builder
-                        .ins()
-                        .store(MemFlags::new(), tool_str, elem_ptr, 0);
-                }
-                cx.builder.ins().store(MemFlags::new(), arr_ptr, ptr, 16);
-
-                // Slot 3: resources array
-                let resources_len_val = cx.builder.ins().iconst(types::I64, resources.len() as i64);
-                let res_alloc_ref = cx
-                    .module
-                    .declare_func_in_func(arr_alloc_fid, cx.builder.func);
-                let res_call = cx.builder.ins().call(res_alloc_ref, &[resources_len_val]);
-                let res_ptr = cx.builder.inst_results(res_call)[0];
-                for (i, resource_name) in resources.iter().enumerate() {
-                    let resource_str = cx.create_string(resource_name)?;
-                    let offset = cx.builder.ins().iconst(cx.ptr_type, (8 + i * 8) as i64);
-                    let elem_ptr = cx.builder.ins().iadd(res_ptr, offset);
-                    cx.builder
-                        .ins()
-                        .store(MemFlags::new(), resource_str, elem_ptr, 0);
-                }
-                cx.builder.ins().store(MemFlags::new(), res_ptr, ptr, 24);
-
-                // Slot 4: prompts array
-                let prompts_len_val = cx.builder.ins().iconst(types::I64, prompts.len() as i64);
-                let prompt_alloc_ref = cx
-                    .module
-                    .declare_func_in_func(arr_alloc_fid, cx.builder.func);
-                let prompt_call = cx.builder.ins().call(prompt_alloc_ref, &[prompts_len_val]);
-                let prompt_ptr = cx.builder.inst_results(prompt_call)[0];
-                for (i, prompt_name) in prompts.iter().enumerate() {
-                    let prompt_str = cx.create_string(prompt_name)?;
-                    let offset = cx.builder.ins().iconst(cx.ptr_type, (8 + i * 8) as i64);
-                    let elem_ptr = cx.builder.ins().iadd(prompt_ptr, offset);
-                    cx.builder
-                        .ins()
-                        .store(MemFlags::new(), prompt_str, elem_ptr, 0);
-                }
-                cx.builder.ins().store(MemFlags::new(), prompt_ptr, ptr, 32);
-
-                // Slot 5: output type label
-                let output_type_val = cx.create_string(&output_type)?;
-                cx.builder
-                    .ins()
-                    .store(MemFlags::new(), output_type_val, ptr, 40);
-
-                // Slot 6: output schema string
-                let output_schema_val = cx.create_string(&output_schema)?;
-                cx.builder
-                    .ins()
-                    .store(MemFlags::new(), output_schema_val, ptr, 48);
-
-                // Slot 7: tool wrapper pointer array
-                let wrapper_len_val = cx
-                    .builder
-                    .ins()
-                    .iconst(types::I64, tool_wrapper_names.len() as i64);
-                let wrapper_alloc_ref = cx
-                    .module
-                    .declare_func_in_func(arr_alloc_fid, cx.builder.func);
-                let wrapper_call = cx.builder.ins().call(wrapper_alloc_ref, &[wrapper_len_val]);
-                let wrapper_ptr = cx.builder.inst_results(wrapper_call)[0];
-                for (i, tool_name) in tool_wrapper_names.iter().enumerate() {
-                    let raw_ptr = if let Some(wrapper_fid) = cx.tool_wrapper_fns.get(tool_name) {
-                        let wrapper_ref = cx
-                            .module
-                            .declare_func_in_func(*wrapper_fid, cx.builder.func);
-                        cx.builder.ins().func_addr(cx.ptr_type, wrapper_ref)
-                    } else {
-                        cx.builder.ins().iconst(cx.ptr_type, 0)
-                    };
-                    let offset = cx.builder.ins().iconst(cx.ptr_type, (8 + i * 8) as i64);
-                    let elem_ptr = cx.builder.ins().iadd(wrapper_ptr, offset);
-                    cx.builder
-                        .ins()
-                        .store(MemFlags::new(), raw_ptr, elem_ptr, 0);
-                }
-                cx.builder
-                    .ins()
-                    .store(MemFlags::new(), wrapper_ptr, ptr, 56);
-
-                return Ok(Some((ptr, TurboTy::Agent(name.clone()))));
-            }
-
             let struct_layout = cx
                 .struct_fields
                 .get(name)
@@ -806,30 +679,6 @@ pub(crate) fn compile_expr<M: Module>(
             }
 
             let (obj_ptr, obj_tty) = compile_expr(cx, object)?.unwrap();
-
-            // Handle agent field access: model, system, tools, resources, prompts, output metadata
-            if let TurboTy::Agent(_) = &obj_tty {
-                let (offset, tty) = match field.as_str() {
-                    "model" => (0i32, TurboTy::Str),
-                    "system" => (8i32, TurboTy::Str),
-                    "tools" => (16i32, TurboTy::Array(Box::new(TurboTy::Str))),
-                    "resources" => (24i32, TurboTy::Array(Box::new(TurboTy::Str))),
-                    "prompts" => (32i32, TurboTy::Array(Box::new(TurboTy::Str))),
-                    "output_type" => (40i32, TurboTy::Str),
-                    "output_schema" => (48i32, TurboTy::Str),
-                    _ => {
-                        return Err(CodegenError {
-                            code: ErrorCode::E0400,
-                            message: format!("agent has no field `{field}`"),
-                        })
-                    }
-                };
-                let val = cx
-                    .builder
-                    .ins()
-                    .load(types::I64, MemFlags::new(), obj_ptr, offset);
-                return Ok(Some((val, tty)));
-            }
 
             let struct_name = match &obj_tty {
                 TurboTy::Struct(name) => name.clone(),
@@ -1192,7 +1041,6 @@ pub(crate) fn is_rc_heap_type(ty: &TurboTy) -> bool {
             | TurboTy::Struct(_)
             | TurboTy::Result(_, _)
             | TurboTy::Optional(_)
-            | TurboTy::Agent(_)
     )
 }
 
@@ -1294,110 +1142,6 @@ pub(crate) fn release_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty
     let release_fid = cx.rt_fns["rt_release"];
     let release_ref = cx.module.declare_func_in_func(release_fid, cx.builder.func);
     cx.builder.ins().call(release_ref, &[value]);
-}
-
-// ── Structured JSON decoding ─────────────────────────────────────────
-
-fn is_structured_decode_supported(
-    ty: &TurboTy,
-    struct_fields: &HashMap<String, Vec<(String, TurboTy)>>,
-) -> bool {
-    match ty {
-        TurboTy::Str | TurboTy::Int | TurboTy::Bool | TurboTy::Float => true,
-        TurboTy::Struct(name) => struct_fields.get(name).is_some_and(|fields| {
-            fields
-                .iter()
-                .all(|(_, field_ty)| is_structured_decode_supported(field_ty, struct_fields))
-        }),
-        _ => false,
-    }
-}
-
-fn compile_json_decode<M: Module>(
-    cx: &mut Ctx<'_, M>,
-    json_val: Value,
-    ty: &TurboTy,
-) -> Result<Value, CodegenError> {
-    match ty {
-        TurboTy::Str => {
-            let fid = cx.rt_fns["rt_json_root"];
-            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-            let call = cx.builder.ins().call(fref, &[json_val]);
-            Ok(cx.builder.inst_results(call)[0])
-        }
-        TurboTy::Int => {
-            let fid = cx.rt_fns["rt_json_root"];
-            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-            let call = cx.builder.ins().call(fref, &[json_val]);
-            let raw = cx.builder.inst_results(call)[0];
-            let parse_fid = cx.rt_fns["rt_str_to_i64"];
-            let parse_ref = cx.module.declare_func_in_func(parse_fid, cx.builder.func);
-            let parse_call = cx.builder.ins().call(parse_ref, &[raw]);
-            Ok(cx.builder.inst_results(parse_call)[0])
-        }
-        TurboTy::Float => {
-            let fid = cx.rt_fns["rt_json_root"];
-            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-            let call = cx.builder.ins().call(fref, &[json_val]);
-            let raw = cx.builder.inst_results(call)[0];
-            let parse_fid = cx.rt_fns["rt_str_to_f64"];
-            let parse_ref = cx.module.declare_func_in_func(parse_fid, cx.builder.func);
-            let parse_call = cx.builder.ins().call(parse_ref, &[raw]);
-            Ok(cx.builder.inst_results(parse_call)[0])
-        }
-        TurboTy::Bool => {
-            let fid = cx.rt_fns["rt_json_root"];
-            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-            let call = cx.builder.ins().call(fref, &[json_val]);
-            let raw = cx.builder.inst_results(call)[0];
-            let parse_fid = cx.rt_fns["rt_str_to_bool"];
-            let parse_ref = cx.module.declare_func_in_func(parse_fid, cx.builder.func);
-            let parse_call = cx.builder.ins().call(parse_ref, &[raw]);
-            Ok(cx.builder.inst_results(parse_call)[0])
-        }
-        TurboTy::Struct(name) => {
-            let layout = cx
-                .struct_fields
-                .get(name)
-                .ok_or_else(|| CodegenError {
-                    code: ErrorCode::E0400,
-                    message: format!("unknown structured output type `{name}`"),
-                })?
-                .clone();
-            let alloc_fid = cx.rt_fns["rt_struct_alloc"];
-            let alloc_ref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
-            let field_count = cx.builder.ins().iconst(types::I64, layout.len() as i64);
-            let call = cx.builder.ins().call(alloc_ref, &[field_count]);
-            let ptr = cx.builder.inst_results(call)[0];
-            for (index, (field_name, field_ty)) in layout.iter().enumerate() {
-                let key = cx.create_string(field_name)?;
-                let get_fid = cx.rt_fns["rt_json_get"];
-                let get_ref = cx.module.declare_func_in_func(get_fid, cx.builder.func);
-                let get_call = cx.builder.ins().call(get_ref, &[json_val, key]);
-                let field_json = cx.builder.inst_results(get_call)[0];
-                let decoded = compile_json_decode(cx, field_json, field_ty)?;
-                let stored = match field_ty {
-                    TurboTy::Bool => cx.builder.ins().sextend(types::I64, decoded),
-                    TurboTy::Float => {
-                        cx.builder
-                            .ins()
-                            .bitcast(types::I64, MemFlags::new(), decoded)
-                    }
-                    _ => decoded,
-                };
-                cx.builder
-                    .ins()
-                    .store(MemFlags::new(), stored, ptr, (index * 8) as i32);
-            }
-            Ok(ptr)
-        }
-        _ => Err(CodegenError {
-            code: ErrorCode::E0400,
-            message:
-                "structured decoding is only supported for str/int/bool/float and flat structs"
-                    .to_string(),
-        }),
-    }
 }
 
 // ── Binary operations ───────────────────────────────────────────────
@@ -1597,57 +1341,6 @@ fn compile_call<M: Module>(
     } = callee.node
     {
         let (obj_val, obj_tty) = compile_expr(cx, object)?.unwrap();
-        if let TurboTy::Agent(_) = obj_tty {
-            if field == "ask" || field == "ask_structured" || field == "stream" {
-                if args.len() != 1 {
-                    return Err(CodegenError {
-                        code: ErrorCode::E0400,
-                        message: format!("agent.{field}() requires exactly 1 argument"),
-                    });
-                }
-                let (prompt_val, _) = compile_expr(cx, &args[0])?.unwrap();
-                let rt_name = match field.as_str() {
-                    "ask" => "rt_agent_ask",
-                    "ask_structured" => "rt_agent_ask_structured",
-                    "stream" => "rt_agent_stream",
-                    _ => unreachable!(),
-                };
-                let ask_fid = cx.rt_fns[rt_name];
-                let ask_ref = cx.module.declare_func_in_func(ask_fid, cx.builder.func);
-                let call = cx.builder.ins().call(ask_ref, &[obj_val, prompt_val]);
-                let result = cx.builder.inst_results(call)[0];
-                let result_ty = if field == "stream" {
-                    TurboTy::Array(Box::new(TurboTy::Str))
-                } else if field == "ask_structured" {
-                    let TurboTy::Agent(agent_name) = obj_tty else {
-                        unreachable!();
-                    };
-                    let Some((_, _, _, _, _, _, _, _, Some(output_tty))) =
-                        cx.agent_defs.get(&agent_name).cloned()
-                    else {
-                        return Err(CodegenError {
-                            code: ErrorCode::E0400,
-                            message: format!(
-                                "agent `{agent_name}` does not declare a structured output type"
-                            ),
-                        });
-                    };
-                    if !is_structured_decode_supported(&output_tty, cx.struct_fields) {
-                        return Err(CodegenError {
-                            code: ErrorCode::E0400,
-                            message: format!(
-                                "structured decoding for agent `{agent_name}` only supports str/int/bool/float and flat structs"
-                            ),
-                        });
-                    }
-                    let decoded = compile_json_decode(cx, result, &output_tty)?;
-                    return Ok(Some((decoded, output_tty)));
-                } else {
-                    TurboTy::Str
-                };
-                return Ok(Some((result, result_ty)));
-            }
-        }
         if let TurboTy::Struct(ref type_name) = obj_tty {
             let mangled = format!("{}__{}", type_name, field);
             if let Some(&fid) = cx.user_fns.get(&mangled) {
@@ -1684,59 +1377,6 @@ fn compile_call<M: Module>(
             message: "indirect function calls not yet supported".to_string(),
         });
     };
-
-    if (name == "ask" || name == "ask_structured" || name == "stream") && !args.is_empty() {
-        let (agent_val, agent_tty) = compile_expr(cx, &args[0])?.unwrap();
-        if let TurboTy::Agent(_) = agent_tty {
-            if args.len() != 2 {
-                return Err(CodegenError {
-                    code: ErrorCode::E0400,
-                    message: format!("agent.{name}() requires exactly 1 argument"),
-                });
-            }
-            let (prompt_val, _) = compile_expr(cx, &args[1])?.unwrap();
-            let rt_name = match name.as_str() {
-                "ask" => "rt_agent_ask",
-                "ask_structured" => "rt_agent_ask_structured",
-                "stream" => "rt_agent_stream",
-                _ => unreachable!(),
-            };
-            let ask_fid = cx.rt_fns[rt_name];
-            let ask_ref = cx.module.declare_func_in_func(ask_fid, cx.builder.func);
-            let call = cx.builder.ins().call(ask_ref, &[agent_val, prompt_val]);
-            let result = cx.builder.inst_results(call)[0];
-            let result_ty = if name == "stream" {
-                TurboTy::Array(Box::new(TurboTy::Str))
-            } else if name == "ask_structured" {
-                let TurboTy::Agent(agent_name) = agent_tty else {
-                    unreachable!();
-                };
-                let Some((_, _, _, _, _, _, _, _, Some(output_tty))) =
-                    cx.agent_defs.get(&agent_name).cloned()
-                else {
-                    return Err(CodegenError {
-                        code: ErrorCode::E0400,
-                        message: format!(
-                            "agent `{agent_name}` does not declare a structured output type"
-                        ),
-                    });
-                };
-                if !is_structured_decode_supported(&output_tty, cx.struct_fields) {
-                    return Err(CodegenError {
-                        code: ErrorCode::E0400,
-                        message: format!(
-                            "structured decoding for agent `{agent_name}` only supports str/int/bool/float and flat structs"
-                        ),
-                    });
-                }
-                let decoded = compile_json_decode(cx, result, &output_tty)?;
-                return Ok(Some((decoded, output_tty)));
-            } else {
-                TurboTy::Str
-            };
-            return Ok(Some((result, result_ty)));
-        }
-    }
 
     match name.as_str() {
         "print" => compile_print(cx, args),

@@ -61,18 +61,6 @@ pub(crate) use stmt::compile_stmt;
 const RUNTIME_C: &str = include_str!("../runtime/turbo_rt.c");
 const RUNTIME_WASM_C: &str = include_str!("../runtime/turbo_rt_wasm.c");
 
-type AgentMetadata = (
-    String,
-    Vec<String>,
-    Vec<String>,
-    Vec<String>,
-    String,
-    String,
-    Option<String>,
-    Vec<String>,
-    Option<TurboTy>,
-);
-
 // ── Codegen context (generic over Module type) ──────────────────────
 
 /// Max depth for inlining recursive functions at call sites.
@@ -88,7 +76,6 @@ pub(crate) struct Ctx<'a, M: Module> {
     pub(crate) fn_ret_types: &'a HashMap<String, TurboTy>,
     pub(crate) fn_asts: &'a HashMap<String, &'a FnDef>,
     pub(crate) fn_type_params: &'a HashMap<String, Vec<String>>,
-    pub(crate) tool_wrapper_fns: &'a HashMap<String, FuncId>,
     pub(crate) rt_fns: &'a HashMap<String, FuncId>,
     pub(crate) vars: HashMap<String, (Variable, types::Type, TurboTy)>,
     pub(crate) next_var: usize,
@@ -115,8 +102,6 @@ pub(crate) struct Ctx<'a, M: Module> {
     pub(crate) generic_struct_field_overrides: HashMap<String, Vec<(String, TurboTy)>>,
     /// Temporary: last struct literal's concrete field types (set during StructLit compilation, consumed by Let)
     pub(crate) last_struct_lit_concrete_fields: Option<Vec<(String, TurboTy)>>,
-    /// Agent definitions: agent_name -> (model, tools, resources, prompts, output_type, output_schema, system_prompt, tool_wrapper_names, output_tty)
-    pub(crate) agent_defs: &'a HashMap<String, AgentMetadata>,
     /// Spawn thunk map: spawn expr span start -> thunk function name
     pub(crate) spawn_thunks: &'a HashMap<usize, String>,
     /// Module-level constants: name -> AST expression (inlined at usage sites)
@@ -189,309 +174,6 @@ impl<'a, M: Module> Ctx<'a, M> {
         } else {
             let zero = self.builder.ins().iconst(ty, 0);
             self.builder.ins().icmp(IntCC::NotEqual, val, zero)
-        }
-    }
-}
-
-fn compile_tool_wrapper_fn<M: Module>(
-    env: &mut ToolWrapperEnv<'_, M>,
-    wrapper_id: FuncId,
-    tool_fn: &FnDef,
-    original_fid: FuncId,
-) -> Result<(), CodegenError> {
-    let mut cl_ctx = env.module.make_context();
-    cl_ctx.func.signature = env.module.make_signature();
-    cl_ctx.func.signature.call_conv = CallConv::Fast;
-    cl_ctx
-        .func
-        .signature
-        .params
-        .push(AbiParam::new(env.ptr_type));
-    cl_ctx
-        .func
-        .signature
-        .returns
-        .push(AbiParam::new(env.ptr_type));
-
-    let mut fn_ctx = FunctionBuilderContext::new();
-    {
-        let builder = FunctionBuilder::new(&mut cl_ctx.func, &mut fn_ctx);
-        let empty_fn_asts = HashMap::new();
-        let empty_fn_type_params = HashMap::new();
-        let empty_tool_wrapper_fns = HashMap::new();
-        let empty_closure_fns = HashMap::new();
-        let mut empty_closure_captures = HashMap::new();
-        let empty_spawn_thunks = HashMap::new();
-        let empty_constants = HashMap::new();
-        let empty_struct_derives = HashMap::new();
-        let empty_agent_defs = HashMap::new();
-        let mut cx = Ctx {
-            builder,
-            module: env.module,
-            user_fns: env.user_fns,
-            fn_ret_types: env.fn_ret_types,
-            fn_asts: &empty_fn_asts,
-            fn_type_params: &empty_fn_type_params,
-            tool_wrapper_fns: &empty_tool_wrapper_fns,
-            rt_fns: env.rt_fns,
-            vars: HashMap::new(),
-            next_var: 0,
-            data_desc: env.data_desc,
-            string_counter: env.string_counter,
-            ptr_type: env.ptr_type,
-            struct_fields: env.struct_fields,
-            enum_variants: env.enum_variants,
-            enum_variant_fields: env.enum_variant_fields,
-            enum_max_slots: env.enum_max_slots,
-            closure_fns: &empty_closure_fns,
-            trait_impls: env.trait_impls,
-            inline_depth: 0,
-            closure_captures: &mut empty_closure_captures,
-            generic_struct_field_overrides: HashMap::new(),
-            last_struct_lit_concrete_fields: None,
-            agent_defs: &empty_agent_defs,
-            spawn_thunks: &empty_spawn_thunks,
-            constants: &empty_constants,
-            struct_derives: &empty_struct_derives,
-            loop_stack: Vec::new(),
-        };
-        let entry = cx.builder.create_block();
-        cx.builder.append_block_params_for_function_params(entry);
-        cx.builder.switch_to_block(entry);
-        cx.builder.seal_block(entry);
-        cx.builder.ensure_inserted_block();
-
-        let input_ptr = cx.builder.block_params(entry)[0];
-        let original_ref = cx
-            .module
-            .declare_func_in_func(original_fid, cx.builder.func);
-
-        let result_ptr = if tool_fn.is_async {
-            cx.create_string("error: async tool execution is not yet supported in agent tool loop")?
-        } else if tool_fn.params.is_empty() {
-            let call = cx.builder.ins().call(original_ref, &[]);
-            let result_val = {
-                let results = cx.builder.inst_results(call);
-                if results.is_empty() {
-                    None
-                } else {
-                    Some(results[0])
-                }
-            };
-            if let Some(result_val) = result_val {
-                let ret_tty = env
-                    .fn_ret_types
-                    .get(&tool_fn.name)
-                    .cloned()
-                    .unwrap_or(TurboTy::Unit);
-                convert_to_str(&mut cx, result_val, &ret_tty)?
-            } else {
-                cx.create_string("()")?
-            }
-        } else if tool_fn.params.len() == 1
-            && matches!(&tool_fn.params[0].ty.node, TypeExpr::Named(name) if name == "str")
-        {
-            let call = cx.builder.ins().call(original_ref, &[input_ptr]);
-            let result_val = {
-                let results = cx.builder.inst_results(call);
-                if results.is_empty() {
-                    None
-                } else {
-                    Some(results[0])
-                }
-            };
-            if let Some(result_val) = result_val {
-                let ret_tty = env
-                    .fn_ret_types
-                    .get(&tool_fn.name)
-                    .cloned()
-                    .unwrap_or(TurboTy::Unit);
-                convert_to_str(&mut cx, result_val, &ret_tty)?
-            } else {
-                cx.create_string("()")?
-            }
-        } else {
-            cx.create_string("error: unsupported tool signature for runtime execution")?
-        };
-
-        cx.builder.ins().return_(&[result_ptr]);
-        cx.builder.finalize();
-    }
-
-    env.module
-        .define_function(wrapper_id, &mut cl_ctx)
-        .map_err(|e| CodegenError {
-            code: ErrorCode::E0405,
-            message: e.to_string(),
-        })?;
-    env.module.clear_context(&mut cl_ctx);
-    Ok(())
-}
-
-struct ToolWrapperEnv<'a, M: Module> {
-    module: &'a mut M,
-    ptr_type: types::Type,
-    rt_fns: &'a HashMap<String, FuncId>,
-    user_fns: &'a HashMap<String, FuncId>,
-    fn_ret_types: &'a HashMap<String, TurboTy>,
-    struct_fields: &'a HashMap<String, Vec<(String, TurboTy)>>,
-    enum_variants: &'a HashMap<String, Vec<String>>,
-    enum_variant_fields: &'a HashMap<(String, String), Vec<TurboTy>>,
-    enum_max_slots: &'a HashMap<String, usize>,
-    trait_impls: &'a HashMap<String, Vec<String>>,
-    data_desc: &'a mut DataDescription,
-    string_counter: &'a mut usize,
-}
-
-fn json_escape(input: &str) -> String {
-    input
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-}
-
-fn format_type_expr_for_agent_output(ty: &TypeExpr) -> String {
-    match ty {
-        TypeExpr::Named(name) => name.clone(),
-        TypeExpr::Unit => "()".to_string(),
-        TypeExpr::Array(inner) => format!("[{}]", format_type_expr_for_agent_output(&inner.node)),
-        TypeExpr::FnType { params, ret } => format!(
-            "fn({}) -> {}",
-            params
-                .iter()
-                .map(|p| format_type_expr_for_agent_output(&p.node))
-                .collect::<Vec<_>>()
-                .join(", "),
-            format_type_expr_for_agent_output(&ret.node)
-        ),
-        TypeExpr::Result { ok_type, err_type } => format!(
-            "{} ! {}",
-            format_type_expr_for_agent_output(&ok_type.node),
-            format_type_expr_for_agent_output(&err_type.node)
-        ),
-        TypeExpr::Optional(inner) => format!("{}?", format_type_expr_for_agent_output(&inner.node)),
-        TypeExpr::Future(inner) => {
-            format!("Future<{}>", format_type_expr_for_agent_output(&inner.node))
-        }
-        TypeExpr::Inferred => "_".to_string(),
-    }
-}
-
-fn turbo_ty_to_json_schema(
-    ty: &TurboTy,
-    struct_fields: &HashMap<String, Vec<(String, TurboTy)>>,
-    enum_variants: &HashMap<String, Vec<String>>,
-    enum_variant_fields: &HashMap<(String, String), Vec<TurboTy>>,
-) -> String {
-    match ty {
-        TurboTy::I8 | TurboTy::I16 | TurboTy::Int | TurboTy::U8 | TurboTy::U16 => {
-            "{\"type\":\"integer\"}".to_string()
-        }
-        TurboTy::Float => "{\"type\":\"number\"}".to_string(),
-        TurboTy::Bool => "{\"type\":\"boolean\"}".to_string(),
-        TurboTy::Str => "{\"type\":\"string\"}".to_string(),
-        TurboTy::Unit => "{\"type\":\"null\"}".to_string(),
-        TurboTy::Array(inner) => format!(
-            "{{\"type\":\"array\",\"items\":{}}}",
-            turbo_ty_to_json_schema(inner, struct_fields, enum_variants, enum_variant_fields)
-        ),
-        TurboTy::Optional(inner) => format!(
-            "{{\"anyOf\":[{},{{\"type\":\"null\"}}]}}",
-            turbo_ty_to_json_schema(inner, struct_fields, enum_variants, enum_variant_fields)
-        ),
-        TurboTy::Result(ok, err) => format!(
-            "{{\"type\":\"object\",\"properties\":{{\"ok\":{},\"err\":{}}}}}",
-            turbo_ty_to_json_schema(ok, struct_fields, enum_variants, enum_variant_fields),
-            turbo_ty_to_json_schema(err, struct_fields, enum_variants, enum_variant_fields)
-        ),
-        TurboTy::Struct(name) => {
-            if let Some(fields) = struct_fields.get(name) {
-                let properties = fields
-                    .iter()
-                    .map(|(field_name, field_ty)| {
-                        format!(
-                            "\"{}\":{}",
-                            json_escape(field_name),
-                            turbo_ty_to_json_schema(
-                                field_ty,
-                                struct_fields,
-                                enum_variants,
-                                enum_variant_fields
-                            )
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(",");
-                format!(
-                    "{{\"type\":\"object\",\"title\":\"{}\",\"properties\":{{{}}}}}",
-                    json_escape(name),
-                    properties
-                )
-            } else {
-                format!(
-                    "{{\"type\":\"object\",\"title\":\"{}\"}}",
-                    json_escape(name)
-                )
-            }
-        }
-        TurboTy::Enum(name) => {
-            if let Some(variants) = enum_variants.get(name) {
-                let has_payload = variants.iter().any(|variant| {
-                    enum_variant_fields
-                        .get(&(name.clone(), variant.clone()))
-                        .is_some_and(|fields| !fields.is_empty())
-                });
-                if has_payload {
-                    let any_of = variants
-                        .iter()
-                        .map(|variant| {
-                            if let Some(fields) =
-                                enum_variant_fields.get(&(name.clone(), variant.clone()))
-                            {
-                                let field_schemas = fields
-                                    .iter()
-                                    .map(|field_ty| {
-                                        turbo_ty_to_json_schema(
-                                            field_ty,
-                                            struct_fields,
-                                            enum_variants,
-                                            enum_variant_fields,
-                                        )
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join(",");
-                                format!(
-                                    "{{\"type\":\"object\",\"properties\":{{\"variant\":{{\"const\":\"{}\"}},\"fields\":{{\"type\":\"array\",\"items\":[{}]}}}}}}",
-                                    json_escape(variant),
-                                    field_schemas
-                                )
-                            } else {
-                                format!(
-                                    "{{\"type\":\"object\",\"properties\":{{\"variant\":{{\"const\":\"{}\"}}}}}}",
-                                    json_escape(variant)
-                                )
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    format!("{{\"anyOf\":[{}]}}", any_of)
-                } else {
-                    let values = variants
-                        .iter()
-                        .map(|variant| format!("\"{}\"", json_escape(variant)))
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    format!("{{\"type\":\"string\",\"enum\":[{}]}}", values)
-                }
-            } else {
-                format!(
-                    "{{\"type\":\"string\",\"title\":\"{}\"}}",
-                    json_escape(name)
-                )
-            }
-        }
-        TurboTy::Fn(_, _) | TurboTy::Agent(_) | TurboTy::Future(_) => {
-            "{\"type\":\"string\"}".to_string()
         }
     }
 }
@@ -604,7 +286,6 @@ pub(crate) fn turbo_ty_to_cl_type(tty: &TurboTy, ptr_type: types::Type) -> types
         TurboTy::Enum(_) => types::I64, // both unit (tag) and data (ptr) enums fit in I64
         TurboTy::Result(_, _) => ptr_type,
         TurboTy::Optional(_) => ptr_type,
-        TurboTy::Agent(_) => ptr_type, // heap-allocated struct pointer
         TurboTy::Future(_) => ptr_type, // thread handle pointer
     }
 }
@@ -1538,27 +1219,6 @@ fn compile_module<M: Module>(
     declare_rt_fn(
         module,
         &mut rt_fns,
-        "rt_agent_ask",
-        &[ptr_type, ptr_type],
-        Some(ptr_type),
-    )?;
-    declare_rt_fn(
-        module,
-        &mut rt_fns,
-        "rt_agent_ask_structured",
-        &[ptr_type, ptr_type],
-        Some(ptr_type),
-    )?;
-    declare_rt_fn(
-        module,
-        &mut rt_fns,
-        "rt_agent_stream",
-        &[ptr_type, ptr_type],
-        Some(ptr_type),
-    )?;
-    declare_rt_fn(
-        module,
-        &mut rt_fns,
         "rt_json_get",
         &[ptr_type, ptr_type],
         Some(ptr_type),
@@ -1829,43 +1489,6 @@ fn compile_module<M: Module>(
         }
     }
 
-    // Build agent definitions map from AST
-    let mut agent_defs: HashMap<String, AgentMetadata> = HashMap::new();
-    for item in &ast_module.items {
-        if let Item::Agent(agent) = &item.node {
-            let (output_type, output_schema) = if let Some(output_ty) = &agent.output_type {
-                let tty = turbo_ty_from_type_expr_with_params(&output_ty.node, &enum_variants, &[]);
-                let label = format_type_expr_for_agent_output(&output_ty.node);
-                let schema = turbo_ty_to_json_schema(
-                    &tty,
-                    &struct_fields,
-                    &enum_variants,
-                    &enum_variant_fields,
-                );
-                (label, schema)
-            } else {
-                (String::new(), String::new())
-            };
-            agent_defs.insert(
-                agent.name.clone(),
-                (
-                    agent.model.clone(),
-                    agent.tools.clone(),
-                    agent.resources.clone(),
-                    agent.prompts.clone(),
-                    output_type,
-                    output_schema,
-                    agent.system_prompt.clone(),
-                    agent.tools.clone(),
-                    agent
-                        .output_type
-                        .as_ref()
-                        .map(|t| turbo_ty_from_type_expr_with_params(&t.node, &enum_variants, &[])),
-                ),
-            );
-        }
-    }
-
     // Build constants map from AST
     let mut constants_map: HashMap<String, Spanned<Expr>> = HashMap::new();
     for item in &ast_module.items {
@@ -2013,29 +1636,6 @@ fn compile_module<M: Module>(
         };
         fn_asts.insert(f.name.clone(), f);
         fn_type_params.insert(f.name.clone(), f.type_param_names());
-    }
-
-    // Declare standard tool wrapper functions for runtime tool-loop execution.
-    let mut tool_wrapper_fns: HashMap<String, FuncId> = HashMap::new();
-    for item in &ast_module.items {
-        let Item::Function(f) = &item.node else {
-            continue;
-        };
-        if !f.is_tool {
-            continue;
-        }
-        let mut sig = module.make_signature();
-        sig.call_conv = CallConv::Fast;
-        sig.params.push(AbiParam::new(ptr_type));
-        sig.returns.push(AbiParam::new(ptr_type));
-        let wrapper_name = format!("__toolwrap__{}", f.name);
-        let id = module
-            .declare_function(&wrapper_name, Linkage::Local, &sig)
-            .map_err(|e| CodegenError {
-                code: ErrorCode::E0405,
-                message: e.to_string(),
-            })?;
-        tool_wrapper_fns.insert(f.name.clone(), id);
     }
 
     // Declare all methods from impl blocks
@@ -2304,7 +1904,6 @@ fn compile_module<M: Module>(
                 fn_ret_types: &fn_ret_types,
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
-                tool_wrapper_fns: &tool_wrapper_fns,
                 rt_fns: &rt_fns,
                 vars: HashMap::new(),
                 next_var: 0,
@@ -2321,7 +1920,6 @@ fn compile_module<M: Module>(
                 closure_captures: &mut closure_captures_map,
                 generic_struct_field_overrides: HashMap::new(),
                 last_struct_lit_concrete_fields: None,
-                agent_defs: &agent_defs,
                 spawn_thunks: &spawn_thunk_map,
                 constants: &constants_map,
                 struct_derives: &struct_derives,
@@ -2389,35 +1987,6 @@ fn compile_module<M: Module>(
         module.clear_context(&mut cl_ctx);
     }
 
-    // Define tool wrapper functions used by the agent tool-call loop.
-    let mut tool_wrapper_env = ToolWrapperEnv {
-        module,
-        ptr_type,
-        rt_fns: &rt_fns,
-        user_fns: &user_fns,
-        fn_ret_types: &fn_ret_types,
-        struct_fields: &struct_fields,
-        enum_variants: &enum_variants,
-        enum_variant_fields: &enum_variant_fields,
-        enum_max_slots: &enum_max_slots,
-        trait_impls: &trait_impls,
-        data_desc: &mut data_desc,
-        string_counter: &mut string_counter,
-    };
-    for item in &ast_module.items {
-        let Item::Function(f) = &item.node else {
-            continue;
-        };
-        if !f.is_tool {
-            continue;
-        }
-        let Some(&wrapper_id) = tool_wrapper_fns.get(&f.name) else {
-            continue;
-        };
-        let original_fid = user_fns[&f.name];
-        compile_tool_wrapper_fn(&mut tool_wrapper_env, wrapper_id, f, original_fid)?;
-    }
-
     // Define all methods from impl blocks
     for item in &ast_module.items {
         let Item::Impl(imp) = &item.node else {
@@ -2470,8 +2039,7 @@ fn compile_module<M: Module>(
                     fn_ret_types: &fn_ret_types,
                     fn_asts: &fn_asts,
                     fn_type_params: &fn_type_params,
-                    tool_wrapper_fns: &tool_wrapper_fns,
-                    rt_fns: &rt_fns,
+                        rt_fns: &rt_fns,
                     vars: HashMap::new(),
                     next_var: 0,
                     data_desc: &mut data_desc,
@@ -2487,8 +2055,7 @@ fn compile_module<M: Module>(
                     closure_captures: &mut closure_captures_map,
                     generic_struct_field_overrides: HashMap::new(),
                     last_struct_lit_concrete_fields: None,
-                    agent_defs: &agent_defs,
-                    spawn_thunks: &spawn_thunk_map,
+                        spawn_thunks: &spawn_thunk_map,
                     constants: &constants_map,
                     struct_derives: &struct_derives,
                     loop_stack: Vec::new(),
@@ -2593,7 +2160,6 @@ fn compile_module<M: Module>(
                 fn_ret_types: &fn_ret_types,
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
-                tool_wrapper_fns: &tool_wrapper_fns,
                 rt_fns: &rt_fns,
                 vars: HashMap::new(),
                 next_var: 0,
@@ -2610,7 +2176,6 @@ fn compile_module<M: Module>(
                 closure_captures: &mut closure_captures_map,
                 generic_struct_field_overrides: HashMap::new(),
                 last_struct_lit_concrete_fields: None,
-                agent_defs: &agent_defs,
                 spawn_thunks: &spawn_thunk_map,
                 constants: &constants_map,
                 struct_derives: &struct_derives,
@@ -2684,7 +2249,6 @@ fn compile_module<M: Module>(
                 fn_ret_types: &fn_ret_types,
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
-                tool_wrapper_fns: &tool_wrapper_fns,
                 rt_fns: &rt_fns,
                 vars: HashMap::new(),
                 next_var: 0,
@@ -2701,7 +2265,6 @@ fn compile_module<M: Module>(
                 closure_captures: &mut closure_captures_map,
                 generic_struct_field_overrides: HashMap::new(),
                 last_struct_lit_concrete_fields: None,
-                agent_defs: &agent_defs,
                 spawn_thunks: &spawn_thunk_map,
                 constants: &constants_map,
                 struct_derives: &struct_derives,
@@ -2869,7 +2432,6 @@ fn compile_module<M: Module>(
                 fn_ret_types: &fn_ret_types,
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
-                tool_wrapper_fns: &tool_wrapper_fns,
                 rt_fns: &rt_fns,
                 vars: HashMap::new(),
                 next_var: 0,
@@ -2886,7 +2448,6 @@ fn compile_module<M: Module>(
                 closure_captures: &mut closure_captures_map,
                 generic_struct_field_overrides: HashMap::new(),
                 last_struct_lit_concrete_fields: None,
-                agent_defs: &agent_defs,
                 spawn_thunks: &spawn_thunk_map,
                 constants: &constants_map,
                 struct_derives: &struct_derives,

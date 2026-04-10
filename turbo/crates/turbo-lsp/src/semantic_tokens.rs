@@ -8,7 +8,7 @@
 //! * `STRING` / `NUMBER` — string and numeric literals
 //! * `COMMENT` — line comments
 //! * `OPERATOR` — punctuation operators
-//! * `FUNCTION` — identifiers that match a top-level function/agent name
+//! * `FUNCTION` — identifiers that match a top-level function name
 //! * `STRUCT` — identifiers that match a top-level struct name
 //! * `ENUM` — identifiers that match a top-level enum name
 //! * `INTERFACE` — identifiers that match a top-level trait name
@@ -83,9 +83,6 @@ pub(crate) fn compute_semantic_tokens(source: &str) -> SemanticTokens {
                 }
                 turbo_ast::Item::Trait(t) => {
                     ident_kinds.insert(t.name.clone(), TT_INTERFACE);
-                }
-                turbo_ast::Item::Agent(a) => {
-                    ident_kinds.insert(a.name.clone(), TT_FUNCTION);
                 }
                 _ => {}
             }
@@ -166,10 +163,6 @@ fn classify_token(
         | Token::Await
         | Token::Spawn
         | Token::Defer
-        | Token::Agent
-        | Token::Tool
-        | Token::Resource
-        | Token::Prompt
         | Token::Extern
         | Token::True
         | Token::False

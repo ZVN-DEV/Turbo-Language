@@ -24,9 +24,8 @@ use turbo_ast::*;
 use crate::scope::VarInfo;
 use crate::suggest;
 use crate::{
-    extract_int_literal, int_literal_fits_in_type, is_agent_serializable_type,
-    is_agent_structured_decode_supported, is_ffi_safe_type, resolve_type_expr,
-    resolve_type_expr_with_params, types_compatible, AgentInfo, Checker, EnumInfo, FnSig,
+    extract_int_literal, int_literal_fits_in_type, is_ffi_safe_type, resolve_type_expr,
+    resolve_type_expr_with_params, types_compatible, Checker, EnumInfo, FnSig,
     StructInfo, TraitInfo, TraitMethodInfo, Ty, MAX_EXPR_DEPTH,
 };
 
@@ -369,9 +368,6 @@ impl Checker {
                     params,
                     ret,
                     is_async: f.is_async,
-                    is_tool: f.is_tool,
-                    is_resource: f.is_resource,
-                    is_prompt: f.is_prompt,
                     is_unsafe: f.is_unsafe,
                 },
             );
@@ -462,147 +458,9 @@ impl Checker {
                         params,
                         ret,
                         is_async: false,
-                        is_tool: false,
-                        is_resource: false,
-                        is_prompt: false,
                         is_unsafe: false,
                     },
                 );
-            }
-        }
-
-        // Pass 1b: register agent declarations
-        for item in &module.items {
-            let Item::Agent(agent) = &item.node else {
-                continue;
-            };
-            if self.agents.contains_key(&agent.name) {
-                self.error(
-                    ErrorCode::E0312,
-                    format!("agent `{}` is already defined", agent.name),
-                    item.span.clone(),
-                );
-                continue;
-            }
-            let output_ty = agent.output_type.as_ref().map(|ty_expr| {
-                match resolve_type_expr(&ty_expr.node, Some(&self.structs), Some(&self.enums)) {
-                    Some(ty) => {
-                        if !is_agent_serializable_type(&ty, &self.structs, &self.enums) {
-                            self.error(
-                                ErrorCode::E0324,
-                                format!(
-                                    "agent `{}` output type `{}` is not serializable",
-                                    agent.name, ty
-                                ),
-                                ty_expr.span.clone(),
-                            );
-                        }
-                        ty
-                    }
-                    None => {
-                        self.error(
-                            ErrorCode::E0324,
-                            format!("unknown output type in agent `{}`", agent.name),
-                            ty_expr.span.clone(),
-                        );
-                        Ty::Error
-                    }
-                }
-            });
-            self.agents.insert(
-                agent.name.clone(),
-                AgentInfo {
-                    model: agent.model.clone(),
-                    tools: agent.tools.clone(),
-                    resources: agent.resources.clone(),
-                    prompts: agent.prompts.clone(),
-                    output_ty,
-                    system_prompt: agent.system_prompt.clone(),
-                },
-            );
-        }
-
-        // Validate agent references point to actual declarations of the right kind
-        for item in &module.items {
-            if let Item::Agent(agent) = &item.node {
-                for tool_name in &agent.tools {
-                    match self.functions.get(tool_name) {
-                        Some(sig) => {
-                            if !sig.is_tool {
-                                self.error(
-                                    ErrorCode::E0322,
-                                    format!(
-                                        "function `{tool_name}` in agent `{}` is not a `tool fn`",
-                                        agent.name
-                                    ),
-                                    item.span.clone(),
-                                );
-                            }
-                        }
-                        None => {
-                            self.error(
-                                ErrorCode::E0321,
-                                format!(
-                                    "undefined tool function `{tool_name}` in agent `{}`",
-                                    agent.name
-                                ),
-                                item.span.clone(),
-                            );
-                        }
-                    }
-                }
-                for resource_name in &agent.resources {
-                    match self.functions.get(resource_name) {
-                        Some(sig) => {
-                            if !sig.is_resource {
-                                self.error(
-                                    ErrorCode::E0322,
-                                    format!(
-                                        "function `{resource_name}` in agent `{}` is not a `resource`",
-                                        agent.name
-                                    ),
-                                    item.span.clone(),
-                                );
-                            }
-                        }
-                        None => {
-                            self.error(
-                                ErrorCode::E0321,
-                                format!(
-                                    "undefined resource `{resource_name}` in agent `{}`",
-                                    agent.name
-                                ),
-                                item.span.clone(),
-                            );
-                        }
-                    }
-                }
-                for prompt_name in &agent.prompts {
-                    match self.functions.get(prompt_name) {
-                        Some(sig) => {
-                            if !sig.is_prompt {
-                                self.error(
-                                    ErrorCode::E0322,
-                                    format!(
-                                        "function `{prompt_name}` in agent `{}` is not a `prompt`",
-                                        agent.name
-                                    ),
-                                    item.span.clone(),
-                                );
-                            }
-                        }
-                        None => {
-                            self.error(
-                                ErrorCode::E0321,
-                                format!(
-                                    "undefined prompt `{prompt_name}` in agent `{}`",
-                                    agent.name
-                                ),
-                                item.span.clone(),
-                            );
-                        }
-                    }
-                }
             }
         }
 
@@ -696,9 +554,6 @@ impl Checker {
                     params,
                     ret,
                     is_async: false,
-                    is_tool: false,
-                    is_resource: false,
-                    is_prompt: false,
                     is_unsafe: false,
                 };
                 new_methods.push((method.name.clone(), sig, mangled));
@@ -733,9 +588,6 @@ impl Checker {
                                     params,
                                     ret: trait_method.ret.clone(),
                                     is_async: false,
-                                    is_tool: false,
-                                    is_resource: false,
-                                    is_prompt: false,
                                     is_unsafe: false,
                                 };
                                 let type_methods =
@@ -805,9 +657,6 @@ impl Checker {
                         params: vec![("self".to_string(), Ty::Struct(s.name.clone()))],
                         ret: Ty::Str,
                         is_async: false,
-                        is_tool: false,
-                        is_resource: false,
-                        is_prompt: false,
                         is_unsafe: false,
                     };
                     let type_methods = self.methods.entry(s.name.clone()).or_default();
@@ -3183,88 +3032,6 @@ impl Checker {
                         // so the first arg is the receiver.
                         if !args.is_empty() {
                             let first_arg_ty = self.check_expr(&args[0]);
-                            if let Ty::Agent(_) = first_arg_ty {
-                                if name == "ask" || name == "ask_structured" {
-                                    if args.len() != 2 {
-                                        self.error(
-                                            ErrorCode::E0100,
-                                            format!(
-                                                "method `ask` on `{}` expects 1 argument but {} were given",
-                                                first_arg_ty,
-                                                args.len() - 1
-                                            ),
-                                            callee.span.clone(),
-                                        );
-                                        return Ty::Str;
-                                    }
-                                    let prompt_ty = self.check_expr(&args[1]);
-                                    if !prompt_ty.contains_error() && prompt_ty != Ty::Str {
-                                        self.error(
-                                            ErrorCode::E0100,
-                                            format!(
-                                                "argument `prompt` expects `str`, found `{prompt_ty}`"
-                                            ),
-                                            args[1].span.clone(),
-                                        );
-                                    }
-                                    if name == "ask_structured" {
-                                        if let Ty::Agent(agent_name) = &first_arg_ty {
-                                            if let Some(info) = self.agents.get(agent_name) {
-                                                if let Some(output_ty) = &info.output_ty {
-                                                    if !is_agent_structured_decode_supported(
-                                                        output_ty,
-                                                        &self.structs,
-                                                    ) {
-                                                        self.error(
-                                                            ErrorCode::E0324,
-                                                            format!(
-                                                                "agent `{agent_name}` output type `{}` is not supported by ask_structured yet",
-                                                                output_ty
-                                                            ),
-                                                            callee.span.clone(),
-                                                        );
-                                                        return Ty::Error;
-                                                    }
-                                                    return output_ty.clone();
-                                                }
-                                            }
-                                            self.error(
-                                                ErrorCode::E0324,
-                                                format!(
-                                                    "agent `{agent_name}` must declare `output:` before using ask_structured"
-                                                ),
-                                                callee.span.clone(),
-                                            );
-                                            return Ty::Error;
-                                        }
-                                    }
-                                    return Ty::Str;
-                                } else if name == "stream" {
-                                    if args.len() != 2 {
-                                        self.error(
-                                            ErrorCode::E0100,
-                                            format!(
-                                                "method `stream` on `{}` expects 1 argument but {} were given",
-                                                first_arg_ty,
-                                                args.len() - 1
-                                            ),
-                                            callee.span.clone(),
-                                        );
-                                        return Ty::Array(Box::new(Ty::Str));
-                                    }
-                                    let prompt_ty = self.check_expr(&args[1]);
-                                    if !prompt_ty.contains_error() && prompt_ty != Ty::Str {
-                                        self.error(
-                                            ErrorCode::E0100,
-                                            format!(
-                                                "argument `prompt` expects `str`, found `{prompt_ty}`"
-                                            ),
-                                            args[1].span.clone(),
-                                        );
-                                    }
-                                    return Ty::Array(Box::new(Ty::Str));
-                                }
-                            }
                             if let Ty::Struct(ref type_name) = first_arg_ty {
                                 if let Some(method_sig) = self
                                     .methods
@@ -3314,91 +3081,7 @@ impl Checker {
                 } else if let Expr::FieldAccess { object, field } = &callee.node {
                     // Method call: object.method(args) — fallback for non-UFCS path
                     let obj_ty = self.check_expr(object);
-                    if let Ty::Agent(_) = obj_ty {
-                        if field == "ask" || field == "ask_structured" {
-                            if args.len() != 1 {
-                                self.error(
-                                    ErrorCode::E0100,
-                                    format!(
-                                        "method `ask` on `{}` expects 1 argument but {} were given",
-                                        obj_ty,
-                                        args.len()
-                                    ),
-                                    callee.span.clone(),
-                                );
-                                return Ty::Str;
-                            }
-                            let prompt_ty = self.check_expr(&args[0]);
-                            if !prompt_ty.contains_error() && prompt_ty != Ty::Str {
-                                self.error(
-                                    ErrorCode::E0100,
-                                    format!("argument `prompt` expects `str`, found `{prompt_ty}`"),
-                                    args[0].span.clone(),
-                                );
-                            }
-                            if field == "ask_structured" {
-                                if let Ty::Agent(agent_name) = &obj_ty {
-                                    if let Some(info) = self.agents.get(agent_name) {
-                                        if let Some(output_ty) = &info.output_ty {
-                                            if !is_agent_structured_decode_supported(
-                                                output_ty,
-                                                &self.structs,
-                                            ) {
-                                                self.error(
-                                                    ErrorCode::E0324,
-                                                    format!(
-                                                        "agent `{agent_name}` output type `{}` is not supported by ask_structured yet",
-                                                        output_ty
-                                                    ),
-                                                    callee.span.clone(),
-                                                );
-                                                return Ty::Error;
-                                            }
-                                            return output_ty.clone();
-                                        }
-                                    }
-                                    self.error(
-                                        ErrorCode::E0324,
-                                        format!(
-                                            "agent `{agent_name}` must declare `output:` before using ask_structured"
-                                        ),
-                                        callee.span.clone(),
-                                    );
-                                    return Ty::Error;
-                                }
-                            }
-                            Ty::Str
-                        } else if field == "stream" {
-                            if args.len() != 1 {
-                                self.error(
-                                    ErrorCode::E0100,
-                                    format!(
-                                        "method `stream` on `{}` expects 1 argument but {} were given",
-                                        obj_ty,
-                                        args.len()
-                                    ),
-                                    callee.span.clone(),
-                                );
-                                return Ty::Array(Box::new(Ty::Str));
-                            }
-                            let prompt_ty = self.check_expr(&args[0]);
-                            if !prompt_ty.contains_error() && prompt_ty != Ty::Str {
-                                self.error(
-                                    ErrorCode::E0100,
-                                    format!("argument `prompt` expects `str`, found `{prompt_ty}`"),
-                                    args[0].span.clone(),
-                                );
-                            }
-                            Ty::Array(Box::new(Ty::Str))
-                        } else {
-                            self.error(
-                                ErrorCode::E0317,
-                                format!("no method `{field}` found on type `{obj_ty}`"),
-                                callee.span.clone(),
-                            );
-                            Ty::Error
-                        }
-                    } else if let Ty::Struct(ref type_name) = obj_ty {
+                    if let Ty::Struct(ref type_name) = obj_ty {
                         if let Some(method_sig) = self
                             .methods
                             .get(type_name)
@@ -4018,17 +3701,6 @@ impl Checker {
             }
 
             Expr::StructLit { name, fields } => {
-                // Check if this is an agent instantiation: AgentName {}
-                if self.agents.contains_key(name) {
-                    if !fields.is_empty() {
-                        self.error(ErrorCode::E0511,
-                            format!("agent `{name}` does not accept field initializers; use `{name} {{}}` to instantiate"),
-                            expr.span.clone(),
-                        );
-                    }
-                    return Ty::Agent(name.clone());
-                }
-
                 let Some(struct_info) = self.structs.get(name).cloned() else {
                     self.error(
                         ErrorCode::E0302,
@@ -4155,22 +3827,6 @@ impl Checker {
                             Ty::Error
                         }
                     }
-                    Ty::Agent(agent_name) => match field.as_str() {
-                        "model" => Ty::Str,
-                        "system" => Ty::Str,
-                        "tools" => Ty::Array(Box::new(Ty::Str)),
-                        "resources" => Ty::Array(Box::new(Ty::Str)),
-                        "prompts" => Ty::Array(Box::new(Ty::Str)),
-                        "output_type" => Ty::Str,
-                        "output_schema" => Ty::Str,
-                        _ => {
-                            self.error(ErrorCode::E0315,
-                                    format!("agent `{agent_name}` has no field `{field}`; available fields: model, system, tools, resources, prompts, output_type, output_schema"),
-                                    expr.span.clone(),
-                                );
-                            Ty::Error
-                        }
-                    },
                     Ty::Error => Ty::Error,
                     _ => {
                         self.error(

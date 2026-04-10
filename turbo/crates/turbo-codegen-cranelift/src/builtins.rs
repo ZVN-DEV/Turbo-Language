@@ -157,10 +157,6 @@ pub(crate) fn compile_print<M: Module>(
                 cx.builder.switch_to_block(merge_block);
                 cx.builder.seal_block(merge_block);
             }
-            TurboTy::Agent(ref name) => {
-                let ptr = cx.create_string(&format!("[agent {}]", name))?;
-                cx.rt_call("rt_print_str", &[ptr]);
-            }
             TurboTy::Future(_) => {
                 let ptr = cx.create_string("[future]")?;
                 cx.rt_call("rt_print_str", &[ptr]);
@@ -2117,7 +2113,6 @@ pub(crate) fn convert_to_str<M: Module>(
             cx.builder.seal_block(merge_block);
             Ok(cx.builder.block_params(merge_block)[0])
         }
-        TurboTy::Agent(ref name) => cx.create_string(&format!("[agent {}]", name)),
         TurboTy::Future(_) => cx.create_string("[future]"),
     }
 }

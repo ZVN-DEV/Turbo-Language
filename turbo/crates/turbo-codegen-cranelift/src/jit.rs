@@ -134,12 +134,6 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     // HTTP + JSON builtins
     jit_builder.symbol("rt_http_get", rt_http_get as *const u8);
     jit_builder.symbol("rt_http_post", rt_http_post as *const u8);
-    jit_builder.symbol("rt_agent_ask", rt_agent_ask as *const u8);
-    jit_builder.symbol(
-        "rt_agent_ask_structured",
-        rt_agent_ask_structured as *const u8,
-    );
-    jit_builder.symbol("rt_agent_stream", rt_agent_stream as *const u8);
     jit_builder.symbol("rt_json_get", rt_json_get as *const u8);
     jit_builder.symbol("rt_json_stringify", rt_json_stringify as *const u8);
     jit_builder.symbol("rt_json_root", rt_json_root as *const u8);
@@ -283,12 +277,6 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_await_handle", rt_await_handle as *const u8);
     jit_builder.symbol("rt_http_get", rt_http_get as *const u8);
     jit_builder.symbol("rt_http_post", rt_http_post as *const u8);
-    jit_builder.symbol("rt_agent_ask", rt_agent_ask as *const u8);
-    jit_builder.symbol(
-        "rt_agent_ask_structured",
-        rt_agent_ask_structured as *const u8,
-    );
-    jit_builder.symbol("rt_agent_stream", rt_agent_stream as *const u8);
     jit_builder.symbol("rt_json_get", rt_json_get as *const u8);
     jit_builder.symbol("rt_json_stringify", rt_json_stringify as *const u8);
     jit_builder.symbol("rt_json_root", rt_json_root as *const u8);

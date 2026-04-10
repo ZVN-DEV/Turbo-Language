@@ -82,7 +82,6 @@ fn rewrite_item(item: &mut Item) {
         }
         Item::Struct(_)
         | Item::Enum(_)
-        | Item::Agent(_)
         | Item::Import { .. }
         | Item::Extern(_) => {}
     }
