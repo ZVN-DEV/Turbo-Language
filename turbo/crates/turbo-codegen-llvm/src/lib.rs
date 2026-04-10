@@ -57,7 +57,6 @@ enum TurboTy {
     Fn(Vec<TurboTy>, Box<TurboTy>),
     Result(Box<TurboTy>, Box<TurboTy>),
     Optional(Box<TurboTy>),
-    Agent(String),
     Future(Box<TurboTy>),
 }
 
@@ -141,7 +140,6 @@ fn turbo_ty_to_llvm<'ctx>(tty: &TurboTy, context: &'ctx Context) -> BasicTypeEnu
         TurboTy::Enum(_) => context.i64_type().into(),
         TurboTy::Result(_, _) => context.ptr_type(AddressSpace::default()).into(),
         TurboTy::Optional(_) => context.ptr_type(AddressSpace::default()).into(),
-        TurboTy::Agent(_) => context.ptr_type(AddressSpace::default()).into(),
         TurboTy::Future(_) => context.ptr_type(AddressSpace::default()).into(),
     }
 }
@@ -230,10 +228,6 @@ struct Ctx<'a, 'ctx> {
     struct_derives: &'a HashMap<String, Vec<String>>,
     /// Trait impls: type_name -> vec of trait names
     trait_impls: &'a HashMap<String, Vec<String>>,
-    /// Agent names (to distinguish from regular structs)
-    agent_names: &'a std::collections::HashSet<String>,
-    /// Agent definitions: name -> (model, tools, system_prompt)
-    agent_defs: &'a HashMap<String, (String, Vec<String>, Option<String>)>,
     /// Concrete field types for generic struct instances: var_name -> [(field, type)]
     concrete_struct_fields: HashMap<String, Vec<(String, TurboTy)>>,
 }
@@ -1156,34 +1150,6 @@ fn compile_module<'ctx>(
         }
     }
 
-    // ── Build agent struct info ─────────────────────────────────────
-    // Register agent names as structs so StructLit works for agent instantiation
-    let mut agent_names = std::collections::HashSet::new();
-    let mut agent_defs: HashMap<String, (String, Vec<String>, Option<String>)> = HashMap::new();
-    for item in &ast_module.items {
-        if let Item::Agent(agent) = &item.node {
-            agent_names.insert(agent.name.clone());
-            agent_defs.insert(
-                agent.name.clone(),
-                (
-                    agent.model.clone(),
-                    agent.tools.clone(),
-                    agent.system_prompt.clone(),
-                ),
-            );
-            if !struct_fields.contains_key(&agent.name) {
-                struct_fields.insert(
-                    agent.name.clone(),
-                    vec![
-                        ("model".to_string(), TurboTy::Str),
-                        ("system".to_string(), TurboTy::Str),
-                        ("tools".to_string(), TurboTy::Array(Box::new(TurboTy::Str))),
-                    ],
-                );
-            }
-        }
-    }
-
     // ── Extract closures and spawn sites ───────────────────────────
     let all_closures = extract_all_closures_llvm(ast_module);
     let all_spawn_sites = extract_all_spawn_sites_llvm(ast_module);
@@ -1507,8 +1473,6 @@ fn compile_module<'ctx>(
                     spawn_thunks: &spawn_thunks_map,
                     struct_derives: &struct_derives,
                     trait_impls: &trait_impls,
-                    agent_names: &agent_names,
-                    agent_defs: &agent_defs,
                     concrete_struct_fields: std::collections::HashMap::new(),
                 }
             };
@@ -1559,8 +1523,6 @@ fn compile_module<'ctx>(
                 spawn_thunks: &spawn_thunks_map,
                 struct_derives: &struct_derives,
                 trait_impls: &trait_impls,
-                agent_names: &agent_names,
-                agent_defs: &agent_defs,
                 concrete_struct_fields: HashMap::new(),
             }
         };
@@ -2575,73 +2537,6 @@ fn compile_expr<'a, 'ctx>(
         }
 
         Expr::StructLit { name, fields } => {
-            // Check if this is an agent instantiation
-            if let Some((model, tools, system_prompt)) = cx.agent_defs.get(name).cloned() {
-                let i64_type = cx.context.i64_type();
-                let ptr_type = cx.context.ptr_type(AddressSpace::default());
-                let i8_type = cx.context.i8_type();
-                let num_fields_val = i64_type.const_int(3, false);
-                let ptr = cx
-                    .rt_call("rt_struct_alloc", &[num_fields_val.into()])
-                    .unwrap()
-                    .into_pointer_value();
-
-                // Slot 0: model string
-                let model_ptr = cx.create_string(&model)?;
-                let model_i64 = cx
-                    .builder
-                    .build_ptr_to_int(model_ptr, i64_type, "model_i64")
-                    .expect("pti");
-                cx.builder.build_store(ptr, model_i64).expect("store");
-
-                // Slot 1: system prompt string
-                let system_str = system_prompt.as_deref().unwrap_or("");
-                let system_ptr = cx.create_string(system_str)?;
-                let system_i64 = cx
-                    .builder
-                    .build_ptr_to_int(system_ptr, i64_type, "sys_i64")
-                    .expect("pti");
-                let sys_field = unsafe {
-                    cx.builder
-                        .build_gep(i8_type, ptr, &[i64_type.const_int(8, false)], "sys_ptr")
-                        .expect("gep")
-                };
-                cx.builder
-                    .build_store(sys_field, system_i64)
-                    .expect("store");
-
-                // Slot 2: tools array
-                let tools_len = i64_type.const_int(tools.len() as u64, false);
-                let arr_ptr = cx
-                    .rt_call("rt_array_alloc", &[tools_len.into()])
-                    .unwrap()
-                    .into_pointer_value();
-                for (i, tool_name) in tools.iter().enumerate() {
-                    let tool_str = cx.create_string(tool_name)?;
-                    let idx = i64_type.const_int(i as u64, false);
-                    let tool_i64 = cx
-                        .builder
-                        .build_ptr_to_int(tool_str, i64_type, "tool_i64")
-                        .expect("pti");
-                    cx.rt_call(
-                        "rt_array_set",
-                        &[arr_ptr.into(), idx.into(), tool_i64.into()],
-                    );
-                }
-                let arr_i64 = cx
-                    .builder
-                    .build_ptr_to_int(arr_ptr, i64_type, "arr_i64")
-                    .expect("pti");
-                let tools_field = unsafe {
-                    cx.builder
-                        .build_gep(i8_type, ptr, &[i64_type.const_int(16, false)], "tools_ptr")
-                        .expect("gep")
-                };
-                cx.builder.build_store(tools_field, arr_i64).expect("store");
-
-                return Ok(Some((ptr.into(), TurboTy::Agent(name.clone()))));
-            }
-
             let struct_layout = cx
                 .struct_fields
                 .get(name)
@@ -2688,11 +2583,7 @@ fn compile_expr<'a, 'ctx>(
                     .expect("build_store failed");
             }
 
-            let result_tty = if cx.agent_names.contains(name) {
-                TurboTy::Agent(name.clone())
-            } else {
-                TurboTy::Struct(name.clone())
-            };
+            let result_tty = TurboTy::Struct(name.clone());
             // Store concrete field types for generic struct tracking
             // Use a temp key "__last_struct_lit" that Let binding will pick up
             if !concrete_fields.is_empty() {
@@ -2737,54 +2628,6 @@ fn compile_expr<'a, 'ctx>(
             }
 
             let (obj, obj_tty) = compile_expr(cx, object)?.unwrap();
-
-            // Handle agent field access: model (slot 0), system (slot 1), tools (slot 2)
-            if let TurboTy::Agent(_) = &obj_tty {
-                let (offset, tty) = match field.as_str() {
-                    "model" => (0u64, TurboTy::Str),
-                    "system" => (8u64, TurboTy::Str),
-                    "tools" => (16u64, TurboTy::Array(Box::new(TurboTy::Str))),
-                    _ => {
-                        return Err(CodegenError {
-                            code: ErrorCode::E0400,
-                            message: format!("agent has no field `{field}`"),
-                        })
-                    }
-                };
-                let obj_ptr = obj.into_pointer_value();
-                let field_ptr = if offset == 0 {
-                    obj_ptr
-                } else {
-                    unsafe {
-                        cx.builder
-                            .build_gep(
-                                cx.context.i8_type(),
-                                obj_ptr,
-                                &[cx.context.i64_type().const_int(offset, false)],
-                                "agent_field_ptr",
-                            )
-                            .expect("gep")
-                    }
-                };
-                let val = cx
-                    .builder
-                    .build_load(cx.context.i64_type(), field_ptr, "agent_field")
-                    .expect("load");
-                // For Str/Array fields, the loaded i64 is actually a pointer
-                let val = if matches!(tty, TurboTy::Str | TurboTy::Array(_)) {
-                    cx.builder
-                        .build_int_to_ptr(
-                            val.into_int_value(),
-                            cx.context.ptr_type(AddressSpace::default()),
-                            "field_ptr",
-                        )
-                        .expect("itp")
-                        .into()
-                } else {
-                    val
-                };
-                return Ok(Some((val, tty)));
-            }
 
             let struct_name = match &obj_tty {
                 TurboTy::Struct(name) => name.clone(),
@@ -6394,7 +6237,6 @@ fn narrow_from_storage<'a, 'ctx>(
         | TurboTy::Struct(_)
         | TurboTy::Result(_, _)
         | TurboTy::Optional(_)
-        | TurboTy::Agent(_)
         | TurboTy::Future(_) => {
             // i64 -> ptr via inttoptr
             let iv = val.into_int_value();
