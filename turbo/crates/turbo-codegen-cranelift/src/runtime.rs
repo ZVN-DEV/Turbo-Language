@@ -902,54 +902,24 @@ pub(crate) extern "C" fn rt_json_get(json: *const u8, key: *const u8) -> *const 
         .to_str()
         .unwrap_or("");
 
-    // Search for "key" in the JSON
-    let search = format!("\"{}\"", key_str);
-    if let Some(pos) = json_str.find(&search) {
-        let after_key = &json_str[pos + search.len()..];
-        // Skip whitespace and colon
-        let trimmed = after_key.trim_start();
-        if let Some(after_colon) = trimmed.strip_prefix(':') {
-            let value_start = after_colon.trim_start();
-            if let Some(inner) = value_start.strip_prefix('"') {
-                // String value: find closing quote, handling escaped quotes
-                let mut end = 0;
-                let bytes = inner.as_bytes();
-                while end < bytes.len() {
-                    if bytes[end] == b'\\' {
-                        end += 2; // skip escaped char
-                    } else if bytes[end] == b'"' {
-                        break;
-                    } else {
-                        end += 1;
-                    }
-                }
-                let value = &inner[..end];
-                let cs = std::ffi::CString::new(value)
+    let parsed: Result<serde_json::Value, _> = serde_json::from_str(json_str);
+    match parsed {
+        Ok(val) => {
+            if let Some(v) = val.get(key_str) {
+                let result = match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Null => "null".to_string(),
+                    other => other.to_string(),
+                };
+                let cs = std::ffi::CString::new(result)
                     .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
-                return arena_str(cs);
+                arena_str(cs)
             } else {
-                // Number, bool, or null: read until , } ] or whitespace
-                let end = value_start
-                    .find(|c: char| {
-                        c == ','
-                            || c == '}'
-                            || c == ']'
-                            || c == ' '
-                            || c == '\n'
-                            || c == '\r'
-                            || c == '\t'
-                    })
-                    .unwrap_or(value_start.len());
-                let value = &value_start[..end];
-                let cs = std::ffi::CString::new(value)
-                    .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
-                return arena_str(cs);
+                arena_str(std::ffi::CString::new("").unwrap())
             }
         }
+        Err(_) => arena_str(std::ffi::CString::new("").unwrap()),
     }
-    // Key not found: return empty string
-    let cs = std::ffi::CString::new("").unwrap();
-    arena_str(cs)
 }
 
 /// Build a JSON object string from a key and value: {"key": "value"}
@@ -960,12 +930,14 @@ pub(crate) extern "C" fn rt_json_stringify(key: *const u8, value: *const u8) -> 
     let value_str = unsafe { std::ffi::CStr::from_ptr(value as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    let result = format!(
-        "{{\"{}\":\"{}\"}}",
-        key_str.replace('\\', "\\\\").replace('"', "\\\""),
-        value_str.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut map = serde_json::Map::new();
+    map.insert(
+        key_str.to_string(),
+        serde_json::Value::String(value_str.to_string()),
     );
-    let cs = std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let result = serde_json::Value::Object(map).to_string();
+    let cs =
+        std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("{}").unwrap());
     arena_str(cs)
 }
 
@@ -973,18 +945,24 @@ pub(crate) extern "C" fn rt_json_root(json: *const u8) -> *const u8 {
     let json_str = unsafe { std::ffi::CStr::from_ptr(json as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("")
-        .trim()
-        .to_string();
-    if let Some(inner) = json_str.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-        rt_owned_cstr(
-            inner
-                .replace("\\n", "\n")
-                .replace("\\r", "\r")
-                .replace("\\\"", "\"")
-                .replace("\\\\", "\\"),
-        )
-    } else {
-        rt_owned_cstr(json_str)
+        .trim();
+    let parsed: Result<serde_json::Value, _> = serde_json::from_str(json_str);
+    match parsed {
+        Ok(serde_json::Value::String(s)) => {
+            let cs = std::ffi::CString::new(s)
+                .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+            arena_str(cs)
+        }
+        Ok(other) => {
+            let cs = std::ffi::CString::new(other.to_string())
+                .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+            arena_str(cs)
+        }
+        Err(_) => {
+            let cs = std::ffi::CString::new(json_str)
+                .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+            arena_str(cs)
+        }
     }
 }
 
