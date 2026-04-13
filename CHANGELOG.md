@@ -3,6 +3,45 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.5] - 2026-04-13
+
+Pre-launch hardening sprint. Fixed critical runtime security issues,
+cleaned all stale agent content, and strengthened edge-case testing.
+
+### Security
+- **Overflow-checked array allocation** — `rt_array_alloc`, `rt_array_push`,
+  `rt_array_set`, `rt_str_split` now use `checked_mul`/`checked_add` to
+  prevent heap overflow on large or negative lengths.
+- **Thread-local string arena** — all 25 `CString::into_raw()` call sites
+  now go through `arena_str()`, preventing memory leaks in long-running
+  programs. Arena is freed after each JIT execution.
+- **COW refcount ordering** — changed from `Ordering::Relaxed` to
+  `Acquire`/`AcqRel` to prevent use-after-free in concurrent code.
+- **serde_json replaces hand-rolled JSON parser** — the old string-find
+  parser had no escape handling, no depth limits, and was vulnerable to
+  key confusion. Now uses RFC 7159-compliant parsing.
+- **Defensive unwrap audit** — 19 bare `.unwrap()` calls on `CString::new()`
+  replaced with `.unwrap_or_else()` fallbacks for NUL byte safety.
+
+### Removed
+- `design/AGENTIC.md` — stale design doc for removed agent features.
+- `examples/roadmap/desktop-app/` and `examples/roadmap/task-agent/` —
+  used removed `agent`/`tool fn` syntax.
+- Agentic features removed from `design/ROADMAP.md` v1.0 goals.
+
+### Changed
+- README tagline updated: "TypeScript's ease. Rust's speed. No GC, no
+  borrow checker."
+- README known limitations updated to reflect string arena.
+- Error codes E0312, E0321, E0322, E0511 annotated as deprecated.
+
+### Added
+- Edge-case integration tests: `array_bounds_error`, `json_edge_cases`,
+  `string_heavy`, `array_overflow`, `string_arena_basic`.
+- CI job: `test-overflow` runs unit tests with `overflow-checks=on`.
+
+---
+
 ## [0.7.4] - 2026-04-12
 
 Gold-standard open source audit. Hardened the C runtime, split two
