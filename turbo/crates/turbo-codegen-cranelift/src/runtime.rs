@@ -771,12 +771,6 @@ fn rt_empty_cstr() -> *const u8 {
     )
 }
 
-fn rt_owned_cstr(value: String) -> *const u8 {
-    arena_str(
-        std::ffi::CString::new(value)
-            .unwrap_or_else(|_| std::ffi::CString::new("").unwrap()),
-    )
-}
 
 /// Validate that `url` is a well-formed http:// or https:// URL safe to hand
 /// to curl. Mirrors `rt_url_is_http` in the C runtime — reject anything that
