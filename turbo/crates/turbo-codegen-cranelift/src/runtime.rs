@@ -182,7 +182,7 @@ pub(crate) extern "C" fn rt_array_get(arr: *const u8, index: i64) -> i64 {
 pub(crate) extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) -> *mut u8 {
     // COW: check refcount before mutating
     let rc_ptr = unsafe { arr.sub(8) as *mut std::sync::atomic::AtomicI64 };
-    let rc = unsafe { (*rc_ptr).load(std::sync::atomic::Ordering::Relaxed) };
+    let rc = unsafe { (*rc_ptr).load(std::sync::atomic::Ordering::Acquire) };
     let target = if rc > 1 {
         // Copy-on-write: make a private copy
         let len = unsafe { *(arr as *const i64) };
@@ -1629,7 +1629,7 @@ pub(crate) extern "C" fn rt_retain(data_ptr: *mut u8) {
     }
     let header = unsafe { data_ptr.sub(8) as *mut std::sync::atomic::AtomicI64 };
     unsafe {
-        (*header).fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        (*header).fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
 
