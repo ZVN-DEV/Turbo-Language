@@ -187,6 +187,8 @@ the semantic analyzer into focused modules.
 
 ## [0.6.0] - 2026-04-07
 
+> **Note:** Agent primitives (`agent` keyword, `tool fn`, LLM provider integration) were removed in v0.7.3. The memory management, codegen refactor, and security hardening from this release remain.
+
 Real LLM agent integration, memory management overhaul, codegen refactor,
 and runtime security hardening. This is the first release where `agent`
 definitions can call live LLM APIs (OpenAI, Anthropic) — not just mocks.
@@ -491,8 +493,8 @@ Initial public release of the Turbo compiler.
 - `async fn`, `spawn`, and `await` with thread-based concurrency
 - `sleep` builtin for async timing
 - Channels and mutex builtins for thread communication
-- `agent` keyword with instantiation and field access
-- `tool fn` keyword for AI agent primitives
+- `agent` keyword with instantiation and field access (removed in v0.7.3)
+- `tool fn` keyword for AI agent primitives (removed in v0.7.3)
 - `const` declarations
 - `defer` statements
 - `import` system for cross-file code sharing

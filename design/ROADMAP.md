@@ -13,7 +13,6 @@ Everything in the current design documents. What ships on day one.
 - Type system: generics, `T?` optionals, `T ! E` errors, algebraic data types, traits, structural interfaces
 - Memory: CTRC ownership + auto-clone (Level 0), explicit refs (Level 1), regions/arenas (Level 2), `@manual` escape hatch (Level 3)
 - Concurrency: `async`/`await`, `spawn`, `all()`, actors, channels, structured concurrency, supervision trees
-- Agentic: `tool fn`, `agent` keyword, streaming, memory abstractions, multi-agent orchestration
 - Effects: `async`, `throws`, `io`, `unsafe`, `diverges` tracked in function signatures
 
 ### Compilation

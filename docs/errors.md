@@ -78,7 +78,7 @@ Every compiler diagnostic includes a unique error code (e.g. `E0100`). Use `turb
 | E0309 | Trait is already defined |
 | E0310 | Method is already defined for this type |
 | E0311 | Constant is already defined |
-| E0312 | Agent is already defined |
+| E0312 | Agent is already defined (deprecated — removed in v0.7.3) |
 | E0313 | Cannot redefine builtin function |
 | E0314 | No `main` function found |
 | E0315 | Struct has no such field |
@@ -86,8 +86,8 @@ Every compiler diagnostic includes a unique error code (e.g. `E0100`). Use `turb
 | E0317 | No such method found on type |
 | E0318 | Missing field in struct literal |
 | E0319 | Unknown derive trait |
-| E0321 | Undefined tool function referenced in agent |
-| E0322 | Function referenced in agent is not a `tool fn` |
+| E0321 | Undefined tool function referenced in agent (deprecated — removed in v0.7.3) |
+| E0322 | Function referenced in agent is not a `tool fn` (deprecated — removed in v0.7.3) |
 | E0323 | Unknown type in trait method signature |
 | E0324 | Unknown return type |
 
@@ -117,7 +117,7 @@ Every compiler diagnostic includes a unique error code (e.g. `E0100`). Use `turb
 | E0508 | `continue` can only be used inside a loop |
 | E0509 | Required trait method is not implemented |
 | E0510 | Trait impl method return type does not match trait definition |
-| E0511 | Agent does not accept field initializers |
+| E0511 | Agent does not accept field initializers (deprecated — removed in v0.7.3) |
 | E0512 | Only named function calls are supported |
 | E0513 | Builtin function argument count error |
 | E0514 | Unused return value of pure function |
