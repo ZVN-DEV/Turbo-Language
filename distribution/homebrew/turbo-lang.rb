@@ -7,18 +7,18 @@ class TurboLang < Formula
   on_macos do
     on_arm do
       url "https://github.com/ZVN-DEV/Turbo-Language/releases/download/v0.7.5/turbolang-v0.7.5-aarch64-apple-darwin.tar.gz"
-      sha256 "f515bf3ba38488bdda2a38e10a3b265a312b8c953d6b988c84e29487c9eb2512"
+      sha256 "e9228269a7dfda963a191dadf48f4047f0acaf1d5add20cc060d24b3614e103f"
     end
     on_intel do
       url "https://github.com/ZVN-DEV/Turbo-Language/releases/download/v0.7.5/turbolang-v0.7.5-x86_64-apple-darwin.tar.gz"
-      sha256 "e9c234224b7f4ee89f0ee43abf35aac1e80413964b459d2c2aa8951eb8476b59"
+      sha256 "d7a04bb0b72da73e400f0131683c7fe91406ea64d5478b10ff9e555fc661e833"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/ZVN-DEV/Turbo-Language/releases/download/v0.7.5/turbolang-v0.7.5-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "16ef4d3cfc56cc98793c37ddf2bf23f15d745952a97599f59ce2af30fd861b70"
+      sha256 "94bed3cc5b02aeed42f7800417287161aabd3bae6f5586866f2ea36900d24e4e"
     end
   end
 
