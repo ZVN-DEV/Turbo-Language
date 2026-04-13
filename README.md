@@ -49,7 +49,7 @@ turbolang build hello.tb      # AOT — produce a native binary
 
 ### Known Limitations (v0.7.x)
 
-> **Warning — runtime memory leak:** The runtime does not yet perform reference counting. `rt_release` is currently a no-op, so long-running servers and hot loops that allocate repeatedly will leak memory (~2.5 KB/request on the example HTTP server). Real ARC is planned for v0.6. For short-running CLI programs this is not a problem.
+> **Note — runtime string allocation:** The runtime uses a thread-local string arena that is freed after each JIT execution. Long-running AOT servers should be monitored for memory usage. Proper ARC-based string deallocation is planned for a future release.
 >
 > **Warning — HTTP server is experimental:** The built-in HTTP server binds to `127.0.0.1` by default and is not hardened for direct exposure to untrusted networks. Put it behind a reverse proxy (nginx, Caddy) in production. See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
