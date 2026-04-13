@@ -1,0 +1,17 @@
+fn main() {
+    // Test with escaped quotes in JSON
+    let json = "\{\"name\":\"O\\\"Brien\",\"age\":\"30\"\}"
+    let name = json_get(json, "name")
+    let age = json_get(json, "age")
+    print(name)
+    print(age)
+
+    // Test missing key returns empty string
+    let missing = json_get(json, "missing")
+    print(len(missing))
+
+    // Test numeric value
+    let json2 = "\{\"count\":42\}"
+    let count = json_get(json2, "count")
+    print(count)
+}
