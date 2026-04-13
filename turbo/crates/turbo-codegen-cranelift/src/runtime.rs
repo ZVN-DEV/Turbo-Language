@@ -6,6 +6,15 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+/// Compute an allocation layout for array-like structures, returning None on overflow.
+/// Format: [refcount: i64][length: i64][elements: len * 8 bytes]
+fn checked_array_layout(len: usize) -> Option<std::alloc::Layout> {
+    let elem_bytes = len.checked_mul(8)?;
+    let data_bytes = elem_bytes.checked_add(8)?; // +8 for length field
+    let total_bytes = data_bytes.checked_add(8)?; // +8 for refcount header
+    std::alloc::Layout::from_size_align(total_bytes, 8).ok()
+}
+
 pub(crate) extern "C" fn rt_print_str(s: *const u8) {
     if s.is_null() {
         println!();
@@ -99,9 +108,17 @@ pub(crate) extern "C" fn rt_int_overflow() {
 }
 
 pub(crate) extern "C" fn rt_array_alloc(len: i64) -> *mut u8 {
-    let data_bytes = 8 + (len as usize) * 8; // 8 for length + 8 per element
-    let total_bytes = 8 + data_bytes; // +8 for refcount header
-    let layout = std::alloc::Layout::from_size_align(total_bytes, 8).unwrap();
+    if len < 0 {
+        eprintln!("runtime error: negative array length {}", len);
+        std::process::exit(1);
+    }
+    let layout = match checked_array_layout(len as usize) {
+        Some(l) => l,
+        None => {
+            eprintln!("runtime error: array allocation overflow (length {})", len);
+            std::process::exit(1);
+        }
+    };
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         eprintln!("turbo: fatal: memory allocation failed");
@@ -137,9 +154,14 @@ pub(crate) extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) -> *
     let target = if rc > 1 {
         // Copy-on-write: make a private copy
         let len = unsafe { *(arr as *const i64) };
-        let data_size = (1 + len as usize) * 8;
-        let total = 8 + data_size;
-        let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
+        let data_size = (1 + len as usize) * 8; // length field + elements, for copy
+        let layout = match checked_array_layout(len as usize) {
+            Some(l) => l,
+            None => {
+                eprintln!("runtime error: COW array copy overflow");
+                std::process::exit(1);
+            }
+        };
         let new_alloc = unsafe { std::alloc::alloc_zeroed(layout) };
         if new_alloc.is_null() {
             eprintln!("turbo: fatal: memory allocation failed");
@@ -181,10 +203,20 @@ pub(crate) extern "C" fn rt_array_len(arr: *const u8) -> i64 {
 
 pub(crate) extern "C" fn rt_array_push(arr: *const u8, value: i64) -> *mut u8 {
     let old_len = unsafe { *(arr as *const i64) } as usize;
-    let new_len = old_len + 1;
-    let data_size = 8 + new_len * 8; // length field + elements
-    let total = 8 + data_size; // + refcount header
-    let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
+    let new_len = match old_len.checked_add(1) {
+        Some(n) => n,
+        None => {
+            eprintln!("runtime error: array push overflow");
+            std::process::exit(1);
+        }
+    };
+    let layout = match checked_array_layout(new_len) {
+        Some(l) => l,
+        None => {
+            eprintln!("runtime error: array allocation overflow (length {})", new_len);
+            std::process::exit(1);
+        }
+    };
     let new_alloc = unsafe { std::alloc::alloc_zeroed(layout) };
     if new_alloc.is_null() {
         eprintln!("turbo: fatal: memory allocation failed");
@@ -257,8 +289,18 @@ pub(crate) extern "C" fn rt_str_eq(a: *const u8, b: *const u8) -> i8 {
 }
 
 pub(crate) extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
-    let data_size = (num_fields as usize) * 8;
-    let total_size = 8 + data_size.max(8); // +8 for refcount header
+    if num_fields < 0 {
+        eprintln!("runtime error: negative struct field count {}", num_fields);
+        std::process::exit(1);
+    }
+    let data_size = match (num_fields as usize).checked_mul(8) {
+        Some(s) => s.max(8),
+        None => {
+            eprintln!("runtime error: struct allocation overflow");
+            std::process::exit(1);
+        }
+    };
+    let total_size = data_size + 8; // +8 for refcount header
     let layout = std::alloc::Layout::from_size_align(total_size, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
@@ -393,9 +435,13 @@ pub(crate) extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
     let parts: Vec<&str> = s.split(sep).collect();
     let len = parts.len() as i64;
     // Array format: [refcount: i64][len: i64][ptr0: i64][ptr1: i64]...
-    let data_size = 8 + (len as usize) * 8;
-    let total = 8 + data_size; // +8 for refcount header
-    let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
+    let layout = match checked_array_layout(len as usize) {
+        Some(l) => l,
+        None => {
+            eprintln!("runtime error: split result too large");
+            std::process::exit(1);
+        }
+    };
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         eprintln!("turbo: fatal: memory allocation failed");
@@ -1502,9 +1548,13 @@ pub(crate) extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
     keys.sort(); // deterministic order for testing
     let len = keys.len() as i64;
     // Array format: [refcount: i64][len: i64][ptr0: i64][ptr1: i64]...
-    let data_size = 8 + (len as usize) * 8;
-    let total = 8 + data_size; // +8 for refcount header
-    let layout = std::alloc::Layout::from_size_align(total, 8).unwrap();
+    let layout = match checked_array_layout(len as usize) {
+        Some(l) => l,
+        None => {
+            eprintln!("runtime error: hashmap keys overflow");
+            std::process::exit(1);
+        }
+    };
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         eprintln!("turbo: fatal: memory allocation failed");

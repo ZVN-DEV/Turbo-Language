@@ -1,0 +1,6 @@
+fn main() {
+    let mut arr = [1, 2, 3]
+    arr = push(arr, 4)
+    print(len(arr))
+    print(arr[3])
+}

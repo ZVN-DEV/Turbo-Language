@@ -84,8 +84,6 @@ The [`roadmap/`](./roadmap/) directory contains example projects that demonstrat
 
 | Example | Description | Status |
 |---------|-------------|--------|
-| [task-agent](./roadmap/task-agent/) | Task Management API with AI Agent | Planned — uses `?.`, `() ! Error` |
 | [web-api](./roadmap/web-api/) | Production Bookmarking API | Planned — uses `from` imports, `Shared<T>` |
-| [desktop-app](./roadmap/desktop-app/) | Native Desktop Markdown Editor | Planned — uses `?.`, optional chaining |
 | [realtime-system](./roadmap/realtime-system/) | Trading Order Matching Engine | Planned — uses regions, `?.` |
 | [edge-wasm](./roadmap/edge-wasm/) | Edge Image Processing | Planned — uses `from` imports, WASM target |
