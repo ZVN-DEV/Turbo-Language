@@ -1,0 +1,13 @@
+fn main() {
+    let s = "hello"
+    let upper = upper(s)
+    let lower = lower(upper)
+    let trimmed = trim("  spaces  ")
+    let replaced = replace("abc", "b", "x")
+    let joined = "a" + "b" + "c"
+    print(upper)
+    print(lower)
+    print(trimmed)
+    print(replaced)
+    print(joined)
+}

@@ -3,6 +3,7 @@
 //! All `extern "C" fn rt_*` functions live here. They are completely
 //! standalone — no Cranelift types, no `Ctx`, no compiler state.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -13,6 +14,37 @@ fn checked_array_layout(len: usize) -> Option<std::alloc::Layout> {
     let data_bytes = elem_bytes.checked_add(8)?; // +8 for length field
     let total_bytes = data_bytes.checked_add(8)?; // +8 for refcount header
     std::alloc::Layout::from_size_align(total_bytes, 8).ok()
+}
+
+// ── Thread-local string arena ────────────────────────────────────────
+//
+// Every rt_* function that returns a newly-allocated CString registers
+// the pointer here via `arena_str()`. At the end of JIT execution (or
+// after each HTTP request), `rt_arena_reset()` frees them all.
+
+thread_local! {
+    static STRING_ARENA: RefCell<Vec<*mut std::ffi::c_char>> = RefCell::new(Vec::new());
+}
+
+/// Leak a CString into the arena. Returns the raw pointer for FFI.
+fn arena_str(cs: std::ffi::CString) -> *const u8 {
+    let ptr = cs.into_raw();
+    STRING_ARENA.with(|arena| {
+        arena.borrow_mut().push(ptr);
+    });
+    ptr as *const u8
+}
+
+/// Free all strings in the arena. Called after JIT main() returns.
+pub(crate) extern "C" fn rt_arena_reset() {
+    STRING_ARENA.with(|arena| {
+        let mut strings = arena.borrow_mut();
+        for ptr in strings.drain(..) {
+            unsafe {
+                drop(std::ffi::CString::from_raw(ptr));
+            }
+        }
+    });
 }
 
 pub(crate) extern "C" fn rt_print_str(s: *const u8) {
@@ -263,7 +295,7 @@ pub(crate) extern "C" fn rt_str_concat(a: *const u8, b: *const u8) -> *const u8 
     result.push_str(a_str);
     result.push_str(b_str);
     let c_string = std::ffi::CString::new(result).unwrap();
-    c_string.into_raw() as *const u8 // leaked — no GC
+    arena_str(c_string)
 }
 
 pub(crate) extern "C" fn rt_str_eq(a: *const u8, b: *const u8) -> i8 {
@@ -316,19 +348,19 @@ pub(crate) extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
 pub(crate) extern "C" fn rt_i64_to_str(n: i64) -> *const u8 {
     let s = format!("{}", n);
     let c = std::ffi::CString::new(s).unwrap();
-    c.into_raw() as *const u8
+    arena_str(c)
 }
 
 pub(crate) extern "C" fn rt_f64_to_str(n: f64) -> *const u8 {
     let s = format!("{}", n);
     let c = std::ffi::CString::new(s).unwrap();
-    c.into_raw() as *const u8
+    arena_str(c)
 }
 
 pub(crate) extern "C" fn rt_bool_to_str(b: i8) -> *const u8 {
     let s = if b != 0 { "true" } else { "false" };
     let c = std::ffi::CString::new(s).unwrap();
-    c.into_raw() as *const u8
+    arena_str(c)
 }
 
 // ── Result type runtime functions ────────────────────────────────────
@@ -456,7 +488,7 @@ pub(crate) extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
     }
     for (i, part) in parts.iter().enumerate() {
         let cs = std::ffi::CString::new(*part).unwrap();
-        let p = cs.into_raw() as i64;
+        let p = arena_str(cs) as i64;
         unsafe {
             *((data_ptr as *mut i64).add(1 + i)) = p;
         }
@@ -470,7 +502,7 @@ pub(crate) extern "C" fn rt_str_trim(s: *const u8) -> *const u8 {
         .unwrap_or("");
     let trimmed = s.trim();
     let cs = std::ffi::CString::new(trimmed).unwrap();
-    cs.into_raw() as *const u8
+    arena_str(cs)
 }
 
 pub(crate) extern "C" fn rt_str_upper(s: *const u8) -> *const u8 {
@@ -479,7 +511,7 @@ pub(crate) extern "C" fn rt_str_upper(s: *const u8) -> *const u8 {
         .unwrap_or("");
     let upper = s.to_uppercase();
     let cs = std::ffi::CString::new(upper).unwrap();
-    cs.into_raw() as *const u8
+    arena_str(cs)
 }
 
 pub(crate) extern "C" fn rt_str_lower(s: *const u8) -> *const u8 {
@@ -488,7 +520,7 @@ pub(crate) extern "C" fn rt_str_lower(s: *const u8) -> *const u8 {
         .unwrap_or("");
     let lower = s.to_lowercase();
     let cs = std::ffi::CString::new(lower).unwrap();
-    cs.into_raw() as *const u8
+    arena_str(cs)
 }
 
 pub(crate) extern "C" fn rt_str_starts_with(s: *const u8, prefix: *const u8) -> i8 {
@@ -531,7 +563,7 @@ pub(crate) extern "C" fn rt_str_replace(s: *const u8, from: *const u8, to: *cons
         .unwrap_or("");
     let result = s.replace(from, to_s);
     let cs = std::ffi::CString::new(result).unwrap();
-    cs.into_raw() as *const u8
+    arena_str(cs)
 }
 
 pub(crate) extern "C" fn rt_str_char_at(s: *const u8, index: i64) -> *const u8 {
@@ -540,7 +572,7 @@ pub(crate) extern "C" fn rt_str_char_at(s: *const u8, index: i64) -> *const u8 {
         .unwrap_or("");
     if let Some(c) = s.chars().nth(index as usize) {
         let cs = std::ffi::CString::new(c.to_string()).unwrap();
-        cs.into_raw() as *const u8
+        arena_str(cs)
     } else {
         eprintln!(
             "runtime error: string index {} out of bounds (length {})",
@@ -597,7 +629,7 @@ pub(crate) extern "C" fn rt_str_join(arr: *const u8, sep: *const u8) -> *const u
     }
     let joined = parts.join(sep);
     let cs = std::ffi::CString::new(joined).unwrap();
-    cs.into_raw() as *const u8
+    arena_str(cs)
 }
 
 /// Practical cap on a single repeat() allocation. 256 MB is larger than any
@@ -633,9 +665,10 @@ pub(crate) extern "C" fn rt_str_repeat(s: *const u8, n: i64) -> *const u8 {
         return rt_empty_cstr();
     }
     let repeated = s.repeat(count);
-    std::ffi::CString::new(repeated)
-        .unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
-        .into_raw() as *const u8
+    arena_str(
+        std::ffi::CString::new(repeated)
+            .unwrap_or_else(|_| std::ffi::CString::new("").unwrap()),
+    )
 }
 
 pub(crate) extern "C" fn rt_read_line() -> *const u8 {
@@ -643,7 +676,7 @@ pub(crate) extern "C" fn rt_read_line() -> *const u8 {
     std::io::stdin().read_line(&mut line).unwrap_or(0);
     let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
     let cs = std::ffi::CString::new(trimmed).unwrap();
-    cs.into_raw() as *const u8
+    arena_str(cs)
 }
 
 pub(crate) extern "C" fn rt_read_file(path: *const u8) -> *const u8 {
@@ -653,7 +686,7 @@ pub(crate) extern "C" fn rt_read_file(path: *const u8) -> *const u8 {
     match std::fs::read_to_string(path) {
         Ok(content) => {
             let cs = std::ffi::CString::new(content).unwrap();
-            cs.into_raw() as *const u8
+            arena_str(cs)
         }
         Err(e) => {
             eprintln!("runtime error: cannot read file '{}': {}", path, e);
@@ -690,12 +723,12 @@ pub(crate) extern "C" fn rt_exec(cmd: *const u8) -> *const u8 {
                 format!("{}{}", stdout, stderr)
             };
             let cs = std::ffi::CString::new(combined).unwrap();
-            cs.into_raw() as *const u8
+            arena_str(cs)
         }
         Err(e) => {
             let msg = format!("error: exec failed: {}", e);
             let cs = std::ffi::CString::new(msg).unwrap();
-            cs.into_raw() as *const u8
+            arena_str(cs)
         }
     }
 }
@@ -706,7 +739,7 @@ pub(crate) extern "C" fn rt_env_get(name: *const u8) -> *const u8 {
         .unwrap_or("");
     let val = std::env::var(name).unwrap_or_default();
     let cs = std::ffi::CString::new(val).unwrap();
-    cs.into_raw() as *const u8
+    arena_str(cs)
 }
 
 pub(crate) extern "C" fn rt_pow(base: i64, exp: i64) -> i64 {
@@ -733,15 +766,16 @@ const RT_HTTP_MAX_BODY: usize = 32 * 1024 * 1024;
 /// Allocate an empty C string, used as a safe return value from error paths
 /// in string/HTTP helpers. Never panics.
 fn rt_empty_cstr() -> *const u8 {
-    std::ffi::CString::new("")
-        .expect("empty CString never has interior NUL")
-        .into_raw() as *const u8
+    arena_str(
+        std::ffi::CString::new("").expect("empty CString never has interior NUL"),
+    )
 }
 
 fn rt_owned_cstr(value: String) -> *const u8 {
-    std::ffi::CString::new(value)
-        .unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
-        .into_raw() as *const u8
+    arena_str(
+        std::ffi::CString::new(value)
+            .unwrap_or_else(|_| std::ffi::CString::new("").unwrap()),
+    )
 }
 
 /// Validate that `url` is a well-formed http:// or https:// URL safe to hand
@@ -795,7 +829,7 @@ pub(crate) extern "C" fn rt_http_get(url: *const u8) -> *const u8 {
             let body = String::from_utf8_lossy(&out.stdout).to_string();
             let cs = std::ffi::CString::new(body)
                 .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
-            cs.into_raw() as *const u8
+            arena_str(cs)
         }
         Err(e) => {
             eprintln!("[rt_http] curl exec failed: {}", e);
@@ -849,7 +883,7 @@ pub(crate) extern "C" fn rt_http_post(url: *const u8, body: *const u8) -> *const
             let resp = String::from_utf8_lossy(&out.stdout).to_string();
             let cs = std::ffi::CString::new(resp)
                 .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
-            cs.into_raw() as *const u8
+            arena_str(cs)
         }
         Err(e) => {
             eprintln!("[rt_http] curl exec failed: {}", e);
@@ -892,7 +926,7 @@ pub(crate) extern "C" fn rt_json_get(json: *const u8, key: *const u8) -> *const 
                 let value = &inner[..end];
                 let cs = std::ffi::CString::new(value)
                     .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
-                return cs.into_raw() as *const u8;
+                return arena_str(cs);
             } else {
                 // Number, bool, or null: read until , } ] or whitespace
                 let end = value_start
@@ -909,13 +943,13 @@ pub(crate) extern "C" fn rt_json_get(json: *const u8, key: *const u8) -> *const 
                 let value = &value_start[..end];
                 let cs = std::ffi::CString::new(value)
                     .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
-                return cs.into_raw() as *const u8;
+                return arena_str(cs);
             }
         }
     }
     // Key not found: return empty string
     let cs = std::ffi::CString::new("").unwrap();
-    cs.into_raw() as *const u8
+    arena_str(cs)
 }
 
 /// Build a JSON object string from a key and value: {"key": "value"}
@@ -932,7 +966,7 @@ pub(crate) extern "C" fn rt_json_stringify(key: *const u8, value: *const u8) -> 
         value_str.replace('\\', "\\\\").replace('"', "\\\"")
     );
     let cs = std::ffi::CString::new(result).unwrap();
-    cs.into_raw() as *const u8
+    arena_str(cs)
 }
 
 pub(crate) extern "C" fn rt_json_root(json: *const u8) -> *const u8 {
@@ -1264,7 +1298,7 @@ pub(crate) extern "C" fn rt_respond(status: i64, body: *const u8) -> *const u8 {
     let response = format!("{}:{}", status, body_str);
     let cs = std::ffi::CString::new(response)
         .unwrap_or_else(|_| std::ffi::CString::new("200:").unwrap());
-    cs.into_raw() as *const u8
+    arena_str(cs)
 }
 
 /// Helper: extract Nth field from structured request (fields separated by \x01)
@@ -1281,7 +1315,7 @@ fn req_field(req: *const u8, index: usize) -> *const u8 {
 
 fn rt_alloc_string(s: &str) -> *const u8 {
     let cs = std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
-    cs.into_raw() as *const u8
+    arena_str(cs)
 }
 
 /// Extract HTTP method from structured request
@@ -1516,7 +1550,7 @@ pub(crate) extern "C" fn rt_hashmap_get(map_ptr: *const u8, key: *const u8) -> *
     match map.get(key) {
         Some(v) => {
             let cs = std::ffi::CString::new(v.as_str()).unwrap();
-            cs.into_raw() as *const u8
+            arena_str(cs)
         }
         None => std::ptr::null(),
     }
@@ -1570,7 +1604,7 @@ pub(crate) extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
     for (i, key) in keys.iter().enumerate() {
         let cs = std::ffi::CString::new(*key).unwrap();
         unsafe {
-            *((data_ptr as *mut i64).add(1 + i)) = cs.into_raw() as i64;
+            *((data_ptr as *mut i64).add(1 + i)) = arena_str(cs) as i64;
         }
     }
     data_ptr

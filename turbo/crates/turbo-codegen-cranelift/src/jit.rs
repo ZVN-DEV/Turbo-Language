@@ -193,6 +193,8 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     let main_ptr = module.get_finalized_function(*main_id);
     let main_fn: fn() = unsafe { std::mem::transmute(main_ptr) };
     main_fn();
+    // Free all runtime-allocated strings
+    crate::runtime::rt_arena_reset();
 
     Ok(())
 }
@@ -331,6 +333,8 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     let func_ptr = module.get_finalized_function(*func_id);
     let func: fn() = unsafe { std::mem::transmute(func_ptr) };
     func();
+    // Free all runtime-allocated strings
+    crate::runtime::rt_arena_reset();
 
     Ok(())
 }
