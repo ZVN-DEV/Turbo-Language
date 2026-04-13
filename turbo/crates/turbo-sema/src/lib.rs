@@ -1556,17 +1556,12 @@ fn main() { }"#,
 
     #[test]
     fn test_fn_returns_wrong_type_int_vs_bool() {
-        assert_has_code(
-            "fn foo() -> bool { 42 }\nfn main() { }",
-            ErrorCode::E0109,
-        );
+        assert_has_code("fn foo() -> bool { 42 }\nfn main() { }", ErrorCode::E0109);
     }
 
     #[test]
     fn test_fn_returns_correct_type_ok() {
-        assert_no_errors(
-            "fn greet() -> str { \"hello\" }\nfn main() { print(greet()) }",
-        );
+        assert_no_errors("fn greet() -> str { \"hello\" }\nfn main() { print(greet()) }");
     }
 
     // ----- 3. Binary op type checking ----------------------------------------
@@ -1574,27 +1569,18 @@ fn main() { }"#,
     #[test]
     fn test_add_int_and_str_rejected() {
         // 5 + "hello" should produce a mismatched-types-in-arithmetic error.
-        assert_has_code(
-            "fn main() { let x = 5 + \"hello\" }",
-            ErrorCode::E0102,
-        );
+        assert_has_code("fn main() { let x = 5 + \"hello\" }", ErrorCode::E0102);
     }
 
     #[test]
     fn test_compare_int_and_str_rejected() {
         // Comparing incompatible types.
-        assert_has_code(
-            "fn main() { let x = 5 == \"hello\" }",
-            ErrorCode::E0103,
-        );
+        assert_has_code("fn main() { let x = 5 == \"hello\" }", ErrorCode::E0103);
     }
 
     #[test]
     fn test_logical_and_non_bool_rejected() {
-        assert_has_code(
-            "fn main() { let x = 1 && 2 }",
-            ErrorCode::E0104,
-        );
+        assert_has_code("fn main() { let x = 1 && 2 }", ErrorCode::E0104);
     }
 
     // ----- 7. Struct field access — nonexistent field -------------------------
@@ -1636,9 +1622,7 @@ fn main() { }"#,
 
     #[test]
     fn test_enum_valid_variant_ok() {
-        assert_no_errors(
-            "type Color { Red, Green, Blue }\nfn main() { let c = Color.Red }",
-        );
+        assert_no_errors("type Color { Red, Green, Blue }\nfn main() { let c = Color.Red }");
     }
 
     // ----- 14. Ty::Error propagation — no cascading errors -------------------
@@ -1648,7 +1632,10 @@ fn main() { }"#,
         // Using an undefined variable in an expression should NOT cause
         // additional spurious errors on the surrounding expression.
         let errors = check_source("fn main() { let y = unknown_var + 1 }");
-        let real_errors: Vec<_> = errors.iter().filter(|e| e.code == ErrorCode::E0300).collect();
+        let real_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| e.code == ErrorCode::E0300)
+            .collect();
         assert!(
             !real_errors.is_empty(),
             "Expected at least one E0300 (undefined variable)"
@@ -1668,13 +1655,21 @@ fn main() { }"#,
     #[test]
     fn test_error_propagation_in_function_call() {
         // Calling a function with an error-typed argument should not cascade.
-        let errors = check_source(
-            "fn double(x: i64) -> i64 { x * 2 }\nfn main() { double(undefined_var) }",
+        let errors =
+            check_source("fn double(x: i64) -> i64 { x * 2 }\nfn main() { double(undefined_var) }");
+        let undef_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| e.code == ErrorCode::E0300)
+            .collect();
+        assert!(
+            !undef_errors.is_empty(),
+            "Should have undefined variable error"
         );
-        let undef_errors: Vec<_> = errors.iter().filter(|e| e.code == ErrorCode::E0300).collect();
-        assert!(!undef_errors.is_empty(), "Should have undefined variable error");
         // Should NOT have an argument type mismatch cascading from the error.
-        let arg_mismatch: Vec<_> = errors.iter().filter(|e| e.code == ErrorCode::E0100).collect();
+        let arg_mismatch: Vec<_> = errors
+            .iter()
+            .filter(|e| e.code == ErrorCode::E0100)
+            .collect();
         assert!(
             arg_mismatch.is_empty(),
             "Ty::Error should not cascade into argument type mismatch, got: {:?}",
@@ -1694,9 +1689,7 @@ fn main() { }"#,
 
     #[test]
     fn test_closure_valid_ok() {
-        assert_no_errors(
-            "fn main() {\n    let f = |x: i64| -> i64 { x + 1 }\n    print(f(1))\n}",
-        );
+        assert_no_errors("fn main() {\n    let f = |x: i64| -> i64 { x + 1 }\n    print(f(1))\n}");
     }
 
     // ----- 16. Method call on wrong type -------------------------------------
@@ -1725,12 +1718,18 @@ fn main() { }"#,
         assert!(
             undef_count >= 2,
             "Expected at least 2 undefined variable errors, got {undef_count}: {:?}",
-            errors.iter().map(|e| (&e.code, &e.message)).collect::<Vec<_>>()
+            errors
+                .iter()
+                .map(|e| (&e.code, &e.message))
+                .collect::<Vec<_>>()
         );
         assert!(
             mismatch_count >= 1,
             "Expected at least 1 type annotation mismatch, got {mismatch_count}: {:?}",
-            errors.iter().map(|e| (&e.code, &e.message)).collect::<Vec<_>>()
+            errors
+                .iter()
+                .map(|e| (&e.code, &e.message))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -1762,10 +1761,7 @@ fn main() { }"#,
     #[test]
     fn test_len_wrong_arg_type() {
         // len() expects array or string, not int.
-        assert_has_code(
-            "fn main() { let x = len(42) }",
-            ErrorCode::E0133,
-        );
+        assert_has_code("fn main() { let x = len(42) }", ErrorCode::E0133);
     }
 
     #[test]
@@ -1780,10 +1776,7 @@ fn main() { }"#,
 
     #[test]
     fn test_len_wrong_arg_count() {
-        assert_has_code(
-            "fn main() { len(1, 2) }",
-            ErrorCode::E0513,
-        );
+        assert_has_code("fn main() { len(1, 2) }", ErrorCode::E0513);
     }
 
     // ----- check_test mode — no main required --------------------------------
@@ -1802,9 +1795,7 @@ fn main() { }"#,
 
     #[test]
     fn test_check_test_mode_still_type_checks() {
-        let (tokens, _) = turbo_lexer::tokenize(
-            "@test fn my_test() { let x: i32 = \"wrong\" }",
-        );
+        let (tokens, _) = turbo_lexer::tokenize("@test fn my_test() { let x: i32 = \"wrong\" }");
         let (module, _) = turbo_parser::parse(tokens);
         let result = check_test(&module);
         assert!(
@@ -1833,9 +1824,7 @@ fn main() { }"#,
 
     #[test]
     fn test_for_in_array_ok() {
-        assert_no_errors(
-            "fn main() { for x in [1, 2, 3] { print(x) } }",
-        );
+        assert_no_errors("fn main() { for x in [1, 2, 3] { print(x) } }");
     }
 
     // ----- Impl block / method definitions -----------------------------------
@@ -1859,9 +1848,7 @@ fn main() { }"#,
 
     #[test]
     fn test_const_declaration_ok() {
-        assert_no_errors(
-            "const MAX = 100\nfn main() { print(MAX) }",
-        );
+        assert_no_errors("const MAX = 100\nfn main() { print(MAX) }");
     }
 
     // ----- Optional type checking -------------------------------------------

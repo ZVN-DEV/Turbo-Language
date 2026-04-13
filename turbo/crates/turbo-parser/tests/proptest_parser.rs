@@ -13,12 +13,42 @@ use turbo_lexer::{Spanned, Token};
 fn is_keyword(name: &str) -> bool {
     matches!(
         name,
-        "fn" | "let" | "mut" | "if" | "else" | "while" | "for" | "in"
-            | "return" | "match" | "struct" | "enum" | "true" | "false"
-            | "import" | "from" | "const" | "impl" | "trait" | "pub"
-            | "defer" | "spawn" | "await" | "async" | "break" | "continue"
-            | "none" | "some" | "ok" | "err" | "int" | "float" | "bool"
-            | "str" | "extern" | "type" | "unsafe"
+        "fn" | "let"
+            | "mut"
+            | "if"
+            | "else"
+            | "while"
+            | "for"
+            | "in"
+            | "return"
+            | "match"
+            | "struct"
+            | "enum"
+            | "true"
+            | "false"
+            | "import"
+            | "from"
+            | "const"
+            | "impl"
+            | "trait"
+            | "pub"
+            | "defer"
+            | "spawn"
+            | "await"
+            | "async"
+            | "break"
+            | "continue"
+            | "none"
+            | "some"
+            | "ok"
+            | "err"
+            | "int"
+            | "float"
+            | "bool"
+            | "str"
+            | "extern"
+            | "type"
+            | "unsafe"
     )
 }
 
@@ -151,17 +181,14 @@ proptest! {
 fn arb_valid_let_program() -> impl Strategy<Value = String> {
     ("[a-z][a-z0-9_]{0,6}", 0i64..10_000)
         .prop_filter("avoid keywords", |(name, _)| !is_keyword(name))
-        .prop_map(|(name, val)| {
-            format!("fn main() {{ let {} = {} }}", name, val)
-        })
+        .prop_map(|(name, val)| format!("fn main() {{ let {} = {} }}", name, val))
 }
 
 /// Strategy that produces a valid Turbo if-else source string:
 ///   fn main() { if true { <int> } else { <int> } }
 fn arb_valid_if_else_program() -> impl Strategy<Value = String> {
-    (0i64..10_000, 0i64..10_000).prop_map(|(a, b)| {
-        format!("fn main() {{ if true {{ {} }} else {{ {} }} }}", a, b)
-    })
+    (0i64..10_000, 0i64..10_000)
+        .prop_map(|(a, b)| format!("fn main() {{ if true {{ {} }} else {{ {} }} }}", a, b))
 }
 
 /// Strategy that produces a valid Turbo while-loop source string:
@@ -180,9 +207,7 @@ fn arb_valid_while_program() -> impl Strategy<Value = String> {
 fn arb_valid_fn_with_return() -> impl Strategy<Value = String> {
     ("[a-z][a-z]{0,4}",)
         .prop_filter("avoid keywords", |(name,)| !is_keyword(name))
-        .prop_map(|(name,)| {
-            format!("fn {}(a: int, b: int) -> int {{ a + b }}", name)
-        })
+        .prop_map(|(name,)| format!("fn {}(a: int, b: int) -> int {{ a + b }}", name))
 }
 
 proptest! {
@@ -336,6 +361,5 @@ fn arb_turbo_like_source() -> impl Strategy<Value = String> {
         Just("\"hello\"".to_string()),
         Just("\n".to_string()),
     ];
-    proptest::collection::vec(fragment, 0..50)
-        .prop_map(|fragments| fragments.join(" "))
+    proptest::collection::vec(fragment, 0..50).prop_map(|fragments| fragments.join(" "))
 }

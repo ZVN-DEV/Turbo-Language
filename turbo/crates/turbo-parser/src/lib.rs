@@ -2065,9 +2065,7 @@ impl Parser {
                 let span = self.advance().span.clone();
                 Ok(Spanned::new(Pattern::Wildcard, span))
             }
-            Some(t)
-                if matches!(t, Token::Ident(_)) || Self::soft_keyword_ident(t).is_some() =>
-            {
+            Some(t) if matches!(t, Token::Ident(_)) || Self::soft_keyword_ident(t).is_some() => {
                 let (name, span) = self.expect_ident()?;
                 if matches!(self.peek(), Some(Token::LParen)) {
                     // Variant destructure: Circle(r) or Rectangle(w, h)

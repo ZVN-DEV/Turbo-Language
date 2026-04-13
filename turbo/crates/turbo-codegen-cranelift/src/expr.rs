@@ -1037,10 +1037,7 @@ pub(crate) fn compile_expr<M: Module>(
 pub(crate) fn is_rc_heap_type(ty: &TurboTy) -> bool {
     matches!(
         ty,
-        TurboTy::Array(_)
-            | TurboTy::Struct(_)
-            | TurboTy::Result(_, _)
-            | TurboTy::Optional(_)
+        TurboTy::Array(_) | TurboTy::Struct(_) | TurboTy::Result(_, _) | TurboTy::Optional(_)
     )
 }
 

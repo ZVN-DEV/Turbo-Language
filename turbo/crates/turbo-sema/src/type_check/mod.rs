@@ -32,10 +32,9 @@ use turbo_ast::*;
 use crate::scope::VarInfo;
 use crate::{
     extract_int_literal, int_literal_fits_in_type, is_ffi_safe_type, resolve_type_expr,
-    resolve_type_expr_with_params, types_compatible, Checker, EnumInfo, FnSig,
-    StructInfo, TraitInfo, TraitMethodInfo, Ty, MAX_EXPR_DEPTH,
+    resolve_type_expr_with_params, types_compatible, Checker, EnumInfo, FnSig, StructInfo,
+    TraitInfo, TraitMethodInfo, Ty, MAX_EXPR_DEPTH,
 };
-
 
 mod expr;
 mod stmt;

@@ -13,4 +13,11 @@ ignore = [
     # bump requires notify's new API surface, so it is tracked as a followup
     # rather than rushed in for a security rollup.
     "RUSTSEC-2024-0384",
+
+    # `rand 0.9.2` unsoundness with custom loggers in `rand::rng()`.
+    # Only reachable via proptest (dev-dependency for property-based tests).
+    # proptest does not use a custom logger, and rand 0.10.x is not yet
+    # supported by proptest 1.11.0. Remove this ignore once proptest ships
+    # a release that depends on rand >= 0.10.
+    "RUSTSEC-2026-0097",
 ]

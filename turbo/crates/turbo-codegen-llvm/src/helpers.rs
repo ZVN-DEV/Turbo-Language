@@ -112,11 +112,7 @@ pub(crate) fn infer_capture_type_from_body(body: &Expr, var_name: &str) -> Turbo
     }
 }
 
-pub(crate) fn collect_free_vars_llvm(
-    expr: &Expr,
-    bound: &mut Vec<String>,
-    free: &mut Vec<String>,
-) {
+pub(crate) fn collect_free_vars_llvm(expr: &Expr, bound: &mut Vec<String>, free: &mut Vec<String>) {
     match expr {
         Expr::Ident(name) => {
             if !bound.contains(name) && !free.contains(name) {

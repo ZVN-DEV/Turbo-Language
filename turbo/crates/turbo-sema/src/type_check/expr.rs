@@ -11,8 +11,7 @@ use turbo_ast::*;
 use crate::scope::VarInfo;
 use crate::suggest;
 use crate::{
-    extract_int_literal, int_literal_fits_in_type, resolve_type_expr,
-    types_compatible, Checker, Ty,
+    extract_int_literal, int_literal_fits_in_type, resolve_type_expr, types_compatible, Checker, Ty,
 };
 
 impl Checker {

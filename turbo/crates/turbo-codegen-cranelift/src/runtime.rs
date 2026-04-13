@@ -633,10 +633,7 @@ pub(crate) extern "C" fn rt_exec(cmd: *const u8) -> *const u8 {
     let cmd = unsafe { std::ffi::CStr::from_ptr(cmd as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    let output = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .output();
+    let output = std::process::Command::new("sh").arg("-c").arg(cmd).output();
     match output {
         Ok(out) => {
             let stdout = String::from_utf8_lossy(&out.stdout);

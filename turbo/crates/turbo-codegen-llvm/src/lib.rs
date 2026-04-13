@@ -30,8 +30,8 @@ use ctx::Ctx;
 use expr::{compile_expr, convert_to_str, narrow_from_storage};
 use helpers::{extract_all_closures_llvm, extract_all_spawn_sites_llvm};
 use types::{
-    turbo_ty_from_type_expr, turbo_ty_from_type_expr_with_params, turbo_ty_to_llvm,
-    turbo_ty_to_llvm_ctx, resolve_llvm_type_ctx, TurboTy,
+    resolve_llvm_type_ctx, turbo_ty_from_type_expr, turbo_ty_from_type_expr_with_params,
+    turbo_ty_to_llvm, turbo_ty_to_llvm_ctx, TurboTy,
 };
 
 // ── Runtime C source for AOT linking ────────────────────────────────

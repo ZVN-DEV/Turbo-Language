@@ -2867,9 +2867,11 @@ fn resolve_imports(
                 if wanted[fi].contains(&name) {
                     continue;
                 }
-                let defined_here = file.module.items.iter().any(|it| {
-                    item_def_name(&it.node).map(|n| n == name).unwrap_or(false)
-                });
+                let defined_here = file
+                    .module
+                    .items
+                    .iter()
+                    .any(|it| item_def_name(&it.node).map(|n| n == name).unwrap_or(false));
                 if defined_here {
                     wanted[fi].insert(name.clone());
                     changed = true;
@@ -2911,7 +2913,9 @@ fn resolve_imports(
         // over-imported), but explicit names must resolve here.
         for name in &explicit_names {
             let found = found_for_file.iter().any(|item| {
-                item_def_name(&item.node).map(|n| n == name).unwrap_or(false)
+                item_def_name(&item.node)
+                    .map(|n| n == name)
+                    .unwrap_or(false)
             });
             if !found {
                 return Err(format!(

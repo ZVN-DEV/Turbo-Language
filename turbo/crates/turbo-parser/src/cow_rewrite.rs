@@ -80,10 +80,7 @@ fn rewrite_item(item: &mut Item) {
             // `true` as a neutral default for `fn_value_ctx`.
             rewrite_expr(&mut c.value.node, true, true);
         }
-        Item::Struct(_)
-        | Item::Enum(_)
-        | Item::Import { .. }
-        | Item::Extern(_) => {}
+        Item::Struct(_) | Item::Enum(_) | Item::Import { .. } | Item::Extern(_) => {}
     }
 }
 

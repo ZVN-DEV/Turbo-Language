@@ -2,8 +2,7 @@ use std::path::Path;
 
 /// Top-level declarations that trigger blank-line separation.
 const TOP_LEVEL_KEYWORDS: &[&str] = &[
-    "fn ", "struct ", "type ", "impl ", "trait ", "import ", "extern ",
-    "@unsafe",
+    "fn ", "struct ", "type ", "impl ", "trait ", "import ", "extern ", "@unsafe",
 ];
 
 /// Format a Turbo source file in place (or check formatting).

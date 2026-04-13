@@ -1157,13 +1157,7 @@ fn compile_module<M: Module>(
         &[ptr_type, ptr_type],
         None,
     )?;
-    declare_rt_fn(
-        module,
-        &mut rt_fns,
-        "rt_exec",
-        &[ptr_type],
-        Some(ptr_type),
-    )?;
+    declare_rt_fn(module, &mut rt_fns, "rt_exec", &[ptr_type], Some(ptr_type))?;
     declare_rt_fn(
         module,
         &mut rt_fns,
@@ -2039,7 +2033,7 @@ fn compile_module<M: Module>(
                     fn_ret_types: &fn_ret_types,
                     fn_asts: &fn_asts,
                     fn_type_params: &fn_type_params,
-                        rt_fns: &rt_fns,
+                    rt_fns: &rt_fns,
                     vars: HashMap::new(),
                     next_var: 0,
                     data_desc: &mut data_desc,
@@ -2055,7 +2049,7 @@ fn compile_module<M: Module>(
                     closure_captures: &mut closure_captures_map,
                     generic_struct_field_overrides: HashMap::new(),
                     last_struct_lit_concrete_fields: None,
-                        spawn_thunks: &spawn_thunk_map,
+                    spawn_thunks: &spawn_thunk_map,
                     constants: &constants_map,
                     struct_derives: &struct_derives,
                     loop_stack: Vec::new(),
