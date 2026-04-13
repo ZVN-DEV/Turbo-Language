@@ -2,7 +2,7 @@
 
 # Turbo
 
-**JavaScript's soul. Rust's speed. Built for the AI age.**
+**TypeScript's ease. Rust's speed. No GC, no borrow checker.**
 
 A compiled, type-safe programming language with familiar syntax and native performance. Compiles to machine code via Cranelift -- no VM, no garbage collector, no overhead.
 
@@ -47,7 +47,7 @@ turbolang build hello.tb      # AOT — produce a native binary
 ./hello
 ```
 
-### Known Limitations (v0.5.x)
+### Known Limitations (v0.7.x)
 
 > **Warning — runtime memory leak:** The runtime does not yet perform reference counting. `rt_release` is currently a no-op, so long-running servers and hot loops that allocate repeatedly will leak memory (~2.5 KB/request on the example HTTP server). Real ARC is planned for v0.6. For short-running CLI programs this is not a problem.
 >
@@ -348,8 +348,8 @@ turbo-db = "ZVN-DEV/turbo-db"
 [dependencies]
 mathlib = { path = "../mathlib" }
 turbo-db = "0.1"
-agent-kit = { github = "owner/agent-kit", rev = "0123456789abcdef" }
-agent-kit-next = { github = "owner/agent-kit", version = "1.2" }
+http-utils = { github = "owner/http-utils", rev = "0123456789abcdef" }
+http-utils-next = { github = "owner/http-utils", version = "1.2" }
 ```
 
 GitHub installs are pinned into `turbo.lock` so repeat installs use the same
@@ -401,7 +401,7 @@ design/                         # Language specification documents
 
 ## Language Design
 
-Full specification lives in `design/`: [SYNTAX.md](design/SYNTAX.md), [TYPE-SYSTEM.md](design/TYPE-SYSTEM.md), [MEMORY-MODEL.md](design/MEMORY-MODEL.md), [CONCURRENCY.md](design/CONCURRENCY.md), [AGENTIC.md](design/AGENTIC.md), [COMPILATION.md](design/COMPILATION.md), [TOOLCHAIN.md](design/TOOLCHAIN.md).
+Full specification lives in `design/`: [SYNTAX.md](design/SYNTAX.md), [TYPE-SYSTEM.md](design/TYPE-SYSTEM.md), [MEMORY-MODEL.md](design/MEMORY-MODEL.md), [CONCURRENCY.md](design/CONCURRENCY.md), [COMPILATION.md](design/COMPILATION.md), [TOOLCHAIN.md](design/TOOLCHAIN.md).
 
 > **Note:** These documents describe the full language vision. Features marked as implemented are available today; others represent the roadmap.
 
