@@ -145,7 +145,7 @@ fn generate_input(seed: u64) -> String {
 const TURBO_KEYWORDS: &[&str] = &[
     "fn", "let", "mut", "const", "if", "else", "while", "for", "in", "return",
     "true", "false", "match", "struct", "type", "impl", "trait", "pub", "import",
-    "from", "async", "await", "spawn", "defer", "tool", "agent", "none", "some",
+    "from", "async", "await", "spawn", "defer", "none", "some",
     "ok", "err", "break", "continue",
 ];
 

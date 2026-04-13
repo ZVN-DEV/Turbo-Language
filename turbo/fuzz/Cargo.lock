@@ -479,11 +479,11 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "turbo-ast"
-version = "0.5.0"
+version = "0.7.4"
 
 [[package]]
 name = "turbo-codegen-cranelift"
-version = "0.5.0"
+version = "0.7.4"
 dependencies = [
  "cranelift",
  "cranelift-codegen",
@@ -509,14 +509,14 @@ dependencies = [
 
 [[package]]
 name = "turbo-lexer"
-version = "0.5.0"
+version = "0.7.4"
 dependencies = [
  "logos",
 ]
 
 [[package]]
 name = "turbo-parser"
-version = "0.5.0"
+version = "0.7.4"
 dependencies = [
  "turbo-ast",
  "turbo-lexer",
@@ -524,7 +524,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-sema"
-version = "0.5.0"
+version = "0.7.4"
 dependencies = [
  "turbo-ast",
 ]
