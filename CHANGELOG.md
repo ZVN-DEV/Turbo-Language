@@ -3,6 +3,46 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.4] - 2026-04-12
+
+Gold-standard open source audit. Hardened the C runtime, split two
+monolithic source files, added 45 new tests, and improved CI, release,
+and install infrastructure.
+
+### Changed
+- **Split turbo-codegen-llvm/src/lib.rs** (6306 lines) into 7 modules:
+  types.rs, ctx.rs, helpers.rs, expr.rs, stmt.rs, builtins.rs, and a
+  reduced lib.rs (1315 lines). Follows the same structure as the
+  Cranelift backend.
+- **Split turbo-sema/src/type_check.rs** (4738 lines) into a directory
+  module: type_check/{mod.rs, expr.rs, stmt.rs}. The 3470-line
+  `check_expr_inner` match now lives in its own file.
+- **Binary size reporting** added to the CI `build` job — reports size
+  in GitHub step summary on every PR.
+- **Canary release channel** — nightly CI now publishes a rolling
+  `nightly` pre-release on GitHub with the latest binary.
+
+### Fixed
+- **rt_read_line() silent truncation** — replaced fixed 4096-byte
+  `fgets` stack buffer with POSIX `getline()` for dynamic allocation.
+  Long user input is no longer silently cut off.
+- **cargo-audit version mismatch** — nightly.yml pinned 0.21.2 while
+  ci.yml pinned 0.22.1. Both now use 0.22.1.
+- **Clippy warning** in parser `soft_keyword_ident()` — removed
+  unnecessary match wrapping a single `_ => None` arm.
+- Removed stale `tool fn` sema tests (agent primitives removed in v0.7.3).
+
+### Added
+- **37 sema unit tests** covering type inference, function return types,
+  binary ops, struct/enum checking, closures, builtins, error
+  propagation (Ty::Error no-cascade), optionals, results, impl blocks,
+  const declarations, compound assignment, and check_test mode.
+- **8 property-based parser tests** (proptest) verifying: parser never
+  panics on random token streams, valid programs always parse, and
+  tokenize-then-parse never panics on arbitrary strings.
+- **GPG verification** — `distribution/install.sh` now accepts
+  `--verify` to download and check GPG signatures on release tarballs.
+
 ## [0.7.2] - 2026-04-09
 
 Import ergonomics release. The transitive import walker introduced in
