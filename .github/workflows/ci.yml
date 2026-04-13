@@ -118,6 +118,27 @@ jobs:
         run: ./tests/run_tests.sh
         working-directory: turbo
 
+  test-overflow:
+    name: Unit tests (overflow-checks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            turbo/target
+          key: ${{ runner.os }}-cargo-overflow-${{ hashFiles('turbo/Cargo.lock') }}
+
+      - name: cargo test (overflow-checks enabled)
+        run: cargo test --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+        env:
+          RUSTFLAGS: "-C overflow-checks=on"
+
   build:
     name: Build (release)
     runs-on: ubuntu-latest

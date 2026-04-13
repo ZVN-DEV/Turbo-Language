@@ -51,3 +51,8 @@ opt-level = 0
 opt-level = 3
 lto = true
 strip = true
+
+[profile.ci]
+inherits = "dev"
+overflow-checks = true
+debug-assertions = true
