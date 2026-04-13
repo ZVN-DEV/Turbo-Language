@@ -3,6 +3,7 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh | bash
 # Specific version: VERSION=0.2.0 curl -fsSL ... | bash
 # Or: curl -fsSL ... | bash -s -- --version 0.2.0
+# With GPG verification: curl -fsSL ... | bash -s -- --verify
 
 set -euo pipefail
 
@@ -17,6 +18,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --version=*)
             VERSION="${1#*=}"
+            shift
+            ;;
+        --verify)
+            VERIFY_GPG=true
             shift
             ;;
         *)
@@ -100,6 +105,35 @@ else
     exit 1
 fi
 cd - > /dev/null
+
+# GPG verification (optional — requires gpg and the signing key)
+if [ "${VERIFY_GPG:-false}" = "true" ]; then
+    SIG_URL="${BASE_URL}/${TARBALL}.sig"
+    echo "Downloading GPG signature..."
+    curl -fsSL "${SIG_URL}" -o "${TMPDIR}/${TARBALL}.sig" || {
+        echo "warning: GPG signature not available for this release (signatures available from v0.6+)" >&2
+        echo "Continuing without GPG verification." >&2
+    }
+
+    if [ -f "${TMPDIR}/${TARBALL}.sig" ]; then
+        if command -v gpg &> /dev/null; then
+            # Import the Turbo signing key if not already present
+            KEY_URL="https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/signing-key.asc"
+            curl -fsSL "${KEY_URL}" | gpg --import 2>/dev/null || true
+
+            echo "Verifying GPG signature..."
+            if gpg --verify "${TMPDIR}/${TARBALL}.sig" "${TMPDIR}/${TARBALL}" 2>/dev/null; then
+                echo "GPG signature verified successfully."
+            else
+                echo "error: GPG signature verification failed — the download may have been tampered with" >&2
+                exit 1
+            fi
+        else
+            echo "error: --verify requires gpg to be installed" >&2
+            exit 1
+        fi
+    fi
+fi
 
 # Extract
 tar xz -C "${TMPDIR}" -f "${TMPDIR}/${TARBALL}"

@@ -53,7 +53,7 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-audit@0.21.2
+          tool: cargo-audit@0.22.1
 
       - name: cargo audit
         run: cargo audit --deny warnings
@@ -143,6 +143,53 @@ jobs:
 
       - name: Smoke test
         run: ./turbo/target/release/turbolang --version
+
+  canary-publish:
+    name: Publish canary
+    needs: [gauntlet, release-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release
+        run: cargo build --release --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+
+      - name: Package canary
+        run: |
+          DATE=$(date -u +%Y%m%d)
+          VERSION=$(grep '^version' turbo/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          CANARY_VERSION="${VERSION}-nightly.${DATE}"
+          TARGET=$(rustc -vV | awk '/^host:/ {print $2}')
+          TARBALL="turbolang-v${CANARY_VERSION}-${TARGET}.tar.gz"
+          cp turbo/target/release/turbolang .
+          tar czf "${TARBALL}" turbolang
+          sha256sum "${TARBALL}" > checksums.txt
+          echo "CANARY_VERSION=${CANARY_VERSION}" >> "$GITHUB_ENV"
+          echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
+          echo "DATE=${DATE}" >> "$GITHUB_ENV"
+
+      - name: Create or update nightly release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Delete existing nightly release/tag if present
+          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+          # Create new nightly pre-release
+          gh release create nightly \
+            --title "Nightly Build (${DATE})" \
+            --notes "Automated nightly build from master @ $(git rev-parse --short HEAD).
+
+          Version: ${CANARY_VERSION}
+          Commit: $(git rev-parse HEAD)
+          Date: $(date -u +%Y-%m-%d)
+
+          **This is a pre-release build. For stable releases, use \`brew install ZVN-DEV/turbo/turbo-lang\` or the [latest release](https://github.com/ZVN-DEV/Turbo-Language/releases/latest).**" \
+            --prerelease \
+            "${TARBALL}" checksums.txt
 
   notify-on-failure:
     name: Open tracking issue on failure

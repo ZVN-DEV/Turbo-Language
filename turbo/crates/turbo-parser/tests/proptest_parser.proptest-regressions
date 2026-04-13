@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c796fe741ae0a24b28ee616728685fd0aed0ea7f89814519a8919f9553d02197 # shrinks to source = "fn fn(a: int, b: int) -> int { a + b }"

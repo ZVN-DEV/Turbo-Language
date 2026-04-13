@@ -684,14 +684,20 @@ const char* rt_str_join(const char *arr_ptr, const char *sep) {
 /* ── Standard library: I/O functions ───────────────────────────────── */
 
 const char* rt_read_line(void) {
-    char buf[4096];
-    if (fgets(buf, sizeof(buf), stdin) == NULL) {
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t nread = getline(&line, &cap, stdin);
+    if (nread < 0) {
+        free(line);
         char *e = turbo_alloc(1); e[0] = '\0'; return e;
     }
-    size_t len = strlen(buf);
-    while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) { buf[--len] = '\0'; }
-    char *result = turbo_alloc(len + 1);
-    memcpy(result, buf, len + 1);
+    /* strip trailing \n / \r */
+    while (nread > 0 && (line[nread-1] == '\n' || line[nread-1] == '\r')) {
+        line[--nread] = '\0';
+    }
+    char *result = turbo_alloc((size_t)nread + 1);
+    memcpy(result, line, (size_t)nread + 1);
+    free(line);
     return result;
 }
 

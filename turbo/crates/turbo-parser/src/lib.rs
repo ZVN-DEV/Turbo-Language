@@ -149,10 +149,8 @@ impl Parser {
     /// identifiers. This mechanism is kept even with no soft keywords defined
     /// so the rest of the parser's `expect_ident`/`peek_is_ident_like` logic
     /// stays ready for future soft keywords.
-    fn soft_keyword_ident(tok: &Token) -> Option<&'static str> {
-        match tok {
-            _ => None,
-        }
+    fn soft_keyword_ident(_tok: &Token) -> Option<&'static str> {
+        None
     }
 
     fn peek_is_ident_like(&self) -> bool {

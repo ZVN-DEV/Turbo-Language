@@ -137,6 +137,15 @@ jobs:
       - name: Build
         run: cargo build --release --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
 
+      - name: Report binary size
+        run: |
+          SIZE=$(stat --format=%s turbo/target/release/turbolang 2>/dev/null || stat -f%z turbo/target/release/turbolang)
+          HUMAN=$(ls -lh turbo/target/release/turbolang | awk '{print $5}')
+          echo "### Binary Size" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Binary | Size (bytes) | Size |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------------|------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| turbolang | ${SIZE} | ${HUMAN} |" >> "$GITHUB_STEP_SUMMARY"
+
   c-runtime-tests:
     name: C runtime tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -5,9 +5,10 @@
 //! by `turbo_parser` and produces a [`SemaResult`] containing every
 //! well-defined [`SemaError`] and [`SemaWarning`] found.
 //!
-//! The checker is split across four files:
-//! * `type_check` — expression / statement / module type checking
-//!   (the bulk of the work).
+//! The checker is split across several files:
+//! * `type_check/` — module, function, expression, and statement type
+//!   checking (the bulk of the work), itself split into `mod.rs`,
+//!   `expr.rs`, and `stmt.rs`.
 //! * `scope` — lexical scope stack and name resolution.
 //! * `exhaustiveness` — match-pattern validity helpers.
 //! * This file (`lib.rs`) — shared type definitions ([`Ty`], `Checker`,
@@ -890,23 +891,6 @@ fn main() { }"#,
     }
 
     #[test]
-    fn test_tool_fn_valid() {
-        assert_no_errors(
-            r#"tool fn search(q: str) -> str { "results" }
-fn main() { search("hello") }"#,
-        );
-    }
-
-    #[test]
-    fn test_tool_fn_type_checking() {
-        assert_has_error(
-            r#"tool fn search(q: str) -> str { "results" }
-fn main() { search(42) }"#,
-            "argument `q` expects `str`, found `int`",
-        );
-    }
-
-    #[test]
     fn test_optional_none_no_error_leak() {
         // Regression: `let x: i64? = none` should not produce an error
         // containing `<error>?` (internal type representation leaking).
@@ -1536,5 +1520,379 @@ fn main() { }"#,
     #[test]
     fn test_negate_bool_rejected() {
         assert_has_code("fn main() { let x = -true }", ErrorCode::E0105);
+    }
+
+    // =========================================================================
+    // Type checker unit tests — targeted coverage for core type-checking paths.
+    // =========================================================================
+
+    // ----- 1. Basic type inference -------------------------------------------
+
+    #[test]
+    fn test_infer_int_literal() {
+        // `let x = 5` should infer as int (i64) — no errors.
+        assert_no_errors("fn main() { let x = 5\n print(x) }");
+    }
+
+    #[test]
+    fn test_infer_str_literal() {
+        // `let s = "hello"` should infer as str.
+        assert_no_errors("fn main() { let s = \"hello\"\n print(s) }");
+    }
+
+    #[test]
+    fn test_infer_bool_literal() {
+        // `let b = true` should infer as bool.
+        assert_no_errors("fn main() { let b = true\n print(b) }");
+    }
+
+    #[test]
+    fn test_infer_float_literal() {
+        // `let f = 3.14` should infer as float (f64).
+        assert_no_errors("fn main() { let f = 3.14\n print(f) }");
+    }
+
+    // ----- 2. Function return type checking ----------------------------------
+
+    #[test]
+    fn test_fn_returns_wrong_type_int_vs_bool() {
+        assert_has_code(
+            "fn foo() -> bool { 42 }\nfn main() { }",
+            ErrorCode::E0109,
+        );
+    }
+
+    #[test]
+    fn test_fn_returns_correct_type_ok() {
+        assert_no_errors(
+            "fn greet() -> str { \"hello\" }\nfn main() { print(greet()) }",
+        );
+    }
+
+    // ----- 3. Binary op type checking ----------------------------------------
+
+    #[test]
+    fn test_add_int_and_str_rejected() {
+        // 5 + "hello" should produce a mismatched-types-in-arithmetic error.
+        assert_has_code(
+            "fn main() { let x = 5 + \"hello\" }",
+            ErrorCode::E0102,
+        );
+    }
+
+    #[test]
+    fn test_compare_int_and_str_rejected() {
+        // Comparing incompatible types.
+        assert_has_code(
+            "fn main() { let x = 5 == \"hello\" }",
+            ErrorCode::E0103,
+        );
+    }
+
+    #[test]
+    fn test_logical_and_non_bool_rejected() {
+        assert_has_code(
+            "fn main() { let x = 1 && 2 }",
+            ErrorCode::E0104,
+        );
+    }
+
+    // ----- 7. Struct field access — nonexistent field -------------------------
+
+    #[test]
+    fn test_struct_nonexistent_field_access() {
+        assert_has_code(
+            "struct Point { x: i64, y: i64 }\nfn main() {\n    let p = Point { x: 1, y: 2 }\n    print(p.z)\n}",
+            ErrorCode::E0315,
+        );
+    }
+
+    #[test]
+    fn test_struct_valid_field_access_ok() {
+        assert_no_errors(
+            "struct Point { x: i64, y: i64 }\nfn main() {\n    let p = Point { x: 1, y: 2 }\n    print(p.x)\n}",
+        );
+    }
+
+    // ----- 8. Struct instantiation — extra field ------------------------------
+
+    #[test]
+    fn test_struct_extra_field_rejected() {
+        assert_has_code(
+            "struct Point { x: i64, y: i64 }\nfn main() { let p = Point { x: 1, y: 2, z: 3 } }",
+            ErrorCode::E0315,
+        );
+    }
+
+    // ----- 9. Enum variant — nonexistent variant -----------------------------
+
+    #[test]
+    fn test_enum_nonexistent_variant() {
+        assert_has_code(
+            "type Color { Red, Green, Blue }\nfn main() { let c = Color.Yellow }",
+            ErrorCode::E0316,
+        );
+    }
+
+    #[test]
+    fn test_enum_valid_variant_ok() {
+        assert_no_errors(
+            "type Color { Red, Green, Blue }\nfn main() { let c = Color.Red }",
+        );
+    }
+
+    // ----- 14. Ty::Error propagation — no cascading errors -------------------
+
+    #[test]
+    fn test_error_propagation_no_cascade() {
+        // Using an undefined variable in an expression should NOT cause
+        // additional spurious errors on the surrounding expression.
+        let errors = check_source("fn main() { let y = unknown_var + 1 }");
+        let real_errors: Vec<_> = errors.iter().filter(|e| e.code == ErrorCode::E0300).collect();
+        assert!(
+            !real_errors.is_empty(),
+            "Expected at least one E0300 (undefined variable)"
+        );
+        // There should be no arithmetic-type error cascading from the <error> type.
+        let cascade_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| e.code == ErrorCode::E0101 || e.code == ErrorCode::E0102)
+            .collect();
+        assert!(
+            cascade_errors.is_empty(),
+            "Ty::Error should suppress cascading arithmetic errors, but got: {:?}",
+            cascade_errors
+        );
+    }
+
+    #[test]
+    fn test_error_propagation_in_function_call() {
+        // Calling a function with an error-typed argument should not cascade.
+        let errors = check_source(
+            "fn double(x: i64) -> i64 { x * 2 }\nfn main() { double(undefined_var) }",
+        );
+        let undef_errors: Vec<_> = errors.iter().filter(|e| e.code == ErrorCode::E0300).collect();
+        assert!(!undef_errors.is_empty(), "Should have undefined variable error");
+        // Should NOT have an argument type mismatch cascading from the error.
+        let arg_mismatch: Vec<_> = errors.iter().filter(|e| e.code == ErrorCode::E0100).collect();
+        assert!(
+            arg_mismatch.is_empty(),
+            "Ty::Error should not cascade into argument type mismatch, got: {:?}",
+            arg_mismatch
+        );
+    }
+
+    // ----- 15. Closure type checking -----------------------------------------
+
+    #[test]
+    fn test_closure_return_type_mismatch() {
+        assert_has_code(
+            "fn main() {\n    let f = |x: i64| -> i64 { \"hello\" }\n    f(1)\n}",
+            ErrorCode::E0125,
+        );
+    }
+
+    #[test]
+    fn test_closure_valid_ok() {
+        assert_no_errors(
+            "fn main() {\n    let f = |x: i64| -> i64 { x + 1 }\n    print(f(1))\n}",
+        );
+    }
+
+    // ----- 16. Method call on wrong type -------------------------------------
+
+    #[test]
+    fn test_method_not_found_on_struct() {
+        // Method call on a struct that has no such method — the sema resolves
+        // this as an undefined function call (E0301).
+        assert_has_code(
+            "struct Foo { x: i64 }\nfn main() {\n    let f = Foo { x: 1 }\n    f.bar()\n}",
+            ErrorCode::E0301,
+        );
+    }
+
+    // ----- 18. Multiple errors — program with several errors reports all -----
+
+    #[test]
+    fn test_multiple_errors_reported() {
+        // This program has multiple distinct errors; the checker should report all.
+        let errors = check_source(
+            "fn main() {\n    let x = undefined_a\n    let y = undefined_b\n    let z: i32 = \"wrong\"\n}",
+        );
+        // At least two undefined variable errors + one type annotation mismatch.
+        let undef_count = errors.iter().filter(|e| e.code == ErrorCode::E0300).count();
+        let mismatch_count = errors.iter().filter(|e| e.code == ErrorCode::E0110).count();
+        assert!(
+            undef_count >= 2,
+            "Expected at least 2 undefined variable errors, got {undef_count}: {:?}",
+            errors.iter().map(|e| (&e.code, &e.message)).collect::<Vec<_>>()
+        );
+        assert!(
+            mismatch_count >= 1,
+            "Expected at least 1 type annotation mismatch, got {mismatch_count}: {:?}",
+            errors.iter().map(|e| (&e.code, &e.message)).collect::<Vec<_>>()
+        );
+    }
+
+    // ----- 19. Clean program — valid programs produce zero errors ------------
+
+    #[test]
+    fn test_clean_program_with_structs_and_enums() {
+        assert_no_errors(
+            "struct Point { x: i64, y: i64 }\ntype Direction { North, South, East, West }\nfn add(a: i64, b: i64) -> i64 { a + b }\nfn main() {\n    let p = Point { x: 1, y: 2 }\n    let d = Direction.North\n    let sum = add(p.x, p.y)\n    print(sum)\n}",
+        );
+    }
+
+    #[test]
+    fn test_clean_program_with_arrays_and_loops() {
+        assert_no_errors(
+            "fn main() {\n    let arr = [10, 20, 30]\n    let mut total = 0\n    for item in arr {\n        total += item\n    }\n    print(total)\n}",
+        );
+    }
+
+    #[test]
+    fn test_clean_program_with_match() {
+        assert_no_errors(
+            "type Shape { Circle(f64), Rectangle(f64, f64) }\nfn area(s: Shape) -> f64 {\n    match s {\n        Circle(r) => 3.14 * r * r\n        Rectangle(w, h) => w * h\n    }\n}\nfn main() {\n    let s = Shape.Circle(5.0)\n    print(area(s))\n}",
+        );
+    }
+
+    // ----- 20. Builtin function types — wrong arg type -----------------------
+
+    #[test]
+    fn test_len_wrong_arg_type() {
+        // len() expects array or string, not int.
+        assert_has_code(
+            "fn main() { let x = len(42) }",
+            ErrorCode::E0133,
+        );
+    }
+
+    #[test]
+    fn test_len_with_array_ok() {
+        assert_no_errors("fn main() { let a = [1, 2, 3]\n let n = len(a)\n print(n) }");
+    }
+
+    #[test]
+    fn test_len_with_string_ok() {
+        assert_no_errors("fn main() { let n = len(\"hello\")\n print(n) }");
+    }
+
+    #[test]
+    fn test_len_wrong_arg_count() {
+        assert_has_code(
+            "fn main() { len(1, 2) }",
+            ErrorCode::E0513,
+        );
+    }
+
+    // ----- check_test mode — no main required --------------------------------
+
+    #[test]
+    fn test_check_test_mode_no_main_ok() {
+        let (tokens, _) = turbo_lexer::tokenize("@test fn my_test() { assert(true) }");
+        let (module, _) = turbo_parser::parse(tokens);
+        let result = check_test(&module);
+        assert!(
+            result.errors.is_empty(),
+            "check_test should not require main, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_check_test_mode_still_type_checks() {
+        let (tokens, _) = turbo_lexer::tokenize(
+            "@test fn my_test() { let x: i32 = \"wrong\" }",
+        );
+        let (module, _) = turbo_parser::parse(tokens);
+        let result = check_test(&module);
+        assert!(
+            result.errors.iter().any(|e| e.code == ErrorCode::E0110),
+            "check_test should still report type errors, got: {:?}",
+            result.errors
+        );
+    }
+
+    // ----- Compound assignment type checking --------------------------------
+
+    #[test]
+    fn test_compound_assign_type_mismatch() {
+        assert_has_code(
+            "fn main() { let mut x = 1\n x += \"hello\" }",
+            ErrorCode::E0130,
+        );
+    }
+
+    #[test]
+    fn test_compound_assign_ok() {
+        assert_no_errors("fn main() { let mut x = 10\n x += 5\n x -= 2\n x *= 3\n print(x) }");
+    }
+
+    // ----- For-in loop type checking ----------------------------------------
+
+    #[test]
+    fn test_for_in_array_ok() {
+        assert_no_errors(
+            "fn main() { for x in [1, 2, 3] { print(x) } }",
+        );
+    }
+
+    // ----- Impl block / method definitions -----------------------------------
+
+    #[test]
+    fn test_impl_method_call_ok() {
+        assert_no_errors(
+            "struct Counter { value: i64 }\nimpl Counter {\n    fn get(self) -> i64 { self.value }\n}\nfn main() {\n    let c = Counter { value: 42 }\n    print(c.get())\n}",
+        );
+    }
+
+    #[test]
+    fn test_impl_method_wrong_return_type() {
+        assert_has_code(
+            "struct Counter { value: i64 }\nimpl Counter {\n    fn get(self) -> i64 { \"wrong\" }\n}\nfn main() { }",
+            ErrorCode::E0109,
+        );
+    }
+
+    // ----- Const declarations ------------------------------------------------
+
+    #[test]
+    fn test_const_declaration_ok() {
+        assert_no_errors(
+            "const MAX = 100\nfn main() { print(MAX) }",
+        );
+    }
+
+    // ----- Optional type checking -------------------------------------------
+
+    #[test]
+    fn test_optional_some_none_ok() {
+        assert_no_errors(
+            "fn main() {\n    let a: i64? = some(42)\n    let b: i64? = none\n    print(a)\n}",
+        );
+    }
+
+    #[test]
+    fn test_null_coalesce_ok() {
+        assert_no_errors(
+            "fn maybe() -> i64? { some(5) }\nfn main() {\n    let x = maybe() ?? 0\n    print(x)\n}",
+        );
+    }
+
+    // ----- Result type checking ---------------------------------------------
+
+    #[test]
+    fn test_result_ok_err_ok() {
+        assert_no_errors(
+            "fn divide(a: i64, b: i64) -> i64 ! str {\n    if b == 0 { err(\"division by zero\") }\n    ok(a / b)\n}\nfn main() { }",
+        );
+    }
+
+    #[test]
+    fn test_try_operator_in_result_fn_ok() {
+        assert_no_errors(
+            "fn inner() -> i64 ! str { ok(42) }\nfn outer() -> i64 ! str {\n    let x = inner()?\n    ok(x + 1)\n}\nfn main() { }",
+        );
     }
 }
