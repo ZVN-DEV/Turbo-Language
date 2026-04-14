@@ -72,6 +72,15 @@ CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 CHECKSUM_SIG_URL="${BASE_URL}/checksums.txt.sig"
 KEY_URL="${TURBO_RELEASE_KEY_URL:-https://turbolang.dev/keys/release.asc}"
 
+# Pinned SHA256 of the in-repo copy of the Turbo release public key
+# (distribution/turbo-release-key.asc). The --verify flow downloads the key
+# from KEY_URL and refuses to import anything whose SHA256 does not match
+# this value — so a one-time compromise of turbolang.dev cannot silently
+# backdoor the installer. Rotate this value in the same commit that rotates
+# the in-repo key file.
+EXPECTED_KEY_SHA256="0fc30cb7508089d0066241f4dbb9c7211a28c32d28752183a9b33d24043c4738"
+PINNED_KEY_RAW_URL="${TURBO_PINNED_KEY_URL:-https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/turbo-release-key.asc}"
+
 # Download and extract
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "${TMPDIR}"' EXIT
@@ -131,6 +140,41 @@ if [ "${VERIFY_GPG:-false}" = "true" ]; then
         echo "For manual verification instructions, see SECURITY.md." >&2
         exit 1
     }
+
+    # Supply-chain pin: compare the fetched key's SHA256 against the value
+    # pinned in this installer (EXPECTED_KEY_SHA256). The pinned value tracks
+    # the in-repo copy at distribution/turbo-release-key.asc, which is
+    # audited in version control. If the hosted key at ${KEY_URL} is ever
+    # swapped or tampered with, this check aborts the install before gpg
+    # imports the attacker's key.
+    #
+    # Escape hatch: set TURBO_TRUST_REMOTE_KEY=1 to skip this check. Intended
+    # for the brief window during a legitimate key rotation where the pinned
+    # SHA256 has not yet been updated — NOT for routine use. If you're
+    # considering this variable in production, stop and update the pin
+    # instead.
+    if [ "${TURBO_TRUST_REMOTE_KEY:-0}" = "1" ]; then
+        echo "warning: TURBO_TRUST_REMOTE_KEY=1 set — skipping pinned SHA256 check on ${KEY_URL}" >&2
+    else
+        if command -v sha256sum &> /dev/null; then
+            ACTUAL_KEY_SHA256=$(sha256sum "${TMPDIR}/release.asc" | awk '{print $1}')
+        elif command -v shasum &> /dev/null; then
+            ACTUAL_KEY_SHA256=$(shasum -a 256 "${TMPDIR}/release.asc" | awk '{print $1}')
+        else
+            echo "error: neither sha256sum nor shasum is available — cannot pin the release key, refusing to install" >&2
+            exit 1
+        fi
+        if [ "${ACTUAL_KEY_SHA256}" != "${EXPECTED_KEY_SHA256}" ]; then
+            echo "error: Turbo release key from ${KEY_URL} does not match the pinned SHA256." >&2
+            echo "       expected: ${EXPECTED_KEY_SHA256}" >&2
+            echo "       actual:   ${ACTUAL_KEY_SHA256}" >&2
+            echo "       This could mean a legitimate key rotation OR a tampered key-hosting URL." >&2
+            echo "       Cross-check against the in-repo copy at ${PINNED_KEY_RAW_URL}" >&2
+            echo "       before proceeding. Refusing to install." >&2
+            exit 1
+        fi
+        echo "Pinned release-key SHA256 verified."
+    fi
 
     export GNUPGHOME="$(mktemp -d "${TMPDIR}/gnupg.XXXXXX")"
     chmod 700 "${GNUPGHOME}"

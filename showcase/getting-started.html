@@ -485,21 +485,21 @@ target = <span class="str">"native"</span></pre>
       </div>
     </div>
 
-    <!-- Tour 5: Your First Agent -->
-    <div class="tour-card" id="tour-agents">
-      <h3>5. Your First Agent</h3>
-      <p>Turbo is the first language with native AI primitives. The <code>tool fn</code> keyword declares a function that an LLM can call &mdash; the compiler auto-generates the JSON schema. The <code>Agent</code> type handles model interaction, tool routing, and token streaming.</p>
+    <!-- Tour 5: HTTP + JSON -->
+    <div class="tour-card" id="tour-http">
+      <h3>5. HTTP + JSON In One File</h3>
+      <p>Turbo ships an HTTP server, routing, and JSON helpers as built-ins. You can serve a typed JSON API in a single file with no framework, no external dependency, and the same compiler you used for your first hello-world.</p>
 
       <div class="code-block">
         <div class="code-block-header"><span class="dot turbo"></span> Turbo</div>
-        <pre><span class="kw">tool fn</span> <span class="fn-name">search</span>(query: <span class="type">str</span>) -> <span class="type">[SearchResult]</span> {
-  <span class="kw">await</span> search_api.<span class="fn-name">query</span>(query)
-}
+        <pre><span class="kw">fn</span> <span class="fn-name">main</span>() {
+  <span class="kw">let</span> app = <span class="fn-name">http_server</span>(8080)
 
-<span class="kw">let</span> agent = <span class="type">Agent</span>.<span class="fn-name">new</span>(<span class="str">"claude-sonnet"</span>, tools: [search])
+  <span class="fn-name">route</span>(app, <span class="str">"GET"</span>, <span class="str">"/health"</span>, |req: <span class="type">str</span>| -> <span class="type">str</span> {
+    <span class="fn-name">respond_text</span>(200, <span class="str">"ok"</span>)
+  })
 
-<span class="kw">for await</span> token <span class="kw">in</span> agent.<span class="fn-name">stream</span>(<span class="str">"Find info about Turbo lang"</span>) {
-  <span class="fn-name">print</span>(token, end: <span class="str">""</span>)
+  <span class="fn-name">http_listen</span>(app)
 }</pre>
       </div>
     </div>
@@ -514,10 +514,10 @@ target = <span class="str">"native"</span></pre>
     <p class="section-intro">You have the basics. Dive deeper into specific topics or explore the full showcase to see everything Turbo can do.</p>
 
     <div class="next-links">
-      <a href="docs.html#agents" class="next-link">
-        <div class="next-label">Agents</div>
-        <div class="next-title">Learn About Agents</div>
-        <div class="next-desc">Native AI primitives, tool functions, streaming, structured output, and multi-agent orchestration.</div>
+      <a href="docs.html#concurrency" class="next-link">
+        <div class="next-label">Async</div>
+        <div class="next-title">Concurrency Primitives</div>
+        <div class="next-desc">async/await, spawn, channels, mutex &mdash; the typed async substrate a future <code>turbo-agent</code> library will build on.</div>
       </a>
       <a href="docs.html#concurrency" class="next-link">
         <div class="next-label">Concurrency</div>

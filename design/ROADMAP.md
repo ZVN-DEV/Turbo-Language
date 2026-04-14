@@ -159,7 +159,6 @@ Every feature maps to a disclosure level. Developers discover complexity only wh
 | Memory | Auto-clone (invisible) | `let ref x = ...` | `region { }` | `@manual` + alloc/free |
 | Errors | `?` propagation | `T ! E` types | Custom error hierarchies | Effect system |
 | Concurrency | `await` | `spawn`, `all()` | Actors, channels | Supervision trees |
-| Agents | `Agent.quick(...)` | `tool fn` + `agent` | Multi-agent orchestration | Custom providers |
 | Performance | Just works | `@perf` tests | `@inline`, `const fn` | `region {}`, SIMD |
 | Targets | `turbolang run` (native) | `--target wasm32` | `--target ios-arm64` | `@gpu` kernels |
 | Scripts | `turbolang run file.tb` | `turbo.toml` project | Workspaces | Custom build steps |

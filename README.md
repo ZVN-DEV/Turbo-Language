@@ -53,7 +53,7 @@ turbolang build hello.tb      # AOT — produce a native binary
 >
 > **Warning — HTTP server is experimental:** The built-in HTTP server binds to `127.0.0.1` by default and is not hardened for direct exposure to untrusted networks. Put it behind a reverse proxy (nginx, Caddy) in production. See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
-> **Roadmap note — AI-native syntax:** Turbo's design work explores `agent` and `tool fn` syntax for future AI-native workflows. Those constructs are not implemented in current releases; today's compiler ships native compilation, WASM output, async primitives, HTTP building blocks, REPL/playground, formatter, and LSP.
+> **Roadmap note — agent/tool features live in a sidecar, not the compiler.** Earlier design sketches explored `agent` and `tool fn` keywords. Those are no longer planned as core-language features — they'll ship (post-1.0) as a separate `turbo-agent` library that builds on Turbo's async, HTTP, and typed-serialization primitives. The compiler itself stays focused on being a fast, small, general-purpose systems/application language. Today's release ships native compilation, WASM output, async primitives, HTTP building blocks, REPL/playground, formatter, and LSP.
 
 ### A Taste of Turbo
 

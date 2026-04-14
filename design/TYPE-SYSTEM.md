@@ -659,7 +659,7 @@ let speed: f64<MetersPerSecond> = distance / time  // Type-safe!
 ```
 const type JsonSchema<T> {
   // Generate a JSON schema type from any struct at compile time
-  // Used for agent tool schemas, API validation, etc.
+  // Used for API validation, schema generation for future sidecar libraries, etc.
 }
 
 const fn fields_of<T>() -> [(str, Type)] {

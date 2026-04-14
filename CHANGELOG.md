@@ -7,8 +7,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 - LLVM backend now supports struct destructuring in `let` patterns, `if let` binding, and optional chaining (`x?.y`). Previously these emitted a "not yet implemented" error. The LLVM CI job is now a hard-required check.
+- Added COMPATIBILITY.md documenting the 1.0 stability contract and what remains fluid in 0.7.x and 0.8.x.
 
 ### Security
+- Install script now pins the GPG release key against a local copy in-repo; mismatched remote key aborts the install.
 - Playground: token generation now uses 128 bits of OS randomness via `getrandom` instead of PID+timestamp, closing a localhost CSRF foot-gun.
 - Playground: source files are written via `tempfile::NamedTempFile` (exclusive-create with a random suffix), closing a TOCTOU race on the previously predictable temp filename.
 - Runtime: replace unbounded strcat in rt_str_join with length-tracked memcpy to eliminate a latent heap-overflow foot-gun and an accidental O(n²) append loop.
@@ -16,6 +18,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Parser and codegen now enforce a 256-level recursion depth limit (E0516), so adversarial deeply-nested input errors out with a diagnostic instead of overflowing the compiler's stack.
 
 ### Changed
+- Documentation: removed `agent`, `tool fn`, and "first AI-native language" claims from core-facing copy. Agentic features will ship in a separate `turbo-agent` sidecar library after the core language hits 1.0 stability, not inside the compiler.
 - Runtime: rt_array_push now doubles capacity on growth, giving amortized O(1) pushes instead of O(n) per call. The shared refcount allocation header grew from 8 bytes to 16 bytes to carry the capacity slot; callers continue to see the same data pointer offsets.
 - CI: fuzz-smoke now runs on every push (cap 60s/target) instead of nightly-only.
 - CI: new ASAN+UBSAN job rebuilds the C runtime tests with clang sanitizers.
@@ -23,6 +26,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Fixed
 - LSP: malformed `textDocument/rename`, `codeAction`, and `hover` requests now return proper JSON-RPC error responses instead of crashing the server.
 - WASM codegen: `defer` statements are now lowered correctly (LIFO at scope exit). Previously they were silently dropped, producing wrong semantics when targeting WASM.
+
+### Notes
+- Error-code docs audit: `ErrorCode` variants, `turbo-cli/src/errors/` entries, and `docs/errors/` entries are all in sync at 88/88/88 (after Stream E added E0516). The previously flagged "94 variants vs 87 docs" gap does not exist.
 
 ---
 

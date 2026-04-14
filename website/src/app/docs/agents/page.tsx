@@ -3,142 +3,135 @@ import Link from "next/link";
 export default function AgentsPage() {
   return (
     <article className="text-gray-300 leading-relaxed font-[family-name:var(--font-geist-sans)]">
-      <h1 className="text-4xl font-bold text-white mb-4">Agents</h1>
+      <h1 className="text-4xl font-bold text-white mb-4">
+        Agents: Sidecar, Not Core
+      </h1>
       <p className="text-lg text-gray-400 mb-8">
-        Turbo has an AI-native language direction, but current releases do not
-        yet ship <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">agent</code>{" "}
-        or <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">tool fn</code>{" "}
-        syntax. This page documents the roadmap so the vision is clear without
-        pretending the compiler already supports it.
+        Earlier drafts of Turbo proposed{" "}
+        <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
+          agent
+        </code>{" "}
+        and{" "}
+        <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
+          tool fn
+        </code>{" "}
+        as first-class language keywords. That direction has been retired.
+        These features will ship as a separate library,{" "}
+        <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
+          turbo-agent
+        </code>
+        , built on top of the stable 1.0 core — not as compiler features.
       </p>
 
       <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-4 mb-8">
-        <p className="text-yellow-300 font-medium mb-2">Roadmap, not shipped</p>
+        <p className="text-yellow-300 font-medium mb-2">
+          No agent keywords exist today, and none are planned for the core
+          language.
+        </p>
         <p className="text-gray-300 mb-0 text-sm">
-          The examples below are design sketches for future Turbo releases.
-          Today&apos;s compiler does <strong className="text-white">not</strong> parse,
-          type-check, or execute <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">agent</code>{" "}
-          or <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">tool fn</code>.
-          The goal is to eventually layer AI integration onto the runtime,
-          async, HTTP, and tooling foundations Turbo already ships.
+          The current compiler does{" "}
+          <strong className="text-white">not</strong> parse, type-check, or
+          execute <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">agent</code>{" "}
+          or{" "}
+          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
+            tool fn
+          </code>
+          , and the 1.0 stability contract (see{" "}
+          <a
+            href="https://github.com/ZVN-DEV/Turbo-Language/blob/master/COMPATIBILITY.md"
+            className="text-[#00ff88] underline"
+          >
+            COMPATIBILITY.md
+          </a>
+          ) will not include them either. Agent workflows are a library
+          concern, not a language concern.
         </p>
       </div>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        Why model agents in the language?
+        Why move this out of the compiler?
       </h2>
       <p className="mb-4">
-        Turbo&apos;s long-term bet is that AI-native workflows should feel as
-        straightforward as the rest of the language: explicit types, readable
-        syntax, and first-class tooling support. The current release focuses on
-        the lower layers that make that believable -- native binaries, WASM
-        output, async primitives, HTTP building blocks, the playground, and the
-        LSP.
+        LLM tooling — model providers, tool-calling schemas, memory
+        strategies, supervision patterns — moves fast and changes shape every
+        few months. A core language must not. If we baked those decisions
+        into the grammar, every pivot in the AI ecosystem would break source
+        compatibility across a whole fleet of Turbo programs.
+      </p>
+      <p className="mb-4">
+        By keeping the core small, we can promise{" "}
+        <Link href="/docs/compatibility" className="text-[#00ff88] underline">
+          real stability
+        </Link>{" "}
+        at 1.0. A future{" "}
+        <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
+          turbo-agent
+        </code>{" "}
+        library can iterate freely on top of it.
       </p>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        Planned tool functions
-      </h2>
-      <p className="mb-4">
-        One direction under exploration is a dedicated syntax for declaring
-        tool-callable functions:
-      </p>
-      <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`// Planned syntax — not supported in current releases.
-
-tool fn search(q: str) -> str {
-    "found: {q}"
-}
-
-tool fn calc(x: i64) -> i64 {
-    x * 2
-}`}
-        </code>
-      </pre>
-
-      <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        Planned agent declarations
-      </h2>
-      <p className="mb-4">
-        The design work also explores declarative agent definitions that keep
-        model choice, system prompts, and tool access readable in source:
-      </p>
-      <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`// Planned syntax — not supported in current releases.
-
-tool fn search(q: str) -> str { "found: {q}" }
-tool fn calc(x: i64) -> i64 { x * 2 }
-
-agent Helper {
-    model: "claude-sonnet"
-    tools: [search, calc]
-    system: "You are a helpful assistant."
-}`}
-        </code>
-      </pre>
-
-      <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        Proposed agent fields
-      </h2>
-      <p className="mb-4">
-        If Turbo lands this feature set, the current design direction looks like
-        this:
-      </p>
-      <div className="overflow-x-auto mb-8">
-        <table className="w-full text-sm text-left border border-[#1a1a2e] rounded-lg overflow-hidden">
-          <thead className="bg-[#111118] text-gray-400">
-            <tr>
-              <th className="px-4 py-2 border-b border-[#1a1a2e]">Field</th>
-              <th className="px-4 py-2 border-b border-[#1a1a2e]">Type</th>
-              <th className="px-4 py-2 border-b border-[#1a1a2e]">Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            {[
-              ["model", "str", "Model identifier or provider hint"],
-              ["system", "str", "System prompt or execution policy"],
-              ["tools", "[fn]", "Functions exposed to the runtime tool dispatcher"],
-            ].map(([field, type_, desc]) => (
-              <tr key={field} className="border-b border-[#1a1a2e]">
-                <td className="px-4 py-2">
-                  <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)]">{field}</code>
-                </td>
-                <td className="px-4 py-2">
-                  <code className="text-gray-400 font-[family-name:var(--font-geist-mono)]">{type_}</code>
-                </td>
-                <td className="px-4 py-2">{desc}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        What ships today
+        What the core ships that makes a sidecar credible
       </h2>
       <ul className="list-disc list-inside space-y-2 mb-6">
         <li>
-          <strong className="text-white">Native compilation</strong> -- JIT, AOT, and WASM output are available today
+          <strong className="text-white">Typed async</strong> —{" "}
+          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
+            async fn
+          </code>
+          ,{" "}
+          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
+            spawn
+          </code>
+          ,{" "}
+          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
+            await
+          </code>
+          , channels, mutex
         </li>
         <li>
-          <strong className="text-white">Concurrency foundations</strong> -- async primitives, spawn, channels, and mutex already exist
+          <strong className="text-white">HTTP client + server</strong> —
+          enough to talk to any model provider&apos;s API
         </li>
         <li>
-          <strong className="text-white">Application building blocks</strong> -- HTTP helpers, file I/O, JSON utilities, and CLI workflows are real
+          <strong className="text-white">Typed serialization</strong> — JSON
+          builtins, struct derive attributes
         </li>
         <li>
-          <strong className="text-white">Tooling integration</strong> -- formatter, tests, playground, and LSP are already part of the product
+          <strong className="text-white">Native compilation</strong> — JIT,
+          AOT, and WASM output
+        </li>
+        <li>
+          <strong className="text-white">Tooling integration</strong> —
+          formatter, tests, playground, LSP
         </li>
       </ul>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        Planned work
+        What&apos;s on the roadmap
       </h2>
       <ul className="list-disc list-inside space-y-2 mb-6">
-        <li>Parser and type-system support for <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">agent</code> and <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">tool fn</code></li>
-        <li>Schema generation from typed tool signatures</li>
-        <li>Runtime tool dispatch and provider integration</li>
-        <li>Streaming responses, multi-turn execution, and debugger support</li>
+        <li>
+          Ship Turbo core 1.0 with the stability contract in{" "}
+          <a
+            href="https://github.com/ZVN-DEV/Turbo-Language/blob/master/COMPATIBILITY.md"
+            className="text-[#00ff88] underline"
+          >
+            COMPATIBILITY.md
+          </a>
+        </li>
+        <li>
+          Start{" "}
+          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
+            turbo-agent
+          </code>{" "}
+          as a separate repository and SemVer line
+        </li>
+        <li>
+          Provide idiomatic building blocks — provider adapters, tool-calling
+          schemas, streaming responses, conversation memory — as library
+          types, not compiler keywords
+        </li>
       </ul>
 
       <div className="flex gap-4 mt-10">

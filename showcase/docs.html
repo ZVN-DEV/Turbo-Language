@@ -928,127 +928,25 @@ counter += <span class="num">1</span>
   </div>
 </section>
 
-<!-- ========== Agents ========== -->
+<!-- ========== Agents (sidecar, not core) ========== -->
 <section class="doc-section" id="agents">
   <div class="container">
-    <h2>Agents</h2>
-    <p class="section-intro">Turbo is the first programming language with native AI agent primitives. The <code>agent</code> and <code>tool</code> keywords are first-class &mdash; the compiler understands them natively, generates schemas at compile time, and provides rich IDE support.</p>
+    <h2>Agents: Sidecar, Not Core</h2>
+    <p class="section-intro">Earlier drafts of this page documented <code>agent</code> and <code>tool fn</code> as core-language keywords. That direction has been retired. Agent and tool workflows will ship as a separate library, <code>turbo-agent</code>, built on top of the stable 1.0 core &mdash; not as compiler features.</p>
 
-    <h3>Tool Functions</h3>
-    <p>The <code>tool fn</code> keyword declares a function that an LLM can call. The compiler auto-generates a JSON schema from the function signature and doc comments.</p>
+    <p>The reasoning is simple: LLM tooling (providers, tool-calling schemas, memory strategies, supervision patterns) moves fast and changes shape every few months. A core language must not. If those decisions were baked into the grammar, every pivot in the AI ecosystem would break source compatibility across a whole fleet of Turbo programs.</p>
 
-    <div class="code-block">
-      <div class="code-block-header"><span class="dot turbo"></span> Tool Definition</div>
-      <pre><span class="kw">tool fn</span> <span class="fn-name">get_weather</span>(city: <span class="type">str</span>, units: <span class="type">TemperatureUnit</span> = .celsius) -> <span class="type">WeatherData</span> {
-  <span class="comment">/// Get the current weather for a city</span>
-  <span class="comment">/// @param city - The city name (e.g., "Tokyo", "New York")</span>
-  <span class="comment">/// @param units - Temperature units (celsius or fahrenheit)</span>
-  <span class="kw">await</span> weather_api.<span class="fn-name">fetch</span>(city, units)
-}</pre>
-    </div>
+    <h3>What the core ships that makes a sidecar credible</h3>
+    <ul>
+      <li><strong>Typed async</strong> &mdash; <code>async fn</code>, <code>spawn</code>, <code>await</code>, channels, mutex</li>
+      <li><strong>HTTP client + server</strong> &mdash; enough to talk to any model provider's API</li>
+      <li><strong>Typed serialization</strong> &mdash; JSON builtins and struct <code>@derive</code> attributes</li>
+      <li><strong>Native compilation</strong> &mdash; JIT, AOT, and WASM output</li>
+      <li><strong>Tooling integration</strong> &mdash; formatter, tests, playground, LSP</li>
+    </ul>
 
-    <h3>Agent Declaration</h3>
-    <p>Define agents with model, system prompt, tools, memory, and custom routing logic.</p>
-
-    <div class="code-block">
-      <div class="code-block-header"><span class="dot turbo"></span> Agent Definition</div>
-      <pre><span class="kw">agent</span> <span class="type">Assistant</span> {
-  model: <span class="str">"claude-sonnet"</span>
-  system: <span class="str">"You are a helpful assistant."</span>
-  tools: [get_weather, search_web, run_code]
-  memory: <span class="type">ConversationMemory</span>(max_turns: <span class="num">50</span>)
-  max_tokens: <span class="num">4096</span>
-  temperature: <span class="num">0.7</span>
-
-  <span class="comment">// Custom routing logic</span>
-  <span class="kw">fn</span> <span class="fn-name">route</span>(self, input: <span class="type">str</span>) -> <span class="type">AgentAction</span> {
-    <span class="kw">match</span> <span class="fn-name">classify</span>(input) {
-      .weather => .use_tool(get_weather)
-      .code => .use_tool(run_code)
-      _ => .respond_directly
-    }
-  }
-}</pre>
-    </div>
-
-    <h3>Streaming</h3>
-    <p>Stream responses token-by-token with rich metadata about tool calls, thinking, and usage.</p>
-
-    <div class="code-block">
-      <div class="code-block-header"><span class="dot turbo"></span> Streaming</div>
-      <pre><span class="kw">let</span> agent = <span class="type">Agent</span>.<span class="fn-name">new</span>(<span class="str">"claude-sonnet"</span>, tools: [get_weather])
-
-<span class="kw">for await</span> token <span class="kw">in</span> agent.<span class="fn-name">stream</span>(<span class="str">"What's the weather?"</span>) {
-  <span class="kw">match</span> token.kind {
-    .text(t) => <span class="fn-name">print</span>(t, end: <span class="str">""</span>)
-    .tool_call(name, args) => <span class="fn-name">print</span>(<span class="str">"\n[Calling {name}...]"</span>)
-    .tool_result(result) => <span class="fn-name">print</span>(<span class="str">"\n[Got result]"</span>)
-    .done(usage) => <span class="fn-name">print</span>(<span class="str">"\n\nTokens: {usage.total}"</span>)
-  }
-}</pre>
-    </div>
-
-    <h3>Memory</h3>
-    <p>Built-in memory abstractions for short-term conversation memory, long-term vector memory, and composites of both.</p>
-
-    <div class="code-block">
-      <div class="code-block-header"><span class="dot turbo"></span> Memory</div>
-      <pre><span class="comment">// Short-term (conversation)</span>
-<span class="kw">let</span> memory = <span class="type">ConversationMemory</span>(max_turns: <span class="num">50</span>)
-
-<span class="comment">// Long-term (vector)</span>
-<span class="kw">let</span> long_memory = <span class="type">VectorMemory</span> {
-  store: <span class="type">ChromaDB</span>.<span class="fn-name">connect</span>(<span class="str">"localhost:8000"</span>)
-  embedding_model: <span class="str">"text-embedding-3-small"</span>
-  similarity_threshold: <span class="num">0.8</span>
-}
-
-<span class="comment">// Composite &mdash; check short-term first, then long-term</span>
-<span class="kw">let</span> memory = <span class="type">CompositeMemory</span> {
-  short_term: <span class="type">ConversationMemory</span>(max_turns: <span class="num">20</span>)
-  long_term: <span class="type">VectorMemory</span> { <span class="comment">/* ... */</span> }
-  strategy: .short_term_first
-}</pre>
-    </div>
-
-    <h3>Structured Output</h3>
-    <p>Parse LLM responses into typed structs with compile-time schema generation.</p>
-
-    <div class="code-block">
-      <div class="code-block-header"><span class="dot turbo"></span> Structured Output</div>
-      <pre><span class="attr">@derive(Schema)</span>
-<span class="kw">struct</span> <span class="type">MovieReview</span> {
-  title: <span class="type">str</span>
-  rating: <span class="type">f64</span>
-  summary: <span class="type">str</span>
-  pros: <span class="type">[str]</span>
-  cons: <span class="type">[str]</span>
-  recommended: <span class="type">bool</span>
-}
-
-<span class="comment">// The compiler generates JSON Schema from MovieReview</span>
-<span class="kw">let</span> review = <span class="kw">await</span> agent.<span class="fn-name">structured</span>&lt;<span class="type">MovieReview</span>&gt;(
-  <span class="str">"Review the movie Inception"</span>
-)
-<span class="comment">// review is guaranteed to be a valid MovieReview</span></pre>
-    </div>
-
-    <h3>Multi-Agent Orchestration</h3>
-    <div class="code-block">
-      <div class="code-block-header"><span class="dot turbo"></span> Agent Teams</div>
-      <pre><span class="comment">// Agent team with coordinator</span>
-<span class="kw">let</span> team = <span class="type">AgentTeam</span> {
-  coordinator: <span class="type">PlannerAgent</span>.<span class="fn-name">new</span>()
-  workers: [
-    <span class="type">ResearchAgent</span>.<span class="fn-name">new</span>(),
-    <span class="type">CodeAgent</span>.<span class="fn-name">new</span>(),
-    <span class="type">ReviewAgent</span>.<span class="fn-name">new</span>()
-  ]
-  strategy: .plan_and_execute
-}
-
-<span class="kw">let</span> result = <span class="kw">await</span> team.<span class="fn-name">run</span>(<span class="str">"Build a REST API for a todo app"</span>)</pre>
-    </div>
+    <h3>Roadmap</h3>
+    <p>Ship Turbo core 1.0 with an explicit stability contract (see <a href="https://github.com/ZVN-DEV/Turbo-Language/blob/master/COMPATIBILITY.md">COMPATIBILITY.md</a>). Then start <code>turbo-agent</code> as a separate repository with its own SemVer line, providing idiomatic building blocks &mdash; provider adapters, tool-calling schemas, streaming responses, conversation memory &mdash; as library types, not compiler keywords.</p>
   </div>
 </section>
 
@@ -1220,7 +1118,7 @@ runtime = <span class="str">"default"</span></pre>
       <div class="tool-card">
         <div class="tool-cmd">LSP Server</div>
         <div class="tool-desc">Ships with the compiler. Autocomplete, go-to-definition, find references, rename, inline hints, hover docs, error diagnostics, and code actions.</div>
-        <div class="tool-flags">Agent/tool-aware completions</div>
+        <div class="tool-flags">Library-type aware completions</div>
       </div>
     </div>
 

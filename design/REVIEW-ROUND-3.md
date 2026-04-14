@@ -1,5 +1,7 @@
 # Review Round 3 -- Turbo Language Design
 
+> **Historical note (2026-04):** This review discusses `agent` / `tool fn` as core-language keywords. That direction has been retired — those features now live in the planned `turbo-agent` sidecar library, not the compiler. Preserved for historical context. Current spec: **VISION.md**, **SYNTAX.md**, **COMPATIBILITY.md**.
+
 **Overall Score: 8.4/10** (was 7.4/10 in Round 2)
 
 ---

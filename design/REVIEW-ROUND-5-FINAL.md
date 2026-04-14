@@ -1,5 +1,7 @@
 # Review Round 5 -- FINAL Review of the Turbo Language Design
 
+> **Historical note (2026-04):** This review discusses `agent` / `tool fn` as core-language keywords. That direction has been retired — those features now live in the planned `turbo-agent` sidecar library, not the compiler. Preserved for historical context. Current spec: **VISION.md**, **SYNTAX.md**, **COMPATIBILITY.md**.
+
 **Overall Score: 8.7/10** (adjusted down from Round 4's 9.0/10)
 
 **Why a downgrade?** Round 4 was generous. This final review applies the harshest lens: "Is this actually implementable? Would real engineers trust this? Would it survive first contact with users?" Several issues that were tolerable mid-design are now blockers for sharing externally. I also apply competitive pressure from Gleam, Roc, Mojo, and Zig -- languages that already exist and ship real code. Turbo is still an excellent design. But it is not yet a 9.

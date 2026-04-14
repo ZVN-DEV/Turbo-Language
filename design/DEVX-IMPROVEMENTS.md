@@ -1,5 +1,7 @@
 # Developer Experience (DevX) Improvement Plan
 
+> **Historical note (2026-04):** This document was written against an earlier version of the Turbo vision that included `agent` / `tool fn` as core-language keywords. That direction has since been retired — those features will ship as a separate `turbo-agent` library on top of the stable core, not as compiler keywords. References below to `agent`, `tool fn`, and `Agent.*` APIs reflect that older plan and are kept here for historical context only. For the current language surface, see **VISION.md**, **SYNTAX.md**, and **COMPATIBILITY.md**.
+
 ## Executive Summary
 
 Turbo markets itself as "JavaScript's soul, Rust's speed." After a thorough audit of every design document and both showcase pages, I found **41 distinct issues** across keyboard accessibility, concept naming, symbol density, progressive disclosure, error messages, and JS-developer familiarity. The design is *mostly* excellent -- the instincts are right -- but there are several places where Rust-isms leak through the "JavaScript feel" promise, where syntax choices will confuse beginners, and where the docs themselves are inconsistent with each other.

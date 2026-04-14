@@ -731,8 +731,8 @@
       </div>
       <div class="pillar">
         <div class="pillar-icon">&#9881;</div>
-        <h3>Agentic AI</h3>
-        <p>First language with native <code class="code">agent</code> and <code class="code">tool</code> keywords. Compile-time schema generation, typed streaming, built-in observability.</p>
+        <h3>Small, Honest Core</h3>
+        <p>Turbo keeps the compiler focused on a general-purpose, compiled language. Framework-shaped features (agents, GPU, distributed actors) will ship as sidecar libraries with their own SemVer lines &mdash; the core stays stable.</p>
       </div>
     </div>
   </div>
@@ -781,23 +781,22 @@
       </div>
     </div>
 
-    <!-- Example 3: Agentic AI -->
+    <!-- Example 3: HTTP + JSON -->
     <div class="example-group">
-      <p class="example-label">Agentic AI &mdash; Turbo Only</p>
+      <p class="example-label">HTTP + JSON &mdash; Ships Today</p>
       <div class="side-by-side">
         <div class="code-panel full-width">
           <div class="code-panel-header"><span class="dot turbo"></span> Turbo</div>
-          <pre><span class="comment">// Define a tool &mdash; the compiler generates JSON Schema automatically</span>
-<span class="kw">tool fn</span> <span class="fn-name">get_weather</span>(city: <span class="type">str</span>) -> <span class="type">WeatherData</span> {
-  <span class="kw">await</span> weather_api.<span class="fn-name">fetch</span>(city)
-}
+          <pre><span class="comment">// A typed JSON API in one file &mdash; no framework needed.</span>
+<span class="kw">fn</span> <span class="fn-name">main</span>() {
+  <span class="kw">let</span> app = <span class="fn-name">http_server</span>(8080)
 
-<span class="comment">// Create an agent in two lines</span>
-<span class="kw">let</span> agent = <span class="type">Agent</span>.<span class="fn-name">new</span>(<span class="str">"claude-sonnet"</span>, tools: [get_weather])
+  <span class="fn-name">route</span>(app, <span class="str">"GET"</span>, <span class="str">"/api/fib"</span>, |req: <span class="type">str</span>| -> <span class="type">str</span> {
+    <span class="kw">let</span> n = 40
+    <span class="fn-name">respond_text</span>(200, <span class="str">"{fib(n)}"</span>)
+  })
 
-<span class="comment">// Stream the response token-by-token</span>
-<span class="kw">for await</span> token <span class="kw">in</span> agent.<span class="fn-name">stream</span>(<span class="str">"Weather in Tokyo?"</span>) {
-  <span class="fn-name">print</span>(token)
+  <span class="fn-name">http_listen</span>(app)
 }</pre>
         </div>
       </div>
@@ -1153,14 +1152,6 @@
             <td><span class="cross">&#10005;</span> GC</td>
           </tr>
           <tr>
-            <td>AI agent primitives</td>
-            <td><span class="check">&#10003;</span> Native keywords</td>
-            <td><span class="cross">&#10005;</span> Libraries</td>
-            <td><span class="cross">&#10005;</span> Libraries</td>
-            <td><span class="cross">&#10005;</span> Libraries</td>
-            <td><span class="cross">&#10005;</span> Libraries</td>
-          </tr>
-          <tr>
             <td>Compile to native</td>
             <td><span class="check">&#10003;</span> LLVM</td>
             <td><span class="cross">&#10005;</span> JIT</td>
@@ -1271,7 +1262,7 @@
   <div class="container">
     <p class="section-label">Examples</p>
     <h2 class="section-title">See Turbo In Action</h2>
-    <p class="section-subtitle">Five complete applications that demonstrate Turbo's range &mdash; from web APIs to AI agents, each built with real-world patterns.</p>
+    <p class="section-subtitle">Complete applications that demonstrate Turbo's range &mdash; web APIs, desktop apps, real-time systems, edge WASM &mdash; each built with real-world patterns.</p>
 
     <div class="examples-grid">
 
@@ -1330,20 +1321,6 @@
         <div class="example-card-path">examples/edge-wasm/</div>
       </div>
 
-      <div class="example-card">
-        <div class="example-card-icon">AI Agent</div>
-        <h3>TaskAgent</h3>
-        <div class="example-card-name">AI-Powered Task Manager</div>
-        <p>Task management API powered by an AI assistant with 7 tools.</p>
-        <ul class="example-card-features">
-          <li>tool fn</li>
-          <li>agent keyword</li>
-          <li>MockModel testing</li>
-          <li>Streaming</li>
-        </ul>
-        <div class="example-card-path">examples/task-agent/</div>
-      </div>
-
     </div>
   </div>
 </section>
@@ -1362,7 +1339,7 @@
         <div class="roadmap-content">
           <div class="roadmap-version">v1.0</div>
           <h4>Core Language</h4>
-          <p>Native + WASM compilation, agentic AI primitives, full toolchain. Everything you need to build production software from day one.</p>
+          <p>Native + WASM compilation, typed async, full toolchain, and a small core the authors are willing to freeze. Everything you need to build production software from day one &mdash; without compiler-level framework lock-in.</p>
         </div>
       </div>
 

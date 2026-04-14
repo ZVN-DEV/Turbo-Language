@@ -46,7 +46,7 @@ function highlightTurbo(code: string): React.ReactNode[] {
 
       // Keywords
       const kwMatch = remaining.match(
-        /^(\b(?:fn|let|mut|if|else|while|for|match|struct|type|agent|async|await|spawn|return|true|false|enum|impl|trait|pub|use|const|in|tool)\b)/
+        /^(\b(?:fn|let|mut|if|else|while|for|match|struct|type|async|await|spawn|return|true|false|enum|impl|trait|pub|use|const|in)\b)/
       );
       if (kwMatch) {
         tokens.push(

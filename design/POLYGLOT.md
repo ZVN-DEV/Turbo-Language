@@ -151,4 +151,3 @@ Generate .d.ts files from Turbo's types:
 1. **C FFI is zero-cost** — Not through a bridge, not through marshaling. Direct.
 2. **WASM bridge is auto-generated** — Write code, get JS/TS bindings for free
 3. **Type-safe interop** — The type system carries across the boundary where possible
-4. **Agent tools work across boundaries** — Define tools in Turbo, call them from Python agents (or vice versa)

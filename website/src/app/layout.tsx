@@ -15,13 +15,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Turbo — Fast, Type-Safe Language for the AI Age",
+  title: "Turbo — Fast, Type-Safe, Compiled Language",
   description:
-    "A compiled programming language with JavaScript's developer experience, Rust's performance, and an honest AI-native roadmap. Native speed, tiny binaries, zero GC.",
+    "A compiled programming language with JavaScript's developer experience and Rust's performance. Native speed, tiny binaries, zero GC, small core.",
   openGraph: {
-    title: "Turbo — Fast, Type-Safe Language for the AI Age",
+    title: "Turbo — Fast, Type-Safe, Compiled Language",
     description:
-      "JavaScript's soul. Rust's speed. Honest about what's shipped today.",
+      "JavaScript's soul. Rust's speed. A small, honest core that ships today.",
     type: "website",
   },
 };
