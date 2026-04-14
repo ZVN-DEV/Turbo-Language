@@ -2,16 +2,40 @@
 
 Runnable example projects demonstrating real-world Turbo code. Each can be run directly with `turbolang run`.
 
+## Start here
+
+If you only try one example, make it [`web-dashboard`](./web-dashboard/). It is the clearest end-to-end demo of what ships today: one Turbo file serving a browser UI plus JSON benchmark endpoints.
+
+```bash
+turbolang run examples/web-dashboard/main.tb
+# then open http://localhost:3000
+```
+
 ## Examples
 
 | Example | Description | Key Features |
 |---------|-------------|--------------|
+| [web-dashboard](./web-dashboard/) | **Flagship demo: Interactive Web Dashboard** | HTML UI, multiple API endpoints, real-time benchmarks |
 | [todo-cli](./todo-cli/) | Task Manager | Structs, file I/O, string ops, for-in, if/else |
 | [data-pipeline](./data-pipeline/) | Log Analysis Engine | File I/O, hashmaps, string parsing, closures |
 | [game-of-life](./game-of-life/) | Conway's Game of Life | String-as-grid, char_at, nested loops, algorithms |
 | [simple-script](./simple-script/) | Text Statistics Analyzer | Strings, HashMaps, arrays, pipes, string interpolation |
 | [speed-server](./speed-server/) | REST API Benchmark Server | HTTP server, JSON responses, fibonacci, primes, sorting |
-| [web-dashboard](./web-dashboard/) | Interactive Web Dashboard | HTML UI, multiple API endpoints, real-time benchmarks |
+
+### web-dashboard
+
+The flagship runnable demo. It serves a styled browser dashboard on port 3000, exposes five benchmark endpoints, and lets you trigger them live from the UI. It is the best first stop if you want a quick “Turbo is real” moment.
+
+```bash
+turbolang run examples/web-dashboard/main.tb
+# then open http://localhost:3000
+```
+
+Quick checks:
+
+- Click **Run All Benchmarks**
+- Visit `http://localhost:3000/api/info` in a second tab
+- Stop the server with `Ctrl+C`
 
 ### todo-cli
 
@@ -54,26 +78,17 @@ turbolang run examples/speed-server/main.tb
 # curl http://localhost:8080/api/fib
 ```
 
-### web-dashboard
-
-A full benchmark dashboard with a styled HTML UI served on port 3000. Run benchmarks from the browser and see results in real time.
-
-```bash
-turbolang run examples/web-dashboard/main.tb
-# open http://localhost:3000
-```
-
 ---
 
 ## Running Examples
 
 ```bash
+turbolang run examples/web-dashboard/main.tb
 turbolang run examples/todo-cli/main.tb
 turbolang run examples/data-pipeline/main.tb
 turbolang run examples/game-of-life/main.tb
 turbolang run examples/simple-script/main.tb
 turbolang run examples/speed-server/main.tb
-turbolang run examples/web-dashboard/main.tb
 ```
 
 ---

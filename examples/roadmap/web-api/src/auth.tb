@@ -23,7 +23,8 @@ import { TokenClaims, AuthToken, ApiError, User } from "./models"
 // --- Constants ---
 
 const fn JWT_SECRET() -> str {
-  env.get("JWT_SECRET") ?? "bookmark-api-dev-secret-change-in-production"
+  env.get("JWT_SECRET")
+    ?? panic("Roadmap example requires JWT_SECRET to be configured explicitly; never ship a fallback signing secret")
 }
 
 const fn TOKEN_EXPIRY_SECONDS() -> u64 {
@@ -62,7 +63,11 @@ pub fn verify_password(password: str, hash: str) -> bool ! ApiError {
 
 // --- JWT Token Management ---
 
-/// Sign a new JWT token for a user
+/// Sign a new JWT token for a user.
+///
+/// Roadmap note: this sketch intentionally models explicit secret
+/// configuration only. If `JWT_SECRET` is missing, startup should fail
+/// loudly instead of silently normalizing an insecure default.
 pub fn sign_token(user_id: u64, username: str) -> AuthToken ! ApiError {
   let now = DateTime.now().timestamp()
   let exp = now + TOKEN_EXPIRY_SECONDS()

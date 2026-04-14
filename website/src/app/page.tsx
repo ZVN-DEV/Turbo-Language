@@ -55,9 +55,11 @@ fn main() {
 }`,
   },
   {
-    label: "AI Agent",
-    filename: "assistant.tb",
-    code: `tool fn get_weather(city: str) -> str {
+    label: "Agent Roadmap",
+    filename: "agent-roadmap.tb",
+    code: `// Planned syntax — not supported in current releases yet.
+
+tool fn get_weather(city: str) -> str {
     "Weather for: {city}"
 }
 
@@ -130,9 +132,9 @@ const features = [
     ),
   },
   {
-    title: "AI-First",
+    title: "AI-Native Roadmap",
     description:
-      "Built-in agent and tool fn keywords. Define AI agents with tool-calling as a first-class language construct.",
+      "Turbo&apos;s design work includes planned `agent` and `tool fn` constructs for future AI-native workflows. Current releases focus on the runtime and tooling foundations.",
     icon: (
       <svg
         className="w-6 h-6"
@@ -239,8 +241,9 @@ export default function Home() {
               </h1>
 
               <p className="text-lg md:text-xl text-gray-400 leading-relaxed mb-8 max-w-lg">
-                A compiled, type-safe language with native performance, AI agent
-                primitives, and a modern toolchain. No VM, no GC, no compromise.
+                A compiled, type-safe language with native performance, a
+                modern toolchain, and a clear roadmap toward AI-native
+                workflows. No VM, no GC, no compromise.
               </p>
 
               <div className="flex flex-wrap gap-4">
@@ -259,6 +262,12 @@ export default function Home() {
                   >
                     <path d="M5 12h14M12 5l7 7-7 7" />
                   </svg>
+                </Link>
+                <Link
+                  href="/docs/examples"
+                  className="inline-flex items-center gap-2 border border-[#1a1a2e] text-gray-300 px-6 py-3 rounded-lg hover:border-[#00ff88] hover:text-[#00ff88] transition-colors text-sm"
+                >
+                  Run the flagship demo
                 </Link>
                 <a
                   href="https://github.com/ZVN-DEV/Turbo-Language"
@@ -289,6 +298,78 @@ export default function Home() {
         </div>
       </section>
 
+      {/* ── Flagship Demo ─────────────────────────────────── */}
+      <section className="border-t border-[#1a1a2e]">
+        <div className="max-w-5xl mx-auto px-6 py-20 md:py-24">
+          <div className="grid lg:grid-cols-[1.2fr_0.8fr] gap-8 items-start">
+            <div>
+              <p className="text-xs uppercase tracking-[0.28em] text-[#00ff88] mb-3">
+                Best first proof
+              </p>
+              <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
+                Start with the web-dashboard demo
+              </h2>
+              <p className="text-gray-400 text-lg max-w-2xl mb-6">
+                The clearest runnable example today is{" "}
+                <code className="text-[#00ff88] bg-[#111118] px-2 py-1 rounded text-base font-[family-name:var(--font-geist-mono)]">
+                  examples/web-dashboard/main.tb
+                </code>
+                . It serves a styled browser UI and five JSON benchmark endpoints
+                from one Turbo file.
+              </p>
+              <div className="grid sm:grid-cols-3 gap-3 text-sm mb-6">
+                {[
+                  "Run the Turbo file",
+                  "Open localhost:3000",
+                  "Click Run All Benchmarks",
+                ].map((step, i) => (
+                  <div
+                    key={step}
+                    className="rounded-lg border border-[#1a1a2e] bg-[#111118]/60 p-4 text-gray-300"
+                  >
+                    <div className="text-[#00ff88] font-semibold mb-1">
+                      0{i + 1}
+                    </div>
+                    {step}
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-4">
+                <Link
+                  href="/docs/examples"
+                  className="inline-flex items-center gap-2 bg-[#00ff88] text-[#0a0a0a] font-semibold px-5 py-3 rounded-lg hover:bg-[#00cc6a] transition-colors text-sm"
+                >
+                  Open demo docs
+                </Link>
+                <a
+                  href="https://github.com/ZVN-DEV/Turbo-Language/tree/main/examples/web-dashboard"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 border border-[#1a1a2e] text-gray-300 px-5 py-3 rounded-lg hover:border-[#00ff88] hover:text-[#00ff88] transition-colors text-sm"
+                >
+                  View source
+                </a>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-[#1a1a2e] bg-[#111118] p-6">
+              <p className="text-sm font-semibold text-white mb-4">
+                Quickstart
+              </p>
+              <pre className="text-sm font-[family-name:var(--font-geist-mono)] text-gray-300 leading-relaxed overflow-x-auto mb-4">
+                <code>{`turbolang run examples/web-dashboard/main.tb
+# then open http://localhost:3000`}</code>
+              </pre>
+              <ul className="space-y-2 text-sm text-gray-400">
+                <li>• Browser UI plus JSON endpoints in one process</li>
+                <li>• Good first demo for people evaluating Turbo quickly</li>
+                <li>• Ships today — no roadmap syntax required</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* ── Features Grid ──────────────────────────────────── */}
       <section className="max-w-5xl mx-auto px-6 py-24 md:py-32">
         <div className="text-center mb-16">
@@ -297,7 +378,7 @@ export default function Home() {
           </h2>
           <p className="text-gray-400 text-lg max-w-2xl mx-auto">
             A language designed from scratch for the next era of software --
-            fast, safe, and ready for AI workloads.
+            fast today, with a credible path toward AI-native workflows.
           </p>
         </div>
 
@@ -329,8 +410,8 @@ export default function Home() {
               Expressive by Default
             </h2>
             <p className="text-gray-400 text-lg max-w-2xl mx-auto">
-              Pattern matching, async concurrency, and AI agents -- all with
-              clean, readable syntax.
+              Pattern matching, async concurrency, and the language direction
+              behind Turbo&apos;s agent roadmap -- all with clean, readable syntax.
             </p>
           </div>
 
@@ -460,8 +541,8 @@ export default function Home() {
             Ready to build?
           </h2>
           <p className="text-gray-400 text-xl mb-12 max-w-lg mx-auto">
-            Start writing Turbo today. Native speed, modern syntax, AI-ready
-            from day one.
+            Start writing Turbo today. Native speed, modern syntax, and a
+            roadmap that stays honest about what&apos;s shipped.
           </p>
           <div className="flex flex-wrap justify-center gap-4">
             <Link

@@ -38,20 +38,21 @@ struct Config {
   log_level: str
   rate_limit_rpm: u32
   cors_origins: [str]
-  jwt_secret: str
   enable_metrics: bool
 }
 
 fn load_config() -> Config {
+  let _jwt_secret = env.get("JWT_SECRET")
+    ?? panic("Roadmap example requires JWT_SECRET to be set explicitly before any real deployment")
+
   Config {
-    host:           env.get("BOOKMARK_HOST")       ?? "0.0.0.0",
+    host:           env.get("BOOKMARK_HOST")       ?? "127.0.0.1",
     port:           env.get("BOOKMARK_PORT")?.parse<u16>() ?? 8080,
     log_level:      env.get("BOOKMARK_LOG_LEVEL")  ?? "info",
     rate_limit_rpm: env.get("BOOKMARK_RATE_LIMIT")?.parse<u32>() ?? 100,
     cors_origins:   env.get("BOOKMARK_CORS_ORIGINS")
                       ?.split(",")
-                      ?.collect() ?? ["*"],
-    jwt_secret:     env.get("JWT_SECRET") ?? "bookmark-api-dev-secret-change-in-production",
+                      ?.collect() ?? ["http://localhost:3000"],
     enable_metrics: env.get("BOOKMARK_METRICS")?.parse<bool>() ?? true,
   }
 }
@@ -73,6 +74,11 @@ struct AppState {
 async fn main() -> () ! Error {
   // Load configuration
   let config = load_config()
+
+  // Roadmap note:
+  //   - Default host is loopback-only to avoid normalizing public bind-by-default.
+  //   - Default CORS is a localhost placeholder, not `*`.
+  //   - JWT_SECRET must be supplied explicitly rather than falling back.
 
   // Set up structured logging
   log.init(level: config.log_level, format: "json")
@@ -212,7 +218,7 @@ async fn main() -> () ! Error {
     } else {
       "disabled"
     },
-    websocket: "ws://{config.host}:{config.port}/ws",
+    websocket: "ws://{config.host}:{config.port}/ws (roadmap sketch: use a short-lived upgrade ticket or secure cookie, not a bearer token in the URL)",
   })
 
   await server.listen(config.port, host: config.host)

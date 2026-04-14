@@ -4,6 +4,10 @@
 > code. It uses syntax and language features that are not yet implemented
 > in the current Turbo compiler. See `BRIEFING.md` for the full design
 > write-up. Tracked under the P3 backlog.
+>
+> **Security note:** this folder is roadmap material, not production auth
+> guidance. Do **not** cargo-cult its JWT, CORS, bind-host, or WebSocket auth
+> sketches into a real service without a full security review.
 
 A production-quality REST API for a social bookmarking service (think
 Pinboard or Raindrop.io) built entirely in Turbo. Used as the canary for
@@ -48,6 +52,11 @@ routes. (Sibling tests are designed to exercise the API end to end.)
 
 - **Aspirational.** Do not edit this code expecting it to compile. The
   syntax intentionally runs ahead of the compiler.
+- **Not production auth guidance.** The auth and WebSocket flows here are
+  future-facing sketches. Real deployments should require an explicitly
+  provisioned JWT secret, bind deliberately, scope CORS origins narrowly,
+  and use secure cookies or short-lived upgrade tickets instead of putting
+  bearer tokens in a WebSocket URL.
 - **For P3 follow-up.** Bringing this example back to runnable will
   require shipping the import system, the `Shared<T>` / `Atomic<T>`
   primitives, optional chaining, and a much larger standard library

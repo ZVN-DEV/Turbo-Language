@@ -122,19 +122,23 @@ pub fn ws_routes(broadcaster: Shared<SyncBroadcaster>) -> Router {
   // ── GET /ws — WebSocket upgrade endpoint ──
 
   router.ws("/ws", async (req, socket: WebSocket) => {
-    // Authenticate via query parameter (WebSocket can't use headers easily)
-    let token = match req.query.get("token") {
+    // Roadmap hardening note:
+    //   Do NOT copy long-lived bearer tokens into a WebSocket URL.
+    //   Browser WebSocket APIs cannot set arbitrary Authorization headers, so
+    //   a real implementation should mint a short-lived, single-use upgrade
+    //   ticket (or rely on a secure session cookie) before the handshake.
+    let upgrade_ticket = match req.query.get("ticket") {
       some(t) => t
       none => {
-        await socket.close(4001, "Missing authentication token")
+        await socket.close(4001, "Missing WebSocket upgrade ticket")
         return
       }
     }
 
-    let claims = match verify_token(token) {
+    let claims = match verify_token(upgrade_ticket) {
       ok(c) => c
       err(e) => {
-        await socket.close(4001, "Invalid token: {e.message()}")
+        await socket.close(4001, "Invalid or expired WebSocket upgrade ticket: {e.message()}")
         return
       }
     }

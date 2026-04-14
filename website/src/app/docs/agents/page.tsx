@@ -5,76 +5,85 @@ export default function AgentsPage() {
     <article className="text-gray-300 leading-relaxed font-[family-name:var(--font-geist-sans)]">
       <h1 className="text-4xl font-bold text-white mb-4">Agents</h1>
       <p className="text-lg text-gray-400 mb-8">
-        First-class AI agent primitives built into the language. Define tools,
-        configure agents, and build AI-powered applications natively.
+        Turbo has an AI-native language direction, but current releases do not
+        yet ship <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">agent</code>{" "}
+        or <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">tool fn</code>{" "}
+        syntax. This page documents the roadmap so the vision is clear without
+        pretending the compiler already supports it.
       </p>
 
       <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-4 mb-8">
-        <p className="text-yellow-300 font-medium mb-2">Experimental Syntax</p>
+        <p className="text-yellow-300 font-medium mb-2">Roadmap, not shipped</p>
         <p className="text-gray-300 mb-0 text-sm">
-          The{" "}
-          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">agent</code>{" "}
-          and{" "}
-          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">tool fn</code>{" "}
-          keywords are parsed and type-checked by the compiler, but they do not perform LLM calls,
-          generate JSON schemas, or invoke tools at runtime. Agent definitions store metadata
-          (model, system prompt, tool list) that you can access as fields. Full AI integration --
-          including actual LLM communication and tool dispatch -- is planned for a future release.
+          The examples below are design sketches for future Turbo releases.
+          Today&apos;s compiler does <strong className="text-white">not</strong> parse,
+          type-check, or execute <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">agent</code>{" "}
+          or <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">tool fn</code>.
+          The goal is to eventually layer AI integration onto the runtime,
+          async, HTTP, and tooling foundations Turbo already ships.
         </p>
       </div>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        Tool Functions
+        Why model agents in the language?
       </h2>
       <p className="mb-4">
-        Define functions that an AI agent can call with the{" "}
-        <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
-          tool fn
-        </code>{" "}
-        keyword:
+        Turbo&apos;s long-term bet is that AI-native workflows should feel as
+        straightforward as the rest of the language: explicit types, readable
+        syntax, and first-class tooling support. The current release focuses on
+        the lower layers that make that believable -- native binaries, WASM
+        output, async primitives, HTTP building blocks, the playground, and the
+        LSP.
+      </p>
+
+      <h2 className="text-2xl font-bold text-white mt-10 mb-4">
+        Planned tool functions
+      </h2>
+      <p className="mb-4">
+        One direction under exploration is a dedicated syntax for declaring
+        tool-callable functions:
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`tool fn search(q: str) -> str {
+        <code>{`// Planned syntax — not supported in current releases.
+
+tool fn search(q: str) -> str {
     "found: {q}"
 }
 
 tool fn calc(x: i64) -> i64 {
     x * 2
-}
-
-fn main() {
-    // Tool functions can also be called directly
-    print(search("turbo"))    // found: turbo
-    print(calc(21))           // 42
-}`}</code>
+}`}
+        </code>
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        The Agent Keyword
+        Planned agent declarations
       </h2>
       <p className="mb-4">
-        Define an agent with a model, system prompt, and a set of tools:
+        The design work also explores declarative agent definitions that keep
+        model choice, system prompts, and tool access readable in source:
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`tool fn search(q: str) -> str { "found: {q}" }
+        <code>{`// Planned syntax — not supported in current releases.
+
+tool fn search(q: str) -> str { "found: {q}" }
 tool fn calc(x: i64) -> i64 { x * 2 }
 
 agent Helper {
     model: "claude-sonnet"
     tools: [search, calc]
     system: "You are a helpful assistant."
-}
-
-fn main() {
-    let a = Helper {}
-    print(a.model)     // claude-sonnet
-}`}</code>
+}`}
+        </code>
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        Agent Fields
+        Proposed agent fields
       </h2>
-      <p className="mb-4">Agents expose their configuration as fields:</p>
+      <p className="mb-4">
+        If Turbo lands this feature set, the current design direction looks like
+        this:
+      </p>
       <div className="overflow-x-auto mb-8">
         <table className="w-full text-sm text-left border border-[#1a1a2e] rounded-lg overflow-hidden">
           <thead className="bg-[#111118] text-gray-400">
@@ -86,9 +95,9 @@ fn main() {
           </thead>
           <tbody>
             {[
-              ["model", "str", "The model identifier (e.g. \"claude-sonnet\")"],
-              ["system", "str", "The system prompt"],
-              ["tools", "[fn]", "Array of tool functions available to the agent"],
+              ["model", "str", "Model identifier or provider hint"],
+              ["system", "str", "System prompt or execution policy"],
+              ["tools", "[fn]", "Functions exposed to the runtime tool dispatcher"],
             ].map(([field, type_, desc]) => (
               <tr key={field} className="border-b border-[#1a1a2e]">
                 <td className="px-4 py-2">
@@ -105,71 +114,31 @@ fn main() {
       </div>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        Multi-Agent Patterns
-      </h2>
-      <p className="mb-4">
-        Define multiple specialized agents that work together:
-      </p>
-      <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`tool fn web_search(q: str) -> str { "results for: {q}" }
-tool fn summarize(text: str) -> str { "summary of: {text}" }
-tool fn write_code(spec: str) -> str { "code for: {spec}" }
-
-agent Researcher {
-    model: "claude-sonnet"
-    tools: [web_search, summarize]
-    system: "You research topics thoroughly."
-}
-
-agent Coder {
-    model: "claude-sonnet"
-    tools: [write_code]
-    system: "You write clean, tested code."
-}
-
-fn main() {
-    let researcher = Researcher {}
-    let coder = Coder {}
-    print(researcher.model)    // claude-sonnet
-    print(coder.model)         // claude-sonnet
-}`}</code>
-      </pre>
-
-      <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        What Works Today
+        What ships today
       </h2>
       <ul className="list-disc list-inside space-y-2 mb-6">
         <li>
-          <strong className="text-white">Type-checked tools</strong> -- The
-          compiler validates that agent tools exist and are marked with{" "}
-          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
-            tool fn
-          </code>
+          <strong className="text-white">Native compilation</strong> -- JIT, AOT, and WASM output are available today
         </li>
         <li>
-          <strong className="text-white">Static validation</strong> -- Agent
-          configurations (model, system prompt, tool list) are checked at compile time
+          <strong className="text-white">Concurrency foundations</strong> -- async primitives, spawn, channels, and mutex already exist
         </li>
         <li>
-          <strong className="text-white">Metadata access</strong> -- Agent fields
-          (model, system, tools) are accessible at runtime as struct-like fields
+          <strong className="text-white">Application building blocks</strong> -- HTTP helpers, file I/O, JSON utilities, and CLI workflows are real
         </li>
         <li>
-          <strong className="text-white">Tool functions are real functions</strong> -- {" "}
-          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
-            tool fn
-          </code>{" "}
-          functions can be called directly like any other function
+          <strong className="text-white">Tooling integration</strong> -- formatter, tests, playground, and LSP are already part of the product
         </li>
       </ul>
+
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        Planned for Future Releases
+        Planned work
       </h2>
       <ul className="list-disc list-inside space-y-2 mb-6">
-        <li>LLM API communication (sending prompts, receiving responses)</li>
-        <li>Auto-generated JSON schemas from tool function signatures</li>
-        <li>Tool dispatch and orchestration at runtime</li>
-        <li>Streaming responses and multi-turn conversations</li>
+        <li>Parser and type-system support for <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">agent</code> and <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">tool fn</code></li>
+        <li>Schema generation from typed tool signatures</li>
+        <li>Runtime tool dispatch and provider integration</li>
+        <li>Streaming responses, multi-turn execution, and debugger support</li>
       </ul>
 
       <div className="flex gap-4 mt-10">

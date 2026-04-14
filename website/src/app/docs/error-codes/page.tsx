@@ -173,7 +173,6 @@ E0100: Type mismatch
               ["E0309", "Trait is already defined"],
               ["E0310", "Method is already defined for this type"],
               ["E0311", "Constant is already defined"],
-              ["E0312", "Agent is already defined"],
               ["E0313", "Cannot redefine builtin function"],
               ["E0314", "No main function found"],
               ["E0315", "Struct has no such field"],
@@ -182,8 +181,6 @@ E0100: Type mismatch
               ["E0318", "Missing field in struct literal"],
               ["E0319", "Unknown derive trait"],
               ["E0320", "Impl block for undefined type"],
-              ["E0321", "Undefined tool function referenced in agent"],
-              ["E0322", "Function referenced in agent is not a tool fn"],
               ["E0323", "Unknown type in trait method signature"],
               ["E0324", "Unknown return type"],
             ].map(([code, desc]) => (
@@ -256,7 +253,6 @@ E0100: Type mismatch
               ["E0508", "continue can only be used inside a loop"],
               ["E0509", "Required trait method is not implemented"],
               ["E0510", "Trait impl method return type does not match trait definition"],
-              ["E0511", "Agent does not accept field initializers"],
               ["E0512", "Only named function calls are supported"],
               ["E0513", "Builtin function argument count error"],
             ].map(([code, desc]) => (

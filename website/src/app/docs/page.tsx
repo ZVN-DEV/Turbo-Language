@@ -8,12 +8,12 @@ export default function DocsPage() {
       </h1>
       <p className="text-lg text-gray-400 mb-8">
         A compiled, type-safe programming language with JavaScript&apos;s developer
-        experience, Rust&apos;s performance, and first-class AI agent primitives.
+        experience, Rust&apos;s performance, and a modern built-in toolchain.
       </p>
 
       <div className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-6 mb-8">
         <p className="text-[#00ff88] font-medium text-lg mb-0">
-          JavaScript&apos;s soul. Rust&apos;s speed. Built for the AI age.
+          JavaScript&apos;s soul. Rust&apos;s speed. Honest about what ships today.
         </p>
       </div>
 
@@ -47,10 +47,10 @@ export default function DocsPage() {
           await, channels, mutex
         </li>
         <li>
-          <strong className="text-white">AI agent primitives</strong> --{" "}
+          <strong className="text-white">AI-native roadmap</strong> -- Planned{" "}
           <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">agent</code> and{" "}
           <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">tool fn</code>{" "}
-          keywords
+          concepts are documented, but they are not part of the current compiler release
         </li>
         <li>
           <strong className="text-white">Modern toolchain</strong> -- built-in
@@ -88,7 +88,7 @@ fn main() {
       </h2>
       <ul className="list-disc list-inside space-y-2 mb-8 text-gray-300">
         <li>Developers who want native performance without Rust&apos;s complexity</li>
-        <li>Teams building AI-powered applications with agents and tools</li>
+        <li>Teams that want native-speed tooling today and care about Turbo&apos;s AI-native roadmap</li>
         <li>Anyone who wants a modern language with batteries included</li>
         <li>Systems programmers who appreciate clean, expressive syntax</li>
       </ul>

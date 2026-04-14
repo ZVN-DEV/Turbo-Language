@@ -53,6 +53,8 @@ turbolang build hello.tb      # AOT — produce a native binary
 >
 > **Warning — HTTP server is experimental:** The built-in HTTP server binds to `127.0.0.1` by default and is not hardened for direct exposure to untrusted networks. Put it behind a reverse proxy (nginx, Caddy) in production. See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
+> **Roadmap note — AI-native syntax:** Turbo's design work explores `agent` and `tool fn` syntax for future AI-native workflows. Those constructs are not implemented in current releases; today's compiler ships native compilation, WASM output, async primitives, HTTP building blocks, REPL/playground, formatter, and LSP.
+
 ### A Taste of Turbo
 
 ```turbo
@@ -194,11 +196,11 @@ fn main() {
 fn main() {
     let app = http_server(8080)
     route(app, "GET", "/", |req: str| -> str {
-        respond(200, "hello")
+        respond_text(200, "hello")
     })
     route(app, "POST", "/api/echo", |req: str| -> str {
         let body = request_body(req)
-        respond(200, body)
+        respond_text(200, body)
     })
     http_listen(app)
 }
@@ -280,7 +282,24 @@ Full reference with examples: [`docs/stdlib.md`](docs/stdlib.md)
 
 ## Examples
 
-Three runnable example projects demonstrate real-world Turbo code.
+Selected runnable examples demonstrate real-world Turbo code today. More runnable projects live in [`examples/README.md`](examples/README.md), and [`examples/roadmap/`](examples/roadmap/) contains planned examples that are intentionally not runnable yet.
+
+### Flagship Demo: Interactive Web Dashboard
+
+If you want the fastest proof that Turbo can ship a browser-facing experience today, start here. `web-dashboard` serves a styled HTML app and five JSON benchmark endpoints from a single Turbo file.
+
+```bash
+turbolang run examples/web-dashboard/main.tb
+# then open http://localhost:3000
+```
+
+What to try in the browser:
+
+- Click **Run All Benchmarks** to exercise every endpoint
+- Open `http://localhost:3000/api/info` in another tab to inspect a raw JSON route
+- Keep the terminal open — the dashboard stays live until you press `Ctrl+C`
+
+See [`examples/web-dashboard/main.tb`](examples/web-dashboard/main.tb) and [`examples/web-dashboard/README.md`](examples/web-dashboard/README.md)
 
 ### Text Statistics Analyzer
 
@@ -302,17 +321,6 @@ turbolang run examples/speed-server/main.tb
 ```
 
 See [`examples/speed-server/main.tb`](examples/speed-server/main.tb)
-
-### Interactive Web Dashboard
-
-A full benchmark dashboard with a styled HTML UI served on port 3000. Run benchmarks from the browser and see results in real time.
-
-```bash
-turbolang run examples/web-dashboard/main.tb
-# open http://localhost:3000
-```
-
-See [`examples/web-dashboard/main.tb`](examples/web-dashboard/main.tb)
 
 ## CLI Commands
 
