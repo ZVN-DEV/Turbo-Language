@@ -8,6 +8,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Security
 - Playground: token generation now uses 128 bits of OS randomness via `getrandom` instead of PID+timestamp, closing a localhost CSRF foot-gun.
 - Playground: source files are written via `tempfile::NamedTempFile` (exclusive-create with a random suffix), closing a TOCTOU race on the previously predictable temp filename.
+- Runtime: replace unbounded strcat in rt_str_join with length-tracked memcpy to eliminate a latent heap-overflow foot-gun and an accidental O(n²) append loop.
+- Runtime: guard rt_array_push against size_t overflow on adversarial lengths.
+
+### Changed
+- Runtime: rt_array_push now doubles capacity on growth, giving amortized O(1) pushes instead of O(n) per call. The shared refcount allocation header grew from 8 bytes to 16 bytes to carry the capacity slot; callers continue to see the same data pointer offsets.
 
 ### Fixed
 - LSP: malformed `textDocument/rename`, `codeAction`, and `hover` requests now return proper JSON-RPC error responses instead of crashing the server.
