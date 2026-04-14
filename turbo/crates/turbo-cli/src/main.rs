@@ -3141,6 +3141,7 @@ fn detailed_explanation(code: ErrorCode) -> Option<&'static str> {
         ErrorCode::E0513 => Some(include_str!("errors/E0513.md")),
         ErrorCode::E0514 => Some(include_str!("errors/E0514.md")),
         ErrorCode::E0515 => Some(include_str!("errors/E0515.md")),
+        ErrorCode::E0516 => Some(include_str!("errors/E0516.md")),
     }
 }
 

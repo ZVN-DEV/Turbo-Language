@@ -118,3 +118,4 @@ Every compiler diagnostic includes a unique error code (e.g. `E0100`). Use `turb
 | E0513 | Builtin function argument count error |
 | E0514 | Unused return value of pure function |
 | E0515 | Unused variable |
+| E0516 | Compiler recursion limit exceeded (parser/codegen) |

@@ -68,6 +68,12 @@ const RUNTIME_WASM_C: &str = include_str!("../runtime/turbo_rt_wasm.c");
 /// Higher depths generate too much IR for Cranelift to compile efficiently.
 const MAX_INLINE_DEPTH: usize = 2;
 
+/// Maximum expression recursion depth during codegen. Matches the parser
+/// limit ([`turbo_parser::MAX_PARSER_DEPTH`]) so any AST the parser accepts
+/// cannot then blow codegen's stack. Exceeding this limit produces an
+/// `E0516` codegen error instead of a segfault.
+pub const MAX_CODEGEN_DEPTH: usize = 256;
+
 #[allow(dead_code)]
 pub(crate) struct Ctx<'a, M: Module> {
     pub(crate) builder: FunctionBuilder<'a>,
@@ -96,6 +102,10 @@ pub(crate) struct Ctx<'a, M: Module> {
     pub(crate) trait_impls: &'a HashMap<String, Vec<String>>,
     /// Current function inlining depth (0 = no inlining)
     pub(crate) inline_depth: usize,
+    /// Current expression recursion depth during codegen. Used by
+    /// `compile_expr` to reject pathologically deep ASTs before they
+    /// overflow the native stack.
+    pub(crate) expr_depth: usize,
     /// Capture info populated during Expr::Closure compilation
     pub(crate) closure_captures: &'a mut HashMap<usize, CaptureInfo>,
     /// Concrete field types for generic struct instances: var_name -> vec of (field_name, TurboTy)
@@ -1918,6 +1928,7 @@ fn compile_module<M: Module>(
                 closure_fns: &closure_fns_map,
                 trait_impls: &trait_impls,
                 inline_depth: 0,
+                expr_depth: 0,
                 closure_captures: &mut closure_captures_map,
                 generic_struct_field_overrides: HashMap::new(),
                 last_struct_lit_concrete_fields: None,
@@ -2053,6 +2064,7 @@ fn compile_module<M: Module>(
                     closure_fns: &closure_fns_map,
                     trait_impls: &trait_impls,
                     inline_depth: 0,
+                    expr_depth: 0,
                     closure_captures: &mut closure_captures_map,
                     generic_struct_field_overrides: HashMap::new(),
                     last_struct_lit_concrete_fields: None,
@@ -2174,6 +2186,7 @@ fn compile_module<M: Module>(
                 closure_fns: &closure_fns_map,
                 trait_impls: &trait_impls,
                 inline_depth: 0,
+                expr_depth: 0,
                 closure_captures: &mut closure_captures_map,
                 generic_struct_field_overrides: HashMap::new(),
                 last_struct_lit_concrete_fields: None,
@@ -2263,6 +2276,7 @@ fn compile_module<M: Module>(
                 closure_fns: &closure_fns_map,
                 trait_impls: &trait_impls,
                 inline_depth: 0,
+                expr_depth: 0,
                 closure_captures: &mut closure_captures_map,
                 generic_struct_field_overrides: HashMap::new(),
                 last_struct_lit_concrete_fields: None,
@@ -2446,6 +2460,7 @@ fn compile_module<M: Module>(
                 closure_fns: &closure_fns_map,
                 trait_impls: &trait_impls,
                 inline_depth: 0,
+                expr_depth: 0,
                 closure_captures: &mut closure_captures_map,
                 generic_struct_field_overrides: HashMap::new(),
                 last_struct_lit_concrete_fields: None,
@@ -2722,6 +2737,7 @@ fn resolve_cl_type_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cranelift_module::Module as CraneliftModule;
     use std::ffi::{CStr, CString};
 
     // ── Helper: compile & run a Turbo program via JIT ──────────────
@@ -2738,6 +2754,136 @@ mod tests {
             sema_result.errors
         );
         jit_run(&module).expect("JIT compilation/execution failed");
+    }
+
+    // ================================================================
+    // Depth-limit sanity
+    // ================================================================
+
+    #[test]
+    fn test_max_codegen_depth_constant_is_256() {
+        // Keep the codegen depth limit in lockstep with the parser's
+        // MAX_PARSER_DEPTH so the two stages reject the same inputs.
+        assert_eq!(MAX_CODEGEN_DEPTH, 256);
+        assert_eq!(MAX_CODEGEN_DEPTH, turbo_parser::MAX_PARSER_DEPTH);
+    }
+
+    #[test]
+    fn test_codegen_rejects_pathologically_deep_ast() {
+        // Build an AST directly (bypassing the parser) with >256 levels
+        // of nested unary `-` on an int literal, and feed it straight
+        // to `compile_expr`. The parser would have rejected this input
+        // with E0516; the codegen limit ensures any other AST producer
+        // (LSP quick-fixes, macros, tests) gets the same protection
+        // instead of segfaulting.
+        //
+        // Runs in a thread with a large stack because `Drop` glue for
+        // the deeply-nested `Box<Spanned<Expr>>` chain would itself
+        // overflow the default test stack when the value falls out of
+        // scope.
+        let handler = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let span = 0..1;
+                let mut inner = Spanned::new(Expr::IntLit(1), span.clone());
+                for _ in 0..(MAX_CODEGEN_DEPTH + 16) {
+                    inner = Spanned::new(
+                        Expr::UnaryOp {
+                            op: UnaryOp::Neg,
+                            expr: Box::new(inner),
+                        },
+                        span.clone(),
+                    );
+                }
+
+                // Set up a minimal Cranelift function builder so we can
+                // call `compile_expr` without spinning up a full JIT.
+                use cranelift::prelude::settings::{self, Configurable};
+                let mut flag_builder = settings::builder();
+                flag_builder.set("use_colocated_libcalls", "false").unwrap();
+                flag_builder.set("is_pic", "false").unwrap();
+                let isa_builder = cranelift_native::builder().unwrap();
+                let isa = isa_builder
+                    .finish(settings::Flags::new(flag_builder))
+                    .unwrap();
+                let builder =
+                    JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+                let mut module = JITModule::new(builder);
+                let ptr_type = module.target_config().pointer_type();
+
+                let mut ctx = module.make_context();
+                let mut fn_ctx = FunctionBuilderContext::new();
+                let builder = FunctionBuilder::new(&mut ctx.func, &mut fn_ctx);
+
+                let mut data_desc = DataDescription::new();
+                let mut string_counter = 0usize;
+                let user_fns: HashMap<String, FuncId> = HashMap::new();
+                let fn_ret_types: HashMap<String, TurboTy> = HashMap::new();
+                let fn_asts: HashMap<String, &FnDef> = HashMap::new();
+                let fn_type_params: HashMap<String, Vec<String>> = HashMap::new();
+                let rt_fns: HashMap<String, FuncId> = HashMap::new();
+                let struct_fields: HashMap<String, Vec<(String, TurboTy)>> = HashMap::new();
+                let enum_variants: HashMap<String, Vec<String>> = HashMap::new();
+                let enum_variant_fields: HashMap<(String, String), Vec<TurboTy>> = HashMap::new();
+                let enum_max_slots: HashMap<String, usize> = HashMap::new();
+                let closure_fns: HashMap<usize, (String, TurboTy, Vec<String>)> = HashMap::new();
+                let trait_impls: HashMap<String, Vec<String>> = HashMap::new();
+                let mut closure_captures: HashMap<usize, CaptureInfo> = HashMap::new();
+                let spawn_thunks: HashMap<usize, String> = HashMap::new();
+                let constants: HashMap<String, Spanned<Expr>> = HashMap::new();
+                let struct_derives: HashMap<String, Vec<String>> = HashMap::new();
+
+                let mut cx = Ctx {
+                    builder,
+                    module: &mut module,
+                    user_fns: &user_fns,
+                    fn_ret_types: &fn_ret_types,
+                    fn_asts: &fn_asts,
+                    fn_type_params: &fn_type_params,
+                    rt_fns: &rt_fns,
+                    vars: HashMap::new(),
+                    next_var: 0,
+                    data_desc: &mut data_desc,
+                    string_counter: &mut string_counter,
+                    ptr_type,
+                    struct_fields: &struct_fields,
+                    enum_variants: &enum_variants,
+                    enum_variant_fields: &enum_variant_fields,
+                    enum_max_slots: &enum_max_slots,
+                    closure_fns: &closure_fns,
+                    trait_impls: &trait_impls,
+                    inline_depth: 0,
+                    expr_depth: 0,
+                    closure_captures: &mut closure_captures,
+                    generic_struct_field_overrides: HashMap::new(),
+                    last_struct_lit_concrete_fields: None,
+                    spawn_thunks: &spawn_thunks,
+                    constants: &constants,
+                    struct_derives: &struct_derives,
+                    loop_stack: Vec::new(),
+                };
+
+                let entry = cx.builder.create_block();
+                cx.builder.switch_to_block(entry);
+                cx.builder.seal_block(entry);
+
+                let err = compile_expr(&mut cx, &inner)
+                    .expect_err("codegen should reject >256-deep expressions");
+                assert_eq!(
+                    err.code,
+                    ErrorCode::E0516,
+                    "codegen depth error should use E0516, got {:?}: {}",
+                    err.code,
+                    err.message
+                );
+                assert!(
+                    err.message.contains("256"),
+                    "error should mention the limit value, got: {}",
+                    err.message
+                );
+            })
+            .expect("failed to spawn test thread");
+        handler.join().expect("test thread panicked");
     }
 
     // ================================================================

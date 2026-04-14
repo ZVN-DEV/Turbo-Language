@@ -10,6 +10,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - Playground: source files are written via `tempfile::NamedTempFile` (exclusive-create with a random suffix), closing a TOCTOU race on the previously predictable temp filename.
 - Runtime: replace unbounded strcat in rt_str_join with length-tracked memcpy to eliminate a latent heap-overflow foot-gun and an accidental O(n²) append loop.
 - Runtime: guard rt_array_push against size_t overflow on adversarial lengths.
+- Parser and codegen now enforce a 256-level recursion depth limit (E0516), so adversarial deeply-nested input errors out with a diagnostic instead of overflowing the compiler's stack.
 
 ### Changed
 - Runtime: rt_array_push now doubles capacity on growth, giving amortized O(1) pushes instead of O(n) per call. The shared refcount allocation header grew from 8 bytes to 16 bytes to carry the capacity slot; callers continue to see the same data pointer offsets.

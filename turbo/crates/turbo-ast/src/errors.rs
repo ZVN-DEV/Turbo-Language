@@ -194,6 +194,8 @@ pub enum ErrorCode {
     E0514,
     /// Unused variable
     E0515,
+    /// Compiler recursion limit exceeded (parser/codegen)
+    E0516,
 }
 
 impl ErrorCode {
@@ -293,6 +295,7 @@ impl ErrorCode {
             ErrorCode::E0513 => "E0513",
             ErrorCode::E0514 => "E0514",
             ErrorCode::E0515 => "E0515",
+            ErrorCode::E0516 => "E0516",
         }
     }
 
@@ -392,6 +395,7 @@ impl ErrorCode {
             ErrorCode::E0513 => "builtin function argument count error",
             ErrorCode::E0514 => "unused return value of pure function",
             ErrorCode::E0515 => "unused variable",
+            ErrorCode::E0516 => "compiler recursion limit exceeded",
         }
     }
 
@@ -491,6 +495,7 @@ impl ErrorCode {
             ErrorCode::E0513,
             ErrorCode::E0514,
             ErrorCode::E0515,
+            ErrorCode::E0516,
         ]
     }
 }
