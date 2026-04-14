@@ -13,6 +13,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 - Runtime: rt_array_push now doubles capacity on growth, giving amortized O(1) pushes instead of O(n) per call. The shared refcount allocation header grew from 8 bytes to 16 bytes to carry the capacity slot; callers continue to see the same data pointer offsets.
+- CI: fuzz-smoke now runs on every push (cap 60s/target) instead of nightly-only.
+- CI: new ASAN+UBSAN job rebuilds the C runtime tests with clang sanitizers.
 
 ### Fixed
 - LSP: malformed `textDocument/rename`, `codeAction`, and `hover` requests now return proper JSON-RPC error responses instead of crashing the server.
