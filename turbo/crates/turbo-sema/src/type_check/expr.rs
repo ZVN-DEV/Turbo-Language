@@ -773,12 +773,22 @@ impl Checker {
                         return Ty::Unit;
                     }
 
-                    // ── exec / env_get ──────────────────────────────
-                    if name == "exec" {
+                    // ── shell_exec / exec / env_get ──────────────────────────────
+                    if name == "shell_exec" || name == "exec" {
+                        if !self.in_unsafe_context {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!(
+                                    "`{name}()` can only be called inside an `@unsafe` function"
+                                )
+                                    .to_string(),
+                                callee.span.clone(),
+                            );
+                        }
                         if args.len() != 1 {
                             self.error(
                                 ErrorCode::E0513,
-                                format!("exec() takes exactly 1 argument, got {}", args.len()),
+                                format!("{name}() takes exactly 1 argument, got {}", args.len()),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -787,7 +797,7 @@ impl Checker {
                         if !cmd_ty.is_error() && cmd_ty != Ty::Str {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("exec() expects str, found `{cmd_ty}`"),
+                                format!("{name}() expects str, found `{cmd_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
@@ -1047,12 +1057,15 @@ impl Checker {
                         }
                         return Ty::Unit;
                     }
-                    // respond(status: i64, body: str) -> str
-                    if name == "respond" {
+                    // respond*(status: i64, body: str) -> str
+                    if matches!(
+                        name.as_str(),
+                        "respond" | "respond_text" | "respond_html" | "respond_json"
+                    ) {
                         if args.len() != 2 {
                             self.error(
                                 ErrorCode::E0513,
-                                format!("respond() takes exactly 2 arguments, got {}", args.len()),
+                                format!("{name}() takes exactly 2 arguments, got {}", args.len()),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1060,12 +1073,12 @@ impl Checker {
                         let status_ty = self.check_expr(&args[0]);
                         let body_ty = self.check_expr(&args[1]);
                         if !status_ty.is_error() && !status_ty.is_integer() {
-                            self.error(ErrorCode::E0133, format!("respond() first argument must be integer status code, found `{status_ty}`"), args[0].span.clone());
+                            self.error(ErrorCode::E0133, format!("{name}() first argument must be integer status code, found `{status_ty}`"), args[0].span.clone());
                         }
                         if !body_ty.is_error() && body_ty != Ty::Str {
                             self.error(
                                 ErrorCode::E0133,
-                                format!("respond() second argument must be str, found `{body_ty}`"),
+                                format!("{name}() second argument must be str, found `{body_ty}`"),
                                 args[1].span.clone(),
                             );
                         }

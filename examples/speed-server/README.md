@@ -9,11 +9,11 @@ spirit.
 ## Turbo features shown
 
 - `http_server(port)` + `route(app, METHOD, PATH, handler)` + `http_listen`
-- Closure handlers: `|req: str| -> str { respond(200, body) }`
+- Closure handlers returning explicit response types (`respond_json`, `respond_text`)
 - `struct` definitions used as JSON response shapes (`ServerInfo`,
   `FibResult`, `PrimeResult`, `HealthStatus`)
 - `to_json(value)` for struct -> JSON serialization
-- `respond(status, body)` for HTTP responses
+- `respond_json(status, body)` / `respond_text(status, body)` for HTTP responses
 - Recursive functions (`fib`), `while` loops (`is_prime`, `count_primes`)
 - Mutable arrays + index assignment in `bubble_sort`
 

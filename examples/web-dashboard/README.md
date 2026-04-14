@@ -1,11 +1,28 @@
 # web-dashboard
 
-An interactive HTML benchmark dashboard served entirely from a single Turbo
-file. Visiting `http://localhost:3000` returns a styled dark-mode UI with
-five "Run" cards (fibonacci, prime counter, bubble sort, sieve of
-Eratosthenes, and a zero-cost language-info endpoint). Clicking any card —
-or "Run All Benchmarks" — `fetch`es the matching `/api/*` route and prints
-the JSON response and elapsed time.
+**The flagship runnable Turbo demo.** This example serves an interactive HTML
+benchmark dashboard entirely from a single Turbo file. Visit
+`http://localhost:3000` and you get a styled dark-mode UI with five benchmark
+cards (fibonacci, prime counter, bubble sort, sieve of Eratosthenes, and a
+zero-cost language-info endpoint). Clicking any card — or **Run All
+Benchmarks** — hits the matching `/api/*` route and prints the JSON response
+and elapsed time.
+
+If you want one example that proves Turbo can compile native code, serve a web
+UI, and expose JSON APIs today, this is the one to run first.
+
+## Quickstart
+
+```bash
+turbolang run examples/web-dashboard/main.tb
+```
+
+Then:
+
+1. Open `http://localhost:3000` in your browser
+2. Click **Run All Benchmarks**
+3. Open `http://localhost:3000/api/info` in another tab to see a raw JSON route
+4. Stop the server with `Ctrl+C`
 
 ## Turbo features shown
 
@@ -14,18 +31,13 @@ the JSON response and elapsed time.
 - A pure-Turbo HTML+CSS+JS builder (`build_css`, `build_js`, `build_card`,
   `build_html`) using string concatenation and `\{` / `\}` escapes inside
   string literals to emit literal `{` / `}` for JS/CSS
-- Closure handlers per route: `|req: str| -> str { respond(200, body) }`
+- Explicit response helpers: `respond_html`, `respond_json`, and `respond_text`
 - Recursive `fib`, trial-division `is_prime` / `count_primes`, hashmap-based
   `sieve_count`, and `bubble_sort` for the benchmark workloads
 - Mutable arrays (`let mut arr = arr`) with index assignment
 - `hashmap()` + `hashmap_set` / `hashmap_has` + `to_str` for the sieve
 
-## Run
-
-```bash
-turbolang run examples/web-dashboard/main.tb
-# then open http://localhost:3000 in a browser
-```
+## JSON endpoints
 
 You can also hit the JSON endpoints directly:
 

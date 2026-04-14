@@ -851,6 +851,13 @@ long long rt_http_server(long long port) {
     return 0;
 }
 
+long long rt_http_server_public(long long port) {
+    (void)port;
+    fprintf(stderr, "runtime error: HTTP server not supported in WASM target\n");
+    exit(1);
+    return 0;
+}
+
 void rt_http_route(long long server_id, const char *method, const char *path, const void *handler, const void *env_ptr) {
     (void)server_id; (void)method; (void)path; (void)handler; (void)env_ptr;
     fprintf(stderr, "runtime error: HTTP server not supported in WASM target\n");
@@ -865,6 +872,13 @@ void rt_http_listen(long long server_id) {
 
 const char* rt_respond(long long status, const char *body) {
     (void)status; (void)body;
+    fprintf(stderr, "runtime error: HTTP server not supported in WASM target\n");
+    exit(1);
+    return NULL;
+}
+
+const char* rt_respond_typed(long long status, const char *content_type, const char *body) {
+    (void)status; (void)content_type; (void)body;
     fprintf(stderr, "runtime error: HTTP server not supported in WASM target\n");
     exit(1);
     return NULL;

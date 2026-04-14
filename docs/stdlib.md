@@ -422,22 +422,22 @@ Creates a new HTTP server bound to the given port. The server does not start lis
 
 ```turbo
 route(app, "GET", "/", |req: str| -> str {
-    respond(200, "Hello, Turbo!")
+    respond_text(200, "Hello, Turbo!")
 })
 
 route(app, "POST", "/api/echo", |req: str| -> str {
     let body = request_body(req)
-    respond(200, body)
+    respond_text(200, body)
 })
 ```
 
-Registers a route handler for the given HTTP method and path. The handler receives the request as a string and must return a response string (use `respond` to construct it).
+Registers a route handler for the given HTTP method and path. The handler receives the request as a string and must return a response string (use `respond_text`, `respond_html`, or `respond_json` to construct it).
 
 ### http_listen
 
 ```turbo
 let app = http_server(3000)
-route(app, "GET", "/", |req: str| -> str { respond(200, "ok") })
+route(app, "GET", "/", |req: str| -> str { respond_text(200, "ok") })
 http_listen(app)
 ```
 
@@ -446,18 +446,19 @@ Starts the HTTP server and begins accepting connections. This call blocks until 
 ### respond
 
 ```turbo
-let res = respond(200, "{\"status\":\"ok\"}")
-let err = respond(404, "Not Found")
+let text = respond_text(200, "ok")
+let html = respond_html(200, "<!doctype html><html><body>ok</body></html>")
+let json = respond_json(200, "{\"status\":\"ok\"}")
 ```
 
-Constructs an HTTP response string with the given status code and body.
+Constructs an HTTP response string with the given status code, body, and an explicit content type.
 
 ### request_body
 
 ```turbo
 route(app, "POST", "/data", |req: str| -> str {
     let body = request_body(req)
-    respond(200, body)
+    respond_text(200, body)
 })
 ```
 
@@ -468,7 +469,7 @@ Extracts the body from an HTTP request string.
 ```turbo
 route(app, "GET", "/info", |req: str| -> str {
     let method = request_method(req)    // "GET"
-    respond(200, method)
+    respond_text(200, method)
 })
 ```
 

@@ -1,10 +1,39 @@
-fn main() {
-    let app = http_server(0)
-    route(app, "GET", "/", |req: str| -> str { respond(200, "hello") })
-    route(app, "GET", "/api/status", |req: str| -> str { respond(200, json_stringify("status", "ok")) })
+fn serve(app: i64) {
+    http_listen(app)
+}
+
+@unsafe fn curl_headers(url: str) -> str {
+    shell_exec("curl -sS -D - -o /dev/null " + url)
+}
+
+@unsafe fn curl_post_headers(url: str, body: str) -> str {
+    shell_exec("curl -sS -X POST -H 'Content-Type: text/plain' -d '" + body + "' -D - -o /dev/null " + url)
+}
+
+@unsafe fn main() {
+    let app = http_server(18081)
+    route(app, "GET", "/", |req: str| -> str {
+        respond_html(200, "<!DOCTYPE html><html><body>hello</body></html>")
+    })
+    route(app, "GET", "/api/status", |req: str| -> str {
+        respond_json(200, json_stringify("status", "ok"))
+    })
     route(app, "POST", "/api/echo", |req: str| -> str {
         let body = request_body(req)
-        respond(200, body)
+        respond_text(200, body)
     })
+
+    spawn serve(app)
+    let _ = shell_exec("sleep 0.2")
+
+    let html_headers = lower(curl_headers("http://127.0.0.1:18081/"))
+    assert(contains(html_headers, "content-type: text/html"))
+
+    let json_headers = lower(curl_headers("http://127.0.0.1:18081/api/status"))
+    assert(contains(json_headers, "content-type: application/json"))
+
+    let echo_headers = lower(curl_post_headers("http://127.0.0.1:18081/api/echo", "hello"))
+    assert(contains(echo_headers, "content-type: text/plain"))
+
     print("server configured")
 }

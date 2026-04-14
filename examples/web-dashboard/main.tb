@@ -100,6 +100,11 @@ fn build_css() -> str {
         + ".subtitle \{"
         + "  color: #666; font-size: 1.1rem; margin-top: 0.5rem;"
         + "\}"
+        + ".hero-note \{"
+        + "  max-width: 760px; margin: 1.5rem auto 0;"
+        + "  color: #9a9ab3; font-size: 0.95rem; line-height: 1.6;"
+        + "\}"
+        + ".hero-note strong \{ color: #fff; \}"
         + ".grid \{"
         + "  display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));"
         + "  gap: 1.5rem; max-width: 1200px; margin: 0 auto;"
@@ -285,6 +290,10 @@ fn build_html() -> str {
         + "  <div class=\"subtitle\">Interactive Benchmark Dashboard"
         + "    <span class=\"badge\">v1.0</span>"
         + "  </div>"
+        + "  <div class=\"hero-note\">"
+        + "    <strong>Flagship runnable demo:</strong> one Turbo file serving both the browser UI and the benchmark APIs."
+        + "    Click any card below or open <code>/api/info</code> in another tab to inspect a raw JSON endpoint."
+        + "  </div>"
         + "</div>"
         + "<button class=\"run-all\" onclick=\"runAll()\">Run All Benchmarks</button>"
         + "<div class=\"grid\">"
@@ -310,6 +319,11 @@ fn main() {
     print("  http://localhost:3000")
     print("==============================================")
     print("")
+    print("Quick start:")
+    print("  1. Open http://localhost:3000 in your browser")
+    print("  2. Click 'Run All Benchmarks'")
+    print("  3. Visit /api/info in another tab for raw JSON")
+    print("")
     print("Routes:")
     print("  GET /            - Dashboard UI")
     print("  GET /api/fib     - Fibonacci(35)")
@@ -324,21 +338,21 @@ fn main() {
 
     // Serve the dashboard HTML
     route(app, "GET", "/", |req: str| -> str {
-        respond(200, html)
+        respond_html(200, html)
     })
 
     // Fibonacci benchmark
     route(app, "GET", "/api/fib", |req: str| -> str {
         let n = 35
         let result = fib(n)
-        respond(200, "\{\"benchmark\": \"fibonacci\", \"n\": " + to_str(n) + ", \"result\": " + to_str(result) + "\}")
+        respond_json(200, "\{\"benchmark\": \"fibonacci\", \"n\": " + to_str(n) + ", \"result\": " + to_str(result) + "\}")
     })
 
     // Prime counter benchmark
     route(app, "GET", "/api/primes", |req: str| -> str {
         let limit = 10000
         let count = count_primes(limit)
-        respond(200, "\{\"benchmark\": \"prime_count\", \"limit\": " + to_str(limit) + ", \"count\": " + to_str(count) + "\}")
+        respond_json(200, "\{\"benchmark\": \"prime_count\", \"limit\": " + to_str(limit) + ", \"count\": " + to_str(count) + "\}")
     })
 
     // Sorting benchmark
@@ -396,7 +410,7 @@ fn main() {
             10, 9, 8, 7, 6, 5, 4, 3, 2, 1
         ]
         let sorted = bubble_sort(arr)
-        respond(200, "\{\"benchmark\": \"bubble_sort\", \"count\": 500, \"first_10\": ["
+        respond_json(200, "\{\"benchmark\": \"bubble_sort\", \"count\": 500, \"first_10\": ["
             + to_str(sorted[0]) + ", "
             + to_str(sorted[1]) + ", "
             + to_str(sorted[2]) + ", "
@@ -414,12 +428,12 @@ fn main() {
     route(app, "GET", "/api/sieve", |req: str| -> str {
         let limit = 100000
         let count = sieve_count(limit)
-        respond(200, "\{\"benchmark\": \"sieve_eratosthenes\", \"limit\": " + to_str(limit) + ", \"prime_count\": " + to_str(count) + "\}")
+        respond_json(200, "\{\"benchmark\": \"sieve_eratosthenes\", \"limit\": " + to_str(limit) + ", \"prime_count\": " + to_str(count) + "\}")
     })
 
     // Language info endpoint
     route(app, "GET", "/api/info", |req: str| -> str {
-        respond(200, "\{\"language\": \"Turbo\", \"version\": \"1.0.0\", \"backend\": \"Cranelift\", \"features\": [\"JIT compilation\", \"AOT compilation\", \"async/await\", \"closures\", \"generics\", \"pattern matching\", \"HTTP server\", \"channels\", \"hashmaps\"]\}")
+        respond_json(200, "\{\"language\": \"Turbo\", \"version\": \"1.0.0\", \"backend\": \"Cranelift\", \"features\": [\"JIT compilation\", \"AOT compilation\", \"async/await\", \"closures\", \"generics\", \"pattern matching\", \"HTTP server\", \"channels\", \"hashmaps\"]\}")
     })
 
     print("Dashboard ready. Press Ctrl+C to stop.")

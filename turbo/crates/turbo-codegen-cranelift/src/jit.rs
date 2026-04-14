@@ -146,6 +146,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_http_route", rt_http_route as *const u8);
     jit_builder.symbol("rt_http_listen", rt_http_listen as *const u8);
     jit_builder.symbol("rt_respond", rt_respond as *const u8);
+    jit_builder.symbol("rt_respond_typed", rt_respond_typed as *const u8);
     jit_builder.symbol("rt_request_body", rt_request_body as *const u8);
     jit_builder.symbol("rt_request_method", rt_request_method as *const u8);
     jit_builder.symbol("rt_request_path", rt_request_path as *const u8);
@@ -290,6 +291,7 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_http_route", rt_http_route as *const u8);
     jit_builder.symbol("rt_http_listen", rt_http_listen as *const u8);
     jit_builder.symbol("rt_respond", rt_respond as *const u8);
+    jit_builder.symbol("rt_respond_typed", rt_respond_typed as *const u8);
     jit_builder.symbol("rt_request_body", rt_request_body as *const u8);
     jit_builder.symbol("rt_request_method", rt_request_method as *const u8);
     jit_builder.symbol("rt_request_path", rt_request_path as *const u8);

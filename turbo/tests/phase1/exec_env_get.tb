@@ -1,13 +1,32 @@
-fn main() {
-    // Test exec
-    let result = exec("echo hello_turbo")
+@unsafe fn run_exec(cmd: str) -> str {
+    shell_exec(cmd)
+}
+
+@unsafe fn check_safe_exec_error(path: str) -> str {
+    shell_exec("./target/release/turbolang check " + path + " 2>&1")
+}
+
+@unsafe fn main() {
+    let fixture = "/tmp/turbo_exec_safe_context.tb"
+    write_file(fixture, "fn main() \\{
+    let result = shell_exec(\"echo hello_turbo\")
+    print(result)
+\\}
+")
+
+    let safe_exec_error = check_safe_exec_error(fixture)
+    assert(contains(safe_exec_error, "shell_exec()"))
+    assert(contains(safe_exec_error, "@unsafe"))
+
+    // Test exec inside an @unsafe helper.
+    let result = run_exec("echo hello_turbo")
     print(trim(result))
 
-    // Test env_get with a known variable
+    // Test env_get with a known variable.
     let home = env_get("HOME")
     print(len(home) > 0)
 
-    // Test env_get with unset variable returns empty string
+    // Test env_get with unset variable returns empty string.
     let missing = env_get("TURBO_NONEXISTENT_VAR_12345")
     print(missing == "")
 }

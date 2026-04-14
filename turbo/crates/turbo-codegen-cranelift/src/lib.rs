@@ -1285,6 +1285,13 @@ fn compile_module<M: Module>(
     declare_rt_fn(
         module,
         &mut rt_fns,
+        "rt_respond_typed",
+        &[types::I64, ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
         "rt_request_body",
         &[ptr_type],
         Some(ptr_type),

@@ -1021,6 +1021,10 @@ pub(crate) struct HttpServer {
 unsafe impl Send for HttpServer {}
 
 pub(crate) static HTTP_SERVERS: Mutex<Vec<HttpServer>> = Mutex::new(Vec::new());
+const RT_HTTP_MAX_SERVERS: usize = 16;
+const RT_HTTP_MAX_ROUTES: usize = 64;
+const RT_HTTP_MAX_ACTIVE_CONNECTIONS: usize = 256;
+const RT_RESPONSE_SEP: char = '\u{1f}';
 
 /// Create a new HTTP server bound to localhost. Returns a server id (index).
 pub(crate) extern "C" fn rt_http_server(port: i64) -> i64 {
@@ -1030,6 +1034,10 @@ pub(crate) extern "C" fn rt_http_server(port: i64) -> i64 {
         routes: Vec::new(),
     };
     let mut servers = HTTP_SERVERS.lock().unwrap();
+    if servers.len() >= RT_HTTP_MAX_SERVERS {
+        eprintln!("runtime error: max {} HTTP servers", RT_HTTP_MAX_SERVERS);
+        std::process::exit(1);
+    }
     let id = servers.len() as i64;
     servers.push(server);
     id
@@ -1044,6 +1052,10 @@ pub(crate) extern "C" fn rt_http_server_public(port: i64) -> i64 {
         routes: Vec::new(),
     };
     let mut servers = HTTP_SERVERS.lock().unwrap();
+    if servers.len() >= RT_HTTP_MAX_SERVERS {
+        eprintln!("runtime error: max {} HTTP servers", RT_HTTP_MAX_SERVERS);
+        std::process::exit(1);
+    }
     let id = servers.len() as i64;
     servers.push(server);
     id
@@ -1069,7 +1081,16 @@ pub(crate) extern "C" fn rt_http_route(
 
     let mut servers = HTTP_SERVERS.lock().unwrap();
     if let Some(server) = servers.get_mut(server_id as usize) {
+        if server.routes.len() >= RT_HTTP_MAX_ROUTES {
+            eprintln!(
+                "runtime error: max {} routes per HTTP server",
+                RT_HTTP_MAX_ROUTES
+            );
+            std::process::exit(1);
+        }
         server.routes.push((method, path, handler, env_ptr));
+    } else {
+        eprintln!("runtime error: invalid HTTP server id {}", server_id);
     }
 }
 
@@ -1078,6 +1099,29 @@ pub(crate) extern "C" fn rt_http_route(
 struct SendableRoutes(Vec<(String, String, RouteHandler, *const u8)>);
 unsafe impl Send for SendableRoutes {}
 unsafe impl Sync for SendableRoutes {}
+
+struct ActiveConnectionGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for ActiveConnectionGuard {
+    fn drop(&mut self) {
+        self.0
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+fn parse_rt_response(resp: &str) -> Option<(u16, &str, &str)> {
+    let mut typed = resp.splitn(3, RT_RESPONSE_SEP);
+    if let (Some(status), Some(content_type), Some(body)) =
+        (typed.next(), typed.next(), typed.next())
+    {
+        if let Ok(code) = status.parse::<u16>() {
+            return Some((code, content_type, body));
+        }
+    }
+
+    resp.split_once(':')
+        .and_then(|(status, body)| status.parse::<u16>().ok().map(|code| (code, "text/plain", body)))
+}
 
 /// Handle a single HTTP connection with keep-alive support.
 fn handle_http_connection(
@@ -1195,8 +1239,7 @@ fn handle_http_connection(
                     }
                     .to_str()
                     .unwrap_or("");
-                    if let Some((status, resp_body)) = resp.split_once(':') {
-                        let code = status.parse::<u16>().unwrap_or(200);
+                    if let Some((code, content_type, resp_body)) = parse_rt_response(resp) {
                         let status_text = match code {
                             200 => "OK",
                             201 => "Created",
@@ -1210,8 +1253,13 @@ fn handle_http_connection(
                             _ => "OK",
                         };
                         let http_resp = format!(
-                            "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: {}\r\nContent-Length: {}\r\n\r\n{}",
-                            code, status_text, conn_header, resp_body.len(), resp_body
+                            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: {}\r\nContent-Length: {}\r\n\r\n{}",
+                            code,
+                            status_text,
+                            content_type,
+                            conn_header,
+                            resp_body.len(),
+                            resp_body
                         );
                         let _ = writer.write_all(http_resp.as_bytes());
                     } else {
@@ -1247,10 +1295,14 @@ fn handle_http_connection(
 pub(crate) extern "C" fn rt_http_listen(server_id: i64) {
     use std::net::TcpListener;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     let (host, port, routes) = {
         let servers = HTTP_SERVERS.lock().unwrap();
-        let server = &servers[server_id as usize];
+        let Some(server) = servers.get(server_id as usize) else {
+            eprintln!("runtime error: invalid HTTP server id {}", server_id);
+            return;
+        };
         let host = server.bind_host;
         let port = server.port;
         let routes: Vec<(String, String, RouteHandler, *const u8)> = server.routes.clone();
@@ -1258,25 +1310,51 @@ pub(crate) extern "C" fn rt_http_listen(server_id: i64) {
     };
 
     let routes = Arc::new(SendableRoutes(routes));
+    let active_connections = Arc::new(AtomicUsize::new(0));
     let addr = format!("{}:{}", host, port);
     let listener = TcpListener::bind(&addr).expect("failed to bind HTTP server");
 
     for stream in listener.incoming().flatten() {
+        if active_connections.fetch_add(1, Ordering::AcqRel) >= RT_HTTP_MAX_ACTIVE_CONNECTIONS {
+            active_connections.fetch_sub(1, Ordering::AcqRel);
+            let mut stream = stream;
+            let _ = std::io::Write::write_all(
+                &mut stream,
+                b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: 18\r\n\r\nserver overloaded\n",
+            );
+            continue;
+        }
         let routes = Arc::clone(&routes);
+        let active_connections = Arc::clone(&active_connections);
         std::thread::spawn(move || {
+            let _guard = ActiveConnectionGuard(active_connections);
             handle_http_connection(stream, &routes.0);
         });
     }
 }
 
-/// Build a response string in "STATUS:BODY" format.
+/// Build a response string in "STATUS<sep>text/plain<sep>BODY" format.
 pub(crate) extern "C" fn rt_respond(status: i64, body: *const u8) -> *const u8 {
+    let content_type = rt_alloc_string("text/plain");
+    rt_respond_typed(status, content_type, body)
+}
+
+pub(crate) extern "C" fn rt_respond_typed(
+    status: i64,
+    content_type: *const u8,
+    body: *const u8,
+) -> *const u8 {
+    let content_type_str =
+        unsafe { std::ffi::CStr::from_ptr(content_type as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("text/plain");
     let body_str = unsafe { std::ffi::CStr::from_ptr(body as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    let response = format!("{}:{}", status, body_str);
+    let response = format!("{status}{RT_RESPONSE_SEP}{content_type_str}{RT_RESPONSE_SEP}{body_str}");
+    let fallback = format!("200{0}text/plain{0}", RT_RESPONSE_SEP);
     let cs = std::ffi::CString::new(response)
-        .unwrap_or_else(|_| std::ffi::CString::new("200:").unwrap());
+        .unwrap_or_else(|_| std::ffi::CString::new(fallback).unwrap());
     arena_str(cs)
 }
 

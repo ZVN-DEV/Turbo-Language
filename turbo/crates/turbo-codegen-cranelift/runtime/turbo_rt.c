@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <strings.h>   /* strcasecmp, strncasecmp (BSD/POSIX) */
 #include <pthread.h>
@@ -915,7 +916,7 @@ const char *rt_http_post(const char *url, const char *body) {
     return buf;
 }
 
-/* exec(cmd) -> str — execute a shell command via fork+exec, capture stdout+stderr */
+/* shell_exec(cmd) / exec(cmd) -> str — execute a shell command via fork+exec, capture stdout+stderr */
 const char *rt_exec(const char *cmd) {
     if (!cmd || cmd[0] == '\0') {
         const char *empty = (const char *)turbo_alloc(1);
@@ -1437,10 +1438,13 @@ typedef struct {
     unsigned int bind_addr;
     Route routes[64];
     int route_count;
+    _Atomic int active_connections;
 } HttpServerC;
 
 static HttpServerC http_servers[16];
 static int http_server_count = 0;
+static const int RT_HTTP_MAX_ACTIVE_CONNECTIONS = 256;
+static const char RT_RESPONSE_SEP = '\x1f';
 
 long long rt_http_server(long long port) {
     if (http_server_count >= 16) { fprintf(stderr, "error: max 16 HTTP servers\n"); exit(1); }
@@ -1450,6 +1454,7 @@ long long rt_http_server(long long port) {
      * need external access must opt in via rt_http_server_public. */
     http_servers[id].bind_addr = htonl(INADDR_LOOPBACK);
     http_servers[id].route_count = 0;
+    atomic_store(&http_servers[id].active_connections, 0);
     return id;
 }
 
@@ -1462,10 +1467,15 @@ long long rt_http_server_public(long long port) {
     http_servers[id].port = (unsigned short)port;
     http_servers[id].bind_addr = htonl(INADDR_ANY);
     http_servers[id].route_count = 0;
+    atomic_store(&http_servers[id].active_connections, 0);
     return id;
 }
 
 void rt_http_route(long long server_id, const char *method, const char *path, const void *handler, const void *env_ptr) {
+    if (server_id < 0 || server_id >= http_server_count) {
+        fprintf(stderr, "runtime error: invalid HTTP server id %lld\n", server_id);
+        return;
+    }
     HttpServerC *srv = &http_servers[server_id];
     if (srv->route_count >= 64) { fprintf(stderr, "error: max 64 routes per server\n"); exit(1); }
     int idx = srv->route_count++;
@@ -1483,6 +1493,25 @@ typedef struct {
     int client_fd;
     HttpServerC *srv;
 } conn_thread_data;
+
+static const char *rt_http_content_type(const char *body) {
+    if (!body) return "text/plain";
+    while (*body == ' ' || *body == '\t' || *body == '\r' || *body == '\n') body++;
+    if (strncasecmp(body, "<!doctype html", 14) == 0 ||
+        strncasecmp(body, "<html", 5) == 0) {
+        return "text/html";
+    }
+    if (*body == '{' || *body == '[') return "application/json";
+    return "text/plain";
+}
+
+static int rt_parse_response(
+    const char *resp,
+    int *status_out,
+    char *content_type_out,
+    size_t content_type_out_len,
+    const char **body_out
+);
 
 /* Handle a single HTTP connection with keep-alive support. */
 static void *handle_http_conn(void *arg) {
@@ -1639,17 +1668,17 @@ static void *handle_http_conn(void *arg) {
                 strcmp(srv->routes[i].path, path_buf) == 0) {
                 const char *resp = srv->routes[i].handler(srv->routes[i].env_ptr, req_str);
                 if (resp) {
-                    const char *colon = strchr(resp, ':');
-                    if (colon) {
-                        int status = atoi(resp);
-                        const char *resp_body = colon + 1;
+                    int status = 200;
+                    char content_type[64];
+                    const char *resp_body = NULL;
+                    if (rt_parse_response(resp, &status, content_type, sizeof(content_type), &resp_body)) {
                         int resp_len = strlen(resp_body);
                         char hdr[512];
                         snprintf(hdr, sizeof(hdr),
-                            "HTTP/1.1 %d OK\r\nContent-Type: application/json\r\n"
+                            "HTTP/1.1 %d OK\r\nContent-Type: %s\r\n"
                             "Access-Control-Allow-Origin: *\r\nConnection: %s\r\n"
                             "Content-Length: %d\r\n\r\n",
-                            status, conn_hdr, resp_len);
+                            status, content_type, conn_hdr, resp_len);
                         write(fd, hdr, strlen(hdr));
                         write(fd, resp_body, resp_len);
                     } else {
@@ -1709,10 +1738,15 @@ static void *handle_http_conn(void *arg) {
     rt_arena_end();
 
     close(fd);
+    atomic_fetch_sub(&srv->active_connections, 1);
     return NULL;
 }
 
 void rt_http_listen(long long server_id) {
+    if (server_id < 0 || server_id >= http_server_count) {
+        fprintf(stderr, "runtime error: invalid HTTP server id %lld\n", server_id);
+        return;
+    }
     HttpServerC *srv = &http_servers[server_id];
 
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -1741,8 +1775,25 @@ void rt_http_listen(long long server_id) {
         int client_fd = accept(server_fd, NULL, NULL);
         if (client_fd < 0) continue;
 
+        int prev = atomic_fetch_add(&srv->active_connections, 1);
+        if (prev >= RT_HTTP_MAX_ACTIVE_CONNECTIONS) {
+            atomic_fetch_sub(&srv->active_connections, 1);
+            const char *busy =
+                "HTTP/1.1 503 Service Unavailable\r\n"
+                "Content-Type: text/plain\r\n"
+                "Connection: close\r\n"
+                "Content-Length: 17\r\n\r\nserver overloaded";
+            write(client_fd, busy, strlen(busy));
+            close(client_fd);
+            continue;
+        }
+
         conn_thread_data *data = malloc(sizeof(conn_thread_data));
-        if (!data) { close(client_fd); continue; }
+        if (!data) {
+            atomic_fetch_sub(&srv->active_connections, 1);
+            close(client_fd);
+            continue;
+        }
         data->client_fd = client_fd;
         data->srv = srv;
 
@@ -1751,6 +1802,7 @@ void rt_http_listen(long long server_id) {
         pthread_attr_init(&attr);
         pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
         if (pthread_create(&tid, &attr, handle_http_conn, data) != 0) {
+            atomic_fetch_sub(&srv->active_connections, 1);
             close(client_fd);
             free(data);
         }
@@ -1758,18 +1810,61 @@ void rt_http_listen(long long server_id) {
     }
 }
 
-const char* rt_respond(long long status, const char *body) {
+const char* rt_respond_typed(long long status, const char *content_type, const char *body) {
+    if (!content_type) content_type = "text/plain";
     if (!body) body = "";
     size_t blen = strlen(body);
-    /* "STATUS:BODY\0" */
+    size_t clen = strlen(content_type);
+    /* "STATUS<sep>CONTENT_TYPE<sep>BODY\0" */
     char digits[20];
     int dlen = snprintf(digits, sizeof(digits), "%lld", status);
-    char *result = turbo_alloc(dlen + 1 + blen + 1);
+    char *result = turbo_alloc(dlen + 1 + clen + 1 + blen + 1);
     memcpy(result, digits, dlen);
-    result[dlen] = ':';
-    memcpy(result + dlen + 1, body, blen);
-    result[dlen + 1 + blen] = '\0';
+    result[dlen] = RT_RESPONSE_SEP;
+    memcpy(result + dlen + 1, content_type, clen);
+    result[dlen + 1 + clen] = RT_RESPONSE_SEP;
+    memcpy(result + dlen + 1 + clen + 1, body, blen);
+    result[dlen + 1 + clen + 1 + blen] = '\0';
     return result;
+}
+
+const char* rt_respond(long long status, const char *body) {
+    return rt_respond_typed(status, "text/plain", body);
+}
+
+static int rt_parse_response(
+    const char *resp,
+    int *status_out,
+    char *content_type_out,
+    size_t content_type_out_len,
+    const char **body_out
+) {
+    const char *sep1 = strchr(resp, RT_RESPONSE_SEP);
+    if (sep1) {
+        const char *sep2 = strchr(sep1 + 1, RT_RESPONSE_SEP);
+        if (sep2) {
+            char status_buf[32];
+            size_t slen = (size_t)(sep1 - resp);
+            if (slen >= sizeof(status_buf)) slen = sizeof(status_buf) - 1;
+            memcpy(status_buf, resp, slen);
+            status_buf[slen] = '\0';
+            *status_out = atoi(status_buf);
+            size_t clen = (size_t)(sep2 - (sep1 + 1));
+            if (clen >= content_type_out_len) clen = content_type_out_len - 1;
+            memcpy(content_type_out, sep1 + 1, clen);
+            content_type_out[clen] = '\0';
+            *body_out = sep2 + 1;
+            return 1;
+        }
+    }
+
+    const char *colon = strchr(resp, ':');
+    if (!colon) return 0;
+    *status_out = atoi(resp);
+    strncpy(content_type_out, "text/plain", content_type_out_len);
+    content_type_out[content_type_out_len - 1] = '\0';
+    *body_out = colon + 1;
+    return 1;
 }
 
 /* ── Request field extraction (structured request: METHOD\x01PATH\x01QUERY\x01HEADERS\x01BODY) */

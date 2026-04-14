@@ -551,7 +551,7 @@ pub(crate) fn compile_stdlib_write_file<M: Module>(
     Ok(None)
 }
 
-/// exec(cmd) -> str
+/// shell_exec(cmd) -> str
 pub(crate) fn compile_stdlib_exec<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
@@ -764,18 +764,46 @@ pub(crate) fn compile_builtin_http_listen<M: Module>(
     Ok(None)
 }
 
-/// respond(status, body) -> str — builds "STATUS:BODY" format response
-pub(crate) fn compile_builtin_respond<M: Module>(
+fn compile_builtin_respond_with_type<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
+    content_type: &str,
 ) -> Result<MaybeTyped, CodegenError> {
     let (status_val, _) = compile_expr(cx, &args[0])?.unwrap();
     let (body_val, _) = compile_expr(cx, &args[1])?.unwrap();
-    let fid = cx.rt_fns["rt_respond"];
+    let content_type_val = cx.create_string(content_type)?;
+    let fid = cx.rt_fns["rt_respond_typed"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-    let call = cx.builder.ins().call(fref, &[status_val, body_val]);
+    let call = cx
+        .builder
+        .ins()
+        .call(fref, &[status_val, content_type_val, body_val]);
     let result = cx.builder.inst_results(call)[0];
     Ok(Some((result, TurboTy::Str)))
+}
+
+/// respond(status, body) -> str — builds a text/plain response
+pub(crate) fn compile_builtin_respond_text<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    compile_builtin_respond_with_type(cx, args, "text/plain")
+}
+
+/// respond_html(status, body) -> str — builds a text/html response
+pub(crate) fn compile_builtin_respond_html<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    compile_builtin_respond_with_type(cx, args, "text/html")
+}
+
+/// respond_json(status, body) -> str — builds an application/json response
+pub(crate) fn compile_builtin_respond_json<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    compile_builtin_respond_with_type(cx, args, "application/json")
 }
 
 /// request_body(req) -> str — extracts body from request (identity for now)

@@ -96,7 +96,7 @@ fn main() {
             version: "1.0.0",
             language: "Turbo",
         }
-        respond(200, to_json(info))
+        respond_json(200, to_json(info))
     })
 
     // Fibonacci benchmark: compute fib(35)
@@ -104,7 +104,7 @@ fn main() {
         let n = 35
         let result = fib(n)
         let res = FibResult { n: n, result: result }
-        respond(200, to_json(res))
+        respond_json(200, to_json(res))
     })
 
     // Prime sieve: count primes under 10,000
@@ -112,7 +112,7 @@ fn main() {
         let limit = 10000
         let count = count_primes(limit)
         let res = PrimeResult { limit: limit, count: count }
-        respond(200, to_json(res))
+        respond_json(200, to_json(res))
     })
 
     // Sort benchmark: bubble-sort 50 numbers in reverse order
@@ -135,13 +135,13 @@ fn main() {
             + to_str(sorted[8]) + ", "
             + to_str(sorted[9])
             + "]\}"
-        respond(200, body)
+        respond_json(200, body)
     })
 
     // Health check
     route(app, "GET", "/api/health", |req: str| -> str {
         let h = HealthStatus { status: "ok", uptime: "running" }
-        respond(200, to_json(h))
+        respond_json(200, to_json(h))
     })
 
     print("Server ready. Press Ctrl+C to stop.")
