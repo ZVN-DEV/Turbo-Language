@@ -5,6 +5,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-04-14
+
 ### Added
 - LLVM backend now supports struct destructuring in `let` patterns, `if let` binding, and optional chaining (`x?.y`). Previously these emitted a "not yet implemented" error. The LLVM CI job is now a hard-required check.
 - Added COMPATIBILITY.md documenting the 1.0 stability contract and what remains fluid in 0.7.x and 0.8.x.
