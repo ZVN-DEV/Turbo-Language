@@ -12,6 +12,29 @@ pub(crate) fn compile_expr<M: Module>(
     cx: &mut Ctx<'_, M>,
     expr: &Spanned<Expr>,
 ) -> Result<MaybeTyped, CodegenError> {
+    // Reject pathologically deep ASTs before they overflow the native stack.
+    // Matches the parser's `MAX_PARSER_DEPTH` so anything the parser accepts
+    // is either lowered successfully or rejected here with a diagnostic.
+    cx.expr_depth += 1;
+    if cx.expr_depth > crate::MAX_CODEGEN_DEPTH {
+        cx.expr_depth -= 1;
+        return Err(CodegenError {
+            code: ErrorCode::E0516,
+            message: format!(
+                "expression nesting exceeds {} levels (compiler recursion limit)",
+                crate::MAX_CODEGEN_DEPTH
+            ),
+        });
+    }
+    let result = compile_expr_inner(cx, expr);
+    cx.expr_depth -= 1;
+    result
+}
+
+fn compile_expr_inner<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    expr: &Spanned<Expr>,
+) -> Result<MaybeTyped, CodegenError> {
     match &expr.node {
         Expr::IntLit(n) => {
             let val = cx.builder.ins().iconst(types::I64, *n);

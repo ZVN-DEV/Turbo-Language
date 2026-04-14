@@ -3,6 +3,11 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Security
+- Parser and codegen now enforce a 256-level recursion depth limit (E0516), so adversarial deeply-nested input errors out with a diagnostic instead of overflowing the compiler's stack.
+
 ## [0.7.6] - 2026-04-13
 
 Trust and release hardening follow-up. This release replaces implicit HTTP response typing with explicit helpers, makes shell execution more explicit, adds server runtime guardrails, promotes the web dashboard as the flagship runnable demo, and hardens the release/install path.

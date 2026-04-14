@@ -32,9 +32,16 @@ use turbo_lexer::{Spanned as LexSpanned, Token};
 mod cow_rewrite;
 
 /// Maximum nesting depth for recursive constructs (blocks, if, while, for,
-/// match, closures, parenthesised expressions, etc.). Exceeding this limit
-/// produces a parse error instead of a stack overflow.
-const MAX_NESTING_DEPTH: usize = 256;
+/// match, closures, parenthesised expressions, expression descent, etc.).
+/// Exceeding this limit produces a parse error (E0516) instead of a stack
+/// overflow. Exposed as `pub` so tests and downstream tooling can assert
+/// the exact limit.
+pub const MAX_PARSER_DEPTH: usize = 256;
+
+/// Backwards-compatible alias for [`MAX_PARSER_DEPTH`].
+#[deprecated(note = "use MAX_PARSER_DEPTH")]
+#[allow(dead_code)]
+const MAX_NESTING_DEPTH: usize = MAX_PARSER_DEPTH;
 
 /// A parse error with location info
 #[derive(Debug, Clone)]
@@ -75,13 +82,25 @@ impl Parser {
     }
 
     /// Increment the nesting depth, returning an error if the limit is exceeded.
+    ///
+    /// The recursion limit is shared across every recursive parser entry
+    /// point — parenthesised expressions, blocks, `if`/`while`/`for`/`match`,
+    /// closures, unary chains, and the main expression descent. The
+    /// matching `exit_nesting()` MUST be called on every success path;
+    /// early returns should happen before `enter_nesting()` or funnel
+    /// through an explicit decrement so the counter never drifts.
     fn enter_nesting(&mut self) -> Result<(), ParseError> {
         self.depth += 1;
-        if self.depth > MAX_NESTING_DEPTH {
+        if self.depth > MAX_PARSER_DEPTH {
             let span = self.peek_span();
+            // Pre-decrement: the caller will unwind via `?` and never
+            // reach its matching `exit_nesting`, so keep the counter balanced.
+            self.depth = self.depth.saturating_sub(1);
             return Err(ParseError {
-                code: ErrorCode::E0003,
-                message: format!("maximum nesting depth ({MAX_NESTING_DEPTH}) exceeded"),
+                code: ErrorCode::E0516,
+                message: format!(
+                    "expression nesting exceeds {MAX_PARSER_DEPTH} levels (compiler recursion limit)"
+                ),
                 span,
             });
         }
@@ -1041,6 +1060,17 @@ impl Parser {
     // === Expression parsing (Pratt precedence) ===
 
     fn parse_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        // Guard the main expression descent so deeply-nested right-recursive
+        // input (chained assignments, range/pipe/null-coalesce rhs) can't
+        // overflow the compiler's stack before a more specific construct
+        // (parens, blocks, if/match) bumps the depth itself.
+        self.enter_nesting()?;
+        let result = self.parse_expr_inner();
+        self.exit_nesting();
+        result
+    }
+
+    fn parse_expr_inner(&mut self) -> Result<Spanned<Expr>, ParseError> {
         let lhs = self.parse_unary()?;
 
         // Check for assignment
@@ -1250,10 +1280,16 @@ impl Parser {
     fn parse_unary(&mut self) -> Result<Spanned<Expr>, ParseError> {
         let start = self.peek_span().start;
 
+        // Chained prefix operators (`!!!!x`, `-----x`, `await await ...`,
+        // `spawn spawn ...`) recurse directly into `parse_unary` without
+        // funnelling through any other guarded entry point, so guard the
+        // recursive branches here.
         if matches!(self.peek(), Some(Token::Minus)) {
+            self.enter_nesting()?;
             self.advance();
             let expr = self.parse_unary()?;
             let end = expr.span.end;
+            self.exit_nesting();
             return Ok(Spanned::new(
                 Expr::UnaryOp {
                     op: UnaryOp::Neg,
@@ -1264,9 +1300,11 @@ impl Parser {
         }
 
         if matches!(self.peek(), Some(Token::Bang)) {
+            self.enter_nesting()?;
             self.advance();
             let expr = self.parse_unary()?;
             let end = expr.span.end;
+            self.exit_nesting();
             return Ok(Spanned::new(
                 Expr::UnaryOp {
                     op: UnaryOp::Not,
@@ -1277,16 +1315,20 @@ impl Parser {
         }
 
         if matches!(self.peek(), Some(Token::Await)) {
+            self.enter_nesting()?;
             self.advance();
             let expr = self.parse_unary()?;
             let end = expr.span.end;
+            self.exit_nesting();
             return Ok(Spanned::new(Expr::Await(Box::new(expr)), start..end));
         }
 
         if matches!(self.peek(), Some(Token::Spawn)) {
+            self.enter_nesting()?;
             self.advance();
             let expr = self.parse_unary()?;
             let end = expr.span.end;
+            self.exit_nesting();
             return Ok(Spanned::new(Expr::Spawn(Box::new(expr)), start..end));
         }
 
@@ -2937,8 +2979,58 @@ mod tests {
                     "deeply nested input should produce a parse error"
                 );
                 assert!(
-                    parse_errors[0].message.contains("nesting depth"),
-                    "error should mention nesting depth, got: {}",
+                    parse_errors[0].message.contains("nesting")
+                        || parse_errors[0].message.contains("recursion"),
+                    "error should mention nesting/recursion, got: {}",
+                    parse_errors[0].message
+                );
+                assert_eq!(
+                    parse_errors[0].code,
+                    ErrorCode::E0516,
+                    "depth-limit error should use E0516"
+                );
+            })
+            .expect("failed to spawn test thread");
+        handler.join().expect("test thread panicked");
+    }
+
+    #[test]
+    fn test_max_parser_depth_constant_is_256() {
+        // The limit is load-bearing for the public docs and the E0516
+        // message; assert it here so an accidental change trips a test.
+        assert_eq!(crate::MAX_PARSER_DEPTH, 256);
+    }
+
+    #[test]
+    fn test_300_nested_parens_errors_with_e0516() {
+        // 300+ parens must produce E0516 — not a stack overflow, not a
+        // different parse error.
+        let handler = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(|| {
+                let depth = 400;
+                let mut source = String::from("fn main() { let x = ");
+                for _ in 0..depth {
+                    source.push('(');
+                }
+                source.push('1');
+                for _ in 0..depth {
+                    source.push(')');
+                }
+                source.push_str(" print(x) }");
+                let (tokens, _) = tokenize(&source);
+                let (_module, parse_errors) = parse(tokens);
+                assert!(!parse_errors.is_empty());
+                assert_eq!(
+                    parse_errors[0].code,
+                    ErrorCode::E0516,
+                    "expected E0516 for 400-deep parens, got {:?}: {}",
+                    parse_errors[0].code,
+                    parse_errors[0].message,
+                );
+                assert!(
+                    parse_errors[0].message.contains("256"),
+                    "error should mention the limit value, got: {}",
                     parse_errors[0].message
                 );
             })
