@@ -2,12 +2,11 @@
 
 ## Supported Versions
 
-| Version | Status         |
-|---------|----------------|
-| 0.5.x   | Current — supported with security fixes |
-| 0.4.x   | End of life    |
-| 0.3.x   | End of life    |
-| < 0.3   | Not supported  |
+| Version | Status |
+|---------|--------|
+| 0.7.x   | Current — supported with security fixes |
+| 0.6.x   | Security fixes only while 0.7.x is the current series |
+| < 0.6   | Not supported |
 
 ## Reporting a Vulnerability
 
@@ -70,34 +69,30 @@ fixing them is tracked in `CHANGELOG.md` and `TODO.md`:
   capability/sandbox model. Treat compiled `.tb` programs the same way
   you would any compiled C program.
 
-## Release Signing Key
+## Release Signing and Verification
 
 Every release tarball is published alongside a `checksums.txt` file
-listing SHA-256 hashes for each platform artifact. Starting with the
-v0.6 series, `checksums.txt` is also accompanied by a detached GPG
-signature (`checksums.txt.sig`) produced by the official Turbo release
-key.
+listing SHA-256 hashes for each platform artifact. Stable releases also
+ship a detached GPG signature for that manifest (`checksums.txt.sig`).
+The manifest is signed by the official Turbo release key, published at:
 
-**Public key (primary):** `https://turbolang.dev/keys/release.asc`
+- **Release key URL:** `https://turbolang.dev/keys/release.asc`
 
-**Public key (fallback):** the same key is published as a `release.asc`
-asset on every GitHub release starting with v0.7. If `turbolang.dev` is
-unreachable (or you simply prefer to fetch the key from the same
-distribution channel as the tarball), download the asset directly from
-the release page and import it the same way. The release workflow will
-be updated to upload this asset as part of the v0.7 cut — see
-[`#release-key-fallback` tracker]
-(https://github.com/ZVN-DEV/Turbo-Language/issues?q=label%3Arelease-key-fallback).
+The release automation that builds, signs, and publishes those artifacts
+is pinned to immutable GitHub Action SHAs in:
 
-To verify a download:
+- `.github/workflows/ci.yml`
+- `.github/workflows/release.yml`
+- `.github/workflows/nightly.yml`
+
+This reduces supply-chain drift in CI itself: action upgrades are now
+explicit code changes instead of silent tag movement.
+
+To verify a download manually:
 
 ```bash
 # 1. Import the public release key (one-time setup).
-#    Primary:
 curl -sSL https://turbolang.dev/keys/release.asc | gpg --import
-#    Fallback (v0.7+):
-#    gh release download v0.7.0 --repo ZVN-DEV/Turbo-Language --pattern release.asc \
-#      && gpg --import release.asc
 
 # 2. Verify the manifest signature.
 gpg --verify checksums.txt.sig checksums.txt
@@ -116,28 +111,37 @@ The release private key lives only in GitHub Actions secrets
 key replaces the file at `https://turbolang.dev/keys/release.asc` and a
 release advisory is published to announce the rotation.
 
-### Trust gap: `install.sh` does not GPG-verify
+### `install.sh --verify`
 
-`distribution/install.sh` verifies the downloaded tarball against the
-`checksums.txt` file from the same release, but it **does not** verify
-that `checksums.txt` itself was signed by the release key. A
-sufficiently motivated attacker who can intercept the connection
-between you and GitHub could serve a modified tarball *and* a matching
-modified `checksums.txt` and the install script would be none the
-wiser.
+`distribution/install.sh --verify` now performs the same signed-manifest
+flow automatically:
 
-This is a known limitation of the convenience installer. If you want
-cryptographic guarantees that the binary you're running came from the
-official release pipeline, do not use `install.sh`. Instead:
+1. Download the requested tarball, `checksums.txt`, and `checksums.txt.sig`
+   from the GitHub release.
+2. Download the release public key from `https://turbolang.dev/keys/release.asc`
+   into a temporary GnuPG home.
+3. Verify that `checksums.txt.sig` matches `checksums.txt`.
+4. Verify that the tarball hash matches the signed manifest entry.
 
-1. Download the release artifact and `checksums.txt.sig` from the
-   GitHub release page directly.
-2. Run the `gpg --verify` flow above.
-3. Extract the verified tarball into your `$PATH` by hand.
+This is materially stronger than checksum-only verification because a
+modified tarball now also needs a forged manifest signature.
 
-We accept this trade-off because the install script is the lowest-
-friction onboarding path and most users do not have a GPG keyring set
-up. The honest documentation of the gap is the mitigation.
+### Remaining bootstrap trust assumption
+
+The convenience installer still has one unavoidable bootstrap
+assumption: on first use it trusts HTTPS/DNS for `turbolang.dev` when it
+retrieves the public release key. That is better than pulling the key
+from the same GitHub release channel as the tarball, but it is still a
+network trust dependency.
+
+If you want the strongest assurance available today:
+
+1. Import the release key yourself ahead of time from a channel you
+   trust.
+2. Run the manual `gpg --verify` flow above before extracting the
+   tarball.
+3. Prefer vendoring the release key in internal build/install systems
+   instead of fetching it at install time.
 
 ## Disclosure Policy
 

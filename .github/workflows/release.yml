@@ -33,10 +33,11 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Install LLVM 18 (macOS)
@@ -50,7 +51,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y llvm-18-dev libpolly-18-dev
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -103,7 +104,7 @@ jobs:
           tar czf turbolang-${{ github.ref_name }}-${{ matrix.target }}.tar.gz turbolang turbo-lsp
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: turbolang-${{ matrix.target }}
           path: turbo/target/${{ matrix.target }}/release/turbolang-*.tar.gz
@@ -115,7 +116,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
 
       - name: Generate checksums
         run: |
@@ -183,7 +184,7 @@ jobs:
           echo "Signed checksums.txt -> checksums.txt.sig"
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           files: |
             turbolang-aarch64-apple-darwin/*.tar.gz

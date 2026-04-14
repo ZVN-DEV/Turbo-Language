@@ -20,10 +20,11 @@ jobs:
     name: Gauntlet (ubuntu-latest)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
       - name: cargo fmt --check
@@ -51,7 +52,7 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --no-deps --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
 
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@9545a0634ccdca487a09cde61d362f0bc5fb5df9 # v2.61.4
         with:
           tool: cargo-audit@0.22.1
 
@@ -98,7 +99,7 @@ jobs:
       # same cache layer as PR builds. Keeping the key and restore-keys in
       # lockstep means a cold LLVM 18 build is rare — otherwise this would
       # add ~10 minutes to every nightly run.
-      - uses: actions/cache@v4
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: |
             ~/.cargo/registry
@@ -134,9 +135,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
 
       - name: Build release binary
         run: cargo build --release --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
@@ -151,9 +154,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
 
       - name: Build release
         run: cargo build --release --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml

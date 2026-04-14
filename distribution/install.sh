@@ -3,7 +3,7 @@
 # Usage: curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh | bash
 # Specific version: VERSION=0.2.0 curl -fsSL ... | bash
 # Or: curl -fsSL ... | bash -s -- --version 0.2.0
-# With GPG verification: curl -fsSL ... | bash -s -- --verify
+# With signed-manifest verification: curl -fsSL ... | bash -s -- --verify
 
 set -euo pipefail
 
@@ -69,6 +69,8 @@ TARBALL="turbolang-v${VERSION}-${TARGET}.tar.gz"
 BASE_URL="https://github.com/ZVN-DEV/Turbo-Language/releases/download/v${VERSION}"
 URL="${BASE_URL}/${TARBALL}"
 CHECKSUMS_URL="${BASE_URL}/checksums.txt"
+CHECKSUM_SIG_URL="${BASE_URL}/checksums.txt.sig"
+KEY_URL="${TURBO_RELEASE_KEY_URL:-https://turbolang.dev/keys/release.asc}"
 
 # Download and extract
 TMPDIR=$(mktemp -d)
@@ -106,32 +108,46 @@ else
 fi
 cd - > /dev/null
 
-# GPG verification (optional — requires gpg and the signing key)
+# Signed-manifest verification (optional — requires gpg and the official
+# release key published at turbolang.dev). This verifies that checksums.txt
+# was signed by the Turbo release key, then the tarball is checked against
+# that signed manifest.
 if [ "${VERIFY_GPG:-false}" = "true" ]; then
-    SIG_URL="${BASE_URL}/${TARBALL}.sig"
-    echo "Downloading GPG signature..."
-    curl -fsSL "${SIG_URL}" -o "${TMPDIR}/${TARBALL}.sig" || {
-        echo "warning: GPG signature not available for this release (signatures available from v0.6+)" >&2
-        echo "Continuing without GPG verification." >&2
+    if ! command -v gpg &> /dev/null; then
+        echo "error: --verify requires gpg to be installed" >&2
+        exit 1
+    fi
+
+    echo "Downloading signed checksum manifest..."
+    curl -fsSL "${CHECKSUM_SIG_URL}" -o "${TMPDIR}/checksums.txt.sig" || {
+        echo "error: signed checksum manifest not available at ${CHECKSUM_SIG_URL}" >&2
+        echo "Releases before the signed-manifest flow cannot be verified with --verify." >&2
+        exit 1
     }
 
-    if [ -f "${TMPDIR}/${TARBALL}.sig" ]; then
-        if command -v gpg &> /dev/null; then
-            # Import the Turbo signing key if not already present
-            KEY_URL="https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/signing-key.asc"
-            curl -fsSL "${KEY_URL}" | gpg --import 2>/dev/null || true
+    echo "Importing Turbo release key from ${KEY_URL}..."
+    curl -fsSL "${KEY_URL}" -o "${TMPDIR}/release.asc" || {
+        echo "error: failed to download the Turbo release key from ${KEY_URL}" >&2
+        echo "For manual verification instructions, see SECURITY.md." >&2
+        exit 1
+    }
 
-            echo "Verifying GPG signature..."
-            if gpg --verify "${TMPDIR}/${TARBALL}.sig" "${TMPDIR}/${TARBALL}" 2>/dev/null; then
-                echo "GPG signature verified successfully."
-            else
-                echo "error: GPG signature verification failed — the download may have been tampered with" >&2
-                exit 1
-            fi
-        else
-            echo "error: --verify requires gpg to be installed" >&2
-            exit 1
-        fi
+    export GNUPGHOME="$(mktemp -d "${TMPDIR}/gnupg.XXXXXX")"
+    chmod 700 "${GNUPGHOME}"
+
+    gpg --batch --import "${TMPDIR}/release.asc" >/dev/null 2>&1 || {
+        echo "error: failed to import the Turbo release key" >&2
+        exit 1
+    }
+
+    echo "Verifying signed checksum manifest..."
+    if gpg --batch --verify "${TMPDIR}/checksums.txt.sig" "${TMPDIR}/checksums.txt"; then
+        echo "Signed manifest verified successfully."
+        echo "Note: --verify bootstraps trust from the HTTPS-served key at ${KEY_URL}."
+        echo "For the strongest assurance, import that key yourself before running the installer."
+    else
+        echo "error: signed checksum verification failed — refusing to install" >&2
+        exit 1
     fi
 fi
 
