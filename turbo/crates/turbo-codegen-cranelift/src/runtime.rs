@@ -1104,8 +1104,7 @@ struct ActiveConnectionGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
 impl Drop for ActiveConnectionGuard {
     fn drop(&mut self) {
-        self.0
-            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
 
@@ -1119,8 +1118,12 @@ fn parse_rt_response(resp: &str) -> Option<(u16, &str, &str)> {
         }
     }
 
-    resp.split_once(':')
-        .and_then(|(status, body)| status.parse::<u16>().ok().map(|code| (code, "text/plain", body)))
+    resp.split_once(':').and_then(|(status, body)| {
+        status
+            .parse::<u16>()
+            .ok()
+            .map(|code| (code, "text/plain", body))
+    })
 }
 
 /// Handle a single HTTP connection with keep-alive support.
@@ -1294,8 +1297,8 @@ fn handle_http_connection(
 /// Start the HTTP server. Spawns a thread per connection with keep-alive.
 pub(crate) extern "C" fn rt_http_listen(server_id: i64) {
     use std::net::TcpListener;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     let (host, port, routes) = {
         let servers = HTTP_SERVERS.lock().unwrap();
@@ -1351,7 +1354,8 @@ pub(crate) extern "C" fn rt_respond_typed(
     let body_str = unsafe { std::ffi::CStr::from_ptr(body as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    let response = format!("{status}{RT_RESPONSE_SEP}{content_type_str}{RT_RESPONSE_SEP}{body_str}");
+    let response =
+        format!("{status}{RT_RESPONSE_SEP}{content_type_str}{RT_RESPONSE_SEP}{body_str}");
     let fallback = format!("200{0}text/plain{0}", RT_RESPONSE_SEP);
     let cs = std::ffi::CString::new(response)
         .unwrap_or_else(|_| std::ffi::CString::new(fallback).unwrap());

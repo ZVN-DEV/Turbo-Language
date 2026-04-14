@@ -781,7 +781,7 @@ impl Checker {
                                 format!(
                                     "`{name}()` can only be called inside an `@unsafe` function"
                                 )
-                                    .to_string(),
+                                .to_string(),
                                 callee.span.clone(),
                             );
                         }
