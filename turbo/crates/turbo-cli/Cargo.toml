@@ -22,6 +22,8 @@ notify = { workspace = true }
 notify-debouncer-mini = { workspace = true }
 ctrlc = { workspace = true }
 libc = { workspace = true }
+getrandom = "0.2"
+tempfile = "3"
 
 [features]
 default = []

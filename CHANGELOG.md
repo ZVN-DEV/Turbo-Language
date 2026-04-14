@@ -3,6 +3,14 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Security
+- Playground: token generation now uses 128 bits of OS randomness via `getrandom` instead of PID+timestamp, closing a localhost CSRF foot-gun.
+- Playground: source files are written via `tempfile::NamedTempFile` (exclusive-create with a random suffix), closing a TOCTOU race on the previously predictable temp filename.
+
+---
+
 ## [0.7.6] - 2026-04-13
 
 Trust and release hardening follow-up. This release replaces implicit HTTP response typing with explicit helpers, makes shell execution more explicit, adds server runtime guardrails, promotes the web dashboard as the flagship runnable demo, and hardens the release/install path.

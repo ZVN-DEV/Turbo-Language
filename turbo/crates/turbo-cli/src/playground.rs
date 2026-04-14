@@ -1,7 +1,9 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+use tempfile::Builder;
 
 const HTML: &str = include_str!("playground.html");
 const BENCHMARKS_HTML: &str = include_str!("benchmarks.html");
@@ -75,7 +77,10 @@ pub fn serve(port: u16) {
                 origin.as_deref(),
                 Some(o) if o == origin_localhost || o == origin_loopback
             );
-            let token_ok = supplied_token.as_deref() == Some(token.as_str());
+            let token_ok = supplied_token
+                .as_deref()
+                .map(|s| constant_time_eq(s.as_bytes(), token.as_bytes()))
+                .unwrap_or(false);
             if !origin_ok || !token_ok {
                 let response = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 9\r\nX-Frame-Options: DENY\r\nX-Content-Type-Options: nosniff\r\n\r\nForbidden";
                 let _ = stream.write_all(response.as_bytes());
@@ -111,29 +116,46 @@ pub fn serve(port: u16) {
 }
 
 fn run_code(source: &str) -> (String, String, bool) {
-    // Write source to temp file
-    let tmp = std::env::temp_dir().join(format!(
-        "playground-{}-{}.tb",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    if std::fs::write(&tmp, source).is_err() {
+    // Write source to a tempfile opened with O_EXCL|O_CREAT plus a random
+    // suffix. This closes the TOCTOU race that existed when the path was
+    // predictable (playground-{pid}-{ts}.tb): an attacker on the same host
+    // could have pre-created a symlink at the predicted path.
+    let mut tmp = match Builder::new()
+        .prefix("turbo-playground-")
+        .suffix(".tb")
+        .tempfile()
+    {
+        Ok(f) => f,
+        Err(e) => {
+            return (
+                String::new(),
+                format!("error: could not create temp file: {e}"),
+                false,
+            );
+        }
+    };
+    if let Err(e) = tmp.write_all(source.as_bytes()) {
         return (
             String::new(),
-            "error: could not write temp file".to_string(),
+            format!("error: could not write temp file: {e}"),
             false,
         );
     }
+    if let Err(e) = tmp.as_file_mut().sync_all() {
+        return (
+            String::new(),
+            format!("error: could not flush temp file: {e}"),
+            false,
+        );
+    }
+    let tmp_path = tmp.path().to_path_buf();
 
     // Find our own binary
     let exe = std::env::current_exe().unwrap_or_else(|_| "turbolang".into());
 
     let mut child = match Command::new(&exe)
         .arg("run")
-        .arg(&tmp)
+        .arg(&tmp_path)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -153,7 +175,8 @@ fn run_code(source: &str) -> (String, String, bool) {
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(25)),
             Err(e) => {
-                let _ = std::fs::remove_file(&tmp);
+                // `tmp` is dropped at the end of the function and
+                // auto-deletes the file — no explicit cleanup needed.
                 return (String::new(), format!("error: {e}"), false);
             }
         }
@@ -161,14 +184,12 @@ fn run_code(source: &str) -> (String, String, bool) {
 
     let result = child.wait_with_output();
 
-    let _ = std::fs::remove_file(&tmp);
-
     match result {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             // Replace temp filename in error messages with a friendlier name
-            let stderr = stderr.replace(&tmp.display().to_string(), "playground");
+            let stderr = stderr.replace(&tmp_path.display().to_string(), "playground");
             let stderr = stderr.replace("playground.tb", "playground");
             let stderr = if timed_out {
                 if stderr.is_empty() {
@@ -180,6 +201,8 @@ fn run_code(source: &str) -> (String, String, bool) {
                 stderr
             };
             let ok = output.status.success() && !timed_out;
+            // Drop `tmp` here; NamedTempFile removes the file on drop.
+            drop(tmp);
             (stdout, stderr, ok)
         }
         Err(e) => (String::new(), format!("error: {e}"), false),
@@ -201,11 +224,31 @@ fn header_value(request: &str, header_name: &str) -> Option<String> {
 }
 
 fn generate_playground_token() -> String {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("turbo-{}-{ts:x}", std::process::id())
+    // 128 bits of OS randomness. Previous PID+timestamp tokens were
+    // predictable to a local attacker, enabling CSRF-style attacks against
+    // the playground's /api/run endpoint.
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).expect("OS RNG failure");
+    let mut hex = String::with_capacity(32);
+    for b in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{b:02x}");
+    }
+    format!("turbo-{hex}")
+}
+
+/// Constant-time byte-slice equality. Length mismatch short-circuits (a
+/// length difference is not a secret), but same-length comparisons run in
+/// time that depends only on the length of the inputs.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// Manual JSON serialization (no external dependency needed)
@@ -236,4 +279,86 @@ fn json_string(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    use std::thread;
+
+    #[test]
+    fn playground_token_is_random_and_well_formed() {
+        let mut seen = HashSet::new();
+        for _ in 0..100 {
+            let tok = generate_playground_token();
+            // Format: "turbo-" + 32 lowercase hex chars.
+            assert!(tok.starts_with("turbo-"), "unexpected prefix: {tok}");
+            let hex = &tok["turbo-".len()..];
+            assert_eq!(hex.len(), 32, "hex length mismatch in {tok}");
+            assert!(
+                hex.chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
+                "non-hex characters in {tok}"
+            );
+            assert!(seen.insert(tok), "duplicate token generated");
+        }
+    }
+
+    #[test]
+    fn constant_time_eq_matches_expected() {
+        assert!(constant_time_eq(b"", b""));
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(!constant_time_eq(b"abcd", b"abc"));
+    }
+
+    #[test]
+    fn forged_token_off_by_one_is_rejected() {
+        // Simulate the check performed in the /api/run handler.
+        let real = generate_playground_token();
+        // Flip the last hex character.
+        let mut bytes: Vec<u8> = real.as_bytes().to_vec();
+        let last = bytes.last_mut().expect("non-empty token");
+        *last = if *last == b'0' { b'1' } else { b'0' };
+        let forged = String::from_utf8(bytes).unwrap();
+        assert_ne!(forged, real);
+        assert!(!constant_time_eq(forged.as_bytes(), real.as_bytes()));
+    }
+
+    #[test]
+    fn concurrent_source_file_creation_does_not_collide() {
+        // We can't invoke `run_code` in a unit test (it would shell out to
+        // `turbolang run`), but the collision risk lives in the tempfile
+        // creation — exercise that directly in the same way `run_code`
+        // does, from many threads.
+        let mut handles = Vec::new();
+        let seen: Arc<std::sync::Mutex<HashSet<std::path::PathBuf>>> =
+            Arc::new(std::sync::Mutex::new(HashSet::new()));
+        for i in 0..10 {
+            let seen = Arc::clone(&seen);
+            handles.push(thread::spawn(move || {
+                let mut tmp = Builder::new()
+                    .prefix("turbo-playground-")
+                    .suffix(".tb")
+                    .tempfile()
+                    .expect("tempfile creation failed");
+                let body = format!("fn main() {{ print({i}) }}\n");
+                tmp.write_all(body.as_bytes())
+                    .expect("write to tempfile failed");
+                let path = tmp.path().to_path_buf();
+                let mut guard = seen.lock().unwrap();
+                assert!(
+                    guard.insert(path.clone()),
+                    "tempfile path collided: {path:?}"
+                );
+            }));
+        }
+        for h in handles {
+            h.join().expect("worker thread panicked");
+        }
+        assert_eq!(seen.lock().unwrap().len(), 10);
+    }
 }
