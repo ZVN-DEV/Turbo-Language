@@ -5,8 +5,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Security
+- Playground: token generation now uses 128 bits of OS randomness via `getrandom` instead of PID+timestamp, closing a localhost CSRF foot-gun.
+- Playground: source files are written via `tempfile::NamedTempFile` (exclusive-create with a random suffix), closing a TOCTOU race on the previously predictable temp filename.
+
 ### Fixed
 - LSP: malformed `textDocument/rename`, `codeAction`, and `hover` requests now return proper JSON-RPC error responses instead of crashing the server.
+
+---
 
 ## [0.7.6] - 2026-04-13
 
