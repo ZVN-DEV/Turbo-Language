@@ -368,7 +368,7 @@ resulting commit in `turbo.lock`.
 
 ## Error Codes
 
-Every compiler diagnostic has a unique, searchable error code (E0001--E0521). Look up any code from the command line:
+Every compiler diagnostic has a unique, searchable error code. Look up any code from the command line:
 
 ```bash
 turbolang explain E0100

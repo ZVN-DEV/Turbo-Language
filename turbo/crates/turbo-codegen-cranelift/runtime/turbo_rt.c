@@ -364,9 +364,12 @@ long long rt_array_get(const void *arr, long long index) {
 }
 
 void* rt_array_set(void *arr, long long index, long long value) {
-    /* COW: check refcount before mutating */
+    /* COW: check refcount before mutating.
+     * Acquire load matches __sync_fetch_and_{add,sub} on the same word
+     * used elsewhere in the ARC surface — keeps the ordering story
+     * consistent if an `async` spawn ever shares an array. */
     long long *rc_ptr = rt_rc_refcount_ptr(arr);
-    long long rc = *rc_ptr;
+    long long rc = __atomic_load_n(rc_ptr, __ATOMIC_ACQUIRE);
     void *target;
     if (rc > 1) {
         /* Copy-on-write: make a private copy */
@@ -418,10 +421,11 @@ void* rt_array_push(void *arr, long long value) {
      * (refcount == 1) and the existing allocation has room, write in
      * place. Otherwise double the capacity (minimum 4) and reallocate.
      *
-     * Reading refcount with a plain load is safe: any other thread that
-     * holds a reference would have bumped it via rt_retain before we
-     * got here, so rc == 1 means no one else can be observing. */
-    if (cap > old_len && *rc_ptr == 1) {
+     * Acquire load pairs with the release-style ordering implied by
+     * __sync_fetch_and_{add,sub} elsewhere in the ARC surface. rc == 1
+     * means no concurrent holder exists, so the subsequent write is
+     * safe. */
+    if (cap > old_len && __atomic_load_n(rc_ptr, __ATOMIC_ACQUIRE) == 1) {
         ((long long *)arr)[1 + old_len] = value;
         *(long long *)arr = new_len;
         return arr;

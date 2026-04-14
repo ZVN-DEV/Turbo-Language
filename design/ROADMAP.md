@@ -2,6 +2,8 @@
 
 Turbo grows from a focused core into a universal language through **progressive disclosure**: every new capability is opt-in and does not complicate the base language. A developer who never needs GPU compute will never see GPU syntax. A developer who never targets mobile will never encounter mobile tooling. The language you learn on day one remains clean and simple no matter how many capabilities are added later.
 
+> **Status note (2026-04-14).** The v1.2+ sections below predate the 2026-04-09 "sidecar, not syntax" decision (see VISION.md and [`design/agents-sidecar.md`](agents-sidecar.md) equivalents). Where those sections show keyword-shaped features (`@gpu fn`, `turbo/ui` DSL, actor-spanning-machines syntax), treat the shape as illustrative only. The actual v1.x deliverables in these domains will be sidecar libraries built on v1.0's stable core primitives -- the same way `turbo-agent` replaced the retired `agent` / `tool fn` keywords. The core language contract in [COMPATIBILITY.md](../COMPATIBILITY.md) is the binding artifact; these sketches are not.
+
 ---
 
 ## v1.0 -- Core (Current Design)

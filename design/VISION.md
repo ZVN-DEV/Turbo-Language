@@ -210,9 +210,11 @@ Turbo ships as a focused core and grows through progressive disclosure -- every 
 |---------|-----------|-------------|
 | **v1.0** | Core | Syntax, types, CTRC memory, async, full toolchain, LLVM + WASM |
 | **v1.1** | Script Mode | `turbolang run file.tb` with zero config, shebang, REPL, full inference |
-| **v1.2** | GPU & Compute | `@gpu` kernels, `turbo/tensor`, SIMD, ML inference, Python interop |
-| **v1.3** | Mobile | iOS + Android targets, `turbo/ui` cross-platform framework, platform SDKs |
-| **v1.4** | Distributed | `turbo/cluster` for distributed actors, service mesh, consensus primitives |
+| **v1.2+** | GPU & Compute | SIMD intrinsics and ML/GPU kernels delivered as sidecar libraries on top of stable core primitives, not new compiler keywords |
+| **v1.3+** | Mobile | iOS + Android targets via LLVM. UI frameworks ship as libraries, not language built-ins |
+| **v1.4+** | Distributed | Distributed-actor and consensus crates built on v1.0's `actor` + `spawn`; no new syntax |
+
+> **Sidecar, not syntax.** The 2026-04-09 retirement of `agent` / `tool fn` taught us that domain features tied to fast-moving ecosystems (AI frameworks, GPU APIs, UI toolkits, cluster runtimes) belong in companion libraries whose cadence can diverge from the compiler's stability contract. The v1.2+ rows above are framework-shaped, not keyword-shaped.
 
 The principle: a "Hello, world!" in v1.0 looks identical in v1.4. Complexity is always opt-in.
 

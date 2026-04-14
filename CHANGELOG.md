@@ -20,6 +20,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 - Documentation: removed `agent`, `tool fn`, and "first AI-native language" claims from core-facing copy. Agentic features will ship in a separate `turbo-agent` sidecar library after the core language hits 1.0 stability, not inside the compiler.
 - Runtime: rt_array_push now doubles capacity on growth, giving amortized O(1) pushes instead of O(n) per call. The shared refcount allocation header grew from 8 bytes to 16 bytes to carry the capacity slot; callers continue to see the same data pointer offsets.
+- Runtime: COW refcount reads in rt_array_push and rt_array_set now use `__atomic_load_n(..., __ATOMIC_ACQUIRE)` to match the rest of the ARC surface (`__sync_fetch_and_{add,sub}` retain/release).
+- Docs: VISION.md and ROADMAP.md v1.2+ sketches now explicitly note that GPU, mobile-UI, and distributed-actor features will ship as sidecar libraries -- not compiler keywords -- per the 2026-04-09 "sidecar, not syntax" decision.
+- README: dropped the stale `E0001--E0521` range claim; error-code coverage is communicated without a (sparse, misleading) numeric range.
 - CI: fuzz-smoke now runs on every push (cap 60s/target) instead of nightly-only.
 - CI: new ASAN+UBSAN job rebuilds the C runtime tests with clang sanitizers.
 
