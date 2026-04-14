@@ -3,6 +3,11 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- LLVM backend now supports struct destructuring in `let` patterns, `if let` binding, and optional chaining (`x?.y`). Previously these emitted a "not yet implemented" error. The LLVM CI job is now a hard-required check.
+
 ## [0.7.6] - 2026-04-13
 
 Trust and release hardening follow-up. This release replaces implicit HTTP response typing with explicit helpers, makes shell execution more explicit, adds server runtime guardrails, promotes the web dashboard as the flagship runnable demo, and hardens the release/install path.

@@ -221,13 +221,12 @@ pub(crate) fn compile_expr<'a, 'ctx>(
             else_branch,
         } => compile_if(cx, condition, then_branch, else_branch.as_deref()),
 
-        Expr::IfLet { .. } => {
-            // TODO: if-let not yet implemented for LLVM backend
-            Err(CodegenError {
-                code: ErrorCode::E0400,
-                message: "if-let is not yet supported in the LLVM backend".to_string(),
-            })
-        }
+        Expr::IfLet {
+            pattern,
+            value,
+            then_branch,
+            else_branch,
+        } => compile_if_let(cx, pattern, value, then_branch, else_branch.as_deref()),
 
         Expr::Block { stmts, tail_expr } => {
             let saved_vars = cx.vars.clone();
@@ -731,14 +730,7 @@ pub(crate) fn compile_expr<'a, 'ctx>(
             Ok(Some((phi.as_basic_value(), default_tty)))
         }
 
-        Expr::OptionalChain { .. } => {
-            // TODO: implement optional chaining in LLVM backend
-            Err(CodegenError {
-                code: ErrorCode::E0400,
-                message: "optional chaining `?.` is not yet supported in the LLVM backend"
-                    .to_string(),
-            })
-        }
+        Expr::OptionalChain { object, field } => compile_optional_chain(cx, object, field),
 
         Expr::Closure { params, .. } => {
             // Look up the pre-extracted closure function by span start
@@ -2307,4 +2299,317 @@ pub(crate) fn coerce_arg<'a, 'ctx>(
     }
 
     val
+}
+
+// ── if-let ──────────────────────────────────────────────────────────
+//
+// Mirrors `compile_if_let` in the Cranelift backend
+// (turbo-codegen-cranelift/src/builtins.rs). We tag-check the scrutinee
+// against the pattern, branch into a bind-and-evaluate then-block, and
+// phi the two arms at a merge block. Only `some`/`none`/`ok`/`err` are
+// supported today — any richer pattern lands in the error arm below.
+fn compile_if_let<'a, 'ctx>(
+    cx: &mut Ctx<'a, 'ctx>,
+    pattern: &Spanned<Pattern>,
+    value: &Spanned<Expr>,
+    then_branch: &Spanned<Expr>,
+    else_branch: Option<&Spanned<Expr>>,
+) -> Result<MaybeTyped<'ctx>, CodegenError> {
+    let (val, val_tty) = compile_expr(cx, value)?.unwrap();
+
+    let i64_ty = cx.context.i64_type();
+
+    // Determine the tag check based on the pattern.
+    let matches_cond = match &pattern.node {
+        Pattern::Some(_) => {
+            let tag = cx
+                .rt_call("rt_option_tag", &[val.into()])
+                .unwrap()
+                .into_int_value();
+            let one = i64_ty.const_int(1, false);
+            cx.builder
+                .build_int_compare(IntPredicate::EQ, tag, one, "iflet_is_some")
+                .expect("build_int_compare failed")
+        }
+        Pattern::None => {
+            let tag = cx
+                .rt_call("rt_option_tag", &[val.into()])
+                .unwrap()
+                .into_int_value();
+            let zero = i64_ty.const_int(0, false);
+            cx.builder
+                .build_int_compare(IntPredicate::EQ, tag, zero, "iflet_is_none")
+                .expect("build_int_compare failed")
+        }
+        Pattern::Ok(_) => {
+            let tag = cx
+                .rt_call("rt_result_tag", &[val.into()])
+                .unwrap()
+                .into_int_value();
+            let zero = i64_ty.const_int(0, false);
+            cx.builder
+                .build_int_compare(IntPredicate::EQ, tag, zero, "iflet_is_ok")
+                .expect("build_int_compare failed")
+        }
+        Pattern::Err(_) => {
+            let tag = cx
+                .rt_call("rt_result_tag", &[val.into()])
+                .unwrap()
+                .into_int_value();
+            let one = i64_ty.const_int(1, false);
+            cx.builder
+                .build_int_compare(IntPredicate::EQ, tag, one, "iflet_is_err")
+                .expect("build_int_compare failed")
+        }
+        _ => {
+            return Err(CodegenError {
+                code: ErrorCode::E0400,
+                message: "unsupported pattern in `if let`".to_string(),
+            });
+        }
+    };
+
+    let then_block = cx.context.append_basic_block(cx.current_fn, "iflet_then");
+    let else_block = cx.context.append_basic_block(cx.current_fn, "iflet_else");
+    let merge_block = cx.context.append_basic_block(cx.current_fn, "iflet_merge");
+
+    cx.builder
+        .build_conditional_branch(matches_cond, then_block, else_block)
+        .expect("build_conditional_branch failed");
+
+    // ── Then block: bind the pattern variable, compile the then branch ──
+    cx.builder.position_at_end(then_block);
+    let saved_vars = cx.vars.clone();
+
+    match &pattern.node {
+        Pattern::Some(binding) => {
+            let raw = cx.rt_call("rt_option_value", &[val.into()]).unwrap();
+            let inner_tty = match &val_tty {
+                TurboTy::Optional(inner) => *inner.clone(),
+                _ => TurboTy::Int,
+            };
+            let narrowed = narrow_from_storage(cx, raw, &inner_tty);
+            let alloca = cx.create_entry_block_alloca(narrowed.get_type(), binding);
+            cx.builder
+                .build_store(alloca, narrowed)
+                .expect("build_store failed");
+            cx.vars.insert(binding.clone(), (alloca, inner_tty));
+        }
+        Pattern::Ok(binding) | Pattern::Err(binding) => {
+            let raw = cx.rt_call("rt_result_value", &[val.into()]).unwrap();
+            let inner_tty = match &val_tty {
+                TurboTy::Result(ok_tty, err_tty) => {
+                    if matches!(&pattern.node, Pattern::Ok(_)) {
+                        *ok_tty.clone()
+                    } else {
+                        *err_tty.clone()
+                    }
+                }
+                _ => TurboTy::Int,
+            };
+            let narrowed = narrow_from_storage(cx, raw, &inner_tty);
+            let alloca = cx.create_entry_block_alloca(narrowed.get_type(), binding);
+            cx.builder
+                .build_store(alloca, narrowed)
+                .expect("build_store failed");
+            cx.vars.insert(binding.clone(), (alloca, inner_tty));
+        }
+        Pattern::None => {
+            // No binding.
+        }
+        _ => {}
+    }
+
+    let then_result = compile_expr(cx, then_branch)?;
+    let then_end_block = cx.builder.get_insert_block().unwrap();
+    let then_needs_jump = then_end_block.get_terminator().is_none();
+    if then_needs_jump {
+        cx.builder
+            .build_unconditional_branch(merge_block)
+            .expect("build_unconditional_branch failed");
+    }
+
+    // Restore variable scope (matches Cranelift's behaviour).
+    cx.vars = saved_vars;
+
+    // ── Else block ──
+    cx.builder.position_at_end(else_block);
+    let else_result = if let Some(else_expr) = else_branch {
+        compile_expr(cx, else_expr)?
+    } else {
+        None
+    };
+    let else_end_block = cx.builder.get_insert_block().unwrap();
+    let else_needs_jump = else_end_block.get_terminator().is_none();
+    if else_needs_jump {
+        cx.builder
+            .build_unconditional_branch(merge_block)
+            .expect("build_unconditional_branch failed");
+    }
+
+    // ── Merge block ──
+    cx.builder.position_at_end(merge_block);
+
+    if let (Some((then_val, then_tty)), Some((else_val, _))) = (then_result, else_result) {
+        if then_needs_jump && else_needs_jump {
+            let phi = cx
+                .builder
+                .build_phi(then_val.get_type(), "iflet_phi")
+                .expect("build_phi failed");
+            phi.add_incoming(&[(&then_val, then_end_block), (&else_val, else_end_block)]);
+            Ok(Some((phi.as_basic_value(), then_tty)))
+        } else if then_needs_jump {
+            Ok(Some((then_val, then_tty)))
+        } else if else_needs_jump {
+            Ok(Some((else_val, then_tty)))
+        } else {
+            Ok(None)
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+// ── Optional chaining (`x?.field`) ──────────────────────────────────
+//
+// Mirrors `compile_optional_chain` in the Cranelift backend. The
+// semantics are "map over Option": if `x` is `some(v)`, yield
+// `some(v.field)`; otherwise yield `none`. This is NOT the Rust `?`
+// operator (early-return on None) — it always produces an Optional.
+fn compile_optional_chain<'a, 'ctx>(
+    cx: &mut Ctx<'a, 'ctx>,
+    object: &Spanned<Expr>,
+    field: &str,
+) -> Result<MaybeTyped<'ctx>, CodegenError> {
+    let (opt_val, val_tty) = compile_expr(cx, object)?.unwrap();
+
+    let inner_tty = match &val_tty {
+        TurboTy::Optional(inner) => inner.as_ref().clone(),
+        _ => {
+            return Err(CodegenError {
+                code: ErrorCode::E0400,
+                message: "optional chaining `?.` requires an optional type".to_string(),
+            })
+        }
+    };
+
+    let struct_name = match &inner_tty {
+        TurboTy::Struct(name) => name.clone(),
+        _ => {
+            return Err(CodegenError {
+                code: ErrorCode::E0400,
+                message: "optional chaining `?.` requires an optional struct type".to_string(),
+            })
+        }
+    };
+
+    let fields = cx
+        .struct_fields
+        .get(&struct_name)
+        .ok_or_else(|| CodegenError {
+            code: ErrorCode::E0400,
+            message: format!("undefined struct: {struct_name}"),
+        })?
+        .clone();
+
+    let (field_idx, field_tty) = fields
+        .iter()
+        .enumerate()
+        .find(|(_, (name, _))| name == field)
+        .map(|(idx, (_, tty))| (idx, tty.clone()))
+        .ok_or_else(|| CodegenError {
+            code: ErrorCode::E0400,
+            message: format!("struct `{struct_name}` has no field `{field}`"),
+        })?;
+
+    let i64_ty = cx.context.i64_type();
+    let i8_ty = cx.context.i8_type();
+    let offset = (field_idx as u64) * 8;
+
+    // Extract the tag: 0 = none, 1 = some.
+    let tag = cx
+        .rt_call("rt_option_tag", &[opt_val.into()])
+        .unwrap()
+        .into_int_value();
+    let one = i64_ty.const_int(1, false);
+    let is_some = cx
+        .builder
+        .build_int_compare(IntPredicate::EQ, tag, one, "optchain_is_some")
+        .expect("build_int_compare failed");
+
+    let some_block = cx
+        .context
+        .append_basic_block(cx.current_fn, "optchain_some");
+    let none_block = cx
+        .context
+        .append_basic_block(cx.current_fn, "optchain_none");
+    let merge_block = cx
+        .context
+        .append_basic_block(cx.current_fn, "optchain_merge");
+
+    cx.builder
+        .build_conditional_branch(is_some, some_block, none_block)
+        .expect("build_conditional_branch failed");
+
+    // ── Some branch: unwrap, read field, wrap back in some ──
+    cx.builder.position_at_end(some_block);
+    let inner_raw = cx
+        .rt_call("rt_option_value", &[opt_val.into()])
+        .unwrap()
+        .into_int_value();
+    let inner_ptr = cx
+        .builder
+        .build_int_to_ptr(
+            inner_raw,
+            cx.context.ptr_type(AddressSpace::default()),
+            "optchain_inner_ptr",
+        )
+        .expect("build_int_to_ptr failed");
+
+    let field_ptr = unsafe {
+        cx.builder
+            .build_gep(
+                i8_ty,
+                inner_ptr,
+                &[i64_ty.const_int(offset, false)],
+                "optchain_field_ptr",
+            )
+            .expect("build_gep failed")
+    };
+    let field_raw = cx
+        .builder
+        .build_load(i64_ty, field_ptr, "optchain_field")
+        .expect("build_load failed");
+
+    // rt_option_some takes an i64 — pass the raw storage word. For
+    // pointer/float fields this is already the correct bit-pattern.
+    let some_result = cx.rt_call("rt_option_some", &[field_raw.into()]).unwrap();
+    let some_end_block = cx.builder.get_insert_block().unwrap();
+    cx.builder
+        .build_unconditional_branch(merge_block)
+        .expect("build_unconditional_branch failed");
+
+    // ── None branch: produce a fresh none ──
+    cx.builder.position_at_end(none_block);
+    let none_result = cx.rt_call("rt_option_none", &[]).unwrap();
+    let none_end_block = cx.builder.get_insert_block().unwrap();
+    cx.builder
+        .build_unconditional_branch(merge_block)
+        .expect("build_unconditional_branch failed");
+
+    // ── Merge block ──
+    cx.builder.position_at_end(merge_block);
+    let phi = cx
+        .builder
+        .build_phi(some_result.get_type(), "optchain_phi")
+        .expect("build_phi failed");
+    phi.add_incoming(&[
+        (&some_result, some_end_block),
+        (&none_result, none_end_block),
+    ]);
+
+    Ok(Some((
+        phi.as_basic_value(),
+        TurboTy::Optional(Box::new(field_tty)),
+    )))
 }
