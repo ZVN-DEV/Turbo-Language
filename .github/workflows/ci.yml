@@ -345,6 +345,11 @@ jobs:
 
   fuzz-smoke:
     name: Fuzz smoke (codegen)
+    # Promoted from nightly-only to per-push so codegen panics are caught
+    # at PR time rather than at 07:00 UTC the next day. 200 iters in
+    # release mode finishes well under the 60s/target ceiling on
+    # GitHub-hosted runners (~30s on ubuntu-latest). The nightly canary
+    # still runs a longer 2000-iter pass for broader coverage.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -353,6 +358,10 @@ jobs:
         with:
           toolchain: stable
 
+      # Cargo dependency cache — stable key based on the fuzz lockfile so
+      # we don't rebuild dependencies on every PR. Separate from the
+      # corpus cache below so a corpus bust doesn't also throw away the
+      # compiled cranelift/cargo artifacts.
       - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: |
@@ -361,10 +370,86 @@ jobs:
             turbo/fuzz/target
           key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('turbo/fuzz/Cargo.toml') }}
 
+      # Fuzz corpus cache. The codegen-fuzz harness is deterministic
+      # (seeded xorshift), so there is no libFuzzer-managed corpus on
+      # disk today — but we reserve the cache slot under a stable name
+      # so that once the harness starts persisting interesting inputs
+      # to `turbo/fuzz/corpus/` (or a future libFuzzer conversion), the
+      # scaffolding is already in place.
+      #
+      # Key includes `github.run_id` so each run writes a fresh slice;
+      # `restore-keys: fuzz-corpus-` pulls the most recent predecessor
+      # so corpus growth is monotonic.
+      #
+      # Forks from PRs do not get access to caches that could be
+      # poisoned with adversarial inputs, per GitHub's cache isolation
+      # rules — the `if:` below makes the skip explicit and auditable.
+      - name: Cache fuzz corpus
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: turbo/fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-
+
       - name: Build codegen fuzz binary
         run: cargo build --release --bin codegen-fuzz --manifest-path turbo/fuzz/Cargo.toml
 
-      - name: Run codegen fuzz smoke (200 iters)
+      # Cap the smoke run at 200 iterations, which consistently finishes
+      # in ~30s on GitHub-hosted runners — well under the 60s/target
+      # ceiling set for per-push fuzz jobs. The deeper 2000-iter run
+      # lives in nightly.yml.
+      - name: Run codegen fuzz smoke (200 iters, <60s/target)
         run: cargo run --release --bin codegen-fuzz --manifest-path turbo/fuzz/Cargo.toml
         env:
           TURBO_FUZZ_ITERS: "200"
+
+  c-runtime-sanitizers:
+    name: C runtime sanitizers (ASAN+UBSAN)
+    # Rebuild the C runtime test harness with clang's AddressSanitizer
+    # and UndefinedBehaviorSanitizer so memory bugs (OOB read/write,
+    # use-after-free, signed overflow, etc.) in turbo_rt.c can't slip
+    # past green CI. Companion to the plain c-runtime-tests job above,
+    # which uses the system `cc` with no sanitizers.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      # We don't call runtime/tests.sh directly because it doesn't
+      # forward $CFLAGS — a tests.sh patch lives with Stream B/E.
+      # Until then, we reproduce its compile invocation verbatim plus
+      # the sanitizer flags. If a new tests/*.c harness lands, add it
+      # to the source list below (tests.sh auto-picks them up once
+      # it's patched; this job needs a manual add).
+      - name: Build runtime tests with ASAN+UBSAN
+        run: |
+          set -euo pipefail
+          cd turbo/crates/turbo-codegen-cranelift/runtime
+          mkdir -p "$RUNNER_TEMP/rt"
+          clang \
+            -std=c11 \
+            -Wall -Wextra \
+            -Wno-unused-function -Wno-unused-parameter \
+            -DRT_TEST_BUILD \
+            -fsanitize=address,undefined \
+            -fno-omit-frame-pointer \
+            -O1 -g \
+            -o "$RUNNER_TEMP/rt/test_rt" \
+            tests/test_rt.c \
+            turbo_rt.c \
+            -lpthread -lm
+
+      - name: Run runtime tests under ASAN+UBSAN
+        env:
+          # Abort on any sanitizer hit; detect leaks too. `halt_on_error=1`
+          # for UBSAN makes it behave like ASAN (fail the process) instead
+          # of just printing and continuing.
+          ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1:halt_on_error=1"
+          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
+        run: "$RUNNER_TEMP/rt/test_rt"
