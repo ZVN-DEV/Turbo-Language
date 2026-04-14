@@ -211,7 +211,7 @@ select {
 - Isolated stateful processes with message passing — a pure concurrency primitive with no AI/LLM involvement
 - Each actor has its own state — no shared mutable state
 - Supervision trees for fault tolerance (restart strategies)
-- Actors also serve as the supervision backbone for `agent` declarations (see AGENTIC.md), but actors themselves are general-purpose concurrency constructs
+- Actors are general-purpose concurrency constructs; the planned `turbo-agent` sidecar library can build supervision on top of them, but actors themselves are not tied to any agent keyword (the core language has none)
 - Inspired by Erlang/OTP and Elixir GenServer
 
 > **JS equivalent:** Think of actors as a `Worker` (or `ServiceWorker`) with its own private state that communicates only via messages. In JS, Web Workers can't share memory directly -- they use `postMessage()`. Actors work the same way, but with type-safe messages, automatic restart on failure, and no serialization overhead. The supervision tree is like a process manager (e.g., PM2) built into the language -- if an actor crashes, it restarts automatically.
@@ -320,7 +320,7 @@ let uppercase_stream = token_stream("Hello")
 ### Tokio-style (default)
 - Work-stealing thread pool
 - M:N cooperative scheduling
-- Best for: Servers, APIs, agents, general-purpose async
+- Best for: Servers, APIs, application workloads, general-purpose async
 
 ### Actor-based
 - Elixir-style isolated processes

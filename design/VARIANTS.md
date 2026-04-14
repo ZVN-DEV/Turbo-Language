@@ -1,17 +1,18 @@
 # The Variant Strategy
 
 > **Status: Historical Reference.** The memory model decision is finalized — CTRC + auto-clone is the default. This document is preserved for reference on alternative performance profiles. For the active specification, see MEMORY-MODEL.md.
+>
+> **2026-04 update:** The original shared-core list below included `agent` and `tool` as core-language keywords. Those features have been moved out of the core into the planned `turbo-agent` sidecar library. References to "agents" as a workload type are kept here for benchmark-workload purposes only. See **VISION.md** and **COMPATIBILITY.md**.
 
 ## Philosophy: Don't Guess. Build, Measure, Decide.
 
-All variants share a **common core**: syntax, type system, agentic keywords (`agent`, `tool`), pipe operator, pattern matching, ADTs, `T ! E`, generics, traits. The variants diverge on the hard tradeoff axes.
+All variants share a **common core**: syntax, type system, pipe operator, pattern matching, ADTs, `T ! E`, generics, traits. The variants diverge on the hard tradeoff axes.
 
 ## The Shared Core
 
 Every variant includes these features identically:
 - Syntax (as defined in SYNTAX.md)
 - Type system (as defined in TYPE-SYSTEM.md)
-- `agent` and `tool` keywords
 - Pipe operator `|>`
 - Pattern matching with `match`
 - Algebraic data types (sum types)

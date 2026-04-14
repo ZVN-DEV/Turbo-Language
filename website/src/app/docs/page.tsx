@@ -47,10 +47,11 @@ export default function DocsPage() {
           await, channels, mutex
         </li>
         <li>
-          <strong className="text-white">AI-native roadmap</strong> -- Planned{" "}
-          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">agent</code> and{" "}
-          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">tool fn</code>{" "}
-          concepts are documented, but they are not part of the current compiler release
+          <strong className="text-white">Small, honest core</strong> -- Turbo
+          keeps the compiler focused on a general-purpose language.
+          Agent/tool workflows will ship in a separate{" "}
+          <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">turbo-agent</code>{" "}
+          library after 1.0, not as compiler keywords
         </li>
         <li>
           <strong className="text-white">Modern toolchain</strong> -- built-in
@@ -88,7 +89,7 @@ fn main() {
       </h2>
       <ul className="list-disc list-inside space-y-2 mb-8 text-gray-300">
         <li>Developers who want native performance without Rust&apos;s complexity</li>
-        <li>Teams that want native-speed tooling today and care about Turbo&apos;s AI-native roadmap</li>
+        <li>Teams that want native-speed tooling today with a core small enough to stay stable</li>
         <li>Anyone who wants a modern language with batteries included</li>
         <li>Systems programmers who appreciate clean, expressive syntax</li>
       </ul>

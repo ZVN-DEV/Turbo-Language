@@ -44,8 +44,9 @@ anonymity) once a fix ships.
 
 **Out of scope:**
 - Experimental features explicitly flagged in `CHANGELOG.md` as unstable
-  or experimental (currently: `tool fn` agent primitives, the WASM
-  target, and the LLVM backend)
+  or experimental (currently: the WASM target and the LLVM backend).
+  Agent/tool language primitives are not shipped — and are not planned
+  for the core — so they are out of scope by omission, not by experiment
 - Crashes triggered only by `@unsafe` code or raw pointer arithmetic —
   by design these bypass safety checks
 - Issues in third-party dependencies (please report upstream)

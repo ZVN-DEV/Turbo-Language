@@ -509,29 +509,9 @@ async fn fetch_all(ids: [u64]) -> [User] ! Error {
 }
 ```
 
-### Agents and Tools `[Implemented]`
-```
-// Tool definition
-tool fn get_weather(city: str, units: TemperatureUnit = .celsius) -> WeatherData {
-  /// Get current weather for a city
-  await weather_api.fetch(city, units)
-}
+### Agents and Tools `[Sidecar — not in core]`
 
-// Agent definition
-agent Assistant {
-  model: "claude-sonnet"
-  system: "You are a helpful assistant."
-  tools: [get_weather, search_web]
-  memory: ConversationMemory(max_turns: 50)
-
-  fn handle(self, input: str) -> Stream<Response> {
-    let plan = await self.think(input)
-    for step in plan {
-      yield await self.execute(step)
-    }
-  }
-}
-```
+Earlier drafts of this spec proposed `agent` / `tool fn` as core-language keywords. That direction has been retired: these features will ship as a `turbo-agent` library on top of the stable 1.0 core, not as compiler keywords. Nothing in the language grammar defined in this document includes `agent` or `tool fn`. See **COMPATIBILITY.md** and the "A small, honest core" pillar in **VISION.md**.
 
 ### Compile-Time Execution `[Planned]`
 ```
@@ -723,8 +703,6 @@ let ids: {u64} = {1, 2, 3}               // set of u64
 | Map type | `{K: V}` | Novel | Implemented |
 | Set type | `{T}` | Novel | Planned |
 | Async | `async fn / await` | JS/Rust | Implemented |
-| Agent | `agent Name { }` | Novel | Implemented |
-| Tool | `tool fn name() { }` | Novel | Implemented |
 | Compile-time | `const fn` | Zig (adapted) | Planned |
 | Defer | `defer { cleanup() }` | Go | Implemented |
 
@@ -893,45 +871,6 @@ fn load_config(path: str) -> AppConfig ! IoError | ParseError {
   }
 
   config
-}
-```
-
-### Agent-Powered Search
-
-A complete AI search agent with tools, streaming, and error handling.
-
-```
-import { http } from "turbo/http"
-import { log } from "turbo/log"
-
-tool fn web_search(query: str, max_results: u32 = 5) -> [SearchResult] {
-  /// Search the web and return relevant results
-  await search_api.query(query, limit: max_results)
-}
-
-tool fn summarize(text: str, max_length: u32 = 200) -> str {
-  /// Summarize a block of text
-  await Agent.quick("claude-haiku", "Summarize in {max_length} chars: {text}")
-}
-
-agent ResearchAssistant {
-  model: "claude-sonnet"
-  system: "You are a research assistant. Search the web, then summarize your findings."
-  tools: [web_search, summarize]
-  memory: ConversationMemory(max_turns: 20)
-}
-
-fn main() {
-  let agent = ResearchAssistant.new()
-
-  for await token in agent.stream("What are the latest advances in battery technology?") {
-    match token.kind {
-      .text(t) => print(t, end: "")
-      .tool_call(name, _) => log.debug("Calling tool: {name}")
-      .done(usage) => print("\n[Tokens: {usage.total}]")
-      _ => {}
-    }
-  }
 }
 ```
 

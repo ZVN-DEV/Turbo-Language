@@ -3,6 +3,20 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Security
+- Install script now pins the GPG release key against a local copy in-repo; mismatched remote key aborts the install.
+
+### Changed
+- Documentation: removed `agent`, `tool fn`, and "first AI-native language" claims from core-facing copy. Agentic features will ship in a separate `turbo-agent` sidecar library after the core language hits 1.0 stability, not inside the compiler.
+- Added COMPATIBILITY.md documenting the 1.0 stability contract and what remains fluid in 0.7.x and 0.8.x.
+
+### Notes
+- Error-code docs audit: `ErrorCode` variants, `turbo-cli/src/errors/` entries, and `docs/errors/` entries are all in sync at 87/87/87. The previously flagged "94 variants vs 87 docs" gap does not exist.
+
+---
+
 ## [0.7.6] - 2026-04-13
 
 Trust and release hardening follow-up. This release replaces implicit HTTP response typing with explicit helpers, makes shell execution more explicit, adds server runtime guardrails, promotes the web dashboard as the flagship runnable demo, and hardens the release/install path.

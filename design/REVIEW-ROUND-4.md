@@ -1,5 +1,7 @@
 # Review Round 4 -- Turbo Language Design
 
+> **Historical note (2026-04):** This review discusses `agent` / `tool fn` as core-language keywords. That direction has been retired — those features now live in the planned `turbo-agent` sidecar library, not the compiler. Preserved for historical context. Current spec: **VISION.md**, **SYNTAX.md**, **COMPATIBILITY.md**.
+
 **Overall Score: 9.0/10** (was 8.4/10 in Round 3)
 
 **Review context:** This review follows major DevX improvements applied between Round 3 and Round 4, including: `@decorator` syntax replacing `#[attribute]`, turbofish removal (`::<T>` to `<T>`), `Shared<T>` / `WeakRef<T>` replacing `rc<T>` / `weak<T>`, `const fn` replacing `comptime fn`, new elegant type syntax (`T?`, `T ! E`, `none`, `ok()`, `err()`), JS-like arrow functions as primary closure syntax, a fully specified Error trait hierarchy, string semantics, and agent testing patterns.

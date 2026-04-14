@@ -2,17 +2,19 @@
 
 **Name**: Turbo
 
-**One-liner**: Turbo is a systems-capable, type-safe, developer-loved language with JavaScript's spirit, Rust's performance, and first-class agentic AI primitives.
+**One-liner**: Turbo is a systems-capable, type-safe, developer-loved language with JavaScript's spirit and Rust's performance — a small, honest core that ships as a compiled general-purpose language.
 
 ---
 
 ## Why Turbo Exists
 
-We are at an inflection point in software development. AI agents are becoming the dominant new category of software, yet every language treats them as an afterthought -- something you bolt on with libraries and frameworks. Meanwhile, the languages that offer real performance and safety demand a brutal learning curve, and the languages that developers love lack the power to build serious systems.
+The languages that offer real performance and safety demand a brutal learning curve. The languages that developers love lack the power to build serious systems. Turbo exists to close that gap.
 
-Turbo exists to close that gap. It is the language we wish we had: one that compiles to native code and WebAssembly, enforces safety without a garbage collector, ships world-class tooling on day one, and treats AI agents as first-class citizens of the language itself -- not library constructs, not framework patterns, but language primitives with compile-time guarantees.
+Turbo is the language we wish we had: one that compiles to native code and WebAssembly, enforces safety without a garbage collector, ships world-class tooling on day one, and keeps its core surface small enough for a working engineer to hold in their head.
 
 This is not incremental improvement. This is a new foundation.
+
+> **A note on agentic features.** Earlier drafts of this document promised `agent` / `tool fn` keywords and first-class AI primitives baked into the language. That direction has been retired: agentic workflows will ship as a separate `turbo-agent` library built on top of the stable 1.0 core (async, HTTP, typed serialization), not as compiler-level keywords. The rationale is simple — language-level AI primitives would couple Turbo's core evolution to a rapidly-moving ecosystem (model providers, tool-calling schemas, memory strategies) that belongs in library space. See **COMPATIBILITY.md** for the stability contract.
 
 ---
 
@@ -44,7 +46,7 @@ Type safety is the foundation of reliable software. But too many type systems fe
 - **Monomorphized generics with opt-in runtime type metadata.** Generics are monomorphized at compile time for zero-cost performance (like Rust and C++). Unlike Java's type erasure, Turbo can retain type information at runtime when you need it -- opt in with `@derive(TypeInfo)` on types that require reflection, runtime type checks, or serialization. This gives you zero-cost generics by default with the ability to access runtime type metadata when your use case demands it.
 - **Result-based error handling with `?` propagation.** Errors are values, expressed as `T ! E` (read: "T or error E"). The `?` operator propagates errors concisely. No exceptions, no hidden control flow. Error types compose, and the compiler ensures you handle every failure path.
 - **Structural typing for interfaces, nominal for data types.** Interfaces (traits) use structural subtyping -- if your type has the right shape, it satisfies the interface, no explicit declaration required. Data types (structs, enums) use nominal typing -- two types with the same fields are still distinct types. This gives you the flexibility of duck typing where it helps and the safety of nominal typing where it matters.
-- **Effect tracking in signatures.** Functions declare their effects: `async`, `throws`, `io`, `unsafe`, `diverges`. The compiler tracks effect propagation. You can see at a glance what a function might do, and the type system ensures effects are handled appropriately. This is especially powerful for agentic code, where understanding what an agent can do is critical for safety and auditability.
+- **Effect tracking in signatures.** Functions declare their effects: `async`, `throws`, `io`, `unsafe`, `diverges`. The compiler tracks effect propagation. You can see at a glance what a function might do, and the type system ensures effects are handled appropriately.
 
 ### 3. Developer Love -- Because Life Is Too Short for Bad Tooling
 
@@ -65,44 +67,27 @@ A language is only as good as the experience of using it. We refuse to ship Turb
 - **Clean, expressive syntax.** We have studied 25 languages to find the most readable, writable, and learnable syntax for each construct. The goal is code that reads like well-written prose: clear intent, minimal ceremony, no line noise. Semicolons are optional (newline-terminated statements). Braces for blocks. Type annotations where they help, inference where they do not.
 - **Amazing onboarding.** A new developer should go from zero to a running program in under five minutes. The installation is a single command. The `new` command scaffolds a project. The tutorial is interactive and runs in the REPL. The standard library is comprehensive and well-documented.
 
-### 4. Agentic-First -- Built for the AI Era
+### 4. A Small, Honest Core
 
-**Target**: The first programming language with native, compile-time-verified primitives for building AI agents.
+**Target**: A language whose full feature surface can be held in one engineer's head, and whose stable parts stay stable.
 
-This is what makes Turbo different from everything else. AI agents are not an add-on or a library -- they are a first-class part of the language:
+Turbo deliberately does not ship agentic keywords, GPU kernels, a distributed actor system, or other framework-shaped features as compiler built-ins. Those belong in libraries that can iterate on their own cadence without dragging the whole language along for the ride.
 
-- **`agent` as a first-class keyword.** Define agents with their capabilities, constraints, and behaviors directly in Turbo. The compiler verifies that agents only use the tools they declare, that their state machines are well-formed, and that their supervision hierarchies are sound.
+What stays in the core:
 
-```
-agent ResearchAssistant {
-    model: "claude-sonnet",
-    tools: [web_search, file_read, summarize],
-    memory: ConversationBuffer(max_tokens: 8192),
-    supervision: .human_in_the_loop(confidence_threshold: 0.8),
+- The type system (generics, traits, ADTs, pattern matching, Result/Optional).
+- Memory model (CoW values, deterministic destruction, arenas where they help).
+- Async/await, spawn, channels, mutex.
+- C FFI.
+- AOT + JIT compilation and a WASM target.
+- The built-in toolchain (formatter, LSP, tests, REPL, playground).
 
-    fn research(query: str) -> Stream<Finding> {
-        // Agent logic with full type safety
-    }
-}
-```
+What lives outside the core, as separate libraries with their own SemVer stories:
 
-- **`tool` as a first-class keyword.** Define tools that agents can use with compile-time schema validation. The compiler generates the JSON schema, validates input/output types, and ensures type-safe communication between agents and tools.
+- **`turbo-agent`** — the agent/tool/provider surface that earlier drafts of Turbo tried to bake in. Ships after the core hits 1.0, builds on async + HTTP + typed serialization, and can evolve with the LLM ecosystem without re-cutting the compiler. Out of scope for the core language contract.
+- **`turbo-tensor` / GPU compute, mobile UI, distributed actors** — explored in the roadmap as potential sidecar libraries, not as language keywords.
 
-```
-tool fn web_search(query: str, max_results: u32 = 10) -> [SearchResult] {
-    @description("Search the web for information")
-    @parameter(query, "The search query string")
-    // Implementation with full type safety
-}
-```
-
-- **Native streaming with `Stream<Token>`.** Token-by-token streaming is a language-level primitive, not a library abstraction. Streams compose, transform, and type-check. Backpressure is built in. You can stream from an LLM, transform the output, and pipe it to a UI -- all with compile-time type safety.
-- **Structured output with compile-time schema validation.** Define the shape of an agent's output as a type, and the compiler generates the constraint schema, validates it against the model's capabilities, and ensures the output is parsed correctly. No more runtime schema mismatches.
-- **Supervision trees for agent reliability.** Borrowed from Erlang/OTP's battle-tested supervisor pattern, adapted for AI agents. Define how agents are supervised, restarted, escalated, and rate-limited. The compiler verifies that supervision hierarchies are acyclic and that every agent has a supervision strategy.
-- **Built-in memory abstractions.** Conversation buffers, sliding windows, semantic memory (vector stores), and persistent memory are language-level constructs with pluggable backends. Memory strategies are declared, not hand-coded.
-- **Built-in tracing and observability.** Every agent invocation, tool call, and decision point is automatically traced. The tracing system is zero-cost when disabled and low-overhead when enabled. Traces are structured, queryable, and integrate with standard observability tools.
-
-This is not a framework. These are Turbo language primitives with compiler support. The type system understands agents. The borrow checker understands tool ownership. The effect system tracks what agents can do. This is what it means to be agentic-first.
+This is a trust move. A small core that actually ships and stays stable is worth more to real users than a giant feature list with shifting ground underneath it.
 
 ### 5. Broad Reach -- One Language, Every Platform
 
@@ -121,8 +106,6 @@ This is not a framework. These are Turbo language primitives with compiler suppo
 
 The conditions for Turbo have never been better:
 
-**AI agents are the fastest-growing software category -- and no language natively supports them.** Every agent framework today is a library bolted onto a language that was not designed for it. Python agents have no type safety. TypeScript agents have no performance. Rust agents have no ergonomics. The gap is enormous and growing.
-
 **Rust proved you do not need a garbage collector for memory safety -- but the learning curve is too steep for most developers.** Rust's insight was revolutionary: ownership and borrowing can replace garbage collection. But Rust's implementation demands expertise that most developers do not have and do not need. We can simplify the model dramatically for 90% of use cases while providing escape hatches for the other 10%.
 
 **TypeScript showed that developers want types -- but they want sound types with great developer experience.** TypeScript's adoption proved that developers will embrace type systems when they help rather than hinder. But TypeScript's types are unsound by design, and its performance ceiling is JavaScript. We can do better on both fronts.
@@ -139,7 +122,9 @@ Clarity about what Turbo is not is as important as clarity about what it is:
 
 - **Not a "better JavaScript."** We do not compile to JavaScript. We do not target the JavaScript runtime. We compile to native machine code and WebAssembly. JavaScript interop exists for the WASM-in-browser use case, but Turbo is not part of the JS ecosystem.
 
-- **Not a Rust clone.** We learn from Rust enormously -- ownership, algebraic types, pattern matching, traits, zero-cost abstractions. But Turbo is not Rust. We simplify the memory model (fewer lifetime annotations, more inference, arena-based patterns as defaults). We add agentic primitives. We prioritize developer experience over maximum control. If Rust is a formula one car, Turbo is a high-performance sports car: almost as fast, dramatically easier to drive.
+- **Not a Rust clone.** We learn from Rust enormously -- ownership, algebraic types, pattern matching, traits, zero-cost abstractions. But Turbo is not Rust. We simplify the memory model (fewer lifetime annotations, more inference, arena-based patterns as defaults). We prioritize developer experience over maximum control. If Rust is a formula one car, Turbo is a high-performance sports car: almost as fast, dramatically easier to drive.
+
+- **Not an AI-native language.** Earlier drafts positioned Turbo as "agentic-first" with language-level `agent` / `tool fn` keywords. That positioning has been retired. Agent and tool workflows will ship as `turbo-agent`, a library on top of the stable core — not as compiler features.
 
 - **Not an academic language.** Every feature in Turbo must earn its place through practical utility. We do not add features because they are theoretically elegant. We add them because real developers building real software need them. Features that do not pull their weight get cut.
 
@@ -183,20 +168,20 @@ But power users can go deeper. Unsafe blocks for manual memory management. Custo
 
 ## Target Audiences (in Priority Order)
 
-### 1. AI/Agent Developers
-Building LLM-powered agents, tool-calling systems, multi-agent orchestration, RAG pipelines, and AI-native applications. These developers are currently forced to choose between Python's ecosystem (no safety, no performance) and Rust/Go (no agent primitives, steep learning curve). Turbo gives them everything: safety, performance, ergonomics, and native agent support.
-
-### 2. Backend/Systems Engineers
+### 1. Backend/Systems Engineers
 Building servers, CLI tools, infrastructure software, databases, message queues, and distributed systems. These developers need performance, reliability, and control. They currently choose between Rust (powerful but demanding), Go (simple but limited), and C++ (fast but dangerous). Turbo offers Rust-class performance with dramatically better ergonomics.
 
-### 3. Full-Stack Developers
+### 2. Full-Stack Developers
 Building web applications with WASM frontends and native backends in the same language. These developers currently juggle TypeScript on the frontend and a different language on the backend. Turbo lets them write the entire stack in one language, sharing types, validation logic, and business rules across the boundary.
 
-### 4. Game and Real-Time Developers
+### 3. Game and Real-Time Developers
 Building games, audio engines, trading systems, robotics, and anything that demands deterministic performance. These developers need precise memory control, predictable latency, and zero-overhead abstractions. Turbo's ownership model and arena-based allocation patterns give them the control they need without the complexity of raw C++ or full Rust lifetimes.
 
-### 5. Embedded Developers
+### 4. Embedded Developers
 Building for IoT devices, microcontrollers, and constrained environments. These developers need small binaries, no runtime dependencies, and predictable memory usage. Turbo's `no_std` mode and compile-time computation give them a modern, type-safe language that fits in the smallest targets.
+
+### 5. Future: `turbo-agent` Library Users
+Developers who eventually want to build LLM-powered agents, tool-calling systems, or RAG pipelines on top of Turbo. This is not a core-language audience — it's a library audience served by the post-1.0 `turbo-agent` sidecar. Turbo's typed async/HTTP/serialization primitives make it a credible substrate for that library, but the language itself doesn't ship agentic keywords.
 
 ---
 
@@ -223,7 +208,7 @@ Turbo ships as a focused core and grows through progressive disclosure -- every 
 
 | Version | Milestone | Key Addition |
 |---------|-----------|-------------|
-| **v1.0** | Core | Syntax, types, CTRC memory, async, agents, full toolchain, LLVM + WASM |
+| **v1.0** | Core | Syntax, types, CTRC memory, async, full toolchain, LLVM + WASM |
 | **v1.1** | Script Mode | `turbolang run file.tb` with zero config, shebang, REPL, full inference |
 | **v1.2** | GPU & Compute | `@gpu` kernels, `turbo/tensor`, SIMD, ML inference, Python interop |
 | **v1.3** | Mobile | iOS + Android targets, `turbo/ui` cross-platform framework, platform SDKs |
@@ -235,11 +220,9 @@ The principle: a "Hello, world!" in v1.0 looks identical in v1.4. Complexity is 
 
 ## The Road Ahead
 
-This document is a compass, not a map. The destination is clear: a language that makes building the next generation of software -- especially AI-native software -- a joy rather than a struggle. The exact path will be shaped by data, community input, and the reality of implementation.
+This document is a compass, not a map. The destination is clear: a compiled, type-safe, systems-capable language that makes building real software a joy rather than a struggle, with a core small enough to stay stable. The exact path will be shaped by data, community input, and the reality of implementation.
 
-What we are building has never existed before. No language has combined systems-level performance, a sound type system, world-class developer experience, and native AI agent primitives the way Turbo does. Each of these alone is hard. Together, they are transformative.
-
-The age of AI-native programming languages begins now.
+What we are building combines systems-level performance, a sound type system, and a world-class developer experience in a package that ships today and promises a well-defined stability contract at 1.0.
 
 ---
 

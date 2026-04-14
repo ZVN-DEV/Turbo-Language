@@ -55,28 +55,21 @@ fn main() {
 }`,
   },
   {
-    label: "Agent Roadmap",
-    filename: "agent-roadmap.tb",
-    code: `// Planned syntax — not supported in current releases yet.
+    label: "HTTP + JSON",
+    filename: "api.tb",
+    code: `fn main() {
+    let app = http_server(8080)
 
-tool fn get_weather(city: str) -> str {
-    "Weather for: {city}"
-}
+    route(app, "GET", "/health", |req: str| -> str {
+        respond_text(200, "ok")
+    })
 
-tool fn get_forecast(city: str, days: i64) -> str {
-    "Forecast for {city} ({days} days)"
-}
+    route(app, "POST", "/api/echo", |req: str| -> str {
+        let body = request_body(req)
+        respond_text(200, body)
+    })
 
-agent WeatherBot {
-    model: "claude-sonnet"
-    tools: [get_weather, get_forecast]
-    system: "You are a helpful weather assistant."
-}
-
-fn main() {
-    let bot = WeatherBot {}
-    print(bot.model)
-    print(get_weather("Tokyo"))
+    http_listen(app)
 }`,
   },
 ];
@@ -132,9 +125,9 @@ const features = [
     ),
   },
   {
-    title: "AI-Native Roadmap",
+    title: "Small, Honest Core",
     description:
-      "Turbo&apos;s design work includes planned `agent` and `tool fn` constructs for future AI-native workflows. Current releases focus on the runtime and tooling foundations.",
+      "Turbo keeps the compiler focused on a general-purpose, compiled language. Framework-shaped features (agents, GPU kernels, distributed actors) live in sidecar libraries, not keywords — so the core stays stable.",
     icon: (
       <svg
         className="w-6 h-6"
@@ -241,9 +234,9 @@ export default function Home() {
               </h1>
 
               <p className="text-lg md:text-xl text-gray-400 leading-relaxed mb-8 max-w-lg">
-                A compiled, type-safe language with native performance, a
-                modern toolchain, and a clear roadmap toward AI-native
-                workflows. No VM, no GC, no compromise.
+                A compiled, type-safe language with native performance and a
+                modern toolchain. Small, honest core. No VM, no GC, no
+                compromise.
               </p>
 
               <div className="flex flex-wrap gap-4">
@@ -378,7 +371,7 @@ export default function Home() {
           </h2>
           <p className="text-gray-400 text-lg max-w-2xl mx-auto">
             A language designed from scratch for the next era of software --
-            fast today, with a credible path toward AI-native workflows.
+            fast today, with a small core the authors are willing to freeze.
           </p>
         </div>
 
@@ -410,8 +403,8 @@ export default function Home() {
               Expressive by Default
             </h2>
             <p className="text-gray-400 text-lg max-w-2xl mx-auto">
-              Pattern matching, async concurrency, and the language direction
-              behind Turbo&apos;s agent roadmap -- all with clean, readable syntax.
+              Pattern matching, async concurrency, and HTTP+JSON servers --
+              all with clean, readable syntax.
             </p>
           </div>
 

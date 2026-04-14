@@ -514,7 +514,7 @@ fn test_cache_expiry() {
 - Ships with the compiler, not a separate install
 - Features: autocomplete, go to definition, find references, rename, inline hints, hover docs, error diagnostics, code actions
 - Real-time type information and error reporting
-- Agent/tool-aware: autocomplete tool names, validate agent configs
+- Surfaces types from sidecar libraries (e.g. the planned `turbo-agent`) through their public APIs — the LSP itself has no built-in agent/tool keyword support, because those are library types, not compiler features
 - Inspired by: rust-analyzer, gopls, TypeScript language service
 
 ### Benchmarking: `turbolang bench`
