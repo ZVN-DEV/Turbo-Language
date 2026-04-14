@@ -3,6 +3,11 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+- WASM codegen: `defer` statements are now lowered correctly (LIFO at scope exit). Previously they were silently dropped, producing wrong semantics when targeting WASM.
+
 ## [0.7.6] - 2026-04-13
 
 Trust and release hardening follow-up. This release replaces implicit HTTP response typing with explicit helpers, makes shell execution more explicit, adds server runtime guardrails, promotes the web dashboard as the flagship runnable demo, and hardens the release/install path.
