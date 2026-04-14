@@ -3,6 +3,28 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.6] - 2026-04-13
+
+Trust and release hardening follow-up. This release replaces implicit HTTP response typing with explicit helpers, makes shell execution more explicit, adds server runtime guardrails, promotes the web dashboard as the flagship runnable demo, and hardens the release/install path.
+
+### Changed
+- Added explicit HTTP response helpers: `respond_text`, `respond_html`, and `respond_json`.
+- `exec()` is now mirrored by the clearer `shell_exec()` name and remains gated behind `@unsafe`.
+- Public docs and website copy now consistently distinguish shipped capabilities from roadmap work.
+- `web-dashboard` is now the recommended first-run demo across README, examples, and website docs.
+
+### Fixed
+- Browser-facing Turbo demos now emit explicit content types instead of relying on fragile heuristics.
+- Roadmap auth examples no longer normalize insecure JWT secret defaults or permissive bind/CORS defaults.
+- Playground version, error-code docs, and metadata drift were cleaned up.
+
+### Security
+- Release workflows are pinned to immutable GitHub Action SHAs.
+- `install.sh --verify` now verifies a signed release manifest before trusting tarball checksums.
+- HTTP servers now reject invalid server IDs and apply a connection cap with 503 backpressure when overloaded.
+
+---
+
 ## [0.7.5] - 2026-04-13
 
 Pre-launch hardening sprint. Fixed critical runtime security issues,
