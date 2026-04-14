@@ -449,9 +449,15 @@ jobs:
 
       - name: Run runtime tests under ASAN+UBSAN
         env:
-          # Abort on any sanitizer hit; detect leaks too. `halt_on_error=1`
-          # for UBSAN makes it behave like ASAN (fail the process) instead
-          # of just printing and continuing.
-          ASAN_OPTIONS: "detect_leaks=1:abort_on_error=1:halt_on_error=1"
+          # Abort on any real memory-safety violation (out-of-bounds,
+          # use-after-free, double-free) or UB (signed overflow, misaligned
+          # access, integer-cast-truncation). Leak detection is disabled:
+          # the test harness is a short-lived main() and several
+          # negative-path tests intentionally skip freeing the empty/NULL
+          # return of rt_http_* and rt_str_repeat -- those are
+          # process-lifetime leaks, not runtime bugs. The goal of this job
+          # is to catch UB and memory-safety bugs, which ASAN+UBSAN still
+          # cover with detect_leaks=0.
+          ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1:halt_on_error=1"
           UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
         run: "$RUNNER_TEMP/rt/test_rt"

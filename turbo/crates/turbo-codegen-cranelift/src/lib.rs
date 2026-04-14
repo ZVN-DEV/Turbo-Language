@@ -69,7 +69,7 @@ const RUNTIME_WASM_C: &str = include_str!("../runtime/turbo_rt_wasm.c");
 const MAX_INLINE_DEPTH: usize = 2;
 
 /// Maximum expression recursion depth during codegen. Matches the parser
-/// limit ([`turbo_parser::MAX_PARSER_DEPTH`]) so any AST the parser accepts
+/// limit (`turbo_parser::MAX_PARSER_DEPTH`) so any AST the parser accepts
 /// cannot then blow codegen's stack. Exceeding this limit produces an
 /// `E0516` codegen error instead of a segfault.
 pub const MAX_CODEGEN_DEPTH: usize = 256;
@@ -2806,8 +2806,7 @@ mod tests {
                 let isa = isa_builder
                     .finish(settings::Flags::new(flag_builder))
                     .unwrap();
-                let builder =
-                    JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+                let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
                 let mut module = JITModule::new(builder);
                 let ptr_type = module.target_config().pointer_type();
 
