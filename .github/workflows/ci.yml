@@ -196,7 +196,9 @@ jobs:
   llvm-backend:
     name: LLVM backend (build + test)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # Hard-required now that struct destructuring, if-let, and optional
+    # chaining are implemented. The three features were the last TODOs
+    # gating the fence; see CHANGELOG.md under [Unreleased] for details.
     # Only run when LLVM-related files change, or on pushes to master
     if: >-
       github.event_name == 'push' ||
