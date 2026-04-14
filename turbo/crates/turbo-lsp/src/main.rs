@@ -24,9 +24,15 @@
 //! # extension at editors/vscode/ does this out of the box.
 //! ```
 
-use lsp_server::{Connection, Message, Notification, Response};
+use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response};
 use lsp_types::*;
 use std::collections::{HashMap, HashSet};
+
+/// JSON-RPC 2.0 standard error codes we surface to clients. Kept as local
+/// constants so handler sites read as "return `invalid_params(...)`" rather
+/// than sprinkling magic numbers.
+const INVALID_PARAMS: i32 = ErrorCode::InvalidParams as i32;
+const INTERNAL_ERROR: i32 = ErrorCode::InternalError as i32;
 
 mod code_actions;
 mod rename;
@@ -119,199 +125,17 @@ fn main() {
                 }
                 _ => {}
             },
-            Message::Request(req) => match req.method.as_str() {
-                "textDocument/hover" => {
-                    let params: HoverParams = match serde_json::from_value(req.params.clone()) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            eprintln!("turbo-lsp: bad hover params: {e}");
-                            let _ = send_response(
-                                &connection,
-                                Response::new_ok(req.id, serde_json::Value::Null),
-                            );
-                            continue;
-                        }
-                    };
-                    let uri = &params.text_document_position_params.text_document.uri;
-                    let pos = params.text_document_position_params.position;
-                    let hover = documents.get(uri).and_then(|text| compute_hover(text, pos));
-                    let result = serde_json::to_value(hover).unwrap_or(serde_json::Value::Null);
-                    let _ = send_response(&connection, Response::new_ok(req.id, result));
-                }
-                "textDocument/definition" => {
-                    let params: GotoDefinitionParams =
-                        match serde_json::from_value(req.params.clone()) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                eprintln!("turbo-lsp: bad definition params: {e}");
-                                let _ = send_response(
-                                    &connection,
-                                    Response::new_ok(req.id, serde_json::Value::Null),
-                                );
-                                continue;
-                            }
-                        };
-                    let uri = &params.text_document_position_params.text_document.uri;
-                    let pos = params.text_document_position_params.position;
-                    let location = documents
-                        .get(uri)
-                        .and_then(|text| compute_definition(text, pos, uri));
-                    let result = serde_json::to_value(location.map(GotoDefinitionResponse::Scalar))
-                        .unwrap_or(serde_json::Value::Null);
-                    let _ = send_response(&connection, Response::new_ok(req.id, result));
-                }
-                "textDocument/completion" => {
-                    let params: CompletionParams = match serde_json::from_value(req.params.clone())
-                    {
-                        Ok(p) => p,
-                        Err(e) => {
-                            eprintln!("turbo-lsp: bad completion params: {e}");
-                            let _ = send_response(
-                                &connection,
-                                Response::new_ok(req.id, serde_json::Value::Null),
-                            );
-                            continue;
-                        }
-                    };
-                    let uri = &params.text_document_position.text_document.uri;
-                    let pos = params.text_document_position.position;
-                    let result = documents
-                        .get(uri)
-                        .map(|text| CompletionResponse::Array(compute_completion_items(text, pos)));
-                    let value = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
-                    let _ = send_response(&connection, Response::new_ok(req.id, value));
-                }
-                "textDocument/references" => {
-                    let params: ReferenceParams = match serde_json::from_value(req.params.clone()) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            eprintln!("turbo-lsp: bad references params: {e}");
-                            let _ = send_response(
-                                &connection,
-                                Response::new_ok(req.id, serde_json::Value::Null),
-                            );
-                            continue;
-                        }
-                    };
-                    let uri = &params.text_document_position.text_document.uri;
-                    let pos = params.text_document_position.position;
-                    let refs = documents.get(uri).map(|text| {
-                        compute_references(text, pos, uri, params.context.include_declaration)
-                    });
-                    let value = serde_json::to_value(refs).unwrap_or(serde_json::Value::Null);
-                    let _ = send_response(&connection, Response::new_ok(req.id, value));
-                }
-                "textDocument/documentSymbol" => {
-                    let params: DocumentSymbolParams =
-                        match serde_json::from_value(req.params.clone()) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                eprintln!("turbo-lsp: bad documentSymbol params: {e}");
-                                let _ = send_response(
-                                    &connection,
-                                    Response::new_ok(req.id, serde_json::Value::Null),
-                                );
-                                continue;
-                            }
-                        };
-                    let uri = &params.text_document.uri;
-                    let result = documents
-                        .get(uri)
-                        .map(|text| DocumentSymbolResponse::Nested(compute_document_symbols(text)));
-                    let value = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
-                    let _ = send_response(&connection, Response::new_ok(req.id, value));
-                }
-                "textDocument/prepareRename" => {
-                    let params: TextDocumentPositionParams =
-                        match serde_json::from_value(req.params.clone()) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                eprintln!("turbo-lsp: bad prepareRename params: {e}");
-                                let _ = send_response(
-                                    &connection,
-                                    Response::new_ok(req.id, serde_json::Value::Null),
-                                );
-                                continue;
-                            }
-                        };
-                    let uri = &params.text_document.uri;
-                    let resp = documents
-                        .get(uri)
-                        .and_then(|text| rename::compute_prepare_rename(text, &params));
-                    let value = serde_json::to_value(resp).unwrap_or(serde_json::Value::Null);
-                    let _ = send_response(&connection, Response::new_ok(req.id, value));
-                }
-                "textDocument/rename" => {
-                    let params: RenameParams = match serde_json::from_value(req.params.clone()) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            eprintln!("turbo-lsp: bad rename params: {e}");
-                            let _ = send_response(
-                                &connection,
-                                Response::new_ok(req.id, serde_json::Value::Null),
-                            );
-                            continue;
-                        }
-                    };
-                    let uri = &params.text_document_position.text_document.uri;
-                    let edit = documents
-                        .get(uri)
-                        .and_then(|text| rename::compute_rename(text, &params));
-                    let value = serde_json::to_value(edit).unwrap_or(serde_json::Value::Null);
-                    let _ = send_response(&connection, Response::new_ok(req.id, value));
-                }
-                "textDocument/codeAction" => {
-                    let params: CodeActionParams = match serde_json::from_value(req.params.clone())
-                    {
-                        Ok(p) => p,
-                        Err(e) => {
-                            eprintln!("turbo-lsp: bad codeAction params: {e}");
-                            let _ = send_response(
-                                &connection,
-                                Response::new_ok(req.id, serde_json::Value::Null),
-                            );
-                            continue;
-                        }
-                    };
-                    let actions = code_actions::compute_code_actions(&params);
-                    let value = serde_json::to_value(actions).unwrap_or(serde_json::Value::Null);
-                    let _ = send_response(&connection, Response::new_ok(req.id, value));
-                }
-                "textDocument/semanticTokens/full" => {
-                    let params: SemanticTokensParams =
-                        match serde_json::from_value(req.params.clone()) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                eprintln!("turbo-lsp: bad semanticTokens params: {e}");
-                                let _ = send_response(
-                                    &connection,
-                                    Response::new_ok(req.id, serde_json::Value::Null),
-                                );
-                                continue;
-                            }
-                        };
-                    let uri = &params.text_document.uri;
-                    let tokens = documents
-                        .get(uri)
-                        .map(|text| semantic_tokens::compute_semantic_tokens(text))
-                        .map(SemanticTokensResult::Tokens);
-                    let value = serde_json::to_value(tokens).unwrap_or(serde_json::Value::Null);
-                    let _ = send_response(&connection, Response::new_ok(req.id, value));
-                }
-                "shutdown" => {
+            Message::Request(req) => {
+                if req.method == "shutdown" {
                     let _ = send_response(
                         &connection,
                         Response::new_ok(req.id, serde_json::Value::Null),
                     );
                     break;
                 }
-                _ => {
-                    let _ = send_response(
-                        &connection,
-                        Response::new_ok(req.id, serde_json::Value::Null),
-                    );
-                }
-            },
+                let response = dispatch_request(req, &documents);
+                let _ = send_response(&connection, response);
+            }
             _ => {}
         }
     }
@@ -330,6 +154,231 @@ fn send_response(connection: &Connection, response: Response) -> Result<(), Stri
             eprintln!("turbo-lsp: failed to send response: {e}");
             e.to_string()
         })
+}
+
+// ---------------------------------------------------------------------------
+// Request dispatch
+//
+// Every handler below is fallible: on malformed client input it returns a
+// proper JSON-RPC `Response::new_err` with the standard `InvalidParams` code
+// (-32602), and on an internal bug it returns `InternalError` (-32603). The
+// server must stay alive regardless of what a misbehaving editor sends, so
+// panics and unwraps on client-derived data are forbidden in this section.
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
+fn dispatch_request(req: Request, documents: &HashMap<Uri, String>) -> Response {
+    let id = req.id.clone();
+    let result: Result<serde_json::Value, (i32, String)> = match req.method.as_str() {
+        "textDocument/hover" => handle_hover(req.params, documents),
+        "textDocument/definition" => handle_definition(req.params, documents),
+        "textDocument/completion" => handle_completion(req.params, documents),
+        "textDocument/references" => handle_references(req.params, documents),
+        "textDocument/documentSymbol" => handle_document_symbol(req.params, documents),
+        "textDocument/prepareRename" => handle_prepare_rename(req.params, documents),
+        "textDocument/rename" => handle_rename(req.params, documents),
+        "textDocument/codeAction" => handle_code_action(req.params, documents),
+        "textDocument/semanticTokens/full" => handle_semantic_tokens(req.params, documents),
+        // Unknown methods get an empty success response: lsp-server already
+        // logs them, and some clients probe for optional capabilities this way.
+        _ => Ok(serde_json::Value::Null),
+    };
+
+    match result {
+        Ok(value) => Response::new_ok(id, value),
+        Err((code, message)) => {
+            eprintln!("turbo-lsp: {} ({code}): {message}", req.method);
+            Response::new_err(id, code, message)
+        }
+    }
+}
+
+/// Wrap a serde_json deserialize error into an `InvalidParams` response.
+fn invalid_params(method: &str, err: impl std::fmt::Display) -> (i32, String) {
+    (INVALID_PARAMS, format!("invalid {method} params: {err}"))
+}
+
+/// Wrap a serde_json serialize error into an `InternalError` response. This
+/// should effectively never fire (we only serialize types we control), but
+/// panicking here would still kill the server.
+fn serialize_error(err: impl std::fmt::Display) -> (i32, String) {
+    (
+        INTERNAL_ERROR,
+        format!("failed to serialize response: {err}"),
+    )
+}
+
+/// Validate that a position lies inside the given document. Returns an
+/// `InvalidParams` error for positions past the end of file so a malformed
+/// rename request surfaces as a proper LSP error instead of a silent null.
+fn validate_position(source: &str, pos: Position, method: &str) -> Result<(), (i32, String)> {
+    if position_to_offset(source, pos).is_none() {
+        return Err((
+            INVALID_PARAMS,
+            format!(
+                "{method}: position {line}:{char} is past end of document",
+                line = pos.line,
+                char = pos.character
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate that an LSP range is well-formed (start <= end). The LSP spec
+/// allows an empty range (start == end) to mean "cursor", so we only reject
+/// ranges where the end precedes the start.
+fn validate_range(range: Range, method: &str) -> Result<(), (i32, String)> {
+    let start = (range.start.line, range.start.character);
+    let end = (range.end.line, range.end.character);
+    if end < start {
+        return Err((
+            INVALID_PARAMS,
+            format!("{method}: range end precedes range start"),
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
+fn handle_hover(
+    params: serde_json::Value,
+    documents: &HashMap<Uri, String>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let params: HoverParams =
+        serde_json::from_value(params).map_err(|e| invalid_params("textDocument/hover", e))?;
+    let uri = &params.text_document_position_params.text_document.uri;
+    let pos = params.text_document_position_params.position;
+    let hover = match documents.get(uri) {
+        Some(text) => compute_hover(text, pos),
+        None => None,
+    };
+    serde_json::to_value(hover).map_err(serialize_error)
+}
+
+#[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
+fn handle_definition(
+    params: serde_json::Value,
+    documents: &HashMap<Uri, String>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let params: GotoDefinitionParams =
+        serde_json::from_value(params).map_err(|e| invalid_params("textDocument/definition", e))?;
+    let uri = &params.text_document_position_params.text_document.uri;
+    let pos = params.text_document_position_params.position;
+    let location = match documents.get(uri) {
+        Some(text) => compute_definition(text, pos, uri),
+        None => None,
+    };
+    serde_json::to_value(location.map(GotoDefinitionResponse::Scalar)).map_err(serialize_error)
+}
+
+#[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
+fn handle_completion(
+    params: serde_json::Value,
+    documents: &HashMap<Uri, String>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let params: CompletionParams =
+        serde_json::from_value(params).map_err(|e| invalid_params("textDocument/completion", e))?;
+    let uri = &params.text_document_position.text_document.uri;
+    let pos = params.text_document_position.position;
+    let result = documents
+        .get(uri)
+        .map(|text| CompletionResponse::Array(compute_completion_items(text, pos)));
+    serde_json::to_value(result).map_err(serialize_error)
+}
+
+#[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
+fn handle_references(
+    params: serde_json::Value,
+    documents: &HashMap<Uri, String>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let params: ReferenceParams =
+        serde_json::from_value(params).map_err(|e| invalid_params("textDocument/references", e))?;
+    let uri = &params.text_document_position.text_document.uri;
+    let pos = params.text_document_position.position;
+    let refs = documents
+        .get(uri)
+        .map(|text| compute_references(text, pos, uri, params.context.include_declaration));
+    serde_json::to_value(refs).map_err(serialize_error)
+}
+
+#[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
+fn handle_document_symbol(
+    params: serde_json::Value,
+    documents: &HashMap<Uri, String>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let params: DocumentSymbolParams = serde_json::from_value(params)
+        .map_err(|e| invalid_params("textDocument/documentSymbol", e))?;
+    let uri = &params.text_document.uri;
+    let result = documents
+        .get(uri)
+        .map(|text| DocumentSymbolResponse::Nested(compute_document_symbols(text)));
+    serde_json::to_value(result).map_err(serialize_error)
+}
+
+#[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
+fn handle_prepare_rename(
+    params: serde_json::Value,
+    documents: &HashMap<Uri, String>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let params: TextDocumentPositionParams = serde_json::from_value(params)
+        .map_err(|e| invalid_params("textDocument/prepareRename", e))?;
+    let uri = &params.text_document.uri;
+    if let Some(text) = documents.get(uri) {
+        validate_position(text, params.position, "textDocument/prepareRename")?;
+    }
+    let resp = documents
+        .get(uri)
+        .and_then(|text| rename::compute_prepare_rename(text, &params));
+    serde_json::to_value(resp).map_err(serialize_error)
+}
+
+#[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
+fn handle_rename(
+    params: serde_json::Value,
+    documents: &HashMap<Uri, String>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let params: RenameParams =
+        serde_json::from_value(params).map_err(|e| invalid_params("textDocument/rename", e))?;
+    let uri = &params.text_document_position.text_document.uri;
+    if let Some(text) = documents.get(uri) {
+        validate_position(
+            text,
+            params.text_document_position.position,
+            "textDocument/rename",
+        )?;
+    }
+    let edit = documents
+        .get(uri)
+        .and_then(|text| rename::compute_rename(text, &params));
+    serde_json::to_value(edit).map_err(serialize_error)
+}
+
+#[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
+fn handle_code_action(
+    params: serde_json::Value,
+    _documents: &HashMap<Uri, String>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let params: CodeActionParams =
+        serde_json::from_value(params).map_err(|e| invalid_params("textDocument/codeAction", e))?;
+    validate_range(params.range, "textDocument/codeAction")?;
+    let actions = code_actions::compute_code_actions(&params);
+    serde_json::to_value(actions).map_err(serialize_error)
+}
+
+#[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
+fn handle_semantic_tokens(
+    params: serde_json::Value,
+    documents: &HashMap<Uri, String>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let params: SemanticTokensParams = serde_json::from_value(params)
+        .map_err(|e| invalid_params("textDocument/semanticTokens/full", e))?;
+    let uri = &params.text_document.uri;
+    let tokens = documents
+        .get(uri)
+        .map(|text| semantic_tokens::compute_semantic_tokens(text))
+        .map(SemanticTokensResult::Tokens);
+    serde_json::to_value(tokens).map_err(serialize_error)
 }
 
 // ---------------------------------------------------------------------------
@@ -1227,5 +1276,198 @@ mod tests {
             format_type(&turbo_ast::TypeExpr::Array(Box::new(inner))),
             "[i32]"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Robustness tests: malformed client input must never crash the server.
+    // These drive the request dispatch layer with adversarial JSON to make
+    // sure every public LSP method returns a JSON-RPC error response
+    // (InvalidParams / InternalError) rather than panicking the event loop.
+    // -----------------------------------------------------------------------
+
+    use serde_json::json;
+
+    // `lsp_types::Uri` has interior mutability (cached parts), so any
+    // `HashMap<Uri, _>` trips `clippy::mutable_key_type`. The maps here are
+    // built by the tests and never mutated through their keys — it is a
+    // false positive in every one of these fixtures.
+    #[allow(clippy::mutable_key_type)]
+    fn empty_docs() -> HashMap<Uri, String> {
+        HashMap::new()
+    }
+
+    #[allow(clippy::mutable_key_type)]
+    fn docs_with(uri: &str, text: &str) -> HashMap<Uri, String> {
+        let mut docs = HashMap::new();
+        docs.insert(uri.parse::<Uri>().unwrap(), text.to_string());
+        docs
+    }
+
+    fn make_request(method: &str, params: serde_json::Value) -> Request {
+        Request {
+            id: RequestId::from(1),
+            method: method.to_string(),
+            params,
+        }
+    }
+
+    // A RequestId constructor is only reachable via the trait impl, so
+    // re-export it here instead of at the top of the file (it is unused
+    // outside of tests).
+    use lsp_server::RequestId;
+
+    #[test]
+    fn rename_missing_position_field_returns_invalid_params() {
+        // `textDocument/rename` requires a `position` field. Drop it.
+        let bad = json!({
+            "textDocument": { "uri": "file:///t.tb" },
+            "newName": "renamed",
+        });
+        let resp = dispatch_request(make_request("textDocument/rename", bad), &empty_docs());
+        let err = resp
+            .error
+            .expect("expected JSON-RPC error for missing position");
+        assert_eq!(err.code, INVALID_PARAMS);
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)]
+    fn rename_position_past_eof_returns_invalid_params() {
+        let docs = docs_with("file:///t.tb", "fn main() {}");
+        let params = json!({
+            "textDocument": { "uri": "file:///t.tb" },
+            "position": { "line": 9999, "character": 9999 },
+            "newName": "renamed",
+        });
+        let resp = dispatch_request(make_request("textDocument/rename", params), &docs);
+        let err = resp
+            .error
+            .expect("expected error for out-of-range position");
+        assert_eq!(err.code, INVALID_PARAMS);
+        assert!(err.message.contains("past end"));
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)]
+    fn prepare_rename_position_past_eof_returns_invalid_params() {
+        let docs = docs_with("file:///t.tb", "fn main() {}");
+        let params = json!({
+            "textDocument": { "uri": "file:///t.tb" },
+            "position": { "line": 9999, "character": 9999 },
+        });
+        let resp = dispatch_request(make_request("textDocument/prepareRename", params), &docs);
+        let err = resp
+            .error
+            .expect("expected error for out-of-range prepareRename");
+        assert_eq!(err.code, INVALID_PARAMS);
+    }
+
+    #[test]
+    fn code_action_inverted_range_returns_invalid_params() {
+        // Range where `end` precedes `start` — an empty range (start == end)
+        // is legal per the LSP spec, so we only reject truly malformed ones.
+        let params = json!({
+            "textDocument": { "uri": "file:///t.tb" },
+            "range": {
+                "start": { "line": 5, "character": 10 },
+                "end":   { "line": 1, "character": 0 },
+            },
+            "context": { "diagnostics": [] },
+        });
+        let resp = dispatch_request(
+            make_request("textDocument/codeAction", params),
+            &empty_docs(),
+        );
+        let err = resp.error.expect("expected error for inverted range");
+        assert_eq!(err.code, INVALID_PARAMS);
+    }
+
+    #[test]
+    fn code_action_empty_range_is_ok() {
+        // An empty (zero-width) range is a valid LSP "cursor position" signal.
+        // It must produce a success response, not an error.
+        let params = json!({
+            "textDocument": { "uri": "file:///t.tb" },
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end":   { "line": 0, "character": 0 },
+            },
+            "context": { "diagnostics": [] },
+        });
+        let resp = dispatch_request(
+            make_request("textDocument/codeAction", params),
+            &empty_docs(),
+        );
+        assert!(resp.error.is_none(), "empty range should be accepted");
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)]
+    fn hover_on_whitespace_returns_null_not_error() {
+        // Per the LSP spec hovering on a non-token location should succeed
+        // (usually with `null`), never panic. The lexer treats newline as a
+        // token so the exact payload depends on cursor placement, but the
+        // contract we care about here is "no error response".
+        let docs = docs_with("file:///t.tb", "fn main() {}   \n");
+        let params = json!({
+            "textDocument": { "uri": "file:///t.tb" },
+            // Sitting on the trailing spaces (char 13) — no token covers
+            // that offset.
+            "position": { "line": 0, "character": 13 },
+        });
+        let resp = dispatch_request(make_request("textDocument/hover", params), &docs);
+        assert!(resp.error.is_none(), "hover on whitespace must succeed");
+        assert_eq!(resp.result, Some(serde_json::Value::Null));
+    }
+
+    #[test]
+    fn hover_with_malformed_params_returns_invalid_params() {
+        let resp = dispatch_request(
+            make_request("textDocument/hover", json!({"bogus": true})),
+            &empty_docs(),
+        );
+        let err = resp
+            .error
+            .expect("expected error for malformed hover params");
+        assert_eq!(err.code, INVALID_PARAMS);
+    }
+
+    #[test]
+    fn unknown_method_is_ignored_not_crashed() {
+        // Unknown request methods must not crash or error — lsp-server's own
+        // fallback is a null success response, and we match that behaviour
+        // so that client capability probes work.
+        let resp = dispatch_request(
+            make_request("textDocument/nonexistent", json!({})),
+            &empty_docs(),
+        );
+        assert!(resp.error.is_none());
+        assert_eq!(resp.result, Some(serde_json::Value::Null));
+    }
+
+    #[test]
+    fn every_request_method_handles_malformed_params() {
+        // Smoke-test: send `null` as params to every method we implement
+        // and assert the dispatcher never panics and always returns an
+        // InvalidParams response (except `shutdown`, which is short-circuited
+        // by the main loop before dispatch_request).
+        let methods = [
+            "textDocument/hover",
+            "textDocument/definition",
+            "textDocument/completion",
+            "textDocument/references",
+            "textDocument/documentSymbol",
+            "textDocument/prepareRename",
+            "textDocument/rename",
+            "textDocument/codeAction",
+            "textDocument/semanticTokens/full",
+        ];
+        for method in methods {
+            let resp = dispatch_request(make_request(method, json!(null)), &empty_docs());
+            let err = resp
+                .error
+                .unwrap_or_else(|| panic!("{method}: expected error for null params"));
+            assert_eq!(err.code, INVALID_PARAMS, "{method}: wrong error code");
+        }
     }
 }
