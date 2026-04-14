@@ -32,6 +32,11 @@ struct CEmitter {
     var_types: HashMap<String, String>,
     /// Function return type tracking: function name -> simplified type tag
     fn_return_types: HashMap<String, String>,
+    /// Per-scope stack of deferred expressions. Each entry is a scope;
+    /// the inner `Vec<Expr>` holds the deferred expressions in the order
+    /// they were encountered (they will be emitted in LIFO order at scope
+    /// exit, matching the Cranelift backend's semantics).
+    defer_stack: Vec<Vec<Expr>>,
 }
 
 impl CEmitter {
@@ -46,6 +51,45 @@ impl CEmitter {
             enum_variants: HashMap::new(),
             var_types: HashMap::new(),
             fn_return_types: HashMap::new(),
+            defer_stack: Vec::new(),
+        }
+    }
+
+    /// Push a new defer scope. Call at the start of every block that may
+    /// contain `defer` statements.
+    fn push_defer_scope(&mut self) {
+        self.defer_stack.push(Vec::new());
+    }
+
+    /// Pop the current defer scope, returning its deferred expressions
+    /// (in LIFO/reverse order — ready to emit at scope exit).
+    fn pop_defer_scope(&mut self) -> Vec<Expr> {
+        let mut scope = self.defer_stack.pop().unwrap_or_default();
+        scope.reverse();
+        scope
+    }
+
+    /// Emit every currently-live deferred expression (across all active
+    /// scopes, innermost first, LIFO within each scope) into `buf`. Used
+    /// to run all pending cleanup before an early `return`.
+    fn emit_all_deferred_for_return(&mut self, buf: &mut String) {
+        // Clone the active scopes so we don't mutate the stack itself —
+        // the block they live in still owns them and will emit on normal exit.
+        let scopes: Vec<Vec<Expr>> = self.defer_stack.iter().rev().cloned().collect();
+        for scope in scopes {
+            for expr in scope.into_iter().rev() {
+                let e = self.emit_expr(&expr);
+                writeln!(buf, "{}{e};", self.indent_str()).unwrap();
+            }
+        }
+    }
+
+    /// Emit the deferred expressions returned by `pop_defer_scope` into
+    /// `buf` (they arrive already in LIFO order).
+    fn emit_popped_deferred(&mut self, buf: &mut String, deferred: Vec<Expr>) {
+        for expr in deferred {
+            let e = self.emit_expr(&expr);
+            writeln!(buf, "{}{e};", self.indent_str()).unwrap();
         }
     }
 
@@ -316,14 +360,38 @@ impl CEmitter {
             }
             Expr::Block { stmts, tail_expr } => {
                 // Use GCC statement expression extension: ({ stmt; stmt; expr; })
+                self.push_defer_scope();
                 let mut parts = Vec::new();
                 for stmt in stmts {
                     let s = self.emit_stmt_to_string(&stmt.node);
-                    parts.push(s);
+                    if !s.is_empty() {
+                        parts.push(s);
+                    }
                 }
+                // For a block in value position, the deferred expressions
+                // must run *after* the tail expression is evaluated but
+                // *before* the statement-expression yields its value. Stash
+                // the tail into a temp, run defers, then yield the temp.
+                let deferred = self.pop_defer_scope();
                 if let Some(tail) = tail_expr {
                     let e = self.emit_expr(&tail.node);
-                    parts.push(format!("{e};"));
+                    if deferred.is_empty() {
+                        parts.push(format!("{e};"));
+                    } else {
+                        let tmp = self.fresh_tmp();
+                        let c_type = self.infer_c_type(&tail.node);
+                        parts.push(format!("{c_type} {tmp} = ({c_type})({e});"));
+                        for dex in deferred {
+                            let d = self.emit_expr(&dex);
+                            parts.push(format!("{d};"));
+                        }
+                        parts.push(format!("{tmp};"));
+                    }
+                } else {
+                    for dex in deferred {
+                        let d = self.emit_expr(&dex);
+                        parts.push(format!("{d};"));
+                    }
                 }
                 if parts.is_empty() {
                     "0".to_string()
@@ -746,7 +814,19 @@ impl CEmitter {
                 format!("return {e};")
             }
             Stmt::Return(None) => "return;".to_string(),
-            Stmt::Defer(_) => "/* defer not supported in wasm codegen */".to_string(),
+            Stmt::Defer(expr) => {
+                // Record the deferred expression for the innermost scope.
+                // It will be emitted in LIFO order at scope exit.
+                if let Some(scope) = self.defer_stack.last_mut() {
+                    scope.push(expr.node.clone());
+                } else {
+                    // Defer outside any tracked scope is a programmer error;
+                    // drop it with a warning comment so it's auditable in the
+                    // emitted C rather than silently swallowed.
+                    return "/* defer outside tracked scope — dropped */".to_string();
+                }
+                String::new()
+            }
             Stmt::LetDestructure { fields, value, .. } => {
                 let v = self.emit_expr(&value.node);
                 let tmp = self.fresh_tmp();
@@ -834,17 +914,46 @@ impl CEmitter {
     fn emit_block_body(&mut self, expr: &Expr, buf: &mut String, is_void: bool) {
         match expr {
             Expr::Block { stmts, tail_expr } => {
+                self.push_defer_scope();
                 for stmt in stmts {
                     self.emit_stmt(buf, &stmt.node, is_void);
                 }
                 if let Some(tail) = tail_expr {
                     if is_void {
-                        // In a void context, emit the tail as a statement
+                        // In a void context, emit the tail as a statement,
+                        // then emit the scope's deferreds in LIFO order
+                        // before falling off.
                         self.emit_stmt(buf, &Stmt::Expr((**tail).clone()), is_void);
+                        let deferred = self.pop_defer_scope();
+                        self.emit_popped_deferred(buf, deferred);
                     } else {
+                        // Value-returning tail: stash into a temp, run the
+                        // defers, then `return` the temp. This mirrors the
+                        // Cranelift backend's ordering (tail evaluated,
+                        // defers run LIFO, function returns the tail value).
                         let e = self.emit_expr(&tail.node);
-                        writeln!(buf, "{}return {e};", self.indent_str()).unwrap();
+                        let deferred = self.pop_defer_scope();
+                        if deferred.is_empty() {
+                            writeln!(buf, "{}return {e};", self.indent_str()).unwrap();
+                        } else {
+                            let tmp = self.fresh_tmp();
+                            let c_type = self.infer_c_type(&tail.node);
+                            writeln!(
+                                buf,
+                                "{}{c_type} {tmp} = ({c_type})({e});",
+                                self.indent_str()
+                            )
+                            .unwrap();
+                            self.emit_popped_deferred(buf, deferred);
+                            writeln!(buf, "{}return {tmp};", self.indent_str()).unwrap();
+                        }
                     }
+                } else {
+                    // No tail expression — defers just fire before the
+                    // block falls off. (Any inner `return` statements have
+                    // already flushed deferreds via `emit_all_deferred_for_return`.)
+                    let deferred = self.pop_defer_scope();
+                    self.emit_popped_deferred(buf, deferred);
                 }
             }
             _ => {
@@ -1076,22 +1185,53 @@ impl CEmitter {
                 if is_void {
                     let e = self.emit_expr(&expr.node);
                     writeln!(buf, "{}{e};", self.indent_str()).unwrap();
+                    // Flush every currently-live deferred expression (LIFO)
+                    // before the actual return, matching Cranelift semantics.
+                    self.emit_all_deferred_for_return(buf);
                     writeln!(buf, "{}return;", self.indent_str()).unwrap();
                 } else {
                     let e = self.emit_expr(&expr.node);
-                    writeln!(buf, "{}return {e};", self.indent_str()).unwrap();
+                    // Stash the return value into a temp so the defers can
+                    // observe the "return happens last" sequencing without
+                    // re-evaluating the expression (which might have side
+                    // effects).
+                    if self.defer_stack.iter().any(|s| !s.is_empty()) {
+                        let tmp = self.fresh_tmp();
+                        let c_type = self.infer_c_type(&expr.node);
+                        writeln!(
+                            buf,
+                            "{}{c_type} {tmp} = ({c_type})({e});",
+                            self.indent_str()
+                        )
+                        .unwrap();
+                        self.emit_all_deferred_for_return(buf);
+                        writeln!(buf, "{}return {tmp};", self.indent_str()).unwrap();
+                    } else {
+                        writeln!(buf, "{}return {e};", self.indent_str()).unwrap();
+                    }
                 }
             }
             Stmt::Return(None) => {
+                self.emit_all_deferred_for_return(buf);
                 writeln!(buf, "{}return;", self.indent_str()).unwrap();
             }
-            Stmt::Defer(_) => {
-                writeln!(
-                    buf,
-                    "{}/* defer not supported in wasm */",
-                    self.indent_str()
-                )
-                .unwrap();
+            Stmt::Defer(expr) => {
+                // Record the deferred expression onto the innermost scope.
+                // Actual emission happens at scope exit (or before `return`).
+                if let Some(scope) = self.defer_stack.last_mut() {
+                    scope.push(expr.node.clone());
+                } else {
+                    // Should be unreachable: emit_stmt is only called from
+                    // inside a scope pushed by emit_block_body. Leave a
+                    // breadcrumb so any future refactor that breaks this
+                    // invariant is obvious in the generated C.
+                    writeln!(
+                        buf,
+                        "{}/* defer outside tracked scope — dropped */",
+                        self.indent_str()
+                    )
+                    .unwrap();
+                }
             }
             Stmt::LetDestructure { fields, value, .. } => {
                 let v = self.emit_expr(&value.node);
@@ -1459,4 +1599,141 @@ impl CEmitter {
 pub fn generate_c(module: &turbo_ast::Module) -> String {
     let mut emitter = CEmitter::new();
     emitter.emit_module(module)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compile_to_c(source: &str) -> String {
+        let (tokens, lex_errors) = turbo_lexer::tokenize(source);
+        assert!(lex_errors.is_empty(), "lex errors: {:?}", lex_errors);
+        let (module, parse_errors) = turbo_parser::parse(tokens);
+        assert!(parse_errors.is_empty(), "parse errors: {:?}", parse_errors);
+        generate_c(&module)
+    }
+
+    /// Extract the body of `turbo_main` (the renamed `main`) from the
+    /// emitted C — keeps assertions focused on the relevant fragment.
+    fn turbo_main_body(c: &str) -> String {
+        let marker = "turbo_main(void) {";
+        let start = c.find(marker).expect("turbo_main not emitted");
+        let rest = &c[start + marker.len()..];
+        // Match braces to find the body end.
+        let mut depth = 1usize;
+        for (i, ch) in rest.char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return rest[..i].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unterminated turbo_main body in emitted C");
+    }
+
+    #[test]
+    fn defer_basic_lifo_order() {
+        let c = compile_to_c(
+            r#"
+fn main() {
+    print("start")
+    defer print("deferred 1")
+    defer print("deferred 2")
+    print("middle")
+    print("end")
+}
+"#,
+        );
+        let body = turbo_main_body(&c);
+
+        // All four user prints must appear.
+        for needle in [
+            "\"start\"",
+            "\"middle\"",
+            "\"end\"",
+            "\"deferred 1\"",
+            "\"deferred 2\"",
+        ] {
+            assert!(
+                body.contains(needle),
+                "expected `{}` in emitted body:\n{}",
+                needle,
+                body
+            );
+        }
+
+        // Ordering: the body prints in source order, then defers fire in
+        // LIFO, so "deferred 2" must come before "deferred 1", and both
+        // must come after "end".
+        let pos_end = body.find("\"end\"").expect("missing end");
+        let pos_d1 = body.find("\"deferred 1\"").expect("missing deferred 1");
+        let pos_d2 = body.find("\"deferred 2\"").expect("missing deferred 2");
+        assert!(pos_end < pos_d2, "end must precede deferred 2");
+        assert!(
+            pos_d2 < pos_d1,
+            "LIFO: deferred 2 must precede deferred 1 in emitted C (got d2={} d1={})",
+            pos_d2,
+            pos_d1
+        );
+
+        // And the old "not supported" placeholder must be gone.
+        assert!(
+            !c.contains("defer not supported"),
+            "stale placeholder still emitted:\n{}",
+            c
+        );
+    }
+
+    #[test]
+    fn defer_fires_before_early_return() {
+        let c = compile_to_c(
+            r#"
+fn main() {
+    defer print("cleanup")
+    print("before")
+    return
+    print("after")
+}
+"#,
+        );
+        let body = turbo_main_body(&c);
+
+        // The deferred print must appear between "before" and the return.
+        let pos_before = body.find("\"before\"").expect("missing before");
+        let pos_cleanup = body.find("\"cleanup\"").expect("missing cleanup");
+        let pos_return = body.find("return;").expect("missing return");
+        assert!(
+            pos_before < pos_cleanup,
+            "defer must fire after preceding stmts"
+        );
+        assert!(
+            pos_cleanup < pos_return,
+            "defer must fire before the return (got cleanup={} return={})",
+            pos_cleanup,
+            pos_return
+        );
+    }
+
+    #[test]
+    fn defer_runs_at_fallthrough() {
+        // No explicit return — defer still fires at block end.
+        let c = compile_to_c(
+            r#"
+fn main() {
+    print("a")
+    defer print("z")
+    print("b")
+}
+"#,
+        );
+        let body = turbo_main_body(&c);
+        let pos_b = body.find("\"b\"").expect("missing b");
+        let pos_z = body.find("\"z\"").expect("missing z");
+        assert!(pos_b < pos_z, "defer must fire after tail statements");
+    }
 }

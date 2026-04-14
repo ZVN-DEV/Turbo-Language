@@ -11,6 +11,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 - LSP: malformed `textDocument/rename`, `codeAction`, and `hover` requests now return proper JSON-RPC error responses instead of crashing the server.
+- WASM codegen: `defer` statements are now lowered correctly (LIFO at scope exit). Previously they were silently dropped, producing wrong semantics when targeting WASM.
 
 ---
 
