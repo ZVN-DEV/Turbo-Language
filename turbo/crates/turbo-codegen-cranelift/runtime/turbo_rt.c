@@ -284,13 +284,73 @@ char rt_str_eq(const char *a, const char *b) {
     return strcmp(a, b) == 0 ? 1 : 0;
 }
 
+/* ── Reference-counted allocation header ─────────────────────────────
+ *
+ * Every heap object that participates in ARC (arrays, structs, enums,
+ * channel handles, …) shares a common allocation header layout:
+ *
+ *     raw + 0  : cap        (8 bytes, arrays only — element capacity;
+ *                            zero / unused for non-array types)
+ *     raw + 8  : refcount   (8 bytes)
+ *     raw + 16 : user data  (arrays: [len][elem0][elem1]…,
+ *                            structs: [field0][field1]…,
+ *                            enums:   [tag][payload],
+ *                            …)
+ *
+ * The "data pointer" returned to callers is `raw + RT_RC_HEADER_BYTES`.
+ * rt_retain / rt_release read the refcount at `data_ptr - 8` (unchanged
+ * from the 8-byte-header era) and free from `data_ptr - 16`.
+ *
+ * The cap slot is used by rt_array_push to support amortised O(1)
+ * growth: when the refcount is 1 and `cap > len`, push writes into the
+ * existing allocation in place; otherwise it doubles and reallocates.
+ * Non-array allocations leave the cap slot at zero, where it stays
+ * harmless.
+ *
+ * The 16-byte header also keeps the user-data region 16-byte aligned
+ * on 64-bit hosts, which matches the alignment the arena allocator
+ * already rounds to (see turbo_arena_alloc). */
+#define RT_RC_HEADER_BYTES 16
+
+static inline long long *rt_rc_cap_ptr(void *data_ptr) {
+    return (long long *)((char *)data_ptr - 16);
+}
+
+static inline long long *rt_rc_refcount_ptr(void *data_ptr) {
+    return (long long *)((char *)data_ptr - 8);
+}
+
+/* Allocate a refcount'd heap object with `data_size` user-data bytes
+ * and initial element capacity `cap` (only meaningful for arrays).
+ * Returns the data pointer (not the raw allocation base). */
+static void *rt_rc_alloc(size_t data_size, long long cap) {
+    size_t total = RT_RC_HEADER_BYTES + data_size;
+    void *raw = turbo_calloc(1, total);
+    *(long long *)raw = cap;              /* cap at raw + 0 */
+    *(long long *)((char *)raw + 8) = 1;  /* refcount = 1 */
+    return (char *)raw + RT_RC_HEADER_BYTES;
+}
+
+/* Array allocation: element capacity bound that guarantees the final
+ * `total = RT_RC_HEADER_BYTES + 8 + cap * 8` does not overflow size_t.
+ * Shared by rt_array_alloc and rt_array_push.
+ *
+ * `new_len` is the requested element count. The bound leaves room for
+ * the 16-byte header and the 8-byte length field inside user data. */
+static inline int rt_array_len_fits(long long new_len) {
+    if (new_len < 0) return 0;
+    /* total = RT_RC_HEADER_BYTES + 8 + new_len * 8 must fit in size_t. */
+    return (size_t)new_len <= (SIZE_MAX - (RT_RC_HEADER_BYTES + 8)) / 8;
+}
+
 void* rt_array_alloc(long long len) {
-    size_t data_size = 8 + len * 8;
-    size_t total = 8 + data_size; /* +8 for refcount header */
-    void *ptr = turbo_calloc(1, total);
-    *(long long*)ptr = 1; /* refcount = 1 */
-    void *data_ptr = (char*)ptr + 8;
-    *(long long*)data_ptr = len;
+    if (!rt_array_len_fits(len)) {
+        fprintf(stderr, "runtime error: array alloc size overflow (length %lld)\n", len);
+        exit(1);
+    }
+    size_t data_size = 8 + (size_t)len * 8;
+    void *data_ptr = rt_rc_alloc(data_size, len);
+    *(long long *)data_ptr = len;
     return data_ptr;
 }
 
@@ -305,17 +365,18 @@ long long rt_array_get(const void *arr, long long index) {
 
 void* rt_array_set(void *arr, long long index, long long value) {
     /* COW: check refcount before mutating */
-    long long *rc_ptr = (long long*)((char*)arr - 8);
+    long long *rc_ptr = rt_rc_refcount_ptr(arr);
     long long rc = *rc_ptr;
     void *target;
     if (rc > 1) {
         /* Copy-on-write: make a private copy */
         long long len = *(const long long*)arr;
+        if (!rt_array_len_fits(len)) {
+            fprintf(stderr, "runtime error: array COW size overflow (length %lld)\n", len);
+            exit(1);
+        }
         size_t data_size = (1 + (size_t)len) * 8;
-        size_t total = 8 + data_size;
-        void *new_alloc = turbo_calloc(1, total);
-        *(long long*)new_alloc = 1;
-        void *new_data = (char*)new_alloc + 8;
+        void *new_data = rt_rc_alloc(data_size, len);
         memcpy(new_data, arr, data_size);
         __sync_fetch_and_sub(rc_ptr, 1);
         target = new_data;
@@ -338,12 +399,44 @@ long long rt_array_len(const void *arr) {
 void* rt_array_push(void *arr, long long value) {
     long long old_len = *(const long long*)arr;
     long long new_len = old_len + 1;
-    size_t data_size = 8 + new_len * 8;   /* length field + elements */
-    size_t total = 8 + data_size;          /* + refcount header */
-    void *new_alloc = turbo_calloc(1, total);
-    *(long long*)new_alloc = 1;            /* refcount = 1 */
-    void *new_data = (char*)new_alloc + 8;
-    *(long long*)new_data = new_len;       /* set length */
+    /* Checked-multiply guard: ensure
+     *   total = RT_RC_HEADER_BYTES + 8 + new_len * 8
+     * does not overflow size_t. The practical reach of `long long` on
+     * 64-bit hosts makes this unreachable from normal programs, but
+     * guarding it here turns any miscomputed length (or adversarial
+     * caller) into a clean abort instead of a heap overflow. */
+    if (!rt_array_len_fits(new_len)) {
+        fprintf(stderr, "runtime error: array push size overflow\n");
+        exit(1);
+    }
+
+    long long *rc_ptr = rt_rc_refcount_ptr(arr);
+    long long *cap_ptr = rt_rc_cap_ptr(arr);
+    long long cap = *cap_ptr;
+
+    /* Amortised O(1) growth: when we are the sole owner of this array
+     * (refcount == 1) and the existing allocation has room, write in
+     * place. Otherwise double the capacity (minimum 4) and reallocate.
+     *
+     * Reading refcount with a plain load is safe: any other thread that
+     * holds a reference would have bumped it via rt_retain before we
+     * got here, so rc == 1 means no one else can be observing. */
+    if (cap > old_len && *rc_ptr == 1) {
+        ((long long *)arr)[1 + old_len] = value;
+        *(long long *)arr = new_len;
+        return arr;
+    }
+
+    long long new_cap = cap > 0 ? cap * 2 : 4;
+    if (new_cap < new_len) new_cap = new_len;
+    if (!rt_array_len_fits(new_cap)) {
+        /* Fall back to exact-fit if doubling overflows; the same guard
+         * above already proved new_len itself is safe. */
+        new_cap = new_len;
+    }
+    size_t data_size = 8 + (size_t)new_cap * 8;
+    void *new_data = rt_rc_alloc(data_size, new_cap);
+    *(long long *)new_data = new_len;
     /* Copy old elements */
     memcpy((char*)new_data + 8, (const char*)arr + 8, (size_t)old_len * 8);
     /* Append new element */
@@ -356,12 +449,9 @@ long long rt_str_len(const char *s) {
 }
 
 void* rt_struct_alloc(long long num_fields) {
-    size_t data_size = num_fields * 8;
+    size_t data_size = (size_t)num_fields * 8;
     if (data_size < 8) data_size = 8;
-    size_t total = 8 + data_size; /* +8 for refcount header */
-    void *ptr = turbo_calloc(1, total);
-    *(long long*)ptr = 1; /* refcount = 1 */
-    return (char*)ptr + 8; /* return pointer past refcount */
+    return rt_rc_alloc(data_size, 0);
 }
 
 const char* rt_i64_to_str(long long n) {
@@ -391,19 +481,19 @@ const char* rt_bool_to_str(char b) {
 /* Result type runtime functions */
 
 void* rt_result_ok(long long value) {
-    long long *ptr = (long long*)turbo_calloc(3, sizeof(long long)); /* refcount + tag + value */
-    ptr[0] = 1; /* refcount = 1 */
-    ptr[1] = 0; /* ok tag */
-    ptr[2] = value;
-    return &ptr[1]; /* return pointer past refcount */
+    /* Data layout: [tag (8)][value (8)]. See rt_rc_alloc for the
+     * shared [cap][refcount] header that precedes it. */
+    long long *data = (long long *)rt_rc_alloc(2 * sizeof(long long), 0);
+    data[0] = 0; /* ok tag */
+    data[1] = value;
+    return data;
 }
 
 void* rt_result_err(long long value) {
-    long long *ptr = (long long*)turbo_calloc(3, sizeof(long long)); /* refcount + tag + value */
-    ptr[0] = 1; /* refcount = 1 */
-    ptr[1] = 1; /* err tag */
-    ptr[2] = value;
-    return &ptr[1]; /* return pointer past refcount */
+    long long *data = (long long *)rt_rc_alloc(2 * sizeof(long long), 0);
+    data[0] = 1; /* err tag */
+    data[1] = value;
+    return data;
 }
 
 long long rt_result_tag(const void *result) {
@@ -417,19 +507,17 @@ long long rt_result_value(const void *result) {
 /* Optional type runtime functions */
 
 void* rt_option_some(long long value) {
-    long long *ptr = (long long*)turbo_calloc(3, sizeof(long long)); /* refcount + tag + value */
-    ptr[0] = 1; /* refcount = 1 */
-    ptr[1] = 1; /* some tag */
-    ptr[2] = value;
-    return &ptr[1]; /* return pointer past refcount */
+    long long *data = (long long *)rt_rc_alloc(2 * sizeof(long long), 0);
+    data[0] = 1; /* some tag */
+    data[1] = value;
+    return data;
 }
 
 void* rt_option_none(void) {
-    long long *ptr = (long long*)turbo_calloc(3, sizeof(long long)); /* refcount + tag + value */
-    ptr[0] = 1; /* refcount = 1 */
-    ptr[1] = 0; /* none tag */
-    ptr[2] = 0;
-    return &ptr[1]; /* return pointer past refcount */
+    long long *data = (long long *)rt_rc_alloc(2 * sizeof(long long), 0);
+    data[0] = 0; /* none tag */
+    data[1] = 0;
+    return data;
 }
 
 long long rt_option_tag(const void *opt) {
@@ -455,11 +543,12 @@ void* rt_str_split(const char *s, const char *sep) {
         if (count == 0) count = 1;
     }
 
+    if (!rt_array_len_fits((long long)count)) {
+        fprintf(stderr, "runtime error: array alloc size overflow (split count %zu)\n", count);
+        exit(1);
+    }
     size_t data_size = 8 + count * 8;
-    size_t total = 8 + data_size; /* +8 for refcount header */
-    long long *raw = (long long*)turbo_calloc(1, total);
-    raw[0] = 1; /* refcount = 1 */
-    long long *arr = raw + 1; /* data pointer past refcount */
+    long long *arr = (long long *)rt_rc_alloc(data_size, (long long)count);
     arr[0] = (long long)count;
 
     if (sep_len == 0) {
@@ -674,11 +763,24 @@ const char* rt_str_join(const char *arr_ptr, const char *sep) {
         if (i < len - 1) total += sep_len;
     }
     char *result = (char *)turbo_alloc(total + 1);
-    result[0] = '\0';
+    /* Length-tracked memcpy instead of strcat. strcat re-scans the
+     * growing prefix for its NUL terminator on every call — an O(n^2)
+     * footgun on long joins — and any future miscalculation of `total`
+     * would silently turn into a heap overflow. Tracking the write
+     * offset explicitly makes the write bounded by `total` and O(n). */
+    size_t offset = 0;
     for (long long i = 0; i < len; i++) {
-        if (elems[i]) strcat(result, elems[i]);
-        if (i < len - 1 && sep) strcat(result, sep);
+        if (elems[i]) {
+            size_t n = strlen(elems[i]);
+            memcpy(result + offset, elems[i], n);
+            offset += n;
+        }
+        if (i < len - 1 && sep) {
+            memcpy(result + offset, sep, sep_len);
+            offset += sep_len;
+        }
     }
+    result[offset] = '\0';
     return result;
 }
 
@@ -1126,11 +1228,9 @@ void *rt_channel_create(void) {
     pthread_mutex_init(&q->lock, NULL);
     pthread_cond_init(&q->cond, NULL);
 
-    /* Allocate with refcount header: [refcount: i64][sender_ptr: i64][receiver_ptr: i64] */
-    size_t ch_total = 8 + sizeof(channel_handle); /* +8 for refcount */
-    void *raw = turbo_calloc(1, ch_total);
-    *(long long*)raw = 1; /* refcount = 1 */
-    channel_handle *h = (channel_handle *)((char*)raw + 8);
+    /* Data layout: [sender_ptr: i64][receiver_ptr: i64]; prefixed by
+     * the shared [cap][refcount] header from rt_rc_alloc. */
+    channel_handle *h = (channel_handle *)rt_rc_alloc(sizeof(channel_handle), 0);
     /* Both sender and receiver point to the same queue */
     h->sender_ptr = (long long)(size_t)q;
     h->receiver_ptr = (long long)(size_t)q;
@@ -1176,11 +1276,7 @@ long long rt_channel_recv(const void *ch) {
 
 void *rt_channel_clone_sender(const void *ch) {
     const channel_handle *h = (const channel_handle *)ch;
-    /* Allocate with refcount header */
-    size_t ch_total = 8 + sizeof(channel_handle);
-    void *raw = turbo_calloc(1, ch_total);
-    *(long long*)raw = 1; /* refcount = 1 */
-    channel_handle *nh = (channel_handle *)((char*)raw + 8);
+    channel_handle *nh = (channel_handle *)rt_rc_alloc(sizeof(channel_handle), 0);
     nh->sender_ptr = h->sender_ptr;
     nh->receiver_ptr = h->receiver_ptr;
     return nh;
@@ -1355,12 +1451,14 @@ void *rt_hashmap_keys(const void *map_ptr) {
         }
         key_ptrs[j + 1] = tmp;
     }
-    /* Build array in same format as rt_str_split: [refcount][len][ptr0][ptr1]... */
+    /* Build array in same format as rt_str_split: [len][ptr0][ptr1]...
+     * prefixed by the shared [cap][refcount] header. */
+    if (!rt_array_len_fits(idx)) {
+        fprintf(stderr, "runtime error: array alloc size overflow (hashmap keys %lld)\n", idx);
+        exit(1);
+    }
     size_t data_size = 8 + (size_t)idx * 8;
-    size_t total = 8 + data_size; /* +8 for refcount header */
-    long long *raw = (long long *)turbo_calloc(1, total);
-    raw[0] = 1; /* refcount = 1 */
-    long long *arr = raw + 1; /* data pointer past refcount */
+    long long *arr = (long long *)rt_rc_alloc(data_size, idx);
     arr[0] = idx;
     for (long long i = 0; i < idx; i++) {
         arr[1 + i] = (long long)(size_t)strdup(key_ptrs[i]);
@@ -1964,7 +2062,7 @@ const char* rt_request_body(const char *req) {
 
 void rt_retain(void *data_ptr) {
     if (!data_ptr) return;
-    long long *rc = (long long*)((char*)data_ptr - 8);
+    long long *rc = rt_rc_refcount_ptr(data_ptr);
     __sync_fetch_and_add(rc, 1);
 }
 
@@ -1975,10 +2073,12 @@ void rt_release(void *data_ptr) {
          * rt_arena_end(); never call free() on arena memory. */
         return;
     }
-    long long *rc = (long long*)((char*)data_ptr - 8);
+    long long *rc = rt_rc_refcount_ptr(data_ptr);
     long long prev = __sync_fetch_and_sub(rc, 1);
     if (prev == 1) {
-        free(rc);
+        /* Free from the raw allocation base, which sits RT_RC_HEADER_BYTES
+         * below the data pointer (cap slot at raw+0, refcount at raw+8). */
+        free((char *)data_ptr - RT_RC_HEADER_BYTES);
     }
 }
 

@@ -9,6 +9,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <math.h>
 
@@ -166,7 +167,15 @@ long long rt_array_len(const void *arr) {
 void* rt_array_push(void *arr, long long value) {
     long long old_len = *(const long long*)arr;
     long long new_len = old_len + 1;
-    size_t data_size = 8 + new_len * 8;
+    /* Checked-multiply guard: ensure
+     *   total = 8 + data_size, data_size = 8 + new_len * 8
+     * does not overflow size_t. Turns adversarial or miscomputed
+     * lengths into a clean abort instead of a heap overflow. */
+    if (new_len < 0 || (size_t)new_len > (SIZE_MAX - 16) / 8) {
+        fprintf(stderr, "runtime error: array push size overflow\n");
+        exit(1);
+    }
+    size_t data_size = 8 + (size_t)new_len * 8;
     size_t total = 8 + data_size;
     void *new_alloc = turbo_calloc(1, total);
     *(long long*)new_alloc = 1;
@@ -435,10 +444,13 @@ const char* rt_str_repeat(const char *s, long long count) {
     size_t len = strlen(s);
     size_t total = len * (size_t)count;
     char *result = (char *)turbo_alloc(total + 1);
-    result[0] = '\0';
+    /* Length-tracked memcpy instead of strcat (O(n^2) scan + footgun). */
+    size_t offset = 0;
     for (long long i = 0; i < count; i++) {
-        strcat(result, s);
+        memcpy(result + offset, s, len);
+        offset += len;
     }
+    result[offset] = '\0';
     return result;
 }
 
@@ -461,11 +473,20 @@ const char* rt_str_join(const char *arr_ptr, const char *sep) {
         if (i < len - 1) total += sep_len;
     }
     char *result = (char *)turbo_alloc(total + 1);
-    result[0] = '\0';
+    /* Length-tracked memcpy instead of strcat (O(n^2) scan + footgun). */
+    size_t offset = 0;
     for (long long i = 0; i < len; i++) {
-        if (elems[i]) strcat(result, elems[i]);
-        if (i < len - 1 && sep) strcat(result, sep);
+        if (elems[i]) {
+            size_t n = strlen(elems[i]);
+            memcpy(result + offset, elems[i], n);
+            offset += n;
+        }
+        if (i < len - 1 && sep) {
+            memcpy(result + offset, sep, sep_len);
+            offset += sep_len;
+        }
     }
+    result[offset] = '\0';
     return result;
 }
 

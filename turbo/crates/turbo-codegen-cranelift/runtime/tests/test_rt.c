@@ -19,7 +19,10 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 /* Forward declarations of the runtime functions we exercise. We don't
  * include turbo_rt.c via a header — the runtime intentionally has no
@@ -30,6 +33,12 @@ extern const char *rt_http_get(const char *url);
 extern const char *rt_http_post(const char *url, const char *body);
 extern void rt_arena_begin(void);
 extern void rt_arena_end(void);
+extern const char *rt_str_join(const char *arr_ptr, const char *sep);
+extern void *rt_array_alloc(long long len);
+extern long long rt_array_len(const void *arr);
+extern long long rt_array_get(const void *arr, long long index);
+extern void *rt_array_push(void *arr, long long value);
+extern void rt_release(void *data_ptr);
 
 static int g_failures = 0;
 
@@ -171,6 +180,170 @@ static void test_arena_end_without_begin(void) {
     check("test_arena_end_without_begin is a no-op", 1);
 }
 
+/* ── rt_str_join helpers ───────────────────────────────────────────── */
+/* Build a Turbo string array: raw allocation big enough for
+ * [cap][refcount][len][ptr0][ptr1]…, returning the data pointer that
+ * points at len (same ABI rt_array_alloc produces). We allocate
+ * through rt_array_alloc so the shared header layout stays in sync. */
+static void *make_str_array(const char **strs, long long count) {
+    void *arr = rt_array_alloc(count);
+    long long *slots = (long long *)arr;
+    for (long long i = 0; i < count; i++) {
+        slots[1 + i] = (long long)(size_t)strs[i];
+    }
+    return arr;
+}
+
+/* ── 15: rt_str_join on zero-element array ─────────────────────────── */
+static void test_str_join_empty(void) {
+    void *arr = rt_array_alloc(0);
+    const char *r = rt_str_join((const char *)arr, ",");
+    check("test_str_join_empty returns empty string",
+          r != NULL && r[0] == '\0');
+    rt_release(arr);
+}
+
+/* ── 16: rt_str_join on single element ─────────────────────────────── */
+static void test_str_join_one(void) {
+    const char *strs[] = {"solo"};
+    void *arr = make_str_array(strs, 1);
+    const char *r = rt_str_join((const char *)arr, ", ");
+    check("test_str_join_one == 'solo'",
+          r != NULL && strcmp(r, "solo") == 0);
+    rt_release(arr);
+}
+
+/* ── 17: rt_str_join on many elements ──────────────────────────────── */
+static void test_str_join_many(void) {
+    const char *strs[] = {"a", "bb", "ccc", "dddd"};
+    void *arr = make_str_array(strs, 4);
+    const char *r = rt_str_join((const char *)arr, "-");
+    check("test_str_join_many == 'a-bb-ccc-dddd'",
+          r != NULL && strcmp(r, "a-bb-ccc-dddd") == 0);
+    rt_release(arr);
+}
+
+/* ── 18: rt_str_join with NULL separator treats it as empty ────────── */
+static void test_str_join_null_sep(void) {
+    const char *strs[] = {"hello", "world"};
+    void *arr = make_str_array(strs, 2);
+    const char *r = rt_str_join((const char *)arr, NULL);
+    check("test_str_join_null_sep == 'helloworld'",
+          r != NULL && strcmp(r, "helloworld") == 0);
+    rt_release(arr);
+}
+
+/* ── 19: rt_array_push on an empty array grows correctly ───────────── */
+static void test_array_push_empty(void) {
+    void *arr = rt_array_alloc(0);
+    arr = rt_array_push(arr, 42);
+    int ok = (rt_array_len(arr) == 1 && rt_array_get(arr, 0) == 42);
+    check("test_array_push_empty [42]", ok);
+    rt_release(arr);
+}
+
+/* ── 20: rt_array_push 1000 times stays fast (amortised O(1)) ─────────
+ * We can't portably measure wall time here, so we assert correctness
+ * and rely on the unit test completing in well under a second. With
+ * the old O(n) per push, 1000 pushes cost ~500k element copies; with
+ * capacity doubling it costs ~2000. Either finishes quickly in CI,
+ * but only the new path keeps the allocation count logarithmic. */
+static void test_array_push_1000(void) {
+    void *arr = rt_array_alloc(0);
+    int ok = 1;
+    for (long long i = 0; i < 1000; i++) {
+        arr = rt_array_push(arr, i * 7);
+    }
+    if (rt_array_len(arr) != 1000) ok = 0;
+    for (long long i = 0; i < 1000 && ok; i++) {
+        if (rt_array_get(arr, i) != i * 7) ok = 0;
+    }
+    check("test_array_push_1000 keeps every element", ok);
+    rt_release(arr);
+}
+
+/* ── 21: rt_array_push reuses the buffer when cap > len and rc == 1 ──
+ * This is a behavioural test for the amortised-O(1) path. The second
+ * push after the first growth must not move the data pointer. */
+static void test_array_push_reuses_buffer(void) {
+    void *arr = rt_array_alloc(0);
+    /* First push allocates an initial capacity > 1. */
+    arr = rt_array_push(arr, 10);
+    void *after_first = arr;
+    /* The next two pushes should fit in the spare capacity. */
+    arr = rt_array_push(arr, 20);
+    int second_reused = (arr == after_first);
+    arr = rt_array_push(arr, 30);
+    int third_reused = (arr == after_first);
+    check("test_array_push_reuses_buffer keeps the pointer on growth",
+          second_reused && third_reused &&
+          rt_array_len(arr) == 3 &&
+          rt_array_get(arr, 0) == 10 &&
+          rt_array_get(arr, 1) == 20 &&
+          rt_array_get(arr, 2) == 30);
+    rt_release(arr);
+}
+
+/* ── 22: rt_array_push overflow guard aborts cleanly ──────────────────
+ * We can't actually allocate a 2e18-element array, but we can spawn a
+ * child process, forge an array header claiming it already has
+ * (SIZE_MAX / 8) elements, and observe that the next push exits with
+ * the expected error message. The forged header lives on the stack in
+ * the child; the child never reaches the allocation call because the
+ * overflow check fires first. */
+static void test_array_push_overflow_guard(void) {
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        check("test_array_push_overflow_guard pipe", 0);
+        return;
+    }
+    /* Flush stdio before fork so both processes don't later re-emit
+     * buffered output. The guard calls exit(1) which flushes libc
+     * buffers — if we leave the parent's test log queued, the child
+     * would print it again. */
+    fflush(stdout);
+    fflush(stderr);
+    pid_t pid = fork();
+    if (pid < 0) {
+        check("test_array_push_overflow_guard fork", 0);
+        close(pipefd[0]); close(pipefd[1]);
+        return;
+    }
+    if (pid == 0) {
+        /* Child: redirect stderr into the pipe, forge an oversized len. */
+        close(pipefd[0]);
+        dup2(pipefd[1], 2);
+        close(pipefd[1]);
+
+        /* Header layout mirrors rt_rc_alloc: [cap][refcount][len][...]
+         * We only need len to be large enough that new_len = len + 1
+         * trips the overflow guard. SIZE_MAX / 8 comfortably does. */
+        static long long fake[4];
+        fake[0] = 0;                   /* cap */
+        fake[1] = 1;                   /* refcount */
+        fake[2] = (long long)(SIZE_MAX / 8); /* len — triggers guard on +1 */
+        fake[3] = 0;                   /* one element slot (never read) */
+        void *data_ptr = &fake[2];
+        (void)rt_array_push(data_ptr, 999);
+        /* The guard calls exit(1); reaching here is a test failure. */
+        _exit(0);
+    }
+    /* Parent: read child's stderr, wait, check. */
+    close(pipefd[1]);
+    char buf[256];
+    ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
+    close(pipefd[0]);
+    if (n < 0) n = 0;
+    buf[n] = '\0';
+    int status = 0;
+    waitpid(pid, &status, 0);
+    int exited_with_one =
+        WIFEXITED(status) && WEXITSTATUS(status) == 1;
+    int said_overflow = strstr(buf, "array push size overflow") != NULL;
+    check("test_array_push_overflow_guard aborts with runtime error",
+          exited_with_one && said_overflow);
+}
+
 int main(void) {
     printf("== turbo_rt C runtime tests ==\n");
 
@@ -188,6 +361,14 @@ int main(void) {
     test_arena_reclaims_memory();
     test_arena_nested_begin_resets();
     test_arena_end_without_begin();
+    test_str_join_empty();
+    test_str_join_one();
+    test_str_join_many();
+    test_str_join_null_sep();
+    test_array_push_empty();
+    test_array_push_1000();
+    test_array_push_reuses_buffer();
+    test_array_push_overflow_guard();
 
     if (g_failures == 0) {
         printf("\nAll tests passed.\n");
