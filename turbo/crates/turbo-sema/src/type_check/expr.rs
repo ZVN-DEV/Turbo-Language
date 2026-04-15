@@ -772,6 +772,60 @@ impl Checker {
                         }
                         return Ty::Unit;
                     }
+                    if name == "try_read_file" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!(
+                                    "try_read_file() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let path_ty = self.check_expr(&args[0]);
+                        if !path_ty.is_error() && path_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("try_read_file() expects str, found `{path_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::Result(Box::new(Ty::Str), Box::new(Ty::Str));
+                    }
+                    if name == "try_write_file" {
+                        if args.len() != 2 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!(
+                                    "try_write_file() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let path_ty = self.check_expr(&args[0]);
+                        let content_ty = self.check_expr(&args[1]);
+                        if !path_ty.is_error() && path_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0133,
+                                format!(
+                                    "try_write_file() first argument must be str, found `{path_ty}`"
+                                ),
+                                args[0].span.clone(),
+                            );
+                        }
+                        if !content_ty.is_error() && content_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0133,
+                                format!("try_write_file() second argument must be str, found `{content_ty}`"),
+                                args[1].span.clone(),
+                            );
+                        }
+                        return Ty::Result(Box::new(Ty::Bool), Box::new(Ty::Str));
+                    }
 
                     // ── shell_exec / exec / env_get ──────────────────────────────
                     if name == "shell_exec" || name == "exec" {

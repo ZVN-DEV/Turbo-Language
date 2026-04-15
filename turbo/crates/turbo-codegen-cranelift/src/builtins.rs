@@ -551,6 +551,42 @@ pub(crate) fn compile_stdlib_write_file<M: Module>(
     Ok(None)
 }
 
+/// try_read_file(path) -> str ! str
+///
+/// Fallible counterpart to `read_file`. Returns `ok(contents)` on success
+/// or `err(message)` on any I/O failure — never panics.
+pub(crate) fn compile_stdlib_try_read_file<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (path_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_try_read_file"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[path_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((
+        result,
+        TurboTy::Result(Box::new(TurboTy::Str), Box::new(TurboTy::Str)),
+    )))
+}
+
+/// try_write_file(path, content) -> bool ! str
+pub(crate) fn compile_stdlib_try_write_file<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (path_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (content_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_try_write_file"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[path_val, content_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((
+        result,
+        TurboTy::Result(Box::new(TurboTy::Bool), Box::new(TurboTy::Str)),
+    )))
+}
+
 /// shell_exec(cmd) -> str
 pub(crate) fn compile_stdlib_exec<M: Module>(
     cx: &mut Ctx<'_, M>,

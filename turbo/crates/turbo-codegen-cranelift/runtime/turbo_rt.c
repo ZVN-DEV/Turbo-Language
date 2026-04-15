@@ -2211,3 +2211,94 @@ int main(void) {
     return 0;
 }
 #endif
+
+/* ── Fallible I/O (v0.8.0 "Safe Core") ──────────────────────────────────
+ *
+ * Result-returning variants of the panicking rt_read_file / rt_write_file
+ * above. Errors are returned as rt_result_err(str) instead of aborting
+ * the process. Success cases match the existing Turbo Result encoding
+ * used by rt_result_ok / rt_result_err (see line ~487): a heap-allocated
+ * [tag (8)][value (8)] block with tag 0 = ok, tag 1 = err.
+ *
+ * For try_write_file we encode success as rt_result_ok with a boolean
+ * payload of 1 (Turbo bools are stored in a 64-bit slot anyway because
+ * the Result value slot is long long).
+ */
+
+#include <errno.h>
+
+/* try_read_file(path) -> str ! str  */
+void *rt_try_read_file(const char *path) {
+    if (!path) {
+        const char *msg = "null path";
+        size_t n = strlen(msg);
+        char *buf = turbo_alloc(n + 1);
+        memcpy(buf, msg, n + 1);
+        return rt_result_err((long long)(intptr_t)buf);
+    }
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        const char *err = strerror(errno);
+        size_t n = strlen(err);
+        char *buf = turbo_alloc(n + 1);
+        memcpy(buf, err, n + 1);
+        return rt_result_err((long long)(intptr_t)buf);
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        const char *err = strerror(errno);
+        size_t n = strlen(err);
+        char *buf = turbo_alloc(n + 1);
+        memcpy(buf, err, n + 1);
+        fclose(f);
+        return rt_result_err((long long)(intptr_t)buf);
+    }
+    long size = ftell(f);
+    if (size < 0) {
+        const char *err = strerror(errno);
+        size_t n = strlen(err);
+        char *buf = turbo_alloc(n + 1);
+        memcpy(buf, err, n + 1);
+        fclose(f);
+        return rt_result_err((long long)(intptr_t)buf);
+    }
+    fseek(f, 0, SEEK_SET);
+    char *contents = turbo_alloc((size_t)size + 1);
+    size_t nread = fread(contents, 1, (size_t)size, f);
+    contents[nread] = '\0';
+    fclose(f);
+    return rt_result_ok((long long)(intptr_t)contents);
+}
+
+/* try_write_file(path, content) -> bool ! str  */
+void *rt_try_write_file(const char *path, const char *content) {
+    if (!path) {
+        const char *msg = "null path";
+        size_t n = strlen(msg);
+        char *buf = turbo_alloc(n + 1);
+        memcpy(buf, msg, n + 1);
+        return rt_result_err((long long)(intptr_t)buf);
+    }
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        const char *err = strerror(errno);
+        size_t n = strlen(err);
+        char *buf = turbo_alloc(n + 1);
+        memcpy(buf, err, n + 1);
+        return rt_result_err((long long)(intptr_t)buf);
+    }
+    if (content) {
+        size_t len = strlen(content);
+        size_t written = fwrite(content, 1, len, f);
+        if (written != len) {
+            const char *err = strerror(errno);
+            size_t n = strlen(err);
+            char *buf = turbo_alloc(n + 1);
+            memcpy(buf, err, n + 1);
+            fclose(f);
+            return rt_result_err((long long)(intptr_t)buf);
+        }
+    }
+    fclose(f);
+    /* ok(true) — bool payload stored in the 64-bit value slot. */
+    return rt_result_ok(1);
+}

@@ -45,6 +45,29 @@ write_file("lines.txt", data)
 
 Writes a string to a file, creating the file if it does not exist or overwriting it if it does.
 
+### Fallible I/O (`try_read_file` / `try_write_file`)
+
+The plain `read_file` / `write_file` builtins above **panic** (abort the process) on any I/O failure — missing file, permission denied, bad path, disk full, etc. That's convenient for scripts and prototypes, but in production code you almost always want to handle errors explicitly.
+
+For that, use the `try_` variants, which return a `Result`:
+
+- `try_read_file(path: str) -> str ! str` — `ok(contents)` on success, `err(message)` on any failure.
+- `try_write_file(path: str, content: str) -> bool ! str` — `ok(true)` on success, `err(message)` on any failure.
+
+Pattern match to handle both cases:
+
+```turbo
+fn main() {
+    let r = try_read_file("config.toml")
+    match r {
+        ok(s)  => print("loaded {len(s)} bytes")
+        err(e) => print("could not read config: {e}")
+    }
+}
+```
+
+**Rule of thumb:** use `read_file` / `write_file` when a missing file is a bug you want to crash on. Use `try_read_file` / `try_write_file` when a missing file is a situation you want to recover from — that is, almost always, in real software.
+
 ---
 
 ## String Operations
@@ -685,7 +708,7 @@ Writes a 64-bit integer value to the given memory address.
 
 | Category | Functions |
 |----------|-----------|
-| **I/O** | `print`, `read_line`, `read_file`, `write_file` |
+| **I/O** | `print`, `read_line`, `read_file`, `write_file`, `try_read_file`, `try_write_file` |
 | **Strings** | `len`, `trim`, `upper`, `lower`, `split`, `contains`, `starts_with`, `ends_with`, `replace`, `index_of`, `char_at`, `repeat`, `join`, `to_str` |
 | **Arrays** | `len`, `push` |
 | **Functional** | `map`, `filter`, `reduce` |

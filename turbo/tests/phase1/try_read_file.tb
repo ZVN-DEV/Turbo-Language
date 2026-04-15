@@ -1,0 +1,7 @@
+fn main() {
+    let r = try_read_file("/tmp/nonexistent-turbo-xyz-12345.txt")
+    match r {
+        ok(s) => print("ok")
+        err(e) => print("err")
+    }
+}
