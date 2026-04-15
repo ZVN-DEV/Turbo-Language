@@ -106,8 +106,25 @@ pub fn aot_compile(
         cmd.arg("-lpthread");
     }
 
-    // Additional user-specified link libraries (e.g. --link m --link pthread)
+    // Additional user-specified link libraries (e.g. --link m --link pthread).
+    //
+    // Track 4 audit (v0.8.0 "Safe Core"): the ONLY user-controlled values
+    // formatted into linker args in this function are these `--link` names.
+    // Everything else (cc_cmd/cc_args from resolve_cross_compiler, the temp
+    // obj/rt paths, hardcoded -lm/-lpthread, the wasm sysroot/target strings
+    // further down) is either compiler-internal or derived from validated
+    // sources. So we validate each lib name here against a strict allowlist
+    // to prevent linker-flag injection (e.g. "m -o /etc/passwd").
     for lib in link_libs {
+        if !is_valid_lib_name(lib) {
+            return Err(CodegenError {
+                code: ErrorCode::E0404,
+                message: format!(
+                    "invalid library name '{}' in --link; names must match [A-Za-z0-9_.+-]+",
+                    lib
+                ),
+            });
+        }
         cmd.arg(format!("-l{}", lib));
     }
 
@@ -420,4 +437,46 @@ pub fn wasm_compile(
     }
 
     Ok(())
+}
+
+// ── Linker input validation ─────────────────────────────────────────
+
+/// Returns true if `name` is a safe library name to format into a `-l<name>`
+/// linker argument. Accepts only ASCII letters, digits, `_`, `.`, `+`, `-`.
+/// Rejects the empty string so we never emit a bare `-l`.
+///
+/// This is a defence-in-depth check against linker-flag injection via the
+/// `--link` CLI option. A name like `"m -o /etc/passwd"` would otherwise be
+/// spliced straight into the `cc` argv and interpreted as additional flags.
+/// The regex `^[A-Za-z0-9_.+-]+$` implicitly rejects any name starting with
+/// `-` or `@` (since neither is in the charset), but we keep the allowlist
+/// tight rather than blocklisting known-bad prefixes.
+fn is_valid_lib_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '+' | '-'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_injection_in_link_name() {
+        assert!(!is_valid_lib_name(""));
+        assert!(!is_valid_lib_name("m -o /tmp/x"));
+        assert!(!is_valid_lib_name("@/etc/passwd"));
+        assert!(!is_valid_lib_name("../../lib"));
+        assert!(!is_valid_lib_name("-Wl,evil"));
+    }
+
+    #[test]
+    fn accepts_normal_lib_names() {
+        assert!(is_valid_lib_name("m"));
+        assert!(is_valid_lib_name("ssl"));
+        assert!(is_valid_lib_name("c++"));
+        assert!(is_valid_lib_name("z.1"));
+        assert!(is_valid_lib_name("my_lib-2.3+foo"));
+    }
 }
