@@ -2926,6 +2926,42 @@ pub(crate) fn compile_builtin_hashmap_remove<M: Module>(
     Ok(None)
 }
 
+/// hashmap_set_int(map, key, value: int) -> hashmap
+///
+/// v0.8.0 "Safe Core" variant: stores an int value under a string key.
+/// Returns the same map pointer so callers can write
+/// `m = hashmap_set_int(m, k, v)` without a separate mutation rule.
+pub(crate) fn compile_builtin_hashmap_set_int<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let (value_val, _) = compile_expr(cx, &args[2])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_set_int"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[map_val, key_val, value_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// hashmap_get_int(map, key) -> int
+///
+/// Returns 0 on miss. If you need to distinguish missing from a stored
+/// 0, guard with `hashmap_has(m, k)` first.
+pub(crate) fn compile_builtin_hashmap_get_int<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (key_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_hashmap_get_int"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[map_val, key_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
 // ── Map literal compilation ────────────────────────────────────────
 
 /// Compile a map literal: {"key": "value", ...}
