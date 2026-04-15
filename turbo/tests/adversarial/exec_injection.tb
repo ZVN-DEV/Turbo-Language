@@ -1,4 +1,11 @@
+// rt_exec must reject shell metacharacters. If injection succeeded, `out`
+// would contain both "hi" and "pwned". A proper rejection returns an empty
+// string (with a diagnostic on stderr, which the test runner ignores).
 @unsafe fn main() {
     let out = shell_exec("echo hi; echo pwned")
-    print("done")
+    if contains(out, "pwned") {
+        print("INJECTION")
+    } else {
+        print("blocked")
+    }
 }

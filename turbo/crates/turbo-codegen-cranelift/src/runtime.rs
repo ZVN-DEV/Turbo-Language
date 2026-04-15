@@ -760,11 +760,35 @@ pub(crate) extern "C" fn rt_try_write_file(path: *const u8, content: *const u8) 
     }
 }
 
+/// JIT-side twin of `rt_exec` in `turbo_rt.c`. Mirrors the C hardening:
+/// rejects commands containing shell metacharacters and executes the
+/// tokenized argv directly (no `/bin/sh -c`). Historical `sh -c` path
+/// was an RCE vector — do NOT reintroduce it.
+const RT_EXEC_META: &[char] = &[';', '|', '&', '$', '`', '(', ')', '<', '>', '\n', '\\'];
+const RT_EXEC_MAX_ARGS: usize = 64;
+
 pub(crate) extern "C" fn rt_exec(cmd: *const u8) -> *const u8 {
     let cmd = unsafe { std::ffi::CStr::from_ptr(cmd as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    let output = std::process::Command::new("sh").arg("-c").arg(cmd).output();
+    if cmd.chars().any(|c| RT_EXEC_META.contains(&c)) {
+        eprintln!(
+            "rt_exec: refusing command with shell metacharacter: {}",
+            cmd
+        );
+        return rt_empty_cstr();
+    }
+    let tokens: Vec<&str> = cmd.split_whitespace().collect();
+    if tokens.is_empty() || tokens.len() > RT_EXEC_MAX_ARGS {
+        eprintln!(
+            "rt_exec: refusing empty or oversized command ({} tokens)",
+            tokens.len()
+        );
+        return rt_empty_cstr();
+    }
+    let output = std::process::Command::new(tokens[0])
+        .args(&tokens[1..])
+        .output();
     match output {
         Ok(out) => {
             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -797,12 +821,21 @@ pub(crate) extern "C" fn rt_env_get(name: *const u8) -> *const u8 {
 }
 
 pub(crate) extern "C" fn rt_pow(base: i64, exp: i64) -> i64 {
+    // Mirrors `rt_pow` in turbo_rt.c: reject negative exponents and trap on
+    // overflow instead of silently wrapping.
     if exp < 0 {
-        return 0;
+        eprintln!("runtime error: negative exponent in pow");
+        std::process::exit(1);
     }
     let mut result: i64 = 1;
     for _ in 0..exp {
-        result = result.wrapping_mul(base);
+        match result.checked_mul(base) {
+            Some(v) => result = v,
+            None => {
+                eprintln!("runtime error: integer overflow in pow");
+                std::process::exit(1);
+            }
+        }
     }
     result
 }

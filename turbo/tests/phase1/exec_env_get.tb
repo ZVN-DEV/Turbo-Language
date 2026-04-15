@@ -3,7 +3,9 @@
 }
 
 @unsafe fn check_safe_exec_error(path: str) -> str {
-    shell_exec("./target/release/turbolang check " + path + " 2>&1")
+    // shell_exec now tokenizes on whitespace and execs argv directly; it
+    // already merges stderr into the returned string, so no `2>&1` needed.
+    shell_exec("./target/release/turbolang check " + path)
 }
 
 @unsafe fn main() {
