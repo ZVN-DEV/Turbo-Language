@@ -840,9 +840,15 @@ void rt_write_file(const char *path, const char *content) {
 #include <math.h>
 
 long long rt_pow(long long base, long long exp) {
-    if (exp < 0) return 0;
+    if (exp < 0) {
+        rt_panic("negative exponent in pow");
+    }
     long long result = 1;
-    for (long long i = 0; i < exp; i++) result *= base;
+    for (long long i = 0; i < exp; i++) {
+        if (__builtin_mul_overflow(result, base, &result)) {
+            rt_int_overflow();
+        }
+    }
     return result;
 }
 
@@ -900,21 +906,41 @@ long long rt_await_handle(void *handle_ptr) {
 
 /* ── HTTP + JSON builtins ───────────────────────────────────────────── */
 
-/* Helper: read all data from a file descriptor into a heap-allocated string */
+/* Helper: read all data from a file descriptor into an arena-managed string.
+ *
+ * IMPORTANT: we grow the staging buffer with libc malloc/realloc rather than
+ * turbo_realloc, because when this function runs inside a request arena the
+ * arena's "realloc" can only copy size/2 bytes on each growth step (it does
+ * not track prior allocation sizes), which corrupts anything >= 8 KiB. By
+ * using real realloc during the read loop and copying to the arena exactly
+ * once at the end, callers still receive an arena-lifetime pointer while
+ * the growing code avoids the arena-realloc pitfall. */
 static char *read_fd_to_string(int fd) {
     size_t cap = 4096, len = 0;
-    char *buf = (char *)turbo_alloc(cap);
+    char *tmp = (char *)malloc(cap);
+    if (!tmp) { fprintf(stderr, "runtime error: out of memory\n"); exit(1); }
     while (1) {
-        ssize_t n = read(fd, buf + len, cap - len - 1);
+        ssize_t n = read(fd, tmp + len, cap - len - 1);
         if (n <= 0) break;
         len += (size_t)n;
         if (len + 1 >= cap) {
             cap *= 2;
-            buf = (char *)turbo_realloc(buf, cap);
+            char *grown = (char *)realloc(tmp, cap);
+            if (!grown) {
+                free(tmp);
+                fprintf(stderr, "runtime error: out of memory\n");
+                exit(1);
+            }
+            tmp = grown;
         }
     }
-    buf[len] = '\0';
-    return buf;
+    tmp[len] = '\0';
+    /* Copy the final payload into an arena-managed slot so the returned
+     * pointer has the lifetime callers expect, then release the libc buffer. */
+    char *result = (char *)turbo_alloc(len + 1);
+    memcpy(result, tmp, len + 1);
+    free(tmp);
+    return result;
 }
 
 /* Returns 1 if url starts with "http://" or "https://" (case-insensitive),
@@ -1022,30 +1048,87 @@ const char *rt_http_post(const char *url, const char *body) {
     return buf;
 }
 
-/* shell_exec(cmd) / exec(cmd) -> str — execute a shell command via fork+exec, capture stdout+stderr */
+/* shell_exec(cmd) / exec(cmd) -> str — execute a command via fork+execvp,
+ * capture stdout+stderr.
+ *
+ * Security: we DO NOT spawn /bin/sh -c. Any shell metacharacter in `cmd`
+ * causes the call to be rejected outright. Accepted commands are tokenized
+ * on whitespace and handed to execvp() directly, so there is no shell to
+ * interpret quotes, redirections, substitutions, or pipelines. Callers that
+ * genuinely need a pipeline should compose one in Turbo code. */
+static const char *rt_exec_empty_response(void) {
+    char *empty = (char *)turbo_alloc(1);
+    empty[0] = '\0';
+    return empty;
+}
+
+#define RT_EXEC_MAX_ARGS 64
+
 const char *rt_exec(const char *cmd) {
     if (!cmd || cmd[0] == '\0') {
-        const char *empty = (const char *)turbo_alloc(1);
-        ((char *)empty)[0] = '\0';
-        return empty;
+        return rt_exec_empty_response();
     }
+    /* Reject shell metacharacters before we do anything else. The set here
+     * covers command separators, pipes, redirections, subshells, command
+     * substitution, env expansion, line continuations, and backticks. */
+    for (const char *p = cmd; *p; p++) {
+        char c = *p;
+        if (c == ';' || c == '|' || c == '&' || c == '$' || c == '`' ||
+            c == '(' || c == ')' || c == '<' || c == '>' || c == '\n' ||
+            c == '\\') {
+            fprintf(stderr,
+                "rt_exec: refusing command with shell metacharacter: %s\n",
+                cmd);
+            return rt_exec_empty_response();
+        }
+    }
+    /* Tokenize on whitespace into an argv vector. We copy cmd first because
+     * strtok_r mutates its input. */
+    size_t cmd_len = strlen(cmd);
+    char *cmd_copy = (char *)malloc(cmd_len + 1);
+    if (!cmd_copy) { fprintf(stderr, "runtime error: out of memory\n"); exit(1); }
+    memcpy(cmd_copy, cmd, cmd_len + 1);
+
+    char *argv[RT_EXEC_MAX_ARGS + 1];
+    int argc = 0;
+    char *saveptr = NULL;
+    char *tok = strtok_r(cmd_copy, " \t\r\n\v\f", &saveptr);
+    while (tok) {
+        if (argc >= RT_EXEC_MAX_ARGS) {
+            fprintf(stderr,
+                "rt_exec: refusing command with too many arguments (>%d): %s\n",
+                RT_EXEC_MAX_ARGS, cmd);
+            free(cmd_copy);
+            return rt_exec_empty_response();
+        }
+        argv[argc++] = tok;
+        tok = strtok_r(NULL, " \t\r\n\v\f", &saveptr);
+    }
+    argv[argc] = NULL;
+    if (argc == 0) {
+        free(cmd_copy);
+        return rt_exec_empty_response();
+    }
+
     int pipefd[2];
     if (pipe(pipefd) != 0) {
+        free(cmd_copy);
         return strdup("error: cannot create pipe");
     }
     pid_t pid = fork();
     if (pid < 0) {
         close(pipefd[0]);
         close(pipefd[1]);
+        free(cmd_copy);
         return strdup("error: cannot fork");
     }
     if (pid == 0) {
-        /* Child: redirect stdout+stderr to pipe, exec via /bin/sh -c */
+        /* Child: redirect stdout+stderr to pipe, exec directly (no shell). */
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
         dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[1]);
-        execlp("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+        execvp(argv[0], argv);
         _exit(1);
     }
     /* Parent: read from pipe */
@@ -1054,6 +1137,7 @@ const char *rt_exec(const char *cmd) {
     close(pipefd[0]);
     int status;
     waitpid(pid, &status, 0);
+    free(cmd_copy);
     return buf;
 }
 

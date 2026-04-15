@@ -1,0 +1,4 @@
+@unsafe fn main() {
+    let out = shell_exec("echo hi; echo pwned")
+    print("done")
+}
