@@ -716,6 +716,50 @@ pub(crate) extern "C" fn rt_write_file(path: *const u8, content: *const u8) {
     }
 }
 
+/// try_read_file(path) -> str ! str
+///
+/// Returns an `ok(contents)` Result on success, or an `err(message)` Result
+/// on any I/O failure. Never panics — this is the fallible counterpart to
+/// `rt_read_file` (v0.8.0 "Safe Core").
+pub(crate) extern "C" fn rt_try_read_file(path: *const u8) -> *mut u8 {
+    let path_str = unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    match std::fs::read_to_string(path_str) {
+        Ok(content) => {
+            let cs = std::ffi::CString::new(content)
+                .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+            let ptr = arena_str(cs) as i64;
+            rt_result_ok(ptr)
+        }
+        Err(e) => {
+            let cs = std::ffi::CString::new(e.to_string())
+                .unwrap_or_else(|_| std::ffi::CString::new("io error").unwrap());
+            let ptr = arena_str(cs) as i64;
+            rt_result_err(ptr)
+        }
+    }
+}
+
+/// try_write_file(path, content) -> bool ! str
+pub(crate) extern "C" fn rt_try_write_file(path: *const u8, content: *const u8) -> *mut u8 {
+    let path_str = unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    let content_str = unsafe { std::ffi::CStr::from_ptr(content as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    match std::fs::write(path_str, content_str) {
+        Ok(()) => rt_result_ok(1),
+        Err(e) => {
+            let cs = std::ffi::CString::new(e.to_string())
+                .unwrap_or_else(|_| std::ffi::CString::new("io error").unwrap());
+            let ptr = arena_str(cs) as i64;
+            rt_result_err(ptr)
+        }
+    }
+}
+
 pub(crate) extern "C" fn rt_exec(cmd: *const u8) -> *const u8 {
     let cmd = unsafe { std::ffi::CStr::from_ptr(cmd as *const std::ffi::c_char) }
         .to_str()

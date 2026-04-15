@@ -1427,6 +1427,8 @@ fn compile_call<M: Module>(
         "read_line" => compile_stdlib_read_line(cx),
         "read_file" => compile_stdlib_read_file(cx, args),
         "write_file" => compile_stdlib_write_file(cx, args),
+        "try_read_file" => compile_stdlib_try_read_file(cx, args),
+        "try_write_file" => compile_stdlib_try_write_file(cx, args),
         "shell_exec" | "exec" => compile_stdlib_exec(cx, args),
         "env_get" => compile_stdlib_env_get(cx, args),
         // Stdlib math builtins

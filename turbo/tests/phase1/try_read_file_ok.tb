@@ -1,0 +1,8 @@
+fn main() {
+    write_file("/tmp/turbo-try-test.txt", "hello")
+    let r = try_read_file("/tmp/turbo-try-test.txt")
+    match r {
+        ok(s) => print(s)
+        err(e) => print("err")
+    }
+}

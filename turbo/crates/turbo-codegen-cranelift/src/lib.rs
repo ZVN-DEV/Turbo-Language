@@ -1167,6 +1167,20 @@ fn compile_module<M: Module>(
         &[ptr_type, ptr_type],
         None,
     )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_try_read_file",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_try_write_file",
+        &[ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
     declare_rt_fn(module, &mut rt_fns, "rt_exec", &[ptr_type], Some(ptr_type))?;
     declare_rt_fn(
         module,

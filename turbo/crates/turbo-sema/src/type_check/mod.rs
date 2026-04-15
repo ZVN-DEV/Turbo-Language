@@ -74,6 +74,8 @@ impl Checker {
                 | "read_line"
                 | "read_file"
                 | "write_file"
+                | "try_read_file"
+                | "try_write_file"
                 | "shell_exec"
                 | "exec"
                 | "env_get"
