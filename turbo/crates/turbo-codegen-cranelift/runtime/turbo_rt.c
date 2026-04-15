@@ -1510,6 +1510,34 @@ void rt_hashmap_remove(void *map_ptr, const char *key) {
     }
 }
 
+/* ── HashMap str→int variant ─────────────────────────────────────────
+ * Pragmatic implementation: stringify the int and reuse the str→str
+ * storage. Avoids changing the entry union for the v0.8.0 MVP. A proper
+ * generic HashMap<K,V> with a tagged value union is planned post-1.0.
+ * Returns the same map pointer so call sites can write
+ *   m = hashmap_set_int(m, k, v)
+ * and treat the map as a value. */
+void *rt_hashmap_set_int(void *map_ptr, const char *key, long long value) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%lld", value);
+    rt_hashmap_set(map_ptr, key, buf);
+    return map_ptr;
+}
+
+/* Get an int value by key. Returns 0 on miss (no way to distinguish
+ * missing from a stored 0 — callers that need that distinction should
+ * guard with hashmap_has() first). */
+long long rt_hashmap_get_int(const void *map_ptr, const char *key) {
+    const char *s = rt_hashmap_get(map_ptr, key);
+    if (s == NULL) {
+        return 0;
+    }
+    long long v = strtoll(s, NULL, 10);
+    /* rt_hashmap_get returns strdup'd memory; free it to avoid leak. */
+    free((void *)s);
+    return v;
+}
+
 /* ── HTTP server runtime ─────────────────────────────────────────────── */
 
 #include <sys/socket.h>

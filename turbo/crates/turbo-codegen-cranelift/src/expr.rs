@@ -1475,6 +1475,8 @@ fn compile_call<M: Module>(
         "hashmap_len" | "hashmap_size" => compile_builtin_hashmap_len(cx, args),
         "hashmap_keys" => compile_builtin_hashmap_keys(cx, args),
         "hashmap_remove" => compile_builtin_hashmap_remove(cx, args),
+        "hashmap_set_int" => compile_builtin_hashmap_set_int(cx, args),
+        "hashmap_get_int" => compile_builtin_hashmap_get_int(cx, args),
         // Unsafe builtins — raw pointer operations
         "deref" => compile_builtin_deref(cx, args),
         "store" => compile_builtin_store(cx, args),

@@ -283,6 +283,13 @@ Returns the square root of a floating-point number.
 
 ## HashMap
 
+Turbo ships two flavors of hash map in v0.8.0: the original `str → str`
+API and a new `str → int` variant. Both share the same underlying map
+object — you pick a variant per call, not per map. A fully generic
+`HashMap<K, V>` is planned post-1.0; until then, if you need a different
+value type, stringify/parse at the boundary or wait for the generic
+version.
+
 ### hashmap
 
 ```turbo
@@ -299,7 +306,8 @@ hashmap_set(m, "name", "Turbo")
 hashmap_set(m, "version", "0.3")
 ```
 
-Sets a key-value pair in the hash map. If the key already exists, its value is overwritten.
+Sets a string-valued key-value pair. If the key already exists, its
+value is overwritten. Mutates `m` in place; the return value is unit.
 
 ### hashmap_get
 
@@ -307,7 +315,33 @@ Sets a key-value pair in the hash map. If the key already exists, its value is o
 let name = hashmap_get(m, "name")    // "Turbo"
 ```
 
-Returns the value associated with the given key. The key must exist in the map.
+Returns the string value associated with the given key. The key must
+exist in the map — guard with `hashmap_has()` if you're not sure.
+
+### hashmap_set_int
+
+```turbo
+let mut m = hashmap()
+m = hashmap_set_int(m, "count", 1)
+m = hashmap_set_int(m, "count", hashmap_get_int(m, "count") + 1)
+```
+
+**New in v0.8.0.** Stores an integer value under a string key. Returns
+the same map so you can chain it idiomatically as
+`m = hashmap_set_int(m, k, v)`. Internally shares storage with the
+`str → str` variant — do not mix `hashmap_set` and `hashmap_set_int` on
+the same key.
+
+### hashmap_get_int
+
+```turbo
+let n = hashmap_get_int(m, "count")    // 1
+let missing = hashmap_get_int(m, "nope") // 0
+```
+
+**New in v0.8.0.** Returns the integer value associated with the given
+key, or `0` if the key is not present. If you need to distinguish a
+missing key from a stored `0`, guard with `hashmap_has()` first.
 
 ### hashmap_has
 
@@ -316,7 +350,8 @@ let exists = hashmap_has(m, "name")    // true
 let missing = hashmap_has(m, "foo")    // false
 ```
 
-Returns `true` if the hash map contains the given key.
+Returns `true` if the hash map contains the given key. Works for both
+`hashmap_set` and `hashmap_set_int` entries.
 
 ### hashmap_len
 
@@ -655,7 +690,7 @@ Writes a 64-bit integer value to the given memory address.
 | **Arrays** | `len`, `push` |
 | **Functional** | `map`, `filter`, `reduce` |
 | **Math** | `abs`, `min`, `max`, `pow`, `sqrt` |
-| **HashMap** | `hashmap`, `hashmap_set`, `hashmap_get`, `hashmap_has`, `hashmap_len`, `hashmap_keys`, `hashmap_remove` |
+| **HashMap** | `hashmap`, `hashmap_set`, `hashmap_get`, `hashmap_set_int`, `hashmap_get_int`, `hashmap_has`, `hashmap_len`, `hashmap_keys`, `hashmap_remove` |
 | **JSON** | `json_get`, `json_stringify`, `to_json`, `to_json_array` |
 | **HTTP Client** | `http_get`, `http_post` |
 | **HTTP Server** | `http_server`, `route`, `http_listen`, `respond`, `request_body`, `request_method`, `request_path`, `request_query`, `request_header` |

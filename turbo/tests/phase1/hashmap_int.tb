@@ -1,0 +1,17 @@
+fn main() {
+    let words = ["a", "b", "a", "c", "a", "b"]
+    let mut m = hashmap()
+    let mut i = 0
+    while i < len(words) {
+        let w = words[i]
+        if hashmap_has(m, w) {
+            m = hashmap_set_int(m, w, hashmap_get_int(m, w) + 1)
+        } else {
+            m = hashmap_set_int(m, w, 1)
+        }
+        i = i + 1
+    }
+    print(hashmap_get_int(m, "a"))
+    print(hashmap_get_int(m, "b"))
+    print(hashmap_get_int(m, "c"))
+}

@@ -1436,6 +1436,20 @@ fn compile_module<M: Module>(
         &[ptr_type, ptr_type],
         None,
     )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_set_int",
+        &[ptr_type, ptr_type, types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_get_int",
+        &[ptr_type, ptr_type],
+        Some(types::I64),
+    )?;
     // ARC runtime declarations
     declare_rt_fn(module, &mut rt_fns, "rt_retain", &[ptr_type], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_release", &[ptr_type], None)?;

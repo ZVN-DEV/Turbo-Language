@@ -1564,6 +1564,78 @@ impl Checker {
                         }
                         return Ty::Unit;
                     }
+                    // hashmap_set_int(map: i64, key: str, value: int) -> hashmap (i64)
+                    // v0.8.0 "Safe Core" str→int variant. Returns the map so it can be
+                    // used in `m = hashmap_set_int(m, k, v)` style.
+                    if name == "hashmap_set_int" {
+                        if args.len() != 3 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!(
+                                    "hashmap_set_int() takes exactly 3 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        let key_ty = self.check_expr(&args[1]);
+                        let val_ty = self.check_expr(&args[2]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(ErrorCode::E0133, format!("hashmap_set_int() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        if !key_ty.is_error() && key_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0133,
+                                format!(
+                                    "hashmap_set_int() second argument must be str, found `{key_ty}`"
+                                ),
+                                args[1].span.clone(),
+                            );
+                        }
+                        if !val_ty.is_error() && !val_ty.is_integer() {
+                            self.error(
+                                ErrorCode::E0133,
+                                format!(
+                                    "hashmap_set_int() third argument must be int, found `{val_ty}`"
+                                ),
+                                args[2].span.clone(),
+                            );
+                        }
+                        return Ty::I64;
+                    }
+                    // hashmap_get_int(map: i64, key: str) -> int
+                    // Returns 0 on miss — guard with hashmap_has() if you need to
+                    // distinguish missing from a stored 0.
+                    if name == "hashmap_get_int" {
+                        if args.len() != 2 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!(
+                                    "hashmap_get_int() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        let key_ty = self.check_expr(&args[1]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(ErrorCode::E0133, format!("hashmap_get_int() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        if !key_ty.is_error() && key_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0133,
+                                format!(
+                                    "hashmap_get_int() second argument must be str, found `{key_ty}`"
+                                ),
+                                args[1].span.clone(),
+                            );
+                        }
+                        return Ty::I64;
+                    }
 
                     // ── Unsafe builtins ────────────────────────────────
                     // deref(addr: i64) -> i64 — raw memory load (unsafe only)

@@ -1682,6 +1682,37 @@ pub(crate) extern "C" fn rt_hashmap_remove(map_ptr: *mut u8, key: *const u8) {
     map.remove(key);
 }
 
+/// Set a key → int pair. Stringifies the int into the existing
+/// str→str storage so v0.8.0 doesn't need a tagged-union refactor.
+/// Returns the same map pointer so callers can write
+/// `m = hashmap_set_int(m, k, v)`.
+pub(crate) extern "C" fn rt_hashmap_set_int(
+    map_ptr: *mut u8,
+    key: *const u8,
+    value: i64,
+) -> *mut u8 {
+    let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("")
+        .to_string();
+    map.insert(key, value.to_string());
+    map_ptr
+}
+
+/// Get an int value by key. Returns 0 on miss (callers that need to
+/// distinguish missing from a stored 0 should guard with hashmap_has).
+pub(crate) extern "C" fn rt_hashmap_get_int(map_ptr: *const u8, key: *const u8) -> i64 {
+    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    match map.get(key) {
+        Some(v) => v.parse::<i64>().unwrap_or(0),
+        None => 0,
+    }
+}
+
 // ── ARC (Automatic Reference Counting) runtime functions ────────────
 
 /// Increment the reference count of a heap-allocated object.
