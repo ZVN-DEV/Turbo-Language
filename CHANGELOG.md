@@ -5,6 +5,31 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-14 — The Safe Core
+
+Safety-focused release. Four parallel tracks close the highest-severity findings from the 0.7.7 product review: rt_exec shell injection, unchecked integer arithmetic in pow, silently-swallowed I/O errors on `read_file`, generic hashmaps limited to string→string, a realloc corruption window in `read_fd_to_string`, and unbounded linker flags on AOT builds.
+
+### Security
+- **rt_exec no longer shells out.** Both the AOT C runtime (`turbo_rt.c`) and the JIT twin (`crates/turbo-codegen-cranelift/src/runtime.rs`) now reject any command containing shell metacharacters (`; | & $ \` ( ) < > \n \\`), tokenize on whitespace, and `execvp` the argv directly with a 64-argument cap. Previously `shell_exec("echo hi; echo pwned")` happily ran both halves; now it is refused with a runtime error. The JIT divergence was caught by code-quality review and fixed before ship — no `Command::new("sh").arg("-c", ...)` remains on either path. New adversarial test: `turbo/tests/adversarial/exec_injection.tb`.
+- **AOT linker flags are now allowlisted.** `aot.rs` validates every `-l<lib>` name against `[A-Za-z0-9_.+-]+` before invoking `cc`, returning `error[E0404]` on rejection. Closes a vector where a malicious dependency could smuggle `-Wl,...` arguments through the build. Unit tests cover the allowlist edges.
+
+### Changed
+- **`rt_pow` is now overflow-checked.** The C runtime uses `__builtin_mul_overflow`; the JIT runtime uses `i64::checked_mul`. Both exit with `runtime error: integer overflow in pow` instead of silently wrapping. Negative exponents now abort with a clear error rather than returning 1.
+- **`read_fd_to_string` no longer corrupts memory on large reads.** The read loop grows a libc `malloc`/`realloc` buffer, then performs a single `turbo_alloc` + `memcpy` at the end, instead of reallocating arena-owned memory mid-read (which was a latent use-after-realloc window on files larger than the initial chunk).
+
+### Added
+- **`try_read_file` / `try_write_file`** return `str ! str` and integrate with `match ok/err`, replacing the old behavior of `read_file` swallowing I/O errors and returning an empty string. `read_file` still exists for the common happy-path case. See `docs/stdlib.md` § Fallible I/O. Tests: `turbo/tests/phase1/try_read_file.tb`, `try_read_file_ok.tb`.
+- **`hashmap_set_int` / `hashmap_get_int`** provide a str→int hashmap variant — the first step toward generic hashmaps. Implemented as a stringify-and-reuse wrapper on top of `rt_hashmap_set` / `rt_hashmap_get`, so existing str→str usage is unchanged. Test: `turbo/tests/phase1/hashmap_int.tb`.
+
+### Fixed
+- `turbo/tests/phase1/exec_env_get.tb` dropped its `2>&1` suffix (rt_exec already merges stderr into the returned string, and `&` is now a rejected metachar).
+
+### Notes
+- Adversarial suite now exercises shell-injection payloads end-to-end. Previously the test only checked that `shell_exec` returned at all; it now asserts that the post-`;` payload did **not** execute.
+- This release is the "Safe Core" milestone called out in the 0.7.7 product review's Path Forward. Remaining deferred items (full parametric generics for hashmap, bigint pow variant, UTF-8 normalization in `str` ordering) are tracked for 0.9.x.
+
+---
+
 ## [0.7.7] - 2026-04-14
 
 ### Added

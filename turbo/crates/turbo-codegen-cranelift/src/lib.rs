@@ -3218,7 +3218,9 @@ mod tests {
         assert_eq!(rt_pow(2, 10), 1024);
         assert_eq!(rt_pow(3, 0), 1);
         assert_eq!(rt_pow(5, 1), 5);
-        assert_eq!(rt_pow(2, -1), 0); // negative exponent returns 0
+        // Negative exponents and overflow now abort via process::exit(1), so
+        // they can't be asserted in-process; see the runtime error messages in
+        // rt_pow() itself for the exact text.
     }
 
     #[test]
