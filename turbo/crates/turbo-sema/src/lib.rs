@@ -1882,4 +1882,31 @@ fn main() { }"#,
             "fn inner() -> i64 ! str { ok(42) }\nfn outer() -> i64 ! str {\n    let x = inner()?\n    ok(x + 1)\n}\nfn main() { }",
         );
     }
+
+    // === TASK-11: check_function / check_function_with_name safety ===
+
+    #[test]
+    fn test_check_function_missing_sig_no_panic() {
+        // If a function tries to shadow a builtin, the first pass rejects it
+        // and doesn't register the signature. The second pass guard should
+        // skip it gracefully without panicking.
+        let errors = check_source(
+            "fn print() { }\nfn main() { }",
+        );
+        // Should produce a "cannot redefine builtin" error, not panic
+        assert!(
+            errors.iter().any(|e| e.message.contains("cannot redefine builtin")),
+            "Expected builtin redefinition error, got: {:?}",
+            errors,
+        );
+    }
+
+    #[test]
+    fn test_check_method_on_struct_no_panic() {
+        // Ensure impl method checking doesn't panic when the struct exists
+        // and the method is properly registered.
+        assert_no_errors(
+            "struct Point { x: i64, y: i64 }\nimpl Point {\n    fn sum(self) -> i64 { self.x + self.y }\n}\nfn main() {\n    let p = Point { x: 1, y: 2 }\n    print(p.sum())\n}",
+        );
+    }
 }

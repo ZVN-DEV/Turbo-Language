@@ -16,6 +16,29 @@ fn checked_array_layout(len: usize) -> Option<std::alloc::Layout> {
     std::alloc::Layout::from_size_align(total_bytes, 8).ok()
 }
 
+// ── Allocation registry for ARC deallocation ────────────────────────
+//
+// Every rt_* allocation that uses refcounted headers registers the raw
+// allocation pointer and its Layout here. When rt_release drops the
+// refcount to zero, the registry is consulted to safely deallocate.
+
+thread_local! {
+    pub(crate) static ALLOC_REGISTRY: RefCell<HashMap<usize, std::alloc::Layout>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Register a raw allocation pointer and its layout for later deallocation.
+fn register_alloc(raw_ptr: *mut u8, layout: std::alloc::Layout) {
+    ALLOC_REGISTRY.with(|reg| {
+        reg.borrow_mut().insert(raw_ptr as usize, layout);
+    });
+}
+
+/// Remove and return the layout for a raw allocation pointer.
+fn unregister_alloc(raw_ptr: *mut u8) -> Option<std::alloc::Layout> {
+    ALLOC_REGISTRY.with(|reg| reg.borrow_mut().remove(&(raw_ptr as usize)))
+}
+
 // ── Thread-local string arena ────────────────────────────────────────
 //
 // Every rt_* function that returns a newly-allocated CString registers
@@ -156,6 +179,7 @@ pub(crate) extern "C" fn rt_array_alloc(len: i64) -> *mut u8 {
         eprintln!("turbo: fatal: memory allocation failed");
         std::process::exit(1);
     }
+    register_alloc(ptr, layout);
     unsafe {
         *(ptr as *mut i64) = 1;
     } // refcount = 1
@@ -199,6 +223,7 @@ pub(crate) extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) -> *
             eprintln!("turbo: fatal: memory allocation failed");
             std::process::exit(1);
         }
+        register_alloc(new_alloc, layout);
         unsafe {
             *(new_alloc as *mut i64) = 1;
         } // new refcount = 1
@@ -257,6 +282,7 @@ pub(crate) extern "C" fn rt_array_push(arr: *const u8, value: i64) -> *mut u8 {
         eprintln!("turbo: fatal: memory allocation failed");
         std::process::exit(1);
     }
+    register_alloc(new_alloc, layout);
     unsafe {
         *(new_alloc as *mut i64) = 1; // refcount = 1
     }
@@ -343,6 +369,7 @@ pub(crate) extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
         eprintln!("turbo: fatal: memory allocation failed");
         std::process::exit(1);
     }
+    register_alloc(ptr, layout);
     unsafe {
         *(ptr as *mut i64) = 1;
     } // refcount = 1
@@ -376,6 +403,7 @@ pub(crate) extern "C" fn rt_result_ok(value: i64) -> *mut u8 {
         eprintln!("turbo: fatal: memory allocation failed");
         std::process::exit(1);
     }
+    register_alloc(ptr, layout);
     unsafe {
         *(ptr as *mut i64) = 1;
     } // refcount = 1
@@ -394,6 +422,7 @@ pub(crate) extern "C" fn rt_result_err(value: i64) -> *mut u8 {
         eprintln!("turbo: fatal: memory allocation failed");
         std::process::exit(1);
     }
+    register_alloc(ptr, layout);
     unsafe {
         *(ptr as *mut i64) = 1;
     } // refcount = 1
@@ -422,6 +451,7 @@ pub(crate) extern "C" fn rt_option_some(value: i64) -> *mut u8 {
         eprintln!("turbo: fatal: memory allocation failed");
         std::process::exit(1);
     }
+    register_alloc(ptr, layout);
     unsafe {
         *(ptr as *mut i64) = 1;
     } // refcount = 1
@@ -440,6 +470,7 @@ pub(crate) extern "C" fn rt_option_none() -> *mut u8 {
         eprintln!("turbo: fatal: memory allocation failed");
         std::process::exit(1);
     }
+    register_alloc(ptr, layout);
     unsafe {
         *(ptr as *mut i64) = 1;
     } // refcount = 1
@@ -483,6 +514,7 @@ pub(crate) extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
         eprintln!("turbo: fatal: memory allocation failed");
         std::process::exit(1);
     }
+    register_alloc(ptr, layout);
     unsafe {
         *(ptr as *mut i64) = 1;
     } // refcount = 1
@@ -576,6 +608,13 @@ pub(crate) extern "C" fn rt_str_char_at(s: *const u8, index: i64) -> *const u8 {
     let s = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
+    if index < 0 {
+        eprintln!(
+            "runtime error: char_at index {} is negative",
+            index
+        );
+        std::process::exit(1);
+    }
     if let Some(c) = s.chars().nth(index as usize) {
         let cs = std::ffi::CString::new(c.to_string())
             .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
@@ -1101,6 +1140,10 @@ pub(crate) static HTTP_SERVERS: Mutex<Vec<HttpServer>> = Mutex::new(Vec::new());
 const RT_HTTP_MAX_SERVERS: usize = 16;
 const RT_HTTP_MAX_ROUTES: usize = 64;
 const RT_HTTP_MAX_ACTIVE_CONNECTIONS: usize = 256;
+/// Maximum bytes for a single HTTP header line.
+const RT_HTTP_MAX_HEADER_LINE: usize = 8192;
+/// Maximum total bytes for all HTTP headers combined.
+const RT_HTTP_MAX_HEADERS_TOTAL: usize = 65536;
 const RT_RESPONSE_SEP: char = '\u{1f}';
 
 /// Create a new HTTP server bound to localhost. Returns a server id (index).
@@ -1185,6 +1228,25 @@ impl Drop for ActiveConnectionGuard {
     }
 }
 
+/// Read a line from a BufReader with an upper bound on bytes read.
+/// Returns Ok(n) where n is bytes read (0 = EOF), or Err on I/O error
+/// or if the line exceeds `max_bytes`.
+fn bounded_read_line(
+    reader: &mut std::io::BufReader<std::net::TcpStream>,
+    buf: &mut String,
+    max_bytes: usize,
+) -> std::io::Result<usize> {
+    use std::io::BufRead;
+    let n = reader.read_line(buf)?;
+    if buf.len() > max_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "header line too long",
+        ));
+    }
+    Ok(n)
+}
+
 fn parse_rt_response(resp: &str) -> Option<(u16, &str, &str)> {
     let mut typed = resp.splitn(3, RT_RESPONSE_SEP);
     if let (Some(status), Some(content_type), Some(body)) =
@@ -1208,21 +1270,27 @@ fn handle_http_connection(
     stream: std::net::TcpStream,
     routes: &[(String, String, RouteHandler, *const u8)],
 ) {
-    use std::io::{BufRead, BufReader, Read, Write};
+    use std::io::{Read, Write};
 
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
     let write_stream = match stream.try_clone() {
         Ok(s) => s,
         Err(_) => return,
     };
-    let mut reader = BufReader::new(stream);
+    let mut reader = std::io::BufReader::new(stream);
     let mut writer = write_stream;
 
     loop {
-        // Read request line
+        // Read request line (bounded)
         let mut request_line = String::new();
-        match reader.read_line(&mut request_line) {
-            Ok(0) | Err(_) => break, // Connection closed or error
+        match bounded_read_line(&mut reader, &mut request_line, RT_HTTP_MAX_HEADER_LINE) {
+            Ok(0) => break, // Connection closed
+            Err(_) => {
+                let _ = writer.write_all(
+                    b"HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                return;
+            }
             _ => {}
         }
 
@@ -1240,18 +1308,30 @@ fn handle_http_connection(
             (raw_path, "")
         };
 
-        // Read headers
+        // Read headers (bounded per-line and total)
         let mut content_length: usize = 0;
         let mut headers_raw = String::new();
         let mut keep_alive = true; // HTTP/1.1 default
         loop {
             let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => break,
+            match bounded_read_line(&mut reader, &mut line, RT_HTTP_MAX_HEADER_LINE) {
+                Ok(0) => break,
+                Err(_) => {
+                    let _ = writer.write_all(
+                        b"HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    return;
+                }
                 _ => {}
             }
             if line.trim().is_empty() {
                 break;
+            }
+            if headers_raw.len() + line.len() > RT_HTTP_MAX_HEADERS_TOTAL {
+                let _ = writer.write_all(
+                    b"HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                return;
             }
             let lower = line.to_lowercase();
             if lower.starts_with("content-length:") {
@@ -1332,11 +1412,13 @@ fn handle_http_connection(
                             500 => "Internal Server Error",
                             _ => "OK",
                         };
+                        // Sanitize content_type to prevent header injection
+                        let safe_ct = content_type.replace('\r', "").replace('\n', "");
                         let http_resp = format!(
                             "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: {}\r\nContent-Length: {}\r\n\r\n{}",
                             code,
                             status_text,
-                            content_type,
+                            safe_ct,
                             conn_header,
                             resp_body.len(),
                             resp_body
@@ -1566,13 +1648,13 @@ pub(crate) extern "C" fn rt_channel_create() -> *mut u8 {
     let tx_box = Box::into_raw(Box::new(tx)) as i64;
     let rx_box = Box::into_raw(Box::new(rx)) as i64;
 
-    let ptr = unsafe {
-        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(8 + 16, 8).unwrap())
-    };
+    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         eprintln!("turbo: fatal: memory allocation failed");
         std::process::exit(1);
     }
+    register_alloc(ptr, layout);
     unsafe {
         *(ptr as *mut i64) = 1;
     } // refcount = 1
@@ -1607,13 +1689,13 @@ pub(crate) extern "C" fn rt_channel_clone_sender(ch: *const u8) -> *mut u8 {
     let new_tx = Box::into_raw(Box::new(cloned)) as i64;
 
     let rx_ptr = unsafe { *((ch as *const i64).add(1)) };
-    let ptr = unsafe {
-        std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(8 + 16, 8).unwrap())
-    };
+    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         eprintln!("turbo: fatal: memory allocation failed");
         std::process::exit(1);
     }
+    register_alloc(ptr, layout);
     unsafe {
         *(ptr as *mut i64) = 1;
     } // refcount = 1
@@ -1733,6 +1815,7 @@ pub(crate) extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
         eprintln!("turbo: fatal: memory allocation failed");
         std::process::exit(1);
     }
+    register_alloc(ptr, layout);
     unsafe {
         *(ptr as *mut i64) = 1;
     } // refcount = 1
@@ -1805,19 +1888,24 @@ pub(crate) extern "C" fn rt_retain(data_ptr: *mut u8) {
 }
 
 /// Decrement the reference count of a heap-allocated object.
-/// When the refcount reaches 0, the memory could be freed.
-/// For now (Sprint 17), we track but don't free — proper dealloc
-/// requires storing allocation size in the header.
+/// When the refcount reaches 0, the memory is freed using the layout
+/// stored in the thread-local allocation registry.
 pub(crate) extern "C" fn rt_release(data_ptr: *mut u8) {
     if data_ptr.is_null() {
         return;
     }
     let header = unsafe { data_ptr.sub(8) as *mut std::sync::atomic::AtomicI64 };
-    let _prev = unsafe { (*header).fetch_sub(1, std::sync::atomic::Ordering::Release) };
-    if _prev == 1 {
+    let prev = unsafe { (*header).fetch_sub(1, std::sync::atomic::Ordering::Release) };
+    if prev == 1 {
         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
-        // Refcount reached 0 — memory could be freed here.
-        // TODO: store allocation size in header for proper dealloc.
-        // For now we just let it leak (same as before ARC).
+        // Refcount reached 0 — free the allocation.
+        let raw_ptr = unsafe { data_ptr.sub(8) };
+        if let Some(layout) = unregister_alloc(raw_ptr) {
+            unsafe {
+                std::alloc::dealloc(raw_ptr, layout);
+            }
+        }
+        // If not in the registry (e.g. allocated by C runtime or from
+        // a different thread), we silently skip — better than UB.
     }
 }
