@@ -165,8 +165,12 @@ static void *turbo_alloc(size_t size) {
 }
 
 static void *turbo_calloc(size_t count, size_t size) {
+    size_t total;
+    if (__builtin_mul_overflow(count, size, &total)) {
+        fprintf(stderr, "turbo_calloc: overflow\n");
+        abort();
+    }
     if (t_current_arena != NULL) {
-        size_t total = count * size;
         void *p = turbo_arena_alloc(t_current_arena, total);
         memset(p, 0, total);
         return p;
@@ -174,6 +178,37 @@ static void *turbo_calloc(size_t count, size_t size) {
     void *p = calloc(count, size);
     if (!p) { fprintf(stderr, "runtime error: out of memory\n"); exit(1); }
     return p;
+}
+
+/* Arena-aware free: if ptr falls within the active arena's memory
+ * region, do nothing (the arena reclaims in bulk at rt_arena_end).
+ * Otherwise delegate to the system free(). Safe to call on any
+ * pointer returned by turbo_alloc(), turbo_calloc(), or malloc(). */
+static void turbo_free(void *ptr) {
+    if (!ptr) return;
+    if (t_current_arena != NULL) {
+        /* Check whether ptr lies inside any block of the active arena. */
+        turbo_arena_block *blk = t_current_arena->head;
+        while (blk) {
+            char *base = (char *)(blk + 1);
+            char *end  = base + blk->size;
+            if ((char *)ptr >= base && (char *)ptr < end) {
+                return; /* arena-backed — no-op */
+            }
+            blk = blk->next;
+        }
+    }
+    free(ptr);
+}
+
+/* Arena-aware strdup: routes the allocation through turbo_alloc so
+ * string duplications participate in the arena when one is active. */
+static char *turbo_strdup(const char *s) {
+    if (!s) return NULL;
+    size_t len = strlen(s) + 1;
+    char *dup = (char *)turbo_alloc(len);
+    memcpy(dup, s, len);
+    return dup;
 }
 
 static void *turbo_realloc(void *ptr, size_t size) {
@@ -453,7 +488,15 @@ long long rt_str_len(const char *s) {
 }
 
 void* rt_struct_alloc(long long num_fields) {
-    size_t data_size = (size_t)num_fields * 8;
+    if (num_fields < 0) {
+        fprintf(stderr, "rt_struct_alloc: negative num_fields\n");
+        abort();
+    }
+    size_t data_size;
+    if (__builtin_mul_overflow((size_t)num_fields, (size_t)8, &data_size)) {
+        fprintf(stderr, "rt_struct_alloc: overflow\n");
+        abort();
+    }
     if (data_size < 8) data_size = 8;
     return rt_rc_alloc(data_size, 0);
 }
@@ -899,8 +942,8 @@ long long rt_await_handle(void *handle_ptr) {
     spawn_ctx *ctx = *((spawn_ctx **)(handle + 1));
     pthread_join(*handle, NULL);
     long long result = ctx->result;
-    free(ctx);
-    free(handle);
+    turbo_free(ctx);
+    turbo_free(handle);
     return result;
 }
 
@@ -973,13 +1016,13 @@ const char *rt_http_get(const char *url) {
     }
     int pipefd[2];
     if (pipe(pipefd) != 0) {
-        return strdup("error: cannot create pipe");
+        return turbo_strdup("error: cannot create pipe");
     }
     pid_t pid = fork();
     if (pid < 0) {
         close(pipefd[0]);
         close(pipefd[1]);
-        return strdup("error: cannot fork");
+        return turbo_strdup("error: cannot fork");
     }
     if (pid == 0) {
         /* Child: redirect stdout to pipe, exec curl.
@@ -1017,13 +1060,13 @@ const char *rt_http_post(const char *url, const char *body) {
     }
     int pipefd[2];
     if (pipe(pipefd) != 0) {
-        return strdup("error: cannot create pipe");
+        return turbo_strdup("error: cannot create pipe");
     }
     pid_t pid = fork();
     if (pid < 0) {
         close(pipefd[0]);
         close(pipefd[1]);
-        return strdup("error: cannot fork");
+        return turbo_strdup("error: cannot fork");
     }
     if (pid == 0) {
         /* Child: redirect stdout to pipe, exec curl with POST */
@@ -1113,14 +1156,14 @@ const char *rt_exec(const char *cmd) {
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         free(cmd_copy);
-        return strdup("error: cannot create pipe");
+        return turbo_strdup("error: cannot create pipe");
     }
     pid_t pid = fork();
     if (pid < 0) {
         close(pipefd[0]);
         close(pipefd[1]);
         free(cmd_copy);
-        return strdup("error: cannot fork");
+        return turbo_strdup("error: cannot fork");
     }
     if (pid == 0) {
         /* Child: redirect stdout+stderr to pipe, exec directly (no shell). */
@@ -1154,7 +1197,7 @@ const char *rt_env_get(const char *name) {
         ((char *)empty)[0] = '\0';
         return empty;
     }
-    return strdup(val);
+    return turbo_strdup(val);
 }
 
 static char *rt_json_escape_dup(const char *s) {
@@ -1196,13 +1239,13 @@ const char *rt_json_get(const char *json, const char *key) {
     search[klen + 2] = '\0';
 
     const char *pos = strstr(json, search);
-    free(search);
-    if (!pos) return strdup("");
+    turbo_free(search);
+    if (!pos) return turbo_strdup("");
 
     /* Advance past key, skip whitespace and colon */
     pos += klen + 2;
     while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r') pos++;
-    if (*pos != ':') return strdup("");
+    if (*pos != ':') return turbo_strdup("");
     pos++;
     while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r') pos++;
 
@@ -1242,7 +1285,7 @@ const char *rt_json_stringify(const char *key, const char *value) {
 }
 
 const char *rt_json_root(const char *json) {
-    if (!json) return strdup("");
+    if (!json) return turbo_strdup("");
     while (*json == ' ' || *json == '\n' || *json == '\r' || *json == '\t') json++;
     size_t len = strlen(json);
     while (len > 0 && (json[len - 1] == ' ' || json[len - 1] == '\n' || json[len - 1] == '\r' || json[len - 1] == '\t')) len--;
@@ -1358,7 +1401,7 @@ long long rt_channel_recv(const void *ch) {
     pthread_mutex_unlock(&q->lock);
 
     long long val = node->value;
-    free(node);
+    turbo_free(node);
     return val;
 }
 
@@ -1453,7 +1496,7 @@ static void hashmap_resize(turbo_hashmap *map, long long new_cap) {
             map->count++;
         }
     }
-    free(old);
+    turbo_free(old);
 }
 
 void *rt_hashmap_new(void) {
@@ -1474,14 +1517,14 @@ void rt_hashmap_set(void *map_ptr, const char *key, const char *value) {
     while (map->entries[h].occupied) {
         if (strcmp(map->entries[h].key, key) == 0) {
             /* Update existing key */
-            free(map->entries[h].value);
-            map->entries[h].value = strdup(value);
+            turbo_free(map->entries[h].value);
+            map->entries[h].value = turbo_strdup(value);
             return;
         }
         h = (h + 1) % (unsigned long)map->capacity;
     }
-    map->entries[h].key = strdup(key);
-    map->entries[h].value = strdup(value);
+    map->entries[h].key = turbo_strdup(key);
+    map->entries[h].value = turbo_strdup(value);
     map->entries[h].occupied = 1;
     map->count++;
 }
@@ -1492,7 +1535,7 @@ const char *rt_hashmap_get(const void *map_ptr, const char *key) {
     long long checked = 0;
     while (map->entries[h].occupied && checked < map->capacity) {
         if (strcmp(map->entries[h].key, key) == 0) {
-            return strdup(map->entries[h].value);
+            return turbo_strdup(map->entries[h].value);
         }
         h = (h + 1) % (unsigned long)map->capacity;
         checked++;
@@ -1549,9 +1592,9 @@ void *rt_hashmap_keys(const void *map_ptr) {
     long long *arr = (long long *)rt_rc_alloc(data_size, idx);
     arr[0] = idx;
     for (long long i = 0; i < idx; i++) {
-        arr[1 + i] = (long long)(size_t)strdup(key_ptrs[i]);
+        arr[1 + i] = (long long)(size_t)turbo_strdup(key_ptrs[i]);
     }
-    free(key_ptrs);
+    turbo_free(key_ptrs);
     return arr;
 }
 
@@ -1561,8 +1604,8 @@ void rt_hashmap_remove(void *map_ptr, const char *key) {
     long long checked = 0;
     while (map->entries[h].occupied && checked < map->capacity) {
         if (strcmp(map->entries[h].key, key) == 0) {
-            free(map->entries[h].key);
-            free(map->entries[h].value);
+            turbo_free(map->entries[h].key);
+            turbo_free(map->entries[h].value);
             map->entries[h].key = NULL;
             map->entries[h].value = NULL;
             map->entries[h].occupied = 0;
@@ -1740,13 +1783,28 @@ static void *handle_http_conn(void *arg) {
     tv.tv_usec = 0;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    /* Persistent read buffer for keep-alive pipelining */
+    /* Persistent read buffer for keep-alive pipelining.
+     * The 16 KB buffer doubles as a hard cap on total request header
+     * size — if a client sends headers that do not fit, we reject with
+     * 431 Request Header Fields Too Large and close the connection.
+     * Individual header lines are also bounded by the buffer. */
     char buf[16384];
     int buf_len = 0;
 
     while (1) {
         /* Read more data into buffer */
-        int n = read(fd, buf + buf_len, sizeof(buf) - 1 - buf_len);
+        int space = (int)sizeof(buf) - 1 - buf_len;
+        if (space <= 0) {
+            /* Buffer full and no complete header found yet — headers are
+             * too large. Respond with 431 and close. */
+            const char *too_large =
+                "HTTP/1.1 431 Request Header Fields Too Large\r\n"
+                "Content-Length: 0\r\n"
+                "Connection: close\r\n\r\n";
+            write(fd, too_large, strlen(too_large));
+            break;
+        }
+        int n = read(fd, buf + buf_len, space);
         if (n <= 0) break;
         buf_len += n;
         buf[buf_len] = '\0';
@@ -1761,7 +1819,21 @@ static void *handle_http_conn(void *arg) {
 
         /* Find end of headers (\r\n\r\n) */
         char *hdr_end = strstr(buf, "\r\n\r\n");
-        if (!hdr_end) { rt_arena_end(); continue; } /* Need more data */
+        if (!hdr_end) {
+            rt_arena_end();
+            /* If the buffer is full and headers are still incomplete,
+             * reject with 431. This guards against DoS via oversized
+             * headers that never send the terminator. */
+            if (buf_len >= (int)sizeof(buf) - 1) {
+                const char *too_large =
+                    "HTTP/1.1 431 Request Header Fields Too Large\r\n"
+                    "Content-Length: 0\r\n"
+                    "Connection: close\r\n\r\n";
+                write(fd, too_large, strlen(too_large));
+                goto conn_done;
+            }
+            continue;
+        }
 
         /* Parse request line */
         char method[16] = {0}, raw_path[1024] = {0};
@@ -1946,6 +2018,7 @@ static void *handle_http_conn(void *arg) {
             goto process_request;
         }
     }
+conn_done:
     /* Defensive: if we broke out of the loop with an arena still
      * installed (e.g. n <= 0 read after process_request labeled goto),
      * make sure we don't leave the thread-local pointer dangling. */
@@ -2027,6 +2100,15 @@ void rt_http_listen(long long server_id) {
 const char* rt_respond_typed(long long status, const char *content_type, const char *body) {
     if (!content_type) content_type = "text/plain";
     if (!body) body = "";
+    /* Sanitize content_type: if it contains \r or \n, an attacker can
+     * inject arbitrary HTTP headers into the response. Fall back to a
+     * safe default. */
+    for (const char *c = content_type; *c; c++) {
+        if (*c == '\r' || *c == '\n') {
+            content_type = "text/plain";
+            break;
+        }
+    }
     size_t blen = strlen(body);
     size_t clen = strlen(content_type);
     /* "STATUS<sep>CONTENT_TYPE<sep>BODY\0" */
@@ -2067,6 +2149,14 @@ static int rt_parse_response(
             if (clen >= content_type_out_len) clen = content_type_out_len - 1;
             memcpy(content_type_out, sep1 + 1, clen);
             content_type_out[clen] = '\0';
+            /* Sanitize: reject \r or \n to prevent header injection. */
+            for (size_t i = 0; i < clen; i++) {
+                if (content_type_out[i] == '\r' || content_type_out[i] == '\n') {
+                    strncpy(content_type_out, "text/plain", content_type_out_len);
+                    content_type_out[content_type_out_len - 1] = '\0';
+                    break;
+                }
+            }
             *body_out = sep2 + 1;
             return 1;
         }

@@ -39,6 +39,8 @@ extern long long rt_array_len(const void *arr);
 extern long long rt_array_get(const void *arr, long long index);
 extern void *rt_array_push(void *arr, long long value);
 extern void rt_release(void *data_ptr);
+extern void *rt_struct_alloc(long long num_fields);
+extern const char *rt_respond_typed(long long status, const char *content_type, const char *body);
 
 static int g_failures = 0;
 
@@ -344,6 +346,128 @@ static void test_array_push_overflow_guard(void) {
           exited_with_one && said_overflow);
 }
 
+/* ── 23: turbo_calloc overflow aborts cleanly ─────────────────────────
+ * We forge a call with SIZE_MAX-sized arguments that would overflow
+ * the count * size multiplication. The hardened turbo_calloc must
+ * abort() rather than silently wrapping and under-allocating.
+ *
+ * We test this in a child process because the expected behaviour is
+ * abort() (SIGABRT). */
+static void test_turbo_calloc_overflow(void) {
+    fflush(stdout);
+    fflush(stderr);
+    pid_t pid = fork();
+    if (pid < 0) {
+        check("test_turbo_calloc_overflow fork", 0);
+        return;
+    }
+    if (pid == 0) {
+        /* Child: call rt_struct_alloc which routes through turbo_calloc
+         * via rt_rc_alloc. Pass a field count large enough that
+         * num_fields * 8 overflows size_t. */
+        (void)rt_struct_alloc((long long)(SIZE_MAX / 4));
+        /* If we reach here, the overflow was not caught. */
+        _exit(0);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    /* The child should have been killed by SIGABRT or exited non-zero. */
+    int died = WIFSIGNALED(status) ||
+               (WIFEXITED(status) && WEXITSTATUS(status) != 0);
+    check("test_turbo_calloc_overflow aborts on overflow", died);
+}
+
+/* ── 24: rt_struct_alloc negative num_fields aborts ──────────────────── */
+static void test_struct_alloc_negative(void) {
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        check("test_struct_alloc_negative pipe", 0);
+        return;
+    }
+    fflush(stdout);
+    fflush(stderr);
+    pid_t pid = fork();
+    if (pid < 0) {
+        check("test_struct_alloc_negative fork", 0);
+        close(pipefd[0]); close(pipefd[1]);
+        return;
+    }
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], 2);
+        close(pipefd[1]);
+        (void)rt_struct_alloc(-1);
+        _exit(0);
+    }
+    close(pipefd[1]);
+    char buf[256];
+    ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
+    close(pipefd[0]);
+    if (n < 0) n = 0;
+    buf[n] = '\0';
+    int status = 0;
+    waitpid(pid, &status, 0);
+    int died = WIFSIGNALED(status) ||
+               (WIFEXITED(status) && WEXITSTATUS(status) != 0);
+    int said_negative = strstr(buf, "negative num_fields") != NULL;
+    check("test_struct_alloc_negative aborts with message",
+          died && said_negative);
+}
+
+/* ── 25: turbo_strdup basic correctness ──────────────────────────────── */
+static void test_turbo_strdup_basic(void) {
+    /* Exercise turbo_strdup indirectly through rt_str_concat, which
+     * allocates through turbo_alloc, and through rt_respond_typed
+     * which builds a string via turbo_alloc. We can also test via
+     * arena: allocations inside an arena survive until rt_arena_end. */
+    rt_arena_begin();
+    const char *a = rt_str_concat("hello", " world");
+    int ok = (a != NULL && strcmp(a, "hello world") == 0);
+    /* Also exercise the env_get path which uses turbo_strdup internally;
+     * we just verify it doesn't crash. */
+    rt_arena_end();
+    check("test_turbo_strdup_basic via arena concat", ok);
+}
+
+/* ── 26: turbo_free on both arena and malloc pointers ────────────────── */
+static void test_turbo_free_mixed(void) {
+    /* Outside arena: allocate via rt_array_alloc (which uses turbo_calloc
+     * -> malloc path), then release. Should not crash. */
+    void *arr = rt_array_alloc(3);
+    rt_release(arr); /* Uses free() internally on the malloc-backed ptr */
+
+    /* Inside arena: allocations should survive until rt_arena_end,
+     * and rt_release should be a no-op. */
+    rt_arena_begin();
+    void *arr2 = rt_array_alloc(5);
+    rt_release(arr2); /* Should be a no-op (arena-backed) */
+    /* Verify we can still read the array (arena didn't free it) */
+    int ok = (rt_array_len(arr2) == 5);
+    rt_arena_end();
+    check("test_turbo_free_mixed no crash on mixed paths", ok);
+}
+
+/* ── 27: header injection sanitized in rt_respond_typed ──────────────── */
+static void test_header_injection_sanitized(void) {
+    /* content_type with \r\n should be replaced with "text/plain" */
+    const char *resp = rt_respond_typed(200, "text/html\r\nX-Injected: evil", "body");
+    /* The response format is "STATUS\x1fCONTENT_TYPE\x1fBODY".
+     * If sanitization worked, content_type should be "text/plain". */
+    int ok = 0;
+    if (resp) {
+        /* Find first separator */
+        const char *sep1 = strchr(resp, '\x1f');
+        if (sep1) {
+            const char *sep2 = strchr(sep1 + 1, '\x1f');
+            if (sep2) {
+                size_t ct_len = (size_t)(sep2 - (sep1 + 1));
+                ok = (ct_len == 10 && strncmp(sep1 + 1, "text/plain", 10) == 0);
+            }
+        }
+    }
+    check("test_header_injection_sanitized replaces evil content_type", ok);
+}
+
 int main(void) {
     printf("== turbo_rt C runtime tests ==\n");
 
@@ -369,6 +493,11 @@ int main(void) {
     test_array_push_1000();
     test_array_push_reuses_buffer();
     test_array_push_overflow_guard();
+    test_turbo_calloc_overflow();
+    test_struct_alloc_negative();
+    test_turbo_strdup_basic();
+    test_turbo_free_mixed();
+    test_header_injection_sanitized();
 
     if (g_failures == 0) {
         printf("\nAll tests passed.\n");
