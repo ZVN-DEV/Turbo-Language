@@ -5,6 +5,43 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-09 — Hardening Sprint
+
+Hardening sprint addressing all P0/P1 findings from a comprehensive product review. Fixes systemic memory safety bugs in both runtimes, hardens the HTTP server, documents the security model honestly, and adds a getting-started tutorial.
+
+### Security
+- **Arena/malloc mismatch eliminated.** `turbo_free()` now checks whether a pointer is arena-backed before calling `free()`, preventing heap corruption in HTTP handlers using JSON or hashmaps. `turbo_strdup()` routes all string duplication through the arena allocator. 22 call sites across the C runtime were audited and corrected.
+- **Integer overflow checks added** to `turbo_calloc()` and `rt_struct_alloc()` using `__builtin_mul_overflow`, matching the pattern from `rt_pow`.
+- **HTTP response header injection blocked.** Both C and Rust runtimes now strip `\r\n` from content-type before interpolation into response headers.
+- **HTTP request size limits enforced.** 8 KB per header line, 64 KB total headers, 32 MB request body, 256 max concurrent connections. Exceeding limits returns HTTP 431/413.
+- **JIT memory leak fixed.** `rt_release` now tracks allocations via `ALLOC_REGISTRY` and calls `dealloc` when refcount reaches zero, instead of silently leaking.
+- **Cranelift IR verifier** enabled in debug builds (`cfg!(debug_assertions)`), catching codegen bugs before they produce miscompiled code.
+- **Sema panic eliminated.** Replaced `.unwrap()` on function lookups with safe fallbacks, preventing compiler crashes on edge-case AST states.
+
+### Added
+- **`docs/SAFETY.md`** (328 lines) — Safety narrative explaining what errors are impossible, caught at compile time, caught at runtime, and the programmer's responsibility. Includes comparison tables vs C, Go, and Rust.
+- **`docs/GETTING-STARTED.md`** (538 lines) — 10-section tutorial from installation through building a text-stats analyzer project.
+- **`SECURITY.md`** updated with 7-section security model: JIT execution, playground, HTTP server, AOT binaries, FFI, file I/O, shell execution.
+- 5 new C runtime regression tests (arena-aware free, strdup routing, overflow detection, header injection).
+- 6 new Rust runtime/sema unit tests (deallocation, unwrap safety).
+- 14 new CLI/formatter unit tests.
+- 7 new doc-tests across turbo-ast and turbo-parser.
+- 4 new integration tests: `cow_method_chain`, `result_chain`, `nested_match`, `optional_coalesce`.
+
+### Changed
+- `rt_str_char_at` now returns a clear error message for negative indices instead of wrapping to `usize::MAX`.
+- `build.rs` uses runtime `CARGO_MANIFEST_DIR` instead of compile-time macro, fixing silent error-code exhaustiveness check skip on non-standard paths.
+- `README.md` updated: test counts, version references, security model section, stdlib table, fixed dead links.
+- `CONTRIBUTING.md` fixed: correct test commands, updated file paths, added security reporting section.
+- `docs/stdlib.md` updated with `try_read_file`/`try_write_file`, `hashmap_set_int`/`hashmap_get_int`, `exec`, `env_get`, `http_server_public`.
+
+### Notes
+- Sprint tracked in `SPRINT-PLAN.md` with 26 tasks across 4 parallel dev tracks. 5-agent review cycle (PM, CEO, Security, Code Quality, UX/DX) validated all changes before ship.
+- Known limitation: `ALLOC_REGISTRY` is thread-local; cross-thread refcounted objects leak silently rather than causing UB. Tracked for future improvement.
+- Codegen `lib.rs` split (4,327 lines) deferred to a future sprint.
+
+---
+
 ## [0.8.0] - 2026-04-14 — The Safe Core
 
 Safety-focused release. Four parallel tracks close the highest-severity findings from the 0.7.7 product review: rt_exec shell injection, unchecked integer arithmetic in pow, silently-swallowed I/O errors on `read_file`, generic hashmaps limited to string→string, a realloc corruption window in `read_fd_to_string`, and unbounded linker flags on AOT builds.
