@@ -70,6 +70,28 @@ fn main() {
 
 ---
 
+## System
+
+### exec
+
+```turbo
+let output = exec("ls -la")
+print(output)
+```
+
+Executes a system command and returns its stdout as a string. Also available as `shell_exec`. As of v0.8.0, commands containing shell metacharacters (`;`, `|`, `&`, `$`, etc.) are rejected at runtime to prevent shell injection. The command is tokenized on whitespace and executed directly via `execvp` -- no shell is involved.
+
+### env_get
+
+```turbo
+let home = env_get("HOME")
+print("Home directory: {home}")
+```
+
+Returns the value of an environment variable as a string. Returns an empty string if the variable is not set.
+
+---
+
 ## String Operations
 
 ### len (string)
@@ -474,7 +496,15 @@ Performs an HTTP POST request with the given body string and returns the respons
 let app = http_server(8080)
 ```
 
-Creates a new HTTP server bound to the given port. The server does not start listening until `http_listen` is called.
+Creates a new HTTP server bound to the given port on `127.0.0.1` (localhost only). The server does not start listening until `http_listen` is called.
+
+### http_server_public
+
+```turbo
+let app = http_server_public(8080)
+```
+
+Creates a new HTTP server bound to the given port on `0.0.0.0` (all interfaces). Use this only when you intentionally want the server accessible from other machines. **For production, always put a reverse proxy (nginx, Caddy) in front.** See [SECURITY.md](../SECURITY.md).
 
 ### route
 
@@ -716,7 +746,8 @@ Writes a 64-bit integer value to the given memory address.
 | **HashMap** | `hashmap`, `hashmap_set`, `hashmap_get`, `hashmap_set_int`, `hashmap_get_int`, `hashmap_has`, `hashmap_len`, `hashmap_keys`, `hashmap_remove` |
 | **JSON** | `json_get`, `json_stringify`, `to_json`, `to_json_array` |
 | **HTTP Client** | `http_get`, `http_post` |
-| **HTTP Server** | `http_server`, `route`, `http_listen`, `respond`, `request_body`, `request_method`, `request_path`, `request_query`, `request_header` |
+| **HTTP Server** | `http_server`, `http_server_public`, `route`, `http_listen`, `respond_text`, `respond_html`, `respond_json`, `request_body`, `request_method`, `request_path`, `request_query`, `request_header` |
+| **System** | `exec`, `env_get` |
 | **Concurrency** | `channel`, `send`, `recv`, `mutex`, `mutex_get`, `mutex_set`, `sleep`, `clone` |
 | **Testing** | `assert`, `assert_eq`, `assert_ne`, `panic` |
 | **Unsafe** | `deref`, `store` |
