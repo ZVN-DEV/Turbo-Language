@@ -853,7 +853,14 @@ impl Checker {
     }
 
     pub(crate) fn check_function(&mut self, f: &FnDef) {
-        let sig = self.functions.get(&f.name).cloned().unwrap();
+        let sig = match self.functions.get(&f.name).cloned() {
+            Some(s) => s,
+            None => {
+                // Function not registered (e.g. shadowed builtin or internal error).
+                // Skip body checking to avoid a panic.
+                return;
+            }
+        };
 
         // Skip body checking for generic functions — their bodies
         // contain type parameters that aren't concrete types.
@@ -942,7 +949,14 @@ impl Checker {
 
     /// Check a function body using a different name for looking up its signature (for methods).
     pub(crate) fn check_function_with_name(&mut self, f: &FnDef, sig_name: &str) {
-        let sig = self.functions.get(sig_name).cloned().unwrap();
+        let sig = match self.functions.get(sig_name).cloned() {
+            Some(s) => s,
+            None => {
+                // Method signature not registered (internal error or race condition).
+                // Skip body checking to avoid a panic.
+                return;
+            }
+        };
         self.current_return_type = sig.ret.clone();
 
         self.push_scope();

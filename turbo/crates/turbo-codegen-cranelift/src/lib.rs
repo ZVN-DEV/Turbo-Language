@@ -3779,8 +3779,20 @@ mod tests {
         rt_release(arr);
         assert_eq!(unsafe { *rc_ptr }, 1);
 
+        // Verify allocation is registered before final release
+        let raw_ptr = unsafe { arr.sub(8) };
+        let registered_before = ALLOC_REGISTRY.with(|reg| {
+            reg.borrow().contains_key(&(raw_ptr as usize))
+        });
+        assert!(registered_before, "allocation should be registered before final release");
+
         rt_release(arr);
-        assert_eq!(unsafe { *rc_ptr }, 0);
+        // After final release, memory is freed — do NOT read rc_ptr (use-after-free).
+        // Instead, verify the allocation was removed from the registry.
+        let registered_after = ALLOC_REGISTRY.with(|reg| {
+            reg.borrow().contains_key(&(raw_ptr as usize))
+        });
+        assert!(!registered_after, "allocation should be unregistered after final release");
     }
 
     #[test]
@@ -4293,5 +4305,55 @@ mod tests {
         // Verify it implements std::error::Error
         let _: &dyn std::error::Error = &err;
         assert_eq!(err.to_string(), "codegen error: test");
+    }
+
+    // ── TASK-10: rt_release deallocation tests ──────────────────────────
+
+    #[test]
+    fn test_rt_release_frees_on_zero_refcount() {
+        // Allocate an array, verify it's registered, release it, verify it's freed.
+        let arr = rt_array_alloc(3);
+        let raw = unsafe { arr.sub(8) };
+
+        // Verify registered
+        let before = ALLOC_REGISTRY.with(|reg| reg.borrow().contains_key(&(raw as usize)));
+        assert!(before, "new allocation should be in the registry");
+
+        // Release: refcount 1 -> 0, should free
+        rt_release(arr);
+        let after = ALLOC_REGISTRY.with(|reg| reg.borrow().contains_key(&(raw as usize)));
+        assert!(!after, "freed allocation should be removed from registry");
+    }
+
+    #[test]
+    fn test_rt_release_null_is_safe() {
+        // Releasing a null pointer should not panic or crash.
+        rt_release(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn test_rt_release_struct_frees_on_zero() {
+        let s = rt_struct_alloc(4);
+        let raw = unsafe { s.sub(8) };
+
+        let before = ALLOC_REGISTRY.with(|reg| reg.borrow().contains_key(&(raw as usize)));
+        assert!(before);
+
+        rt_release(s);
+        let after = ALLOC_REGISTRY.with(|reg| reg.borrow().contains_key(&(raw as usize)));
+        assert!(!after);
+    }
+
+    #[test]
+    fn test_rt_release_result_frees_on_zero() {
+        let r = rt_result_ok(42);
+        let raw = unsafe { (r as *mut u8).sub(8) };
+
+        let before = ALLOC_REGISTRY.with(|reg| reg.borrow().contains_key(&(raw as usize)));
+        assert!(before);
+
+        rt_release(r as *mut u8);
+        let after = ALLOC_REGISTRY.with(|reg| reg.borrow().contains_key(&(raw as usize)));
+        assert!(!after);
     }
 }
