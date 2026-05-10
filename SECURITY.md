@@ -4,9 +4,9 @@
 
 | Version | Status |
 |---------|--------|
-| 0.7.x   | Current — supported with security fixes |
-| 0.6.x   | Security fixes only while 0.7.x is the current series |
-| < 0.6   | Not supported |
+| 0.8.x   | Current — supported with security fixes |
+| 0.7.x   | Security fixes only while 0.8.x is the current series |
+| < 0.7   | Not supported |
 
 ## Reporting a Vulnerability
 
@@ -51,21 +51,95 @@ anonymity) once a fix ships.
   by design these bypass safety checks
 - Issues in third-party dependencies (please report upstream)
 
+## Security Model
+
+### 1. JIT Execution (`turbolang run`)
+
+`turbolang run` compiles source code and executes it in-process with
+full OS permissions. There is no sandboxing, no capability restriction,
+and no isolation between the Turbo program and the host system.
+
+**Treat `.tb` files like executables.** Do not run untrusted `.tb`
+source files. A malicious `.tb` file can read, write, or delete any
+file accessible to the user, make network requests, and execute
+arbitrary commands (via the `exec` built-in).
+
+### 2. Playground (`turbolang playground`)
+
+The playground starts a local HTTP server on `localhost` with CSRF
+protection (origin checking) and random session tokens (128-bit OS
+randomness). Source files are written via exclusive-create temp files
+to prevent TOCTOU races.
+
+The playground is designed for single-user, local development. It is
+**not designed for multi-tenant deployment.** Do not expose the
+playground to untrusted networks.
+
+### 3. HTTP Server
+
+The built-in HTTP server (`http_server`, `route`, `http_listen`) is
+development-grade:
+
+- `http_server(port)` binds to `127.0.0.1` (localhost only)
+- `http_server_public(port)` binds to `0.0.0.0` (all interfaces)
+- No TLS termination
+- No request body size limits
+- Connection cap with 503 backpressure (tuned for development loads)
+- Invalid server IDs are rejected
+
+**For production deployment, run behind a reverse proxy** (nginx,
+Caddy, or similar) that provides TLS termination, rate limiting,
+request filtering, and authentication.
+
+### 4. AOT Binaries
+
+Binaries produced by `turbolang build` are native executables. They
+inherit OS-level permissions of the user who runs them. Turbo provides
+no built-in sandboxing, capability model, or privilege restriction.
+
+AOT linker flags are allowlisted (alphanumeric + `_.+-` only) to
+prevent a dependency from smuggling malicious flags through the build.
+
+### 5. C FFI
+
+The `@unsafe extern "C"` block allows calling arbitrary C functions.
+These calls bypass all of Turbo's safety checks. A C function accessed
+via FFI can corrupt memory, dereference arbitrary pointers, or perform
+any operation the C ABI permits.
+
+Within `@unsafe` blocks, the `deref` and `store` builtins allow
+reading from and writing to arbitrary memory addresses.
+
+### 6. File I/O
+
+`read_file`, `write_file`, `try_read_file`, and `try_write_file`
+operate on any path the OS user has access to. There is no path
+sanitization, no chroot, and no allowlist of accessible directories.
+
+### 7. Shell Execution (`exec` / `shell_exec`)
+
+As of v0.8.0, `exec` and `shell_exec` reject commands containing shell
+metacharacters (`;`, `|`, `&`, `$`, backticks, parentheses, `<`, `>`,
+newlines, backslashes). Commands are tokenized on whitespace and
+executed directly via `execvp` with a 64-argument cap -- no shell is
+involved.
+
+This prevents shell injection attacks (e.g., `exec("echo hi; rm -rf /")`
+is rejected). However, the underlying command still runs with the full
+OS permissions of the Turbo process.
+
 ## Known Hardening Limits
 
 The following are documented limitations rather than vulnerabilities;
 fixing them is tracked in `CHANGELOG.md` and `TODO.md`:
 
-- **HTTP server primitives are experimental.** `http_server` /
-  `http_listen` are intended for development and demos. They are not
-  hardened for direct exposure to untrusted networks. As of v0.5.1
-  the default bind is `127.0.0.1`; the explicit
-  `http_server_public(port)` opt-in binds `0.0.0.0`. **Always put a
-  reverse proxy (nginx, Caddy) in front of a public deployment.**
-- **No reference counting yet.** `rt_release` is currently a no-op,
-  so long-running services leak memory at allocation rate (~2.5 KB
-  per request on the example HTTP server). Real ARC is planned for
-  v0.6 — see `TODO.md`.
+- **HTTP server primitives are development-grade.** See Security Model
+  section 3 above for details. **Always put a reverse proxy (nginx,
+  Caddy) in front of a public deployment.**
+- **JIT string arena is not individually freed.** The runtime uses a
+  thread-local string arena that is freed after each JIT execution.
+  Long-running AOT servers should be monitored for memory usage.
+  Proper ARC-based string deallocation is planned for a future release.
 - **Compiled binaries run with full system privileges.** Turbo has no
   capability/sandbox model. Treat compiled `.tb` programs the same way
   you would any compiled C program.

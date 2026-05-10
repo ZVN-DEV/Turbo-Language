@@ -7,11 +7,11 @@
 A compiled, type-safe programming language with familiar syntax and native performance. Compiles to machine code via Cranelift -- no VM, no garbage collector, no overhead.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-437%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-613%20passing-brightgreen.svg)](#testing)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 
-[Website](https://turbolang.dev) &middot; [Documentation](https://turbolang.dev/docs) &middot; [Examples](#examples) &middot; [Contributing](CONTRIBUTING.md)
+[Getting Started](docs/GETTING-STARTED.md) &middot; [Documentation](docs/stdlib.md) &middot; [Examples](#examples) &middot; [Safety](docs/SAFETY.md) &middot; [Security](SECURITY.md) &middot; [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -47,13 +47,17 @@ turbolang build hello.tb      # AOT — produce a native binary
 ./hello
 ```
 
-### Known Limitations (v0.7.x)
+### Known Limitations (v0.8.x)
 
 > **Note — runtime string allocation:** The runtime uses a thread-local string arena that is freed after each JIT execution. Long-running AOT servers should be monitored for memory usage. Proper ARC-based string deallocation is planned for a future release.
 >
 > **Warning — HTTP server is experimental:** The built-in HTTP server binds to `127.0.0.1` by default and is not hardened for direct exposure to untrusted networks. Put it behind a reverse proxy (nginx, Caddy) in production. See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
 > **Roadmap note — agent/tool features live in a sidecar, not the compiler.** Earlier design sketches explored `agent` and `tool fn` keywords. Those are no longer planned as core-language features — they'll ship (post-1.0) as a separate `turbo-agent` library that builds on Turbo's async, HTTP, and typed-serialization primitives. The compiler itself stays focused on being a fast, small, general-purpose systems/application language. Today's release ships native compilation, WASM output, async primitives, HTTP building blocks, REPL/playground, formatter, and LSP.
+
+### Security Model
+
+Turbo compiles code to native binaries or runs it via JIT -- both execute with full OS permissions. **Treat `.tb` files like executables.** Do not run untrusted code. For the full security model (JIT sandboxing, HTTP server limits, FFI, shell execution), see [`SECURITY.md`](SECURITY.md). For compile-time and runtime safety guarantees, see [`docs/SAFETY.md`](docs/SAFETY.md).
 
 ### A Taste of Turbo
 
@@ -264,17 +268,18 @@ fn main() {
 
 ### Standard Library
 
-64 built-in functions with no imports required. Method syntax works via UFCS -- `s.trim()` is equivalent to `trim(s)`.
+64+ built-in functions with no imports required. Method syntax works via UFCS -- `s.trim()` is equivalent to `trim(s)`.
 
 | Category | Highlights |
 |----------|------------|
-| **I/O** | `print(value)`, `read_file(path)`, `write_file(path, data)` |
+| **I/O** | `print(value)`, `read_file(path)`, `write_file(path, data)`, `try_read_file(path)`, `try_write_file(path, data)` |
 | **Strings** | `s.trim()`, `s.upper()`, `s.split(",")`, `s.contains("x")`, `s.replace("a", "b")` |
 | **Arrays** | `arr.len()`, `arr.push(elem)`, `arr.map(fn)`, `arr.filter(fn)` |
 | **Math** | `abs(n)`, `min(a, b)`, `max(a, b)`, `pow(base, exp)`, `sqrt(x)` |
-| **HashMap** | `hashmap()`, `hashmap_set(m, k, v)`, `hashmap_get(m, k)`, `hashmap_keys(m)` |
+| **HashMap** | `hashmap()`, `hashmap_set(m, k, v)`, `hashmap_get(m, k)`, `hashmap_set_int(m, k, v)`, `hashmap_get_int(m, k)`, `hashmap_keys(m)` |
 | **JSON** | `json_get(json, key)`, `to_json(struct)`, `to_json_array(arr)` |
 | **HTTP** | `http_get(url)`, `http_post(url, body)`, `http_server(port)`, `route(...)` |
+| **System** | `exec(cmd)`, `env_get(key)` |
 | **Concurrency** | `channel()`, `send(ch, v)`, `recv(ch)`, `mutex(val)`, `sleep(ms)`, `clone(s)` |
 | **Testing** | `assert(cond)`, `assert_eq(a, b)`, `assert_ne(a, b)`, `panic(msg)` |
 
@@ -427,7 +432,7 @@ cd turbo && ./tests/run_tests.sh
 turbolang run turbo/tests/phase1/fibonacci.tb
 ```
 
-437+ tests across unit and integration suites (275 unit + 162 integration).
+613+ tests across unit and integration suites (431 unit + 182 integration).
 
 ## LLVM Backend
 

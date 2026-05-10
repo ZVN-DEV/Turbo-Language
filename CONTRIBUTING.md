@@ -20,7 +20,7 @@ cd Turbo-Language
 cargo build --manifest-path turbo/Cargo.toml
 
 # Run all unit tests
-cargo test --all --manifest-path turbo/Cargo.toml
+cargo test --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
 
 # Run a source file to sanity-check
 cargo run --manifest-path turbo/Cargo.toml -- run turbo/tests/phase1/hello.tb
@@ -62,10 +62,10 @@ cargo fmt --all --manifest-path turbo/Cargo.toml
 cargo clippy --all --manifest-path turbo/Cargo.toml -- -D warnings
 
 # Unit tests
-cargo test --all --manifest-path turbo/Cargo.toml
+cargo test --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
 
 # Integration tests (requires release build)
-cargo build --release --manifest-path turbo/Cargo.toml
+cargo build --release -p turbo-cli --manifest-path turbo/Cargo.toml
 cd turbo && ./tests/run_tests.sh
 ```
 
@@ -89,8 +89,8 @@ command to re-run if any check fails.
 ### New built-in function
 
 1. **Sema** (`turbo-sema/src/lib.rs`) -- add the function signature to the built-in type environment.
-2. **Codegen** (`turbo-codegen-cranelift/src/lib.rs`) -- add a branch in `compile_call()` to emit the Cranelift IR call.
-3. **JIT setup** (same file) -- register the function pointer in the JIT symbol table.
+2. **Codegen** (`turbo-codegen-cranelift/src/builtins.rs`) -- add a compile function, and add the dispatch branch in `compile_call()` in `src/expr.rs`.
+3. **JIT setup** (`turbo-codegen-cranelift/src/jit.rs`) -- register the function pointer in the JIT symbol table.
 4. **C runtime** (`turbo-codegen-cranelift/runtime/turbo_rt.c`) -- implement the C function for AOT builds.
 5. **Test** -- add a `.tb`/`.expected` pair in `turbo/tests/phase1/`.
 6. **COW registration** -- if the builtin returns a new value instead of mutating its first argument in place (like `push`, `map`, `trim`), add its name to the `COW_BUILTINS` list in `turbo-parser/src/cow_rewrite.rs` so that statement-position calls get rewritten into self-assigns (`arr.push(4)` becomes `arr = push(arr, 4)`).
@@ -184,6 +184,16 @@ the manifest entry.
 - **No `unwrap()` in production code.** Use `?` or `match` in the CLI, LSP, and codegen crates. `unwrap()` is acceptable only in unit tests.
 - **Error propagation:** The parser collects errors into `Vec<ParseError>` and keeps going. Sema uses `Ty::Error` as a poison type to prevent cascading errors.
 - **Built-in functions** are recognized by name in `compile_call()`, not in the AST. Follow the existing pattern when adding new ones.
+
+## Security
+
+If you discover a security vulnerability, **do not open a public issue.**
+Use one of the private channels described in [`SECURITY.md`](SECURITY.md):
+
+- **GitHub:** [Private vulnerability reporting](https://github.com/ZVN-DEV/Turbo-Language/security/advisories/new)
+
+For details on the security model, threat boundaries, and what is in scope,
+see [`SECURITY.md`](SECURITY.md).
 
 ## Questions?
 
