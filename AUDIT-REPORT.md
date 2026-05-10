@@ -1,43 +1,48 @@
-# Turbo Hardening Audit Archive
+# TurboLang Product + OSS Audit Report
+Generated: 2026-05-09
+Source: Combined `$product-review` + `$gold-standard-os` review in this Codex session.
 
-Historical note: this file summarizes the 2026-04-06 hardening audit that
-fed the v0.5.1 cleanup and security release. It is not the current health
-report for the repository.
+## Product Verdict
+TurboLang is real software: Rust compiler workspace, CLI, LSP, docs, examples, release engineering, CI, security policy, fuzzing, and runnable demos. Current rating before sprint: 7.1/10. OSS score before sprint: 39-40/50.
 
-## Current status
+## P0/P1 Findings
 
-The issues called out in the original audit were used to drive the v0.5.1
-release work. The repo now contains the main remediations the audit asked for:
+### P0 / Critical Sprint Blockers
+1. **AOT/JIT array parity failure**
+   - Command: `./tests/parity/run_parity.sh`
+   - Failing program: `turbo/tests/parity/programs/arrays.tb`
+   - JIT prints `5,15,1,5`; AOT fails with `runtime error: array index 0 out of bounds (length 0)`.
+   - Impact: core compiler correctness issue.
 
-- `CHANGELOG.md` documents the v0.5.1 security backport work.
-- `SECURITY.md` defines disclosure scope and response expectations.
-- `.github/workflows/ci.yml` now runs fmt, clippy, unit tests, integration
-  tests, C runtime tests, and fuzz smoke coverage.
-- `turbo/crates/turbo-codegen-cranelift/runtime/tests/test_rt.c` and
-  `turbo/crates/turbo-codegen-cranelift/runtime/tests.sh` cover the hardened C
-  runtime cases.
-- The HTTP runtime now rejects non-HTTP(S) URLs, rejects flag-shaped curl
-  inputs, parses `Content-Length` safely, and defaults `http_server(port)` to
-  loopback binding.
+2. **Dependency install path traversal**
+   - Files: `turbo/crates/turbo-cli/src/main.rs:503-505`, `877-889`, `934-975`, `1127-1137`.
+   - Issue: dependency key is used in `turbo_modules.join(dep.name)` without validating against `..`, separators, or absolute names.
+   - Impact: malicious `turbo.toml` can delete/replace files outside `turbo_modules` during install/update.
 
-If you want the current product state, use `README.md`, `CHANGELOG.md`,
-`SECURITY.md`, and the live CI workflows rather than the original audit draft.
+3. **Wildcard CORS in Turbo HTTP runtime**
+   - Files: `turbo/crates/turbo-codegen-cranelift/src/runtime.rs:1417-1424`, `turbo/crates/turbo-codegen-cranelift/runtime/turbo_rt.c:1963-1967`.
+   - Issue: typed responses emit `Access-Control-Allow-Origin: *` by default.
+   - Impact: arbitrary websites can read local/public Turbo HTTP server responses.
 
-## What remains true
+4. **Website vulnerable dependency**
+   - File: `website/package.json:12`.
+   - `npm audit` reports one high Next.js advisory and one moderate PostCSS advisory. Upgrade Next to patched version.
 
-Some concerns from the audit are still relevant:
+### P1 / High Trust-Breaking Issues
+5. **Formatting drift**
+   - `cargo fmt --manifest-path turbo/Cargo.toml --all -- --check` fails.
 
-- `rt_release` is still effectively non-freeing, so long-running allocation-
-  heavy programs remain a known limitation for v0.5.x.
-- The Playground executes user code locally and should still be treated as a
-  developer convenience, not a hardened multi-tenant sandbox.
-- The largest compiler crates are still monolithic and remain a maintenance
-  risk even though they are no longer an immediate release blocker.
+6. **Parity not PR-gated**
+   - CI has parity in nightly only; add PR CI parity job.
 
-## Original audit intent
+7. **Website not root-CI-gated**
+   - Add `npm ci`, `npm run lint`, and `npm run build` to root CI.
 
-The original audit was a pre-release forcing function, not a permanent root
-document. Its purpose was to identify runtime security holes, CI gaps, stale
-public artifacts, and launch blockers before the v0.5.1 release. That work is
-complete enough that the original "confirmed live exploits" framing is now
-misleading if left unqualified.
+8. **Version/docs drift**
+   - Runtime reports `turbolang 0.8.0`; flagship demo says `v1.0` / JSON `1.0.0`.
+   - `SECURITY.md` claims no request body size limits while runtime has limits.
+
+### P2 / Important Follow-ups
+9. Add coverage reporting.
+10. Add CodeQL/secret scanning/dependency review.
+11. Split large files over time.

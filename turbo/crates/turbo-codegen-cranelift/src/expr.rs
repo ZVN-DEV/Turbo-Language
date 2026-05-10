@@ -209,7 +209,10 @@ fn compile_expr_inner<M: Module>(
         }
 
         Expr::Assign { target, value } => {
-            let rhs_is_ident = matches!(&value.node, Expr::Ident(_));
+            let rhs_ident = match &value.node {
+                Expr::Ident(name) => Some(name.as_str()),
+                _ => None,
+            };
             let (val, tty) = compile_expr(cx, value)?.unwrap();
             let (var, _, prev_tty) = cx.vars.get(target).ok_or_else(|| CodegenError {
                 code: ErrorCode::E0401,
@@ -217,12 +220,45 @@ fn compile_expr_inner<M: Module>(
             })?;
             let var = *var;
             let prev_tty = prev_tty.clone();
-            if rhs_is_ident {
-                retain_if_needed(cx, val, &tty);
-            }
-            if is_rc_heap_type(&prev_tty) {
+
+            if is_rc_heap_type(&prev_tty) && is_rc_heap_type(&tty) {
+                // Assignment to refcounted values must handle aliasing as:
+                //
+                //   if old != new {
+                //       retain(new); // when new is borrowed from another variable
+                //       release(old);
+                //   }
+                //
+                // This matters for AOT arrays because the C runtime's
+                // rt_array_push may grow an unshared array in place and return
+                // the same pointer. Unconditionally releasing `old` after
+                // `xs = push(xs, value)` would release the still-live `xs`.
                 let prev_val = cx.builder.use_var(var);
+                let same_ptr = cx.builder.ins().icmp(IntCC::Equal, prev_val, val);
+                let changed_block = cx.builder.create_block();
+                let done_block = cx.builder.create_block();
+                cx.builder
+                    .ins()
+                    .brif(same_ptr, done_block, &[], changed_block, &[]);
+
+                cx.builder.switch_to_block(changed_block);
+                cx.builder.seal_block(changed_block);
+                if rhs_ident.is_some() {
+                    retain_if_needed(cx, val, &tty);
+                }
                 release_if_needed(cx, prev_val, &prev_tty);
+                cx.builder.ins().jump(done_block, &[]);
+
+                cx.builder.switch_to_block(done_block);
+                cx.builder.seal_block(done_block);
+            } else {
+                if rhs_ident.is_some() {
+                    retain_if_needed(cx, val, &tty);
+                }
+                if is_rc_heap_type(&prev_tty) {
+                    let prev_val = cx.builder.use_var(var);
+                    release_if_needed(cx, prev_val, &prev_tty);
+                }
             }
             cx.builder.def_var(var, val);
             // Update the turbo type in case it changed

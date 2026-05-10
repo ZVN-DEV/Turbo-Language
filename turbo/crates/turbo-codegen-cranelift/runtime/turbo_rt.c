@@ -1962,8 +1962,7 @@ static void *handle_http_conn(void *arg) {
                         char hdr[512];
                         snprintf(hdr, sizeof(hdr),
                             "HTTP/1.1 %d OK\r\nContent-Type: %s\r\n"
-                            "Access-Control-Allow-Origin: *\r\nConnection: %s\r\n"
-                            "Content-Length: %d\r\n\r\n",
+                            "Connection: %s\r\nContent-Length: %d\r\n\r\n",
                             status, content_type, conn_hdr, resp_len);
                         write(fd, hdr, strlen(hdr));
                         write(fd, resp_body, resp_len);

@@ -1890,12 +1890,12 @@ fn main() { }"#,
         // If a function tries to shadow a builtin, the first pass rejects it
         // and doesn't register the signature. The second pass guard should
         // skip it gracefully without panicking.
-        let errors = check_source(
-            "fn print() { }\nfn main() { }",
-        );
+        let errors = check_source("fn print() { }\nfn main() { }");
         // Should produce a "cannot redefine builtin" error, not panic
         assert!(
-            errors.iter().any(|e| e.message.contains("cannot redefine builtin")),
+            errors
+                .iter()
+                .any(|e| e.message.contains("cannot redefine builtin")),
             "Expected builtin redefinition error, got: {:?}",
             errors,
         );

@@ -38,6 +38,52 @@ use types::{
 
 const RUNTIME_C: &str = include_str!("../../turbo-codegen-cranelift/runtime/turbo_rt.c");
 
+struct TempBuildDir {
+    path: std::path::PathBuf,
+}
+
+impl TempBuildDir {
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for TempBuildDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn create_exclusive_temp_dir(prefix: &str) -> Result<TempBuildDir, CodegenError> {
+    for attempt in 0..100u32 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "{prefix}_{}_{}_{}",
+            std::process::id(),
+            nanos,
+            attempt
+        ));
+        match std::fs::create_dir(&path) {
+            Ok(()) => return Ok(TempBuildDir { path }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(CodegenError {
+                    code: ErrorCode::E0404,
+                    message: format!("failed to create temp dir: {e}"),
+                })
+            }
+        }
+    }
+
+    Err(CodegenError {
+        code: ErrorCode::E0404,
+        message: "failed to create unique temp dir after 100 attempts".to_string(),
+    })
+}
+
 // ── Error type ──────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -97,14 +143,10 @@ pub fn aot_compile(ast_module: &turbo_ast::Module, output_path: &Path) -> Result
         })?;
 
     // Emit object file
-    let tmp_dir = std::env::temp_dir().join(format!("turbo_llvm_aot_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| CodegenError {
-        code: ErrorCode::E0404,
-        message: format!("failed to create temp dir: {e}"),
-    })?;
+    let tmp_dir = create_exclusive_temp_dir("turbo_llvm_aot")?;
 
-    let obj_path = tmp_dir.join("turbo.o");
-    let rt_path = tmp_dir.join("turbo_rt.c");
+    let obj_path = tmp_dir.path().join("turbo.o");
+    let rt_path = tmp_dir.path().join("turbo_rt.c");
 
     target_machine
         .write_to_file(&module, FileType::Object, &obj_path)
@@ -138,8 +180,6 @@ pub fn aot_compile(ast_module: &turbo_ast::Module, output_path: &Path) -> Result
             message: format!("linker failed: {stderr}"),
         });
     }
-
-    let _ = std::fs::remove_dir_all(&tmp_dir);
 
     Ok(())
 }

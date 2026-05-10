@@ -75,7 +75,7 @@ struct HealthStatus {
 
 fn main() {
     print("===========================================")
-    print("  Turbo Speed Server v1.0")
+    print("  Turbo Speed Server v0.8.x")
     print("  Listening on http://localhost:8080")
     print("===========================================")
     print("")
@@ -93,7 +93,7 @@ fn main() {
     route(app, "GET", "/", |req: str| -> str {
         let info = ServerInfo {
             name: "Turbo Speed Server",
-            version: "1.0.0",
+            version: "0.8.0",
             language: "Turbo",
         }
         respond_json(200, to_json(info))

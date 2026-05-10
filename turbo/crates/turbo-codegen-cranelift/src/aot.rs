@@ -6,6 +6,55 @@
 
 use super::*;
 
+struct TempBuildDir {
+    path: std::path::PathBuf,
+    preserve: bool,
+}
+
+impl TempBuildDir {
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for TempBuildDir {
+    fn drop(&mut self) {
+        if !self.preserve {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+fn create_exclusive_temp_dir(prefix: &str, preserve: bool) -> Result<TempBuildDir, CodegenError> {
+    for attempt in 0..100u32 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "{prefix}_{}_{}_{}",
+            std::process::id(),
+            nanos,
+            attempt
+        ));
+        match std::fs::create_dir(&path) {
+            Ok(()) => return Ok(TempBuildDir { path, preserve }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(CodegenError {
+                    code: ErrorCode::E0404,
+                    message: format!("failed to create temp dir: {e}"),
+                })
+            }
+        }
+    }
+
+    Err(CodegenError {
+        code: ErrorCode::E0404,
+        message: "failed to create unique temp dir after 100 attempts".to_string(),
+    })
+}
+
 pub fn aot_compile(
     ast_module: &turbo_ast::Module,
     output_path: &Path,
@@ -18,7 +67,11 @@ pub fn aot_compile(
     flag_builder.set("is_pic", "true").unwrap(); // Required for AOT linking on macOS
     if optimize {
         flag_builder.set("opt_level", "speed_and_size").unwrap();
-        let verifier = if cfg!(debug_assertions) { "true" } else { "false" };
+        let verifier = if cfg!(debug_assertions) {
+            "true"
+        } else {
+            "false"
+        };
         flag_builder.set("enable_verifier", verifier).unwrap();
         flag_builder.set("enable_alias_analysis", "true").unwrap();
     }
@@ -73,14 +126,10 @@ pub fn aot_compile(
     })?;
 
     // Write object file and runtime to temp, then link with cc
-    let tmp_dir = std::env::temp_dir().join(format!("turbo_aot_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| CodegenError {
-        code: ErrorCode::E0404,
-        message: format!("failed to create temp dir: {e}"),
-    })?;
+    let tmp_dir = create_exclusive_temp_dir("turbo_aot", false)?;
 
-    let obj_path = tmp_dir.join("turbo.o");
-    let rt_path = tmp_dir.join("turbo_rt.c");
+    let obj_path = tmp_dir.path().join("turbo.o");
+    let rt_path = tmp_dir.path().join("turbo_rt.c");
 
     std::fs::write(&obj_path, &obj_bytes).map_err(|e| CodegenError {
         code: ErrorCode::E0400,
@@ -141,9 +190,6 @@ pub fn aot_compile(
             message: format!("linker failed: {stderr}"),
         });
     }
-
-    // Clean up temp directory and all files within
-    let _ = std::fs::remove_dir_all(&tmp_dir);
 
     Ok(())
 }
@@ -325,18 +371,15 @@ pub fn wasm_compile(
     let c_source = wasm_codegen::generate_c(ast_module);
 
     // Write C source, runtime, and stub to temp dir
-    let tmp_dir = std::env::temp_dir().join(format!("turbo_wasm_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| CodegenError {
-        code: ErrorCode::E0404,
-        message: format!("failed to create temp dir: {e}"),
-    })?;
+    let preserve_tmp = std::env::var("TURBO_DEBUG").is_ok();
+    let tmp_dir = create_exclusive_temp_dir("turbo_wasm", preserve_tmp)?;
 
-    let program_c_path = tmp_dir.join("turbo_program.c");
-    let rt_src_path = tmp_dir.join("turbo_rt_wasm.c");
-    let stub_c_path = tmp_dir.join("wasm_stub.c");
-    let program_o_path = tmp_dir.join("turbo_program.o");
-    let rt_o_path = tmp_dir.join("turbo_rt_wasm.o");
-    let stub_o_path = tmp_dir.join("wasm_stub.o");
+    let program_c_path = tmp_dir.path().join("turbo_program.c");
+    let rt_src_path = tmp_dir.path().join("turbo_rt_wasm.c");
+    let stub_c_path = tmp_dir.path().join("wasm_stub.c");
+    let program_o_path = tmp_dir.path().join("turbo_program.o");
+    let rt_o_path = tmp_dir.path().join("turbo_rt_wasm.o");
+    let stub_o_path = tmp_dir.path().join("wasm_stub.o");
 
     std::fs::write(&program_c_path, &c_source).map_err(|e| CodegenError {
         code: ErrorCode::E0400,
@@ -418,11 +461,9 @@ pub fn wasm_compile(
 
     if !link_output.status.success() {
         let stderr = String::from_utf8_lossy(&link_output.stderr);
-        if std::env::var("TURBO_DEBUG").is_ok() {
+        if preserve_tmp {
             eprintln!("debug: generated C source at {}", program_c_path.display());
-            eprintln!("debug: temp dir preserved at {}", tmp_dir.display());
-        } else {
-            let _ = std::fs::remove_dir_all(&tmp_dir);
+            eprintln!("debug: temp dir preserved at {}", tmp_dir.path().display());
         }
         return Err(CodegenError {
             code: ErrorCode::E0404,
@@ -431,10 +472,8 @@ pub fn wasm_compile(
     }
 
     // Clean up temp directory
-    if std::env::var("TURBO_DEBUG").is_ok() {
-        eprintln!("debug: temp dir preserved at {}", tmp_dir.display());
-    } else {
-        let _ = std::fs::remove_dir_all(&tmp_dir);
+    if preserve_tmp {
+        eprintln!("debug: temp dir preserved at {}", tmp_dir.path().display());
     }
 
     Ok(())

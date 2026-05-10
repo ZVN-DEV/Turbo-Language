@@ -288,7 +288,7 @@ fn build_html() -> str {
         + "<div class=\"header\">"
         + "  <div class=\"logo\">Turbo</div>"
         + "  <div class=\"subtitle\">Interactive Benchmark Dashboard"
-        + "    <span class=\"badge\">v1.0</span>"
+        + "    <span class=\"badge\">v0.8.x</span>"
         + "  </div>"
         + "  <div class=\"hero-note\">"
         + "    <strong>Flagship runnable demo:</strong> one Turbo file serving both the browser UI and the benchmark APIs."
@@ -433,7 +433,7 @@ fn main() {
 
     // Language info endpoint
     route(app, "GET", "/api/info", |req: str| -> str {
-        respond_json(200, "\{\"language\": \"Turbo\", \"version\": \"1.0.0\", \"backend\": \"Cranelift\", \"features\": [\"JIT compilation\", \"AOT compilation\", \"async/await\", \"closures\", \"generics\", \"pattern matching\", \"HTTP server\", \"channels\", \"hashmaps\"]\}")
+        respond_json(200, "\{\"language\": \"Turbo\", \"version\": \"0.8.0\", \"backend\": \"Cranelift\", \"features\": [\"JIT compilation\", \"AOT compilation\", \"async/await\", \"closures\", \"generics\", \"pattern matching\", \"HTTP server\", \"channels\", \"hashmaps\"]\}")
     })
 
     print("Dashboard ready. Press Ctrl+C to stop.")

@@ -223,7 +223,11 @@ pub(crate) fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut
 }
 
 /// Determine which variables a closure captures from its enclosing scope.
-pub(crate) fn find_captures(closure_params: &[Param], body: &Expr, outer_vars: &[String]) -> Vec<String> {
+pub(crate) fn find_captures(
+    closure_params: &[Param],
+    body: &Expr,
+    outer_vars: &[String],
+) -> Vec<String> {
     let mut bound: Vec<String> = closure_params.iter().map(|p| p.name.clone()).collect();
     let mut free = Vec::new();
     collect_free_vars(body, &mut bound, &mut free);

@@ -13,9 +13,7 @@ use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 use std::collections::HashMap;
 use turbo_ast::*;
 
-use crate::closures::{
-    extract_all_closures, extract_all_spawn_sites, CaptureInfo,
-};
+use crate::closures::{extract_all_closures, extract_all_spawn_sites, CaptureInfo};
 use crate::expr::compile_expr;
 use crate::turbo_types::*;
 use crate::type_conv::{coerce_value, resolve_cl_type, turbo_ty_to_cl_type};

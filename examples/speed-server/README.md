@@ -35,7 +35,7 @@ The server prints a banner and then blocks on `http_listen`:
 
 ```
 ===========================================
-  Turbo Speed Server v1.0
+  Turbo Speed Server v0.8.x
   Listening on http://localhost:8080
 ===========================================
 

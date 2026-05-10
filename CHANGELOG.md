@@ -5,6 +5,27 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-05-10 — Product Hardening Sprint
+
+Follow-up hardening release closing product-review and gold-standard OSS findings around compiler parity, dependency installation safety, HTTP response defaults, CI coverage, and website dependency hygiene.
+
+### Security
+- **Dependency install/update path traversal blocked.** Manifest dependency names now reject empty names, `..`, path separators, absolute paths, and Windows path prefixes before writing under `turbo_modules`.
+- **Symlinked `turbo_modules` rejected.** Install/update now resolve the modules directory against the project root and refuse symlinked `turbo_modules`, closing a canonicalization bypass.
+- **Wildcard CORS removed from typed HTTP responses.** Rust and C runtimes no longer add `Access-Control-Allow-Origin: *` by default.
+- **Next.js upgraded to 16.2.6** and website CI now gates high-severity `npm audit` findings.
+
+### Fixed
+- **AOT/JIT array parity restored.** Fixed RC heap assignment aliasing so in-place array mutations such as `push` preserve the updated pointer/length in AOT output.
+- **Exclusive AOT/LLVM temp directories.** Build temp directories now use exclusive creation instead of predictable shared paths.
+- **C runtime CORS regression test hardened** with loopback ephemeral-port selection and full response reads.
+
+### CI / Docs
+- PR CI now runs website lint/build, high-severity npm audit, and parity tests.
+- Updated stale v1.0 demo copy to the current 0.8.x status.
+- Updated `SECURITY.md` HTTP request-limit text and README test-status wording.
+- Captured sprint artifacts in `AUDIT-REPORT.md` and `SPRINT-PLAN.md`.
+
 ## [0.8.1] - 2026-05-09 — Hardening Sprint
 
 Hardening sprint addressing all P0/P1 findings from a comprehensive product review. Fixes systemic memory safety bugs in both runtimes, hardens the HTTP server, documents the security model honestly, and adds a getting-started tutorial.

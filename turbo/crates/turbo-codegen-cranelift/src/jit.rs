@@ -59,7 +59,11 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     flag_builder.set("use_colocated_libcalls", "false").unwrap();
     flag_builder.set("is_pic", "false").unwrap();
     flag_builder.set("opt_level", "speed_and_size").unwrap();
-    let verifier = if cfg!(debug_assertions) { "true" } else { "false" };
+    let verifier = if cfg!(debug_assertions) {
+        "true"
+    } else {
+        "false"
+    };
     flag_builder.set("enable_verifier", verifier).unwrap();
     flag_builder.set("enable_alias_analysis", "true").unwrap();
 
@@ -213,7 +217,11 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     flag_builder.set("use_colocated_libcalls", "false").unwrap();
     flag_builder.set("is_pic", "false").unwrap();
     flag_builder.set("opt_level", "speed_and_size").unwrap();
-    let verifier = if cfg!(debug_assertions) { "true" } else { "false" };
+    let verifier = if cfg!(debug_assertions) {
+        "true"
+    } else {
+        "false"
+    };
     flag_builder.set("enable_verifier", verifier).unwrap();
     flag_builder.set("enable_alias_analysis", "true").unwrap();
 

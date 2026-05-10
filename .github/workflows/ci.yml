@@ -254,6 +254,59 @@ jobs:
         if: steps.filter.outputs.llvm != 'true' && github.event_name != 'push'
         run: echo "No LLVM-related files changed — skipping build and test."
 
+  website:
+    name: Website lint + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+        working-directory: website
+
+      - name: npm run lint
+        run: npm run lint
+        working-directory: website
+
+      - name: npm run build
+        run: npm run build
+        working-directory: website
+
+      - name: npm audit (high severity gate)
+        run: npm audit --audit-level=high
+        working-directory: website
+
+  parity:
+    name: Parity tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            turbo/target
+          key: ${{ runner.os }}-cargo-parity-${{ hashFiles('turbo/Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+
+      - name: Run parity tests
+        run: ./tests/parity/run_parity.sh
+        working-directory: turbo
+
   audit:
     name: Cargo audit
     runs-on: ubuntu-latest

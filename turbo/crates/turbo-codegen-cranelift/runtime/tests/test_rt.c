@@ -16,13 +16,22 @@
  * just a forward-compat guard.)
  */
 
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <signal.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 /* Forward declarations of the runtime functions we exercise. We don't
  * include turbo_rt.c via a header — the runtime intentionally has no
@@ -41,6 +50,9 @@ extern void *rt_array_push(void *arr, long long value);
 extern void rt_release(void *data_ptr);
 extern void *rt_struct_alloc(long long num_fields);
 extern const char *rt_respond_typed(long long status, const char *content_type, const char *body);
+extern long long rt_http_server(long long port);
+extern void rt_http_route(long long server_id, const char *method, const char *path, const void *handler, const void *env_ptr);
+extern void rt_http_listen(long long server_id);
 
 static int g_failures = 0;
 
@@ -51,6 +63,32 @@ static void check(const char *name, int ok) {
         printf("  [FAIL] %s\n", name);
         g_failures++;
     }
+}
+
+static long long reserve_loopback_port(void) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return 0;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = 0;
+    addr.sin_addr.s_addr = htonl(0x7f000001UL); /* 127.0.0.1 */
+
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        close(fd);
+        return 0;
+    }
+
+    socklen_t len = sizeof(addr);
+    if (getsockname(fd, (struct sockaddr *)&addr, &len) != 0) {
+        close(fd);
+        return 0;
+    }
+
+    long long port = ntohs(addr.sin_port);
+    close(fd);
+    return port;
 }
 
 /* ── 1: rt_str_repeat overflow ─────────────────────────────────────── */
@@ -468,6 +506,78 @@ static void test_header_injection_sanitized(void) {
     check("test_header_injection_sanitized replaces evil content_type", ok);
 }
 
+static const char *typed_cors_test_handler(const void *env, const char *req) {
+    (void)env;
+    (void)req;
+    return rt_respond_typed(201, "application/json", "{\"ok\":true}");
+}
+
+/* ── 28: typed HTTP responses do not add wildcard CORS by default ───── */
+static void test_typed_http_response_no_default_cors(void) {
+    long long port = reserve_loopback_port();
+    if (port <= 0) {
+        port = 49152 + ((long long)getpid() % 16000);
+    }
+    fflush(stdout);
+    fflush(stderr);
+    pid_t pid = fork();
+    if (pid < 0) {
+        check("test_typed_http_response_no_default_cors fork", 0);
+        return;
+    }
+    if (pid == 0) {
+        long long server = rt_http_server(port);
+        rt_http_route(server, "GET", "/typed", (const void *)typed_cors_test_handler, NULL);
+        rt_http_listen(server);
+        _exit(0);
+    }
+
+    int fd = -1;
+    for (int attempt = 0; attempt < 100; attempt++) {
+        fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) break;
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons((unsigned short)port);
+        addr.sin_addr.s_addr = htonl(0x7f000001UL); /* 127.0.0.1 */
+        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+            break;
+        }
+        close(fd);
+        fd = -1;
+        struct timespec ts = {0, 10 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+    }
+
+    int ok = 0;
+    if (fd >= 0) {
+        const char *request =
+            "GET /typed HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Connection: close\r\n\r\n";
+        write(fd, request, strlen(request));
+        shutdown(fd, SHUT_WR);
+        char buf[4096];
+        size_t used = 0;
+        while (used < sizeof(buf) - 1) {
+            ssize_t n = read(fd, buf + used, sizeof(buf) - 1 - used);
+            if (n <= 0) break;
+            used += (size_t)n;
+        }
+        buf[used] = '\0';
+        ok = strstr(buf, "HTTP/1.1 201 OK\r\n") != NULL &&
+             strstr(buf, "Content-Type: application/json\r\n") != NULL &&
+             strstr(buf, "Access-Control-Allow-Origin") == NULL &&
+             strstr(buf, "{\"ok\":true}") != NULL;
+        close(fd);
+    }
+
+    kill(pid, SIGTERM);
+    waitpid(pid, NULL, 0);
+    check("test_typed_http_response_no_default_cors omits wildcard CORS", ok);
+}
+
 int main(void) {
     printf("== turbo_rt C runtime tests ==\n");
 
@@ -498,6 +608,7 @@ int main(void) {
     test_turbo_strdup_basic();
     test_turbo_free_mixed();
     test_header_injection_sanitized();
+    test_typed_http_response_no_default_cors();
 
     if (g_failures == 0) {
         printf("\nAll tests passed.\n");

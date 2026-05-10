@@ -609,10 +609,7 @@ pub(crate) extern "C" fn rt_str_char_at(s: *const u8, index: i64) -> *const u8 {
         .to_str()
         .unwrap_or("");
     if index < 0 {
-        eprintln!(
-            "runtime error: char_at index {} is negative",
-            index
-        );
+        eprintln!("runtime error: char_at index {} is negative", index);
         std::process::exit(1);
     }
     if let Some(c) = s.chars().nth(index as usize) {
@@ -1266,7 +1263,7 @@ fn parse_rt_response(resp: &str) -> Option<(u16, &str, &str)> {
 }
 
 /// Handle a single HTTP connection with keep-alive support.
-fn handle_http_connection(
+pub(crate) fn handle_http_connection(
     stream: std::net::TcpStream,
     routes: &[(String, String, RouteHandler, *const u8)],
 ) {
@@ -1413,9 +1410,9 @@ fn handle_http_connection(
                             _ => "OK",
                         };
                         // Sanitize content_type to prevent header injection
-                        let safe_ct = content_type.replace('\r', "").replace('\n', "");
+                        let safe_ct = content_type.replace(['\r', '\n'], "");
                         let http_resp = format!(
-                            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: {}\r\nContent-Length: {}\r\n\r\n{}",
+                            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nConnection: {}\r\nContent-Length: {}\r\n\r\n{}",
                             code,
                             status_text,
                             safe_ct,

@@ -594,6 +594,122 @@ fn resolve_registry_repo(name: &str, registries: &HashMap<String, String>) -> Op
         .or_else(|| default_registry_repo(name))
 }
 
+fn validate_dependency_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("dependency name must not be empty".to_string());
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Err(format!(
+            "dependency name `{name}` must not contain path separators"
+        ));
+    }
+    if name == ".." || name.contains("..") {
+        return Err(format!(
+            "dependency name `{name}` must not contain `..` path traversal"
+        ));
+    }
+    if Path::new(name).is_absolute() {
+        return Err(format!(
+            "dependency name `{name}` must not be an absolute path"
+        ));
+    }
+    if is_windows_path_prefix(name) {
+        return Err(format!(
+            "dependency name `{name}` must not use a Windows path prefix"
+        ));
+    }
+
+    Ok(())
+}
+
+fn is_windows_path_prefix(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
+}
+
+fn dependency_target_path(modules_dir: &Path, dep_name: &str) -> Result<PathBuf, String> {
+    validate_dependency_name(dep_name)?;
+    let modules_dir = canonical_modules_dir(modules_dir)?;
+    let target = modules_dir.join(dep_name);
+    if !target.starts_with(&modules_dir) {
+        return Err(format!(
+            "dependency target `{}` would escape `{}`",
+            target.display(),
+            modules_dir.display()
+        ));
+    }
+
+    Ok(target)
+}
+
+fn canonical_modules_dir(modules_dir: &Path) -> Result<PathBuf, String> {
+    let cwd = std::fs::canonicalize(".")
+        .map_err(|e| format!("could not resolve current directory for turbo_modules: {e}"))?;
+
+    if let Ok(metadata) = std::fs::symlink_metadata(modules_dir) {
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "turbo_modules directory `{}` must not be a symlink",
+                modules_dir.display()
+            ));
+        }
+    }
+
+    let resolved = if modules_dir.exists() {
+        std::fs::canonicalize(modules_dir).map_err(|e| {
+            format!(
+                "could not resolve turbo_modules directory `{}`: {e}",
+                modules_dir.display()
+            )
+        })?
+    } else if modules_dir.is_absolute() {
+        let parent = modules_dir.parent().ok_or_else(|| {
+            format!(
+                "could not resolve turbo_modules directory `{}`: missing parent",
+                modules_dir.display()
+            )
+        })?;
+        let name = modules_dir.file_name().ok_or_else(|| {
+            format!(
+                "could not resolve turbo_modules directory `{}`: missing directory name",
+                modules_dir.display()
+            )
+        })?;
+        std::fs::canonicalize(parent)
+            .map(|parent| parent.join(name))
+            .map_err(|e| {
+                format!(
+                    "could not resolve turbo_modules parent `{}`: {e}",
+                    parent.display()
+                )
+            })?
+    } else {
+        cwd.join(modules_dir)
+    };
+
+    if !resolved.starts_with(&cwd) {
+        return Err(format!(
+            "turbo_modules directory `{}` must stay inside project root `{}`",
+            resolved.display(),
+            cwd.display()
+        ));
+    }
+
+    Ok(resolved)
+}
+
+fn validate_manifest_dependency_names(deps: &[DependencySpec]) {
+    for dep in deps {
+        if let Err(err) = validate_dependency_name(&dep.name) {
+            eprintln!(
+                "\x1b[1;31merror\x1b[0m: invalid dependency name `{}` in [{}]: {}",
+                dep.name, dep.section, err
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
 fn read_lockfile() -> HashMap<String, LockedGitDependency> {
     let contents = match std::fs::read_to_string("turbo.lock") {
         Ok(s) => s,
@@ -822,6 +938,88 @@ agent-kit = { github = "owner/agent-kit", version = "1.2" }
     }
 
     #[test]
+    fn validate_dependency_name_accepts_plain_package_names() {
+        for name in ["turbo-db", "agent_kit", "http2"] {
+            assert!(
+                validate_dependency_name(name).is_ok(),
+                "{name} should be a valid dependency name"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_dependency_name_rejects_path_like_names() {
+        for name in [
+            "",
+            "..",
+            "../escape",
+            "escape/child",
+            "escape\\child",
+            "/absolute",
+            "C:escape",
+            "C:\\escape",
+            "pkg..escape",
+        ] {
+            assert!(
+                validate_dependency_name(name).is_err(),
+                "{name:?} should be rejected as a dependency name"
+            );
+        }
+    }
+
+    #[test]
+    fn dependency_target_path_stays_under_turbo_modules() {
+        let test_root = PathBuf::from(format!(
+            ".turbo-cli-dep-target-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let modules_dir = test_root.join("turbo_modules");
+        std::fs::create_dir_all(&modules_dir).unwrap();
+
+        let target = dependency_target_path(&modules_dir, "safe_dep").unwrap();
+        let canonical_modules = std::fs::canonicalize(&modules_dir).unwrap();
+        assert!(target.starts_with(&canonical_modules));
+        assert_eq!(target, canonical_modules.join("safe_dep"));
+
+        let err = dependency_target_path(&modules_dir, "../escape").unwrap_err();
+        assert!(
+            err.contains("path separators") || err.contains("path traversal"),
+            "unexpected error: {err}"
+        );
+
+        std::fs::remove_dir_all(&test_root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dependency_target_path_rejects_symlinked_turbo_modules() {
+        let test_root = PathBuf::from(format!(
+            ".turbo-cli-dep-target-symlink-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let outside = test_root.join("outside");
+        let modules_dir = test_root.join("turbo_modules");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &modules_dir).unwrap();
+
+        let err = dependency_target_path(&modules_dir, "safe_dep").unwrap_err();
+        assert!(
+            err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+
+        std::fs::remove_dir_all(&test_root).unwrap();
+    }
+
+    #[test]
     fn select_latest_patch_for_minor_version() {
         let tags = vec![
             ("v0.1.0".to_string(), "aaa".to_string()),
@@ -854,6 +1052,7 @@ fn install_deps() {
 
     std::fs::create_dir_all("turbo_modules").ok();
     let deps = parse_dependencies_from_manifest(&toml);
+    validate_manifest_dependency_names(&deps);
     let registries = parse_registry_map(&toml);
     let mut lockfile = read_lockfile();
     let mut count = 0u32;
@@ -874,7 +1073,11 @@ fn install_deps() {
                     }
                 };
 
-                let target = std::path::Path::new("turbo_modules").join(&dep.name);
+                let target = dependency_target_path(Path::new("turbo_modules"), &dep.name)
+                    .unwrap_or_else(|err| {
+                        eprintln!("\x1b[1;31merror\x1b[0m: {err}");
+                        std::process::exit(1);
+                    });
                 if target.exists() {
                     // Remove existing symlink or directory
                     if target.is_dir() {
@@ -931,7 +1134,11 @@ fn install_deps() {
                 count += 1;
             }
             DependencySource::GitHub { repo, rev, version } => {
-                let target = Path::new("turbo_modules").join(&dep.name);
+                let target = dependency_target_path(Path::new("turbo_modules"), &dep.name)
+                    .unwrap_or_else(|err| {
+                        eprintln!("\x1b[1;31merror\x1b[0m: {err}");
+                        std::process::exit(1);
+                    });
                 let resolved = if let Some(wanted_rev) = rev.clone() {
                     Ok((wanted_rev.clone(), format!("rev {wanted_rev}")))
                 } else if let Some(version) = version.as_deref() {
@@ -1021,7 +1228,11 @@ fn install_deps() {
                     );
                     continue;
                 };
-                let target = Path::new("turbo_modules").join(&dep.name);
+                let target = dependency_target_path(Path::new("turbo_modules"), &dep.name)
+                    .unwrap_or_else(|err| {
+                        eprintln!("\x1b[1;31merror\x1b[0m: {err}");
+                        std::process::exit(1);
+                    });
                 let (tag, pinned_rev) = match resolve_versioned_rev(&repo, &version) {
                     Ok(v) => v,
                     Err(err) => {
@@ -1116,6 +1327,7 @@ fn update_deps() {
     });
 
     let deps = parse_dependencies_from_manifest(&toml);
+    validate_manifest_dependency_names(&deps);
     let registries = parse_registry_map(&toml);
     let mut lockfile = read_lockfile();
     let mut count = 0u32;
@@ -1124,7 +1336,11 @@ fn update_deps() {
     for dep in deps {
         match dep.source {
             DependencySource::GitHub { repo, rev, version } => {
-                let target = Path::new("turbo_modules").join(&dep.name);
+                let target = dependency_target_path(Path::new("turbo_modules"), &dep.name)
+                    .unwrap_or_else(|err| {
+                        eprintln!("\x1b[1;31merror\x1b[0m: {err}");
+                        std::process::exit(1);
+                    });
                 if !target.exists() {
                     eprintln!(
                         "  \x1b[33m!\x1b[0m {} not installed — run `turbolang install` first",
@@ -1225,7 +1441,11 @@ fn update_deps() {
                     );
                     continue;
                 };
-                let target = Path::new("turbo_modules").join(&dep.name);
+                let target = dependency_target_path(Path::new("turbo_modules"), &dep.name)
+                    .unwrap_or_else(|err| {
+                        eprintln!("\x1b[1;31merror\x1b[0m: {err}");
+                        std::process::exit(1);
+                    });
                 if !target.exists() {
                     eprintln!(
                         "  \x1b[33m!\x1b[0m {} not installed — run `turbolang install` first",
@@ -3810,10 +4030,7 @@ fn main() {{
             url.contains("E0100.md"),
             "URL should contain the error code filename"
         );
-        assert!(
-            url.starts_with("https://"),
-            "URL should be an HTTPS URL"
-        );
+        assert!(url.starts_with("https://"), "URL should be an HTTPS URL");
         assert!(
             url.contains("docs/errors/"),
             "URL should point to docs/errors/"

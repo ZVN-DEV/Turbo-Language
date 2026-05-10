@@ -35,6 +35,7 @@ docs/superpowers/
 
 # OMX tooling artifacts (logs, plans, state — local only, never committed)
 /.omx/
+/.claude/
 
 # Python bytecode cache
 __pycache__/

@@ -83,7 +83,8 @@ development-grade:
 - `http_server(port)` binds to `127.0.0.1` (localhost only)
 - `http_server_public(port)` binds to `0.0.0.0` (all interfaces)
 - No TLS termination
-- No request body size limits
+- Request headers are capped at 16 KiB
+- Request bodies are capped at 32 MiB via `Content-Length` validation
 - Connection cap with 503 backpressure (tuned for development loads)
 - Invalid server IDs are rejected
 

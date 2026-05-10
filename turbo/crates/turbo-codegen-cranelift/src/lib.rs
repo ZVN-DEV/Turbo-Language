@@ -132,7 +132,11 @@ pub(crate) struct Ctx<'a, M: Module> {
 }
 
 impl<'a, M: Module> Ctx<'a, M> {
-    pub(crate) fn fresh_var(&mut self, cl_ty: cranelift::prelude::types::Type, turbo_ty: TurboTy) -> Variable {
+    pub(crate) fn fresh_var(
+        &mut self,
+        cl_ty: cranelift::prelude::types::Type,
+        turbo_ty: TurboTy,
+    ) -> Variable {
         let var = Variable::new(self.next_var);
         self.next_var += 1;
         self.builder.declare_var(var, cl_ty);
