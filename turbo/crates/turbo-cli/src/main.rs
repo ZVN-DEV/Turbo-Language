@@ -884,7 +884,7 @@ fn select_tag_for_version(version: &str, tags: &[(String, String)]) -> Option<(S
     if matching_minor.is_empty() {
         return None;
     }
-    matching_minor.sort_by(|a, b| a.0.cmp(&b.0));
+    matching_minor.sort_by_key(|a| a.0);
     let (_, tag, sha) = matching_minor.pop()?;
     Some((tag, sha))
 }
