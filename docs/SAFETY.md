@@ -226,7 +226,7 @@ For recoverable I/O, use `try_read_file` and `try_write_file`, which return `Res
 The built-in HTTP server (`http_server`, `http_listen`, `route`) is designed for development and demos. It is not hardened for direct exposure to untrusted networks:
 
 - No TLS termination
-- No request size limits beyond what the OS TCP stack provides
+- Request size limits enforced (8 KB per header line, 64 KB total headers, 32 MB body, 256 max connections) but not configurable
 - No authentication or authorization middleware
 - Connection cap with 503 backpressure exists but is tuned for development loads
 

@@ -1660,8 +1660,8 @@ long long rt_hashmap_get_int(const void *map_ptr, const char *key) {
         return 0;
     }
     long long v = strtoll(s, NULL, 10);
-    /* rt_hashmap_get returns strdup'd memory; free it to avoid leak. */
-    free((void *)s);
+    /* rt_hashmap_get returns turbo_strdup'd memory; use turbo_free for arena safety. */
+    turbo_free((void *)s);
     return v;
 }
 
