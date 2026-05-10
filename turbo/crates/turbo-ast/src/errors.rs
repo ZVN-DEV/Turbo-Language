@@ -7,6 +7,16 @@
 /// - E0300-E0399: Name resolution (undefined var/fn/type, duplicates, scope)
 /// - E0400-E0499: Codegen errors
 /// - E0500-E0599: Misc (immutability, unused, constraints, etc.)
+///
+/// # Examples
+///
+/// ```
+/// use turbo_ast::ErrorCode;
+///
+/// let code = ErrorCode::E0001;
+/// assert_eq!(code.as_str(), "E0001");
+/// assert!(!code.description().is_empty());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCode {
     // ── Parse errors (E0001-E0099) ──────────────────────────────────

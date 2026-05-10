@@ -42,17 +42,26 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    // Cargo invokes build scripts from the package directory
-    // (turbo/crates/turbo-cli) — repo root is three parents up.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
-        .parent() // crates
-        .and_then(Path::parent) // turbo
-        .and_then(Path::parent) // <repo root>
-        .expect("turbo-cli/build.rs: failed to resolve repo root from CARGO_MANIFEST_DIR")
-        .to_path_buf();
+    // Cargo sets CARGO_MANIFEST_DIR at runtime for build scripts;
+    // use the runtime env var (not the compile-time `env!()` macro)
+    // so the path is always correct regardless of repo location on disk.
+    let manifest_dir = PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR")
+            .expect("CARGO_MANIFEST_DIR not set — are we running outside Cargo?"),
+    );
 
-    let errors_rs = repo_root.join("turbo/crates/turbo-ast/src/errors.rs");
+    // manifest_dir = <repo>/turbo/crates/turbo-cli
+    // errors.rs is a sibling crate: ../turbo-ast/src/errors.rs
+    // docs/errors is at the repo root: ../../../docs/errors
+    let crates_dir = manifest_dir
+        .parent() // <repo>/turbo/crates
+        .expect("turbo-cli/build.rs: CARGO_MANIFEST_DIR has no parent");
+    let errors_rs = crates_dir.join("turbo-ast/src/errors.rs");
+
+    let repo_root = crates_dir
+        .parent() // <repo>/turbo
+        .and_then(Path::parent) // <repo>
+        .expect("turbo-cli/build.rs: failed to resolve repo root from CARGO_MANIFEST_DIR");
     let docs_dir = repo_root.join("docs/errors");
 
     println!("cargo:rerun-if-changed={}", errors_rs.display());

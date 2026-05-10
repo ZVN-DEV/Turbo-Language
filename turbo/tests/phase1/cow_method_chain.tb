@@ -1,0 +1,22 @@
+fn main() {
+    // Test nested COW builtins used as expressions (not statements)
+    let s = "  Hello World  "
+    let result = lower(trim(s))
+    print(result)
+
+    // Test nested replace + lower chain
+    let s2 = "  Hello World  "
+    let result2 = replace(lower(trim(s2)), "world", "turbo")
+    print(result2)
+
+    // Test COW push in statement position (self-assign rewrite)
+    let mut arr = [3, 1, 2]
+    push(arr, 4)
+    print(len(arr))
+    print(arr[3])
+
+    // Test trim + upper chain
+    let greeting = "  hello there  "
+    let cleaned = upper(trim(greeting))
+    print(cleaned)
+}

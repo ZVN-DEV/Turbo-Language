@@ -28,10 +28,30 @@ pub mod errors;
 pub mod stdlib_modules;
 pub use errors::ErrorCode;
 
-/// A span in source code: byte offset range [start, end)
+/// A span in source code: byte offset range [start, end).
+///
+/// # Examples
+///
+/// ```
+/// use turbo_ast::Span;
+///
+/// let span: Span = 0..5;
+/// assert_eq!(span.start, 0);
+/// assert_eq!(span.end, 5);
+/// ```
 pub type Span = std::ops::Range<usize>;
 
-/// A node with source location
+/// A node with source location.
+///
+/// # Examples
+///
+/// ```
+/// use turbo_ast::Spanned;
+///
+/// let spanned = Spanned::new(42, 0..2);
+/// assert_eq!(spanned.node, 42);
+/// assert_eq!(spanned.span, 0..2);
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct Spanned<T> {
     pub node: T,
@@ -44,7 +64,16 @@ impl<T> Spanned<T> {
     }
 }
 
-/// A complete source file
+/// A complete source file.
+///
+/// # Examples
+///
+/// ```
+/// use turbo_ast::Module;
+///
+/// let module = Module { items: vec![] };
+/// assert!(module.items.is_empty());
+/// ```
 #[derive(Debug, Clone)]
 pub struct Module {
     pub items: Vec<Spanned<Item>>,
@@ -267,7 +296,17 @@ pub enum InterpolPart {
     Expr(Box<Spanned<Expr>>),
 }
 
-/// Expressions
+/// Expressions.
+///
+/// # Examples
+///
+/// ```
+/// use turbo_ast::{Expr, Spanned};
+///
+/// let lit = Expr::IntLit(42);
+/// let spanned = Spanned::new(lit, 0..2);
+/// assert_eq!(spanned.node, Expr::IntLit(42));
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     /// Integer literal

@@ -2308,6 +2308,15 @@ fn split_interpolation_parts(s: &str, span: &Span) -> Result<Vec<InterpolPart>, 
 
 /// Parse a token stream into a Module.
 /// Returns the module and any parse errors.
+///
+/// # Examples
+///
+/// ```
+/// let (tokens, _) = turbo_lexer::tokenize("fn main() { print(42) }");
+/// let (module, errors) = turbo_parser::parse(tokens);
+/// assert!(errors.is_empty());
+/// assert_eq!(module.items.len(), 1);
+/// ```
 pub fn parse(tokens: Vec<LexSpanned<Token>>) -> (Module, Vec<ParseError>) {
     let mut parser = Parser::new(tokens);
     let mut module = parser.parse_module();

@@ -1,0 +1,32 @@
+fn find_name(id: i64) -> str? {
+    if id == 1 {
+        some("Alice")
+    } else if id == 2 {
+        some("Bob")
+    } else {
+        none
+    }
+}
+
+fn main() {
+    let name1 = find_name(1) ?? "unknown"
+    print(name1)
+
+    let name2 = find_name(99) ?? "unknown"
+    print(name2)
+
+    let opt: i64? = some(42)
+    match opt {
+        some(v) => print("got: {v}")
+        none => print("nothing")
+    }
+
+    let empty: i64? = none
+    match empty {
+        some(v) => print("got: {v}")
+        none => print("nothing")
+    }
+
+    let val = some(10) ?? 0
+    print(val)
+}

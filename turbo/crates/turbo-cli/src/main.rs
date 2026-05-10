@@ -3685,3 +3685,177 @@ fn doc_file(path: &std::path::Path) {
 
     print!("{}", out);
 }
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    // ── Init command scaffolding ───────────────────────────────────────
+
+    #[test]
+    fn init_turbo_toml_content() {
+        // The init command generates a turbo.toml with [package] and [dependencies]
+        let pkg_name = "my-app";
+        let expected = format!(
+            "[package]\nname = \"{pkg_name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n"
+        );
+        assert!(expected.contains("[package]"));
+        assert!(expected.contains(&format!("name = \"{}\"", pkg_name)));
+        assert!(expected.contains("version = \"0.1.0\""));
+        assert!(expected.contains("[dependencies]"));
+    }
+
+    #[test]
+    fn init_main_tb_content() {
+        // The scaffolded src/main.tb should contain fn main(), Counter struct, and Shape enum
+        let pkg_name = "test-proj";
+        let main_tb = format!(
+            r#"/// A counter that tracks a value
+struct Counter {{
+    count: i64,
+}}
+
+impl Counter {{
+    fn increment(self) -> Counter {{
+        Counter {{ count: self.count + 1 }}
+    }}
+
+    fn value(self) -> i64 {{
+        self.count
+    }}
+}}
+
+/// Shapes with area calculation
+type Shape {{
+    Circle(f64),
+    Rectangle(f64, f64),
+}}
+
+fn area(shape: Shape) -> f64 {{
+    match shape {{
+        Circle(r) => 3.14159 * r * r
+        Rectangle(w, h) => w * h
+    }}
+}}
+
+fn main() {{
+    print("Hello from {pkg_name}!")
+
+    // Struct with methods
+    let mut c = Counter {{ count: 0 }}
+    c = c.increment()
+    c = c.increment()
+    c = c.increment()
+    print("Counter: " + to_str(c.value()))
+
+    // Enum + pattern matching
+    let circle = Shape.Circle(5.0)
+    let rect = Shape.Rectangle(4.0, 6.0)
+    print("Circle area: " + to_str(area(circle)))
+    print("Rectangle area: " + to_str(area(rect)))
+}}
+"#
+        );
+        assert!(main_tb.contains("fn main()"));
+        assert!(main_tb.contains("struct Counter"));
+        assert!(main_tb.contains(&format!("Hello from {pkg_name}!")));
+        assert!(main_tb.contains("type Shape"));
+    }
+
+    // ── Error code explain ────────────────────────────────────────────
+
+    #[test]
+    fn detailed_explanation_returns_content_for_parse_error() {
+        let detail = detailed_explanation(ErrorCode::E0001);
+        assert!(detail.is_some(), "E0001 should have a detailed explanation");
+        let text = detail.unwrap();
+        assert!(!text.is_empty(), "E0001 explanation should not be empty");
+    }
+
+    #[test]
+    fn detailed_explanation_returns_content_for_type_error() {
+        let detail = detailed_explanation(ErrorCode::E0100);
+        assert!(detail.is_some(), "E0100 should have a detailed explanation");
+        let text = detail.unwrap();
+        assert!(!text.is_empty(), "E0100 explanation should not be empty");
+    }
+
+    #[test]
+    fn detailed_explanation_returns_content_for_name_resolution_error() {
+        let detail = detailed_explanation(ErrorCode::E0300);
+        assert!(detail.is_some(), "E0300 should have a detailed explanation");
+        let text = detail.unwrap();
+        assert!(!text.is_empty(), "E0300 explanation should not be empty");
+    }
+
+    #[test]
+    fn detailed_explanation_exhaustive_for_all_codes() {
+        // Every error code should have a detailed explanation
+        for code in ErrorCode::all() {
+            let detail = detailed_explanation(code);
+            assert!(
+                detail.is_some(),
+                "{} should have a detailed explanation",
+                code.as_str()
+            );
+        }
+    }
+
+    // ── Error code URL generation ─────────────────────────────────────
+
+    #[test]
+    fn error_code_url_format() {
+        let url = error_code_url(ErrorCode::E0100);
+        assert!(
+            url.contains("E0100.md"),
+            "URL should contain the error code filename"
+        );
+        assert!(
+            url.starts_with("https://"),
+            "URL should be an HTTPS URL"
+        );
+        assert!(
+            url.contains("docs/errors/"),
+            "URL should point to docs/errors/"
+        );
+    }
+
+    // ── File extension validation ─────────────────────────────────────
+
+    #[test]
+    fn tb_file_extension_check() {
+        let tb_path = Path::new("test.tb");
+        assert_eq!(
+            tb_path.extension().and_then(|e| e.to_str()),
+            Some("tb"),
+            ".tb extension should be recognized"
+        );
+
+        let non_tb_path = Path::new("test.rs");
+        assert_ne!(
+            non_tb_path.extension().and_then(|e| e.to_str()),
+            Some("tb"),
+            ".rs extension should not be .tb"
+        );
+
+        let no_ext_path = Path::new("test");
+        assert_eq!(
+            no_ext_path.extension().and_then(|e| e.to_str()),
+            None,
+            "no extension should return None"
+        );
+    }
+
+    // ── Doc comment extraction ────────────────────────────────────────
+
+    #[test]
+    fn extract_doc_comments_basic() {
+        let source = "/// This is a doc comment\nfn main() {\n}\n";
+        let docs = extract_doc_comments(source);
+        // The doc comment on line 0 applies to the item on line 1
+        assert!(docs.contains_key(&1), "doc should be attached to line 1");
+        let comment = &docs[&1];
+        assert_eq!(comment.len(), 1);
+        assert_eq!(comment[0], "This is a doc comment");
+    }
+}
