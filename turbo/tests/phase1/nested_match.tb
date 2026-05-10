@@ -1,0 +1,39 @@
+type Color { Red, Green, Blue }
+
+type Shape { Circle(f64), Rect(f64, f64) }
+
+fn describe_color(c: Color) -> str {
+    match c {
+        Red => "red"
+        Green => "green"
+        Blue => "blue"
+    }
+}
+
+fn describe_shape(s: Shape) -> str {
+    match s {
+        Circle(r) => "circle r=" + to_str(r)
+        Rect(w, h) => to_str(w) + "x" + to_str(h)
+    }
+}
+
+fn classify(s: Shape) -> str {
+    match s {
+        Circle(r) if r > 10.0 => "big circle"
+        Circle(r) if r > 5.0 => "medium circle"
+        Circle(r) => "small circle"
+        Rect(w, h) if w == h => "square " + to_str(w)
+        Rect(w, h) => "rect " + describe_shape(s)
+    }
+}
+
+fn main() {
+    print(describe_color(Color.Red))
+    print(describe_color(Color.Blue))
+    print(describe_shape(Shape.Circle(3.0)))
+    print(describe_shape(Shape.Rect(4.0, 5.0)))
+    print(classify(Shape.Circle(15.0)))
+    print(classify(Shape.Circle(7.0)))
+    print(classify(Shape.Circle(2.0)))
+    print(classify(Shape.Rect(6.0, 6.0)))
+}

@@ -719,4 +719,57 @@ fn main() {
             output
         );
     }
+
+    #[test]
+    fn test_string_literals_with_special_chars_preserved() {
+        // Strings containing escape sequences and special characters must survive formatting
+        let input = "fn main() {\n    let s = \"hello\\nworld\\t!\"\n    let e = \"braces { } in string\"\n}\n";
+        let output = format_source(input);
+        assert!(
+            output.contains("\"hello\\nworld\\t!\""),
+            "Escape sequences in strings should be preserved, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("\"braces { } in string\""),
+            "Braces inside strings should be preserved, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_nested_generics_preserved() {
+        // Nested generic types like HashMap<str, Vec<i64>> should not get extra spaces
+        let input = "fn main() {\n    let m: HashMap<str, Vec<i64>> = {}\n}\n";
+        let output = format_source(input);
+        assert!(
+            output.contains("HashMap<str, Vec<i64>>"),
+            "Nested generics should be preserved without extra spaces, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_assignment_operator_spacing() {
+        // Single `=` should have spaces around it
+        let input = "fn main() {\n    let x=42\n}\n";
+        let output = format_source(input);
+        assert!(
+            output.contains("let x = 42"),
+            "Assignment should have spaces around `=`, got:\n{}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_comments_preserved_during_formatting() {
+        // Comments should be preserved intact, not mangled by spacing rules
+        let input = "fn main() {\n    // This is a comment with special chars: <>, ==, {}\n    let x = 1\n}\n";
+        let output = format_source(input);
+        assert!(
+            output.contains("// This is a comment with special chars: <>, ==, {}"),
+            "Comment content should be preserved exactly, got:\n{}",
+            output
+        );
+    }
 }

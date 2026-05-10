@@ -1,0 +1,18 @@
+fn try_divide(a: i64, b: i64) -> i64 ! str {
+    if b == 0 {
+        err("division by zero")
+    } else {
+        ok(a / b)
+    }
+}
+
+fn main() {
+    match try_divide(10, 2) {
+        ok(v) => print("ok: {v}")
+        err(e) => print("err: {e}")
+    }
+    match try_divide(10, 0) {
+        ok(v) => print("ok: {v}")
+        err(e) => print("err: {e}")
+    }
+}
