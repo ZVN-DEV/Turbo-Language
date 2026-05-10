@@ -1380,10 +1380,8 @@ impl CEmitter {
 
         for item in &module.items {
             match &item.node {
-                Item::Function(fndef) => {
-                    if !fndef.is_test {
-                        self.emit_function(fndef, None);
-                    }
+                Item::Function(fndef) if !fndef.is_test => {
+                    self.emit_function(fndef, None);
                 }
                 Item::Const(c) => {
                     let v = self.emit_expr(&c.value.node);

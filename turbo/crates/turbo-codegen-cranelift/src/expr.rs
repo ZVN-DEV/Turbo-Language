@@ -1129,69 +1129,65 @@ pub(crate) fn release_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty
                 }
             }
         }
-        TurboTy::Optional(inner) => {
-            if is_rc_heap_type(inner) {
-                let tag_fid = cx.rt_fns["rt_option_tag"];
-                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
-                let tag_call = cx.builder.ins().call(tag_fref, &[value]);
-                let tag = cx.builder.inst_results(tag_call)[0];
-                let one = cx.builder.ins().iconst(types::I64, 1);
-                let is_some = cx.builder.ins().icmp(IntCC::Equal, tag, one);
-                let some_block = cx.builder.create_block();
-                let done_block = cx.builder.create_block();
-                cx.builder
-                    .ins()
-                    .brif(is_some, some_block, &[], done_block, &[]);
-                cx.builder.switch_to_block(some_block);
-                cx.builder.seal_block(some_block);
-                let val_fid = cx.rt_fns["rt_option_value"];
+        TurboTy::Optional(inner) if is_rc_heap_type(inner) => {
+            let tag_fid = cx.rt_fns["rt_option_tag"];
+            let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+            let tag_call = cx.builder.ins().call(tag_fref, &[value]);
+            let tag = cx.builder.inst_results(tag_call)[0];
+            let one = cx.builder.ins().iconst(types::I64, 1);
+            let is_some = cx.builder.ins().icmp(IntCC::Equal, tag, one);
+            let some_block = cx.builder.create_block();
+            let done_block = cx.builder.create_block();
+            cx.builder
+                .ins()
+                .brif(is_some, some_block, &[], done_block, &[]);
+            cx.builder.switch_to_block(some_block);
+            cx.builder.seal_block(some_block);
+            let val_fid = cx.rt_fns["rt_option_value"];
+            let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
+            let val_call = cx.builder.ins().call(val_fref, &[value]);
+            let inner_val = cx.builder.inst_results(val_call)[0];
+            release_if_needed(cx, inner_val, inner);
+            cx.builder.ins().jump(done_block, &[]);
+            cx.builder.switch_to_block(done_block);
+            cx.builder.seal_block(done_block);
+        }
+        TurboTy::Result(ok_tty, err_tty) if is_rc_heap_type(ok_tty) || is_rc_heap_type(err_tty) => {
+            let tag_fid = cx.rt_fns["rt_result_tag"];
+            let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+            let tag_call = cx.builder.ins().call(tag_fref, &[value]);
+            let tag = cx.builder.inst_results(tag_call)[0];
+            let zero = cx.builder.ins().iconst(types::I64, 0);
+            let is_ok = cx.builder.ins().icmp(IntCC::Equal, tag, zero);
+            let ok_block = cx.builder.create_block();
+            let err_block = cx.builder.create_block();
+            let done_block = cx.builder.create_block();
+            cx.builder.ins().brif(is_ok, ok_block, &[], err_block, &[]);
+
+            cx.builder.switch_to_block(ok_block);
+            cx.builder.seal_block(ok_block);
+            if is_rc_heap_type(ok_tty) {
+                let val_fid = cx.rt_fns["rt_result_value"];
                 let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
                 let val_call = cx.builder.ins().call(val_fref, &[value]);
                 let inner_val = cx.builder.inst_results(val_call)[0];
-                release_if_needed(cx, inner_val, inner);
-                cx.builder.ins().jump(done_block, &[]);
-                cx.builder.switch_to_block(done_block);
-                cx.builder.seal_block(done_block);
+                release_if_needed(cx, inner_val, ok_tty);
             }
-        }
-        TurboTy::Result(ok_tty, err_tty) => {
-            if is_rc_heap_type(ok_tty) || is_rc_heap_type(err_tty) {
-                let tag_fid = cx.rt_fns["rt_result_tag"];
-                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
-                let tag_call = cx.builder.ins().call(tag_fref, &[value]);
-                let tag = cx.builder.inst_results(tag_call)[0];
-                let zero = cx.builder.ins().iconst(types::I64, 0);
-                let is_ok = cx.builder.ins().icmp(IntCC::Equal, tag, zero);
-                let ok_block = cx.builder.create_block();
-                let err_block = cx.builder.create_block();
-                let done_block = cx.builder.create_block();
-                cx.builder.ins().brif(is_ok, ok_block, &[], err_block, &[]);
+            cx.builder.ins().jump(done_block, &[]);
 
-                cx.builder.switch_to_block(ok_block);
-                cx.builder.seal_block(ok_block);
-                if is_rc_heap_type(ok_tty) {
-                    let val_fid = cx.rt_fns["rt_result_value"];
-                    let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
-                    let val_call = cx.builder.ins().call(val_fref, &[value]);
-                    let inner_val = cx.builder.inst_results(val_call)[0];
-                    release_if_needed(cx, inner_val, ok_tty);
-                }
-                cx.builder.ins().jump(done_block, &[]);
-
-                cx.builder.switch_to_block(err_block);
-                cx.builder.seal_block(err_block);
-                if is_rc_heap_type(err_tty) {
-                    let val_fid = cx.rt_fns["rt_result_value"];
-                    let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
-                    let val_call = cx.builder.ins().call(val_fref, &[value]);
-                    let inner_val = cx.builder.inst_results(val_call)[0];
-                    release_if_needed(cx, inner_val, err_tty);
-                }
-                cx.builder.ins().jump(done_block, &[]);
-
-                cx.builder.switch_to_block(done_block);
-                cx.builder.seal_block(done_block);
+            cx.builder.switch_to_block(err_block);
+            cx.builder.seal_block(err_block);
+            if is_rc_heap_type(err_tty) {
+                let val_fid = cx.rt_fns["rt_result_value"];
+                let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
+                let val_call = cx.builder.ins().call(val_fref, &[value]);
+                let inner_val = cx.builder.inst_results(val_call)[0];
+                release_if_needed(cx, inner_val, err_tty);
             }
+            cx.builder.ins().jump(done_block, &[]);
+
+            cx.builder.switch_to_block(done_block);
+            cx.builder.seal_block(done_block);
         }
         _ => {}
     }
