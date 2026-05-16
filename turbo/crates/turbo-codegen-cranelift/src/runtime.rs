@@ -932,10 +932,12 @@ pub(crate) extern "C" fn rt_random() -> f64 {
     use std::hash::{BuildHasher, Hasher};
     let s = RandomState::new();
     let mut hasher = s.build_hasher();
-    hasher.write_usize(std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos() as usize);
+    hasher.write_usize(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() as usize,
+    );
     let bits = hasher.finish();
     (bits as f64) / (u64::MAX as f64)
 }
@@ -949,10 +951,12 @@ pub(crate) extern "C" fn rt_random_range(min_val: i64, max_val: i64) -> i64 {
     use std::hash::{BuildHasher, Hasher};
     let s = RandomState::new();
     let mut hasher = s.build_hasher();
-    hasher.write_usize(std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos() as usize);
+    hasher.write_usize(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() as usize,
+    );
     let bits = hasher.finish();
     min_val + (bits % range) as i64
 }
@@ -971,7 +975,15 @@ pub(crate) extern "C" fn rt_args() -> *mut u8 {
 // ── String parsing builtins ────────────────────────────────────────
 
 pub(crate) extern "C" fn rt_substring(s: *const u8, start: i64, end: i64) -> *const u8 {
-    let s_str = if s.is_null() { "" } else { unsafe { std::ffi::CStr::from_ptr(s as *const i8).to_str().unwrap_or("") } };
+    let s_str = if s.is_null() {
+        ""
+    } else {
+        unsafe {
+            std::ffi::CStr::from_ptr(s as *const i8)
+                .to_str()
+                .unwrap_or("")
+        }
+    };
     let slen = s_str.len() as i64;
     let start = start.max(0).min(slen) as usize;
     let end = end.max(0).min(slen) as usize;
@@ -983,37 +995,89 @@ pub(crate) extern "C" fn rt_substring(s: *const u8, start: i64, end: i64) -> *co
 }
 
 pub(crate) extern "C" fn rt_pad_left(s: *const u8, width: i64, pad_char: *const u8) -> *const u8 {
-    let s_str = if s.is_null() { "" } else { unsafe { std::ffi::CStr::from_ptr(s as *const i8).to_str().unwrap_or("") } };
-    let pad_str = if pad_char.is_null() { " " } else { unsafe { std::ffi::CStr::from_ptr(pad_char as *const i8).to_str().unwrap_or(" ") } };
+    let s_str = if s.is_null() {
+        ""
+    } else {
+        unsafe {
+            std::ffi::CStr::from_ptr(s as *const i8)
+                .to_str()
+                .unwrap_or("")
+        }
+    };
+    let pad_str = if pad_char.is_null() {
+        " "
+    } else {
+        unsafe {
+            std::ffi::CStr::from_ptr(pad_char as *const i8)
+                .to_str()
+                .unwrap_or(" ")
+        }
+    };
     let c = pad_str.chars().next().unwrap_or(' ');
     let slen = s_str.len() as i64;
     if slen >= width {
-        return arena_str(std::ffi::CString::new(s_str).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()));
+        return arena_str(
+            std::ffi::CString::new(s_str).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()),
+        );
     }
     let pad_count = (width - slen) as usize;
     let mut result = String::with_capacity(width as usize);
-    for _ in 0..pad_count { result.push(c); }
+    for _ in 0..pad_count {
+        result.push(c);
+    }
     result.push_str(s_str);
-    arena_str(std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()))
+    arena_str(
+        std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()),
+    )
 }
 
 pub(crate) extern "C" fn rt_pad_right(s: *const u8, width: i64, pad_char: *const u8) -> *const u8 {
-    let s_str = if s.is_null() { "" } else { unsafe { std::ffi::CStr::from_ptr(s as *const i8).to_str().unwrap_or("") } };
-    let pad_str = if pad_char.is_null() { " " } else { unsafe { std::ffi::CStr::from_ptr(pad_char as *const i8).to_str().unwrap_or(" ") } };
+    let s_str = if s.is_null() {
+        ""
+    } else {
+        unsafe {
+            std::ffi::CStr::from_ptr(s as *const i8)
+                .to_str()
+                .unwrap_or("")
+        }
+    };
+    let pad_str = if pad_char.is_null() {
+        " "
+    } else {
+        unsafe {
+            std::ffi::CStr::from_ptr(pad_char as *const i8)
+                .to_str()
+                .unwrap_or(" ")
+        }
+    };
     let c = pad_str.chars().next().unwrap_or(' ');
     let slen = s_str.len() as i64;
     if slen >= width {
-        return arena_str(std::ffi::CString::new(s_str).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()));
+        return arena_str(
+            std::ffi::CString::new(s_str).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()),
+        );
     }
     let pad_count = (width - slen) as usize;
     let mut result = String::with_capacity(width as usize);
     result.push_str(s_str);
-    for _ in 0..pad_count { result.push(c); }
-    arena_str(std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()))
+    for _ in 0..pad_count {
+        result.push(c);
+    }
+    arena_str(
+        std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()),
+    )
 }
 
 pub(crate) extern "C" fn rt_str_to_int(s: *const u8) -> *mut u8 {
-    let s_str = if s.is_null() { "" } else { unsafe { std::ffi::CStr::from_ptr(s as *const i8).to_str().unwrap_or("") } };
+    let s_str = if s.is_null() {
+        ""
+    } else {
+        unsafe {
+            std::ffi::CStr::from_ptr(s as *const i8)
+                .to_str()
+                .unwrap_or("")
+        }
+    };
     match s_str.parse::<i64>() {
         Ok(val) => rt_result_ok(val),
         Err(_) => {
@@ -1026,7 +1090,15 @@ pub(crate) extern "C" fn rt_str_to_int(s: *const u8) -> *mut u8 {
 }
 
 pub(crate) extern "C" fn rt_str_to_float(s: *const u8) -> *mut u8 {
-    let s_str = if s.is_null() { "" } else { unsafe { std::ffi::CStr::from_ptr(s as *const i8).to_str().unwrap_or("") } };
+    let s_str = if s.is_null() {
+        ""
+    } else {
+        unsafe {
+            std::ffi::CStr::from_ptr(s as *const i8)
+                .to_str()
+                .unwrap_or("")
+        }
+    };
     match s_str.parse::<f64>() {
         Ok(val) => {
             let bits = val.to_bits() as i64;
@@ -2136,8 +2208,8 @@ pub(crate) extern "C" fn rt_list_dir(path: *const u8) -> *mut u8 {
         *(data_ptr as *mut i64) = len;
     }
     for (i, name) in entries.iter().enumerate() {
-        let cs =
-            std::ffi::CString::new(name.as_str()).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+        let cs = std::ffi::CString::new(name.as_str())
+            .unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
         unsafe {
             *((data_ptr as *mut i64).add(1 + i)) = arena_str(cs) as i64;
         }
@@ -2197,7 +2269,8 @@ pub(crate) extern "C" fn rt_path_dir(path: *const u8) -> *const u8 {
         Some(p) if !p.as_os_str().is_empty() => p.to_str().unwrap_or(".").to_string(),
         _ => ".".to_string(),
     };
-    let cs = std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new(".").unwrap());
+    let cs =
+        std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new(".").unwrap());
     arena_str(cs)
 }
 
@@ -2252,13 +2325,19 @@ pub(crate) extern "C" fn rt_sort_int(arr: *const u8) -> *mut u8 {
         std::process::exit(1);
     }
     register_alloc(ptr, layout);
-    unsafe { *(ptr as *mut i64) = 1; } // refcount
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount
     let data_ptr = unsafe { ptr.add(8) };
-    unsafe { *(data_ptr as *mut i64) = len; }
+    unsafe {
+        *(data_ptr as *mut i64) = len;
+    }
     // Copy elements
     let src = unsafe { (arr as *const i64).add(1) };
     let dst = unsafe { (data_ptr as *mut i64).add(1) };
-    unsafe { std::ptr::copy_nonoverlapping(src, dst, len as usize); }
+    unsafe {
+        std::ptr::copy_nonoverlapping(src, dst, len as usize);
+    }
     // Sort as i64
     let slice = unsafe { std::slice::from_raw_parts_mut(dst, len as usize) };
     slice.sort();
@@ -2280,13 +2359,19 @@ pub(crate) extern "C" fn rt_sort_str(arr: *const u8) -> *mut u8 {
         std::process::exit(1);
     }
     register_alloc(ptr, layout);
-    unsafe { *(ptr as *mut i64) = 1; } // refcount
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount
     let data_ptr = unsafe { ptr.add(8) };
-    unsafe { *(data_ptr as *mut i64) = len; }
+    unsafe {
+        *(data_ptr as *mut i64) = len;
+    }
     // Copy elements
     let src = unsafe { (arr as *const i64).add(1) };
     let dst = unsafe { (data_ptr as *mut i64).add(1) };
-    unsafe { std::ptr::copy_nonoverlapping(src, dst, len as usize); }
+    unsafe {
+        std::ptr::copy_nonoverlapping(src, dst, len as usize);
+    }
     // Sort as string pointers
     let slice = unsafe { std::slice::from_raw_parts_mut(dst, len as usize) };
     slice.sort_by(|a, b| {
@@ -2324,13 +2409,19 @@ pub(crate) extern "C" fn rt_reverse(arr: *const u8) -> *mut u8 {
         std::process::exit(1);
     }
     register_alloc(ptr, layout);
-    unsafe { *(ptr as *mut i64) = 1; } // refcount
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount
     let data_ptr = unsafe { ptr.add(8) };
-    unsafe { *(data_ptr as *mut i64) = len; }
+    unsafe {
+        *(data_ptr as *mut i64) = len;
+    }
     let src = unsafe { (arr as *const i64).add(1) };
     let dst = unsafe { (data_ptr as *mut i64).add(1) };
     for i in 0..len as usize {
-        unsafe { *dst.add(i) = *src.add(len as usize - 1 - i); }
+        unsafe {
+            *dst.add(i) = *src.add(len as usize - 1 - i);
+        }
     }
     data_ptr
 }
@@ -2390,12 +2481,18 @@ pub(crate) extern "C" fn rt_slice(arr: *const u8, start: i64, end: i64) -> *mut 
         std::process::exit(1);
     }
     register_alloc(ptr, layout);
-    unsafe { *(ptr as *mut i64) = 1; } // refcount
+    unsafe {
+        *(ptr as *mut i64) = 1;
+    } // refcount
     let data_ptr = unsafe { ptr.add(8) };
-    unsafe { *(data_ptr as *mut i64) = new_len; }
+    unsafe {
+        *(data_ptr as *mut i64) = new_len;
+    }
     let src = unsafe { (arr as *const i64).add(1 + start as usize) };
     let dst = unsafe { (data_ptr as *mut i64).add(1) };
-    unsafe { std::ptr::copy_nonoverlapping(src, dst, new_len as usize); }
+    unsafe {
+        std::ptr::copy_nonoverlapping(src, dst, new_len as usize);
+    }
     data_ptr
 }
 
@@ -2440,7 +2537,8 @@ fn chrono_like_format(epoch_secs: i64, fmt: &str) -> String {
         if tm.is_null() {
             return String::new();
         }
-        let fmt_c = std::ffi::CString::new(fmt).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+        let fmt_c =
+            std::ffi::CString::new(fmt).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
         let mut buf = [0u8; 256];
         let n = libc::strftime(
             buf.as_mut_ptr() as *mut libc::c_char,

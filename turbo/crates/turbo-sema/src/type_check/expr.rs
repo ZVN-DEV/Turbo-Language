@@ -947,8 +947,12 @@ impl Checker {
                         return Ty::I64;
                     }
                     // sin/cos/tan/log/log2/log10/exp: (f64) -> f64
-                    if name == "sin" || name == "cos" || name == "tan"
-                        || name == "log" || name == "log2" || name == "log10"
+                    if name == "sin"
+                        || name == "cos"
+                        || name == "tan"
+                        || name == "log"
+                        || name == "log2"
+                        || name == "log10"
                         || name == "exp"
                     {
                         if args.len() != 1 {
@@ -986,7 +990,10 @@ impl Checker {
                         if args.len() != 2 {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("random_range() takes exactly 2 arguments, got {}", args.len()),
+                                format!(
+                                    "random_range() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1064,7 +1071,10 @@ impl Checker {
                         if args.len() != 3 {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("substring() takes exactly 3 arguments, got {}", args.len()),
+                                format!(
+                                    "substring() takes exactly 3 arguments, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1089,7 +1099,9 @@ impl Checker {
                         if !end_ty.is_error() && !end_ty.is_integer() {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("substring() third argument must be integer, found `{end_ty}`"),
+                                format!(
+                                    "substring() third argument must be integer, found `{end_ty}`"
+                                ),
                                 args[2].span.clone(),
                             );
                         }
@@ -1136,7 +1148,10 @@ impl Checker {
                         if args.len() != 3 {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("pad_right() takes exactly 3 arguments, got {}", args.len()),
+                                format!(
+                                    "pad_right() takes exactly 3 arguments, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1161,7 +1176,9 @@ impl Checker {
                         if !char_ty.is_error() && char_ty != Ty::Str {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("pad_right() third argument must be str, found `{char_ty}`"),
+                                format!(
+                                    "pad_right() third argument must be str, found `{char_ty}`"
+                                ),
                                 args[2].span.clone(),
                             );
                         }
@@ -1172,7 +1189,10 @@ impl Checker {
                         if args.len() != 1 {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("str_to_int() takes exactly 1 argument, got {}", args.len()),
+                                format!(
+                                    "str_to_int() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1192,7 +1212,10 @@ impl Checker {
                         if args.len() != 1 {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("str_to_float() takes exactly 1 argument, got {}", args.len()),
+                                format!(
+                                    "str_to_float() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1214,7 +1237,10 @@ impl Checker {
                         if args.len() != 1 {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("file_exists() takes exactly 1 argument, got {}", args.len()),
+                                format!(
+                                    "file_exists() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1234,7 +1260,10 @@ impl Checker {
                         if args.len() != 1 {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("delete_file() takes exactly 1 argument, got {}", args.len()),
+                                format!(
+                                    "delete_file() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1294,7 +1323,10 @@ impl Checker {
                         if args.len() != 2 {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("path_join() takes exactly 2 arguments, got {}", args.len()),
+                                format!(
+                                    "path_join() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1392,7 +1424,10 @@ impl Checker {
                         if args.len() != 2 {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("array_contains() takes exactly 2 arguments, got {}", args.len()),
+                                format!(
+                                    "array_contains() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1453,7 +1488,9 @@ impl Checker {
                             _ => {
                                 self.error(
                                     ErrorCode::E0133,
-                                    format!("slice() first argument must be an array, found `{arr_ty}`"),
+                                    format!(
+                                        "slice() first argument must be an array, found `{arr_ty}`"
+                                    ),
                                     args[0].span.clone(),
                                 );
                                 return Ty::Error;
@@ -1481,7 +1518,9 @@ impl Checker {
                             _ => {
                                 self.error(
                                     ErrorCode::E0133,
-                                    format!("any() first argument must be an array, found `{arr_ty}`"),
+                                    format!(
+                                        "any() first argument must be an array, found `{arr_ty}`"
+                                    ),
                                     args[0].span.clone(),
                                 );
                                 return Ty::Error;
@@ -1492,10 +1531,16 @@ impl Checker {
                                 if params.len() != 1 {
                                     self.error(
                                         ErrorCode::E0133,
-                                        format!("any() callback must take 1 parameter, takes {}", params.len()),
+                                        format!(
+                                            "any() callback must take 1 parameter, takes {}",
+                                            params.len()
+                                        ),
                                         args[1].span.clone(),
                                     );
-                                } else if !elem_ty.is_error() && !params[0].is_error() && elem_ty != params[0] {
+                                } else if !elem_ty.is_error()
+                                    && !params[0].is_error()
+                                    && elem_ty != params[0]
+                                {
                                     self.error(
                                         ErrorCode::E0100,
                                         format!("any() callback parameter type `{}` doesn't match array element type `{}`", params[0], elem_ty),
@@ -1505,7 +1550,10 @@ impl Checker {
                                 if **ret != Ty::Bool && !ret.is_error() {
                                     self.error(
                                         ErrorCode::E0133,
-                                        format!("any() callback must return `bool`, returns `{}`", ret),
+                                        format!(
+                                            "any() callback must return `bool`, returns `{}`",
+                                            ret
+                                        ),
                                         args[1].span.clone(),
                                     );
                                 }
@@ -1515,7 +1563,9 @@ impl Checker {
                             _ => {
                                 self.error(
                                     ErrorCode::E0133,
-                                    format!("any() second argument must be a function, found `{fn_ty}`"),
+                                    format!(
+                                        "any() second argument must be a function, found `{fn_ty}`"
+                                    ),
                                     args[1].span.clone(),
                                 );
                                 return Ty::Error;
@@ -1543,7 +1593,9 @@ impl Checker {
                             _ => {
                                 self.error(
                                     ErrorCode::E0133,
-                                    format!("all() first argument must be an array, found `{arr_ty}`"),
+                                    format!(
+                                        "all() first argument must be an array, found `{arr_ty}`"
+                                    ),
                                     args[0].span.clone(),
                                 );
                                 return Ty::Error;
@@ -1554,10 +1606,16 @@ impl Checker {
                                 if params.len() != 1 {
                                     self.error(
                                         ErrorCode::E0133,
-                                        format!("all() callback must take 1 parameter, takes {}", params.len()),
+                                        format!(
+                                            "all() callback must take 1 parameter, takes {}",
+                                            params.len()
+                                        ),
                                         args[1].span.clone(),
                                     );
-                                } else if !elem_ty.is_error() && !params[0].is_error() && elem_ty != params[0] {
+                                } else if !elem_ty.is_error()
+                                    && !params[0].is_error()
+                                    && elem_ty != params[0]
+                                {
                                     self.error(
                                         ErrorCode::E0100,
                                         format!("all() callback parameter type `{}` doesn't match array element type `{}`", params[0], elem_ty),
@@ -1567,7 +1625,10 @@ impl Checker {
                                 if **ret != Ty::Bool && !ret.is_error() {
                                     self.error(
                                         ErrorCode::E0133,
-                                        format!("all() callback must return `bool`, returns `{}`", ret),
+                                        format!(
+                                            "all() callback must return `bool`, returns `{}`",
+                                            ret
+                                        ),
                                         args[1].span.clone(),
                                     );
                                 }
@@ -1577,7 +1638,9 @@ impl Checker {
                             _ => {
                                 self.error(
                                     ErrorCode::E0133,
-                                    format!("all() second argument must be a function, found `{fn_ty}`"),
+                                    format!(
+                                        "all() second argument must be a function, found `{fn_ty}`"
+                                    ),
                                     args[1].span.clone(),
                                 );
                                 return Ty::Error;
@@ -1615,7 +1678,10 @@ impl Checker {
                         if args.len() != 2 {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("format_time() takes exactly 2 arguments, got {}", args.len()),
+                                format!(
+                                    "format_time() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1625,14 +1691,18 @@ impl Checker {
                         if !ts_ty.is_error() && ts_ty != Ty::F64 && ts_ty != Ty::F32 {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("format_time() first argument must be float, found `{ts_ty}`"),
+                                format!(
+                                    "format_time() first argument must be float, found `{ts_ty}`"
+                                ),
                                 args[0].span.clone(),
                             );
                         }
                         if !fmt_ty.is_error() && fmt_ty != Ty::Str {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("format_time() second argument must be str, found `{fmt_ty}`"),
+                                format!(
+                                    "format_time() second argument must be str, found `{fmt_ty}`"
+                                ),
                                 args[1].span.clone(),
                             );
                         }

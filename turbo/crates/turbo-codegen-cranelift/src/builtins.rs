@@ -684,9 +684,7 @@ pub(crate) fn compile_math_f64_to_f64<M: Module>(
 }
 
 /// random() -> f64
-pub(crate) fn compile_random<M: Module>(
-    cx: &mut Ctx<'_, M>,
-) -> Result<MaybeTyped, CodegenError> {
+pub(crate) fn compile_random<M: Module>(cx: &mut Ctx<'_, M>) -> Result<MaybeTyped, CodegenError> {
     let fid = cx.rt_fns["rt_random"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[]);
@@ -729,9 +727,7 @@ pub(crate) fn compile_exit<M: Module>(
 }
 
 /// args() -> [str]
-pub(crate) fn compile_args<M: Module>(
-    cx: &mut Ctx<'_, M>,
-) -> Result<MaybeTyped, CodegenError> {
+pub(crate) fn compile_args<M: Module>(cx: &mut Ctx<'_, M>) -> Result<MaybeTyped, CodegenError> {
     let fid = cx.rt_fns["rt_args"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[]);
@@ -1963,7 +1959,12 @@ pub(crate) fn compile_if_let<M: Module>(
 
             // If the turbo type is Float, bitcast the i64 bits to f64
             let (cl_ty, bind_val) = if matches!(turbo_ty, TurboTy::Float) {
-                (types::F64, cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val))
+                (
+                    types::F64,
+                    cx.builder
+                        .ins()
+                        .bitcast(types::F64, MemFlags::new(), raw_val),
+                )
             } else {
                 (types::I64, raw_val)
             };
@@ -2810,7 +2811,12 @@ pub(crate) fn compile_match<M: Module>(
 
                 // If the turbo type is Float, bitcast the i64 bits to f64
                 let (cl_ty, val) = if matches!(turbo_ty, TurboTy::Float) {
-                    (types::F64, cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val))
+                    (
+                        types::F64,
+                        cx.builder
+                            .ins()
+                            .bitcast(types::F64, MemFlags::new(), raw_val),
+                    )
                 } else {
                     (types::I64, raw_val)
                 };
@@ -3486,8 +3492,14 @@ pub(crate) fn compile_builtin_any<M: Module>(
     };
 
     // Extract fn_ptr and env_ptr from closure pair struct
-    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
-    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
+    let fn_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
     let len_fid = cx.rt_fns["rt_array_len"];
     let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
@@ -3522,7 +3534,9 @@ pub(crate) fn compile_builtin_any<M: Module>(
     cx.builder.switch_to_block(header_block);
     let idx = cx.builder.use_var(idx_var);
     let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, arr_len);
-    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+    cx.builder
+        .ins()
+        .brif(cond, body_block, &[], exit_block, &[]);
 
     cx.builder.switch_to_block(body_block);
     cx.builder.seal_block(body_block);
@@ -3535,13 +3549,21 @@ pub(crate) fn compile_builtin_any<M: Module>(
 
     let typed_elem = match &param_tty {
         TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_elem),
-        TurboTy::Float => cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_elem),
+        TurboTy::Float => cx
+            .builder
+            .ins()
+            .bitcast(types::F64, MemFlags::new(), raw_elem),
         _ => raw_elem,
     };
 
-    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[env_ptr, typed_elem]);
+    let indirect_call = cx
+        .builder
+        .ins()
+        .call_indirect(sig_ref, fn_ptr, &[env_ptr, typed_elem]);
     let pred_result = cx.builder.inst_results(indirect_call)[0];
-    cx.builder.ins().brif(pred_result, found_block, &[], inc_block, &[]);
+    cx.builder
+        .ins()
+        .brif(pred_result, found_block, &[], inc_block, &[]);
 
     // Found: set result to true and exit
     cx.builder.switch_to_block(found_block);
@@ -3580,8 +3602,14 @@ pub(crate) fn compile_builtin_all<M: Module>(
         _ => TurboTy::Int,
     };
 
-    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
-    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
+    let fn_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
     let len_fid = cx.rt_fns["rt_array_len"];
     let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
@@ -3616,7 +3644,9 @@ pub(crate) fn compile_builtin_all<M: Module>(
     cx.builder.switch_to_block(header_block);
     let idx = cx.builder.use_var(idx_var);
     let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, arr_len);
-    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+    cx.builder
+        .ins()
+        .brif(cond, body_block, &[], exit_block, &[]);
 
     cx.builder.switch_to_block(body_block);
     cx.builder.seal_block(body_block);
@@ -3629,13 +3659,21 @@ pub(crate) fn compile_builtin_all<M: Module>(
 
     let typed_elem = match &param_tty {
         TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_elem),
-        TurboTy::Float => cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_elem),
+        TurboTy::Float => cx
+            .builder
+            .ins()
+            .bitcast(types::F64, MemFlags::new(), raw_elem),
         _ => raw_elem,
     };
 
-    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[env_ptr, typed_elem]);
+    let indirect_call = cx
+        .builder
+        .ins()
+        .call_indirect(sig_ref, fn_ptr, &[env_ptr, typed_elem]);
     let pred_result = cx.builder.inst_results(indirect_call)[0];
-    cx.builder.ins().brif(pred_result, inc_block, &[], fail_block, &[]);
+    cx.builder
+        .ins()
+        .brif(pred_result, inc_block, &[], fail_block, &[]);
 
     // Fail: set result to false and exit
     cx.builder.switch_to_block(fail_block);
@@ -3664,9 +3702,7 @@ pub(crate) fn compile_builtin_all<M: Module>(
 // ── Date/Time builtins ──────────────────────────────────────────────
 
 /// time_now() -> f64
-pub(crate) fn compile_time_now<M: Module>(
-    cx: &mut Ctx<'_, M>,
-) -> Result<MaybeTyped, CodegenError> {
+pub(crate) fn compile_time_now<M: Module>(cx: &mut Ctx<'_, M>) -> Result<MaybeTyped, CodegenError> {
     let fid = cx.rt_fns["rt_time_now"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[]);
@@ -3675,9 +3711,7 @@ pub(crate) fn compile_time_now<M: Module>(
 }
 
 /// time_ms() -> i64
-pub(crate) fn compile_time_ms<M: Module>(
-    cx: &mut Ctx<'_, M>,
-) -> Result<MaybeTyped, CodegenError> {
+pub(crate) fn compile_time_ms<M: Module>(cx: &mut Ctx<'_, M>) -> Result<MaybeTyped, CodegenError> {
     let fid = cx.rt_fns["rt_time_ms"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[]);
