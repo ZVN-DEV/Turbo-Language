@@ -118,6 +118,15 @@ impl Checker {
                 | "to_json_array"
                 | "deref"
                 | "store"
+                | "args"
+                | "type_of"
+                | "random"
+                | "random_range"
+                | "substring"
+                | "pad_left"
+                | "pad_right"
+                | "str_to_int"
+                | "str_to_float"
         )
     }
 

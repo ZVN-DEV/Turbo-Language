@@ -1466,6 +1466,28 @@ fn compile_call<M: Module>(
         // Stdlib math builtins
         "pow" => compile_stdlib_pow(cx, args),
         "sqrt" => compile_stdlib_sqrt(cx, args),
+        "floor" => compile_math_f64_to_i64(cx, args, "rt_floor"),
+        "ceil" => compile_math_f64_to_i64(cx, args, "rt_ceil"),
+        "round" => compile_math_f64_to_i64(cx, args, "rt_round"),
+        "sin" => compile_math_f64_to_f64(cx, args, "rt_sin"),
+        "cos" => compile_math_f64_to_f64(cx, args, "rt_cos"),
+        "tan" => compile_math_f64_to_f64(cx, args, "rt_tan"),
+        "log" => compile_math_f64_to_f64(cx, args, "rt_log_builtin"),
+        "log2" => compile_math_f64_to_f64(cx, args, "rt_log2_builtin"),
+        "log10" => compile_math_f64_to_f64(cx, args, "rt_log10"),
+        "exp" => compile_math_f64_to_f64(cx, args, "rt_exp"),
+        "random" => compile_random(cx),
+        "random_range" => compile_random_range(cx, args),
+        // System builtins
+        "exit" => compile_exit(cx, args),
+        "args" => compile_args(cx),
+        "type_of" => compile_type_of(cx, args),
+        // String parsing builtins
+        "substring" => compile_substring(cx, args),
+        "pad_left" => compile_pad_left(cx, args),
+        "pad_right" => compile_pad_right(cx, args),
+        "str_to_int" => compile_str_to_int(cx, args),
+        "str_to_float" => compile_str_to_float(cx, args),
         // Async builtins
         "sleep" => compile_builtin_sleep(cx, args),
         "map" => compile_builtin_map(cx, args),

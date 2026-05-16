@@ -880,6 +880,167 @@ pub(crate) extern "C" fn rt_sqrt(x: f64) -> f64 {
     x.sqrt()
 }
 
+// ── Math builtins ──────────────────────────────────────────────────
+
+pub(crate) extern "C" fn rt_floor(x: f64) -> i64 {
+    x.floor() as i64
+}
+
+pub(crate) extern "C" fn rt_ceil(x: f64) -> i64 {
+    x.ceil() as i64
+}
+
+pub(crate) extern "C" fn rt_round(x: f64) -> i64 {
+    x.round() as i64
+}
+
+pub(crate) extern "C" fn rt_sin(x: f64) -> f64 {
+    x.sin()
+}
+
+pub(crate) extern "C" fn rt_cos(x: f64) -> f64 {
+    x.cos()
+}
+
+pub(crate) extern "C" fn rt_tan(x: f64) -> f64 {
+    x.tan()
+}
+
+pub(crate) extern "C" fn rt_log_builtin(x: f64) -> f64 {
+    x.ln()
+}
+
+pub(crate) extern "C" fn rt_log2_builtin(x: f64) -> f64 {
+    x.log2()
+}
+
+pub(crate) extern "C" fn rt_log10(x: f64) -> f64 {
+    x.log10()
+}
+
+pub(crate) extern "C" fn rt_exp(x: f64) -> f64 {
+    x.exp()
+}
+
+static RANDOM_SEEDED: std::sync::Once = std::sync::Once::new();
+
+pub(crate) extern "C" fn rt_random() -> f64 {
+    RANDOM_SEEDED.call_once(|| {
+        // seed not needed for Rust's thread_rng, but we use a simple approach
+    });
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    let s = RandomState::new();
+    let mut hasher = s.build_hasher();
+    hasher.write_usize(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos() as usize);
+    let bits = hasher.finish();
+    (bits as f64) / (u64::MAX as f64)
+}
+
+pub(crate) extern "C" fn rt_random_range(min_val: i64, max_val: i64) -> i64 {
+    if max_val < min_val {
+        return min_val;
+    }
+    let range = (max_val - min_val + 1) as u64;
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    let s = RandomState::new();
+    let mut hasher = s.build_hasher();
+    hasher.write_usize(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos() as usize);
+    let bits = hasher.finish();
+    min_val + (bits % range) as i64
+}
+
+// ── System builtins ────────────────────────────────────────────────
+
+pub(crate) extern "C" fn rt_exit(code: i64) {
+    std::process::exit(code as i32);
+}
+
+pub(crate) extern "C" fn rt_args() -> *mut u8 {
+    // Return an empty array for now
+    rt_array_alloc(0)
+}
+
+// ── String parsing builtins ────────────────────────────────────────
+
+pub(crate) extern "C" fn rt_substring(s: *const u8, start: i64, end: i64) -> *const u8 {
+    let s_str = if s.is_null() { "" } else { unsafe { std::ffi::CStr::from_ptr(s as *const i8).to_str().unwrap_or("") } };
+    let slen = s_str.len() as i64;
+    let start = start.max(0).min(slen) as usize;
+    let end = end.max(0).min(slen) as usize;
+    if start >= end {
+        return arena_str(std::ffi::CString::new("").unwrap());
+    }
+    let sub = &s_str[start..end];
+    arena_str(std::ffi::CString::new(sub).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()))
+}
+
+pub(crate) extern "C" fn rt_pad_left(s: *const u8, width: i64, pad_char: *const u8) -> *const u8 {
+    let s_str = if s.is_null() { "" } else { unsafe { std::ffi::CStr::from_ptr(s as *const i8).to_str().unwrap_or("") } };
+    let pad_str = if pad_char.is_null() { " " } else { unsafe { std::ffi::CStr::from_ptr(pad_char as *const i8).to_str().unwrap_or(" ") } };
+    let c = pad_str.chars().next().unwrap_or(' ');
+    let slen = s_str.len() as i64;
+    if slen >= width {
+        return arena_str(std::ffi::CString::new(s_str).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()));
+    }
+    let pad_count = (width - slen) as usize;
+    let mut result = String::with_capacity(width as usize);
+    for _ in 0..pad_count { result.push(c); }
+    result.push_str(s_str);
+    arena_str(std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()))
+}
+
+pub(crate) extern "C" fn rt_pad_right(s: *const u8, width: i64, pad_char: *const u8) -> *const u8 {
+    let s_str = if s.is_null() { "" } else { unsafe { std::ffi::CStr::from_ptr(s as *const i8).to_str().unwrap_or("") } };
+    let pad_str = if pad_char.is_null() { " " } else { unsafe { std::ffi::CStr::from_ptr(pad_char as *const i8).to_str().unwrap_or(" ") } };
+    let c = pad_str.chars().next().unwrap_or(' ');
+    let slen = s_str.len() as i64;
+    if slen >= width {
+        return arena_str(std::ffi::CString::new(s_str).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()));
+    }
+    let pad_count = (width - slen) as usize;
+    let mut result = String::with_capacity(width as usize);
+    result.push_str(s_str);
+    for _ in 0..pad_count { result.push(c); }
+    arena_str(std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()))
+}
+
+pub(crate) extern "C" fn rt_str_to_int(s: *const u8) -> *mut u8 {
+    let s_str = if s.is_null() { "" } else { unsafe { std::ffi::CStr::from_ptr(s as *const i8).to_str().unwrap_or("") } };
+    match s_str.parse::<i64>() {
+        Ok(val) => rt_result_ok(val),
+        Err(_) => {
+            let msg = format!("cannot parse '{}' as integer", s_str);
+            let cs = std::ffi::CString::new(msg).unwrap();
+            let ptr = arena_str(cs);
+            rt_result_err(ptr as i64)
+        }
+    }
+}
+
+pub(crate) extern "C" fn rt_str_to_float(s: *const u8) -> *mut u8 {
+    let s_str = if s.is_null() { "" } else { unsafe { std::ffi::CStr::from_ptr(s as *const i8).to_str().unwrap_or("") } };
+    match s_str.parse::<f64>() {
+        Ok(val) => {
+            let bits = val.to_bits() as i64;
+            rt_result_ok(bits)
+        }
+        Err(_) => {
+            let msg = format!("cannot parse '{}' as float", s_str);
+            let cs = std::ffi::CString::new(msg).unwrap();
+            let ptr = arena_str(cs);
+            rt_result_err(ptr as i64)
+        }
+    }
+}
+
 // ── HTTP + JSON runtime functions ───────────────────────────────────
 
 /// Maximum HTTP request body we will accept from a client, in bytes.

@@ -134,6 +134,28 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_env_get", rt_env_get as *const u8);
     jit_builder.symbol("rt_pow", rt_pow as *const u8);
     jit_builder.symbol("rt_sqrt", rt_sqrt as *const u8);
+    // Math builtins
+    jit_builder.symbol("rt_floor", rt_floor as *const u8);
+    jit_builder.symbol("rt_ceil", rt_ceil as *const u8);
+    jit_builder.symbol("rt_round", rt_round as *const u8);
+    jit_builder.symbol("rt_sin", rt_sin as *const u8);
+    jit_builder.symbol("rt_cos", rt_cos as *const u8);
+    jit_builder.symbol("rt_tan", rt_tan as *const u8);
+    jit_builder.symbol("rt_log_builtin", rt_log_builtin as *const u8);
+    jit_builder.symbol("rt_log2_builtin", rt_log2_builtin as *const u8);
+    jit_builder.symbol("rt_log10", rt_log10 as *const u8);
+    jit_builder.symbol("rt_exp", rt_exp as *const u8);
+    jit_builder.symbol("rt_random", rt_random as *const u8);
+    jit_builder.symbol("rt_random_range", rt_random_range as *const u8);
+    // System builtins
+    jit_builder.symbol("rt_exit", rt_exit as *const u8);
+    jit_builder.symbol("rt_args", rt_args as *const u8);
+    // String parsing builtins
+    jit_builder.symbol("rt_substring", rt_substring as *const u8);
+    jit_builder.symbol("rt_pad_left", rt_pad_left as *const u8);
+    jit_builder.symbol("rt_pad_right", rt_pad_right as *const u8);
+    jit_builder.symbol("rt_str_to_int", rt_str_to_int as *const u8);
+    jit_builder.symbol("rt_str_to_float", rt_str_to_float as *const u8);
     // Async runtime symbols
     jit_builder.symbol("rt_sleep_ms", rt_sleep_ms as *const u8);
     jit_builder.symbol("rt_spawn_with_args", rt_spawn_with_args as *const u8);
@@ -291,6 +313,28 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_env_get", rt_env_get as *const u8);
     jit_builder.symbol("rt_pow", rt_pow as *const u8);
     jit_builder.symbol("rt_sqrt", rt_sqrt as *const u8);
+    // Math builtins
+    jit_builder.symbol("rt_floor", rt_floor as *const u8);
+    jit_builder.symbol("rt_ceil", rt_ceil as *const u8);
+    jit_builder.symbol("rt_round", rt_round as *const u8);
+    jit_builder.symbol("rt_sin", rt_sin as *const u8);
+    jit_builder.symbol("rt_cos", rt_cos as *const u8);
+    jit_builder.symbol("rt_tan", rt_tan as *const u8);
+    jit_builder.symbol("rt_log_builtin", rt_log_builtin as *const u8);
+    jit_builder.symbol("rt_log2_builtin", rt_log2_builtin as *const u8);
+    jit_builder.symbol("rt_log10", rt_log10 as *const u8);
+    jit_builder.symbol("rt_exp", rt_exp as *const u8);
+    jit_builder.symbol("rt_random", rt_random as *const u8);
+    jit_builder.symbol("rt_random_range", rt_random_range as *const u8);
+    // System builtins
+    jit_builder.symbol("rt_exit", rt_exit as *const u8);
+    jit_builder.symbol("rt_args", rt_args as *const u8);
+    // String parsing builtins
+    jit_builder.symbol("rt_substring", rt_substring as *const u8);
+    jit_builder.symbol("rt_pad_left", rt_pad_left as *const u8);
+    jit_builder.symbol("rt_pad_right", rt_pad_right as *const u8);
+    jit_builder.symbol("rt_str_to_int", rt_str_to_int as *const u8);
+    jit_builder.symbol("rt_str_to_float", rt_str_to_float as *const u8);
     jit_builder.symbol("rt_sleep_ms", rt_sleep_ms as *const u8);
     jit_builder.symbol("rt_spawn_with_args", rt_spawn_with_args as *const u8);
     jit_builder.symbol("rt_await_handle", rt_await_handle as *const u8);

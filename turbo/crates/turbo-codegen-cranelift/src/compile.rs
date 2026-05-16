@@ -341,6 +341,28 @@ pub(crate) fn compile_module<M: Module>(
         &[types::F64],
         Some(types::F64),
     )?;
+    // Math builtins
+    declare_rt_fn(module, &mut rt_fns, "rt_floor", &[types::F64], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_ceil", &[types::F64], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_round", &[types::F64], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_sin", &[types::F64], Some(types::F64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_cos", &[types::F64], Some(types::F64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_tan", &[types::F64], Some(types::F64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_log_builtin", &[types::F64], Some(types::F64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_log2_builtin", &[types::F64], Some(types::F64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_log10", &[types::F64], Some(types::F64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_exp", &[types::F64], Some(types::F64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_random", &[], Some(types::F64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_random_range", &[types::I64, types::I64], Some(types::I64))?;
+    // System builtins
+    declare_rt_fn(module, &mut rt_fns, "rt_exit", &[types::I64], None)?;
+    declare_rt_fn(module, &mut rt_fns, "rt_args", &[], Some(ptr_type))?;
+    // String parsing builtins
+    declare_rt_fn(module, &mut rt_fns, "rt_substring", &[ptr_type, types::I64, types::I64], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_pad_left", &[ptr_type, types::I64, ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_pad_right", &[ptr_type, types::I64, ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_to_int", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_str_to_float", &[ptr_type], Some(ptr_type))?;
     // Async runtime declarations
     declare_rt_fn(module, &mut rt_fns, "rt_sleep_ms", &[types::I64], None)?;
     declare_rt_fn(

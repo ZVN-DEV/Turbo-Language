@@ -653,6 +653,204 @@ pub(crate) fn compile_stdlib_sqrt<M: Module>(
     Ok(Some((result, TurboTy::Float)))
 }
 
+// ── Math builtins ──────────────────────────────────────────────────
+
+/// Generic helper: (f64)->i64 math builtins (floor, ceil, round)
+pub(crate) fn compile_math_f64_to_i64<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+    rt_name: &str,
+) -> Result<MaybeTyped, CodegenError> {
+    let (x_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns[rt_name];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[x_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// Generic helper: (f64)->f64 math builtins (sin, cos, tan, log, exp, etc.)
+pub(crate) fn compile_math_f64_to_f64<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+    rt_name: &str,
+) -> Result<MaybeTyped, CodegenError> {
+    let (x_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns[rt_name];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[x_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Float)))
+}
+
+/// random() -> f64
+pub(crate) fn compile_random<M: Module>(
+    cx: &mut Ctx<'_, M>,
+) -> Result<MaybeTyped, CodegenError> {
+    let fid = cx.rt_fns["rt_random"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Float)))
+}
+
+/// random_range(min, max) -> i64
+pub(crate) fn compile_random_range<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (min_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (max_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_random_range"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[min_val, max_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+// ── System builtins ────────────────────────────────────────────────
+
+/// exit(code) -> ()
+pub(crate) fn compile_exit<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (code_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let code_ty = cx.builder.func.dfg.value_type(code_val);
+    let code_val = if code_ty.bits() < 64 {
+        cx.builder.ins().sextend(types::I64, code_val)
+    } else {
+        code_val
+    };
+    let fid = cx.rt_fns["rt_exit"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    cx.builder.ins().call(fref, &[code_val]);
+    Ok(None)
+}
+
+/// args() -> [str]
+pub(crate) fn compile_args<M: Module>(
+    cx: &mut Ctx<'_, M>,
+) -> Result<MaybeTyped, CodegenError> {
+    let fid = cx.rt_fns["rt_args"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Array(Box::new(TurboTy::Str)))))
+}
+
+/// type_of(val) -> str — compiler intrinsic, emits type name as string constant
+pub(crate) fn compile_type_of<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    // Compile the argument to get its type, then discard the value
+    let result = compile_expr(cx, &args[0])?;
+    let type_name = if let Some((_, ref tty)) = result {
+        match tty {
+            TurboTy::I8 => "i8",
+            TurboTy::I16 => "i16",
+            TurboTy::Int => "i64",
+            TurboTy::U8 => "u8",
+            TurboTy::U16 => "u16",
+            TurboTy::Float => "f64",
+            TurboTy::Bool => "bool",
+            TurboTy::Str => "str",
+            TurboTy::Unit => "unit",
+            TurboTy::Array(_) => "array",
+            TurboTy::Struct(name) => name.as_str(),
+            TurboTy::Enum(name) => name.as_str(),
+            TurboTy::Fn(_, _) => "fn",
+            TurboTy::Result(_, _) => "result",
+            TurboTy::Optional(_) => "optional",
+            TurboTy::Future(_) => "future",
+        }
+    } else {
+        "unit"
+    };
+    let ptr = cx.create_string(type_name)?;
+    Ok(Some((ptr, TurboTy::Str)))
+}
+
+// ── String parsing builtins ────────────────────────────────────────
+
+/// substring(s, start, end) -> str
+pub(crate) fn compile_substring<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (start_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let (end_val, _) = compile_expr(cx, &args[2])?.unwrap();
+    let fid = cx.rt_fns["rt_substring"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[s_val, start_val, end_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// pad_left(s, width, char) -> str
+pub(crate) fn compile_pad_left<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (width_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let (char_val, _) = compile_expr(cx, &args[2])?.unwrap();
+    let fid = cx.rt_fns["rt_pad_left"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[s_val, width_val, char_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// pad_right(s, width, char) -> str
+pub(crate) fn compile_pad_right<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (width_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let (char_val, _) = compile_expr(cx, &args[2])?.unwrap();
+    let fid = cx.rt_fns["rt_pad_right"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[s_val, width_val, char_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// str_to_int(s) -> i64 ! str
+pub(crate) fn compile_str_to_int<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_str_to_int"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[s_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((
+        result,
+        TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Str)),
+    )))
+}
+
+/// str_to_float(s) -> f64 ! str
+pub(crate) fn compile_str_to_float<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (s_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_str_to_float"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[s_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((
+        result,
+        TurboTy::Result(Box::new(TurboTy::Float), Box::new(TurboTy::Str)),
+    )))
+}
+
 /// sleep(ms) -> () — sleep the current thread for ms milliseconds
 pub(crate) fn compile_builtin_sleep<M: Module>(
     cx: &mut Ctx<'_, M>,
@@ -1752,11 +1950,6 @@ pub(crate) fn compile_if_let<M: Module>(
             let val_call = cx.builder.ins().call(val_fref, &[val]);
             let raw_val = cx.builder.inst_results(val_call)[0];
 
-            let var = Variable::new(cx.next_var);
-            cx.next_var += 1;
-            cx.builder.declare_var(var, types::I64);
-            cx.builder.def_var(var, raw_val);
-
             let turbo_ty = match &val_tty {
                 TurboTy::Result(ok_tty, err_tty) => {
                     if matches!(&pattern.node, Pattern::Ok(_)) {
@@ -1767,7 +1960,19 @@ pub(crate) fn compile_if_let<M: Module>(
                 }
                 _ => TurboTy::Int,
             };
-            cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
+
+            // If the turbo type is Float, bitcast the i64 bits to f64
+            let (cl_ty, bind_val) = if matches!(turbo_ty, TurboTy::Float) {
+                (types::F64, cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val))
+            } else {
+                (types::I64, raw_val)
+            };
+
+            let var = Variable::new(cx.next_var);
+            cx.next_var += 1;
+            cx.builder.declare_var(var, cl_ty);
+            cx.builder.def_var(var, bind_val);
+            cx.vars.insert(binding.clone(), (var, cl_ty, turbo_ty));
         }
         Pattern::None => {
             // No binding for none pattern
@@ -2592,11 +2797,6 @@ pub(crate) fn compile_match<M: Module>(
                 let val_call = cx.builder.ins().call(val_fref, &[subj_val]);
                 let raw_val = cx.builder.inst_results(val_call)[0];
 
-                let var = Variable::new(cx.next_var);
-                cx.next_var += 1;
-                cx.builder.declare_var(var, types::I64);
-                cx.builder.def_var(var, raw_val);
-
                 let turbo_ty = match &subj_tty {
                     TurboTy::Result(ok_tty, err_tty) => {
                         if matches!(&arm.pattern.node, Pattern::Ok(_)) {
@@ -2607,7 +2807,19 @@ pub(crate) fn compile_match<M: Module>(
                     }
                     _ => TurboTy::Int,
                 };
-                cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
+
+                // If the turbo type is Float, bitcast the i64 bits to f64
+                let (cl_ty, val) = if matches!(turbo_ty, TurboTy::Float) {
+                    (types::F64, cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_val))
+                } else {
+                    (types::I64, raw_val)
+                };
+
+                let var = Variable::new(cx.next_var);
+                cx.next_var += 1;
+                cx.builder.declare_var(var, cl_ty);
+                cx.builder.def_var(var, val);
+                cx.vars.insert(binding.clone(), (var, cl_ty, turbo_ty));
             }
             Pattern::Some(binding) => {
                 let val_fid = cx.rt_fns["rt_option_value"];

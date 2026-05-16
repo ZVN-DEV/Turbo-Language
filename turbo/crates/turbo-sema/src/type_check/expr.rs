@@ -925,6 +925,289 @@ impl Checker {
                         return Ty::F64;
                     }
 
+                    // ── Math builtins (Tier 1) ───────────────────
+                    // floor/ceil/round: (f64) -> i64
+                    if name == "floor" || name == "ceil" || name == "round" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("{name}() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let x_ty = self.check_expr(&args[0]);
+                        if !x_ty.is_error() && x_ty != Ty::F64 && x_ty != Ty::F32 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("{name}() expects float, found `{x_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::I64;
+                    }
+                    // sin/cos/tan/log/log2/log10/exp: (f64) -> f64
+                    if name == "sin" || name == "cos" || name == "tan"
+                        || name == "log" || name == "log2" || name == "log10"
+                        || name == "exp"
+                    {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("{name}() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let x_ty = self.check_expr(&args[0]);
+                        if !x_ty.is_error() && x_ty != Ty::F64 && x_ty != Ty::F32 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("{name}() expects float, found `{x_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::F64;
+                    }
+                    // random() -> f64
+                    if name == "random" {
+                        if !args.is_empty() {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("random() takes 0 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        return Ty::F64;
+                    }
+                    // random_range(min, max) -> i64
+                    if name == "random_range" {
+                        if args.len() != 2 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("random_range() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let min_ty = self.check_expr(&args[0]);
+                        let max_ty = self.check_expr(&args[1]);
+                        if !min_ty.is_error() && !min_ty.is_integer() {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("random_range() first argument must be integer, found `{min_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        if !max_ty.is_error() && !max_ty.is_integer() {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("random_range() second argument must be integer, found `{max_ty}`"),
+                                args[1].span.clone(),
+                            );
+                        }
+                        return Ty::I64;
+                    }
+
+                    // ── System builtins (Tier 1) ────────────────────
+                    // args() -> [str]
+                    if name == "args" {
+                        if !args.is_empty() {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("args() takes 0 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        return Ty::Array(Box::new(Ty::Str));
+                    }
+                    // exit(code: i64) -> unit
+                    if name == "exit" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("exit() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let code_ty = self.check_expr(&args[0]);
+                        if !code_ty.is_error() && !code_ty.is_integer() {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("exit() expects integer, found `{code_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::Unit;
+                    }
+                    // type_of(val) -> str
+                    if name == "type_of" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("type_of() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        // Accept any type
+                        self.check_expr(&args[0]);
+                        return Ty::Str;
+                    }
+
+                    // ── String parsing builtins (Tier 1) ────────────
+                    // substring(s, start, end) -> str
+                    if name == "substring" {
+                        if args.len() != 3 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("substring() takes exactly 3 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        let start_ty = self.check_expr(&args[1]);
+                        let end_ty = self.check_expr(&args[2]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("substring() first argument must be str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        if !start_ty.is_error() && !start_ty.is_integer() {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("substring() second argument must be integer, found `{start_ty}`"),
+                                args[1].span.clone(),
+                            );
+                        }
+                        if !end_ty.is_error() && !end_ty.is_integer() {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("substring() third argument must be integer, found `{end_ty}`"),
+                                args[2].span.clone(),
+                            );
+                        }
+                        return Ty::Str;
+                    }
+                    // pad_left(s, width, char) -> str
+                    if name == "pad_left" {
+                        if args.len() != 3 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("pad_left() takes exactly 3 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        let width_ty = self.check_expr(&args[1]);
+                        let char_ty = self.check_expr(&args[2]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("pad_left() first argument must be str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        if !width_ty.is_error() && !width_ty.is_integer() {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("pad_left() second argument must be integer, found `{width_ty}`"),
+                                args[1].span.clone(),
+                            );
+                        }
+                        if !char_ty.is_error() && char_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("pad_left() third argument must be str, found `{char_ty}`"),
+                                args[2].span.clone(),
+                            );
+                        }
+                        return Ty::Str;
+                    }
+                    // pad_right(s, width, char) -> str
+                    if name == "pad_right" {
+                        if args.len() != 3 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("pad_right() takes exactly 3 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        let width_ty = self.check_expr(&args[1]);
+                        let char_ty = self.check_expr(&args[2]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("pad_right() first argument must be str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        if !width_ty.is_error() && !width_ty.is_integer() {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("pad_right() second argument must be integer, found `{width_ty}`"),
+                                args[1].span.clone(),
+                            );
+                        }
+                        if !char_ty.is_error() && char_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("pad_right() third argument must be str, found `{char_ty}`"),
+                                args[2].span.clone(),
+                            );
+                        }
+                        return Ty::Str;
+                    }
+                    // str_to_int(s) -> i64 ! str
+                    if name == "str_to_int" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("str_to_int() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("str_to_int() expects str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::Result(Box::new(Ty::I64), Box::new(Ty::Str));
+                    }
+                    // str_to_float(s) -> f64 ! str
+                    if name == "str_to_float" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("str_to_float() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let s_ty = self.check_expr(&args[0]);
+                        if !s_ty.is_error() && s_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("str_to_float() expects str, found `{s_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::Result(Box::new(Ty::F64), Box::new(Ty::Str));
+                    }
+
                     // sleep(ms: i64) -> () — sleep the current thread
                     if name == "sleep" {
                         if args.len() != 1 {

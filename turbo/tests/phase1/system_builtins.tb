@@ -1,0 +1,11 @@
+fn main() {
+    // args() returns an array of strings
+    let a = args()
+    print(len(a))
+
+    // type_of
+    print(type_of(42))
+    print(type_of("hi"))
+    print(type_of(true))
+    print(type_of(3.14))
+}

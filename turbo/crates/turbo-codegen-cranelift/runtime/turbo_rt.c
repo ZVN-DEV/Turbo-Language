@@ -899,6 +899,134 @@ double rt_sqrt(double x) {
     return sqrt(x);
 }
 
+/* ── Math builtins ───────────────────────────────────────────────── */
+
+long long rt_floor(double x) { return (long long)floor(x); }
+long long rt_ceil(double x) { return (long long)ceil(x); }
+long long rt_round(double x) { return (long long)round(x); }
+double rt_sin(double x) { return sin(x); }
+double rt_cos(double x) { return cos(x); }
+double rt_tan(double x) { return tan(x); }
+double rt_log_builtin(double x) { return log(x); }
+double rt_log2_builtin(double x) { return log2(x); }
+double rt_log10(double x) { return log10(x); }
+double rt_exp(double x) { return exp(x); }
+
+static int rt_random_seeded = 0;
+double rt_random(void) {
+    if (!rt_random_seeded) {
+        srand((unsigned int)time(NULL));
+        rt_random_seeded = 1;
+    }
+    return (double)rand() / (double)RAND_MAX;
+}
+
+long long rt_random_range(long long min_val, long long max_val) {
+    if (!rt_random_seeded) {
+        srand((unsigned int)time(NULL));
+        rt_random_seeded = 1;
+    }
+    if (max_val < min_val) return min_val;
+    return min_val + rand() % (max_val - min_val + 1);
+}
+
+/* ── System builtins ─────────────────────────────────────────────── */
+
+void rt_exit(long long code) {
+    exit((int)code);
+}
+
+void *rt_args(void) {
+    /* Return an empty array — CLI arg passing is not yet wired. */
+    return rt_array_alloc(0);
+}
+
+/* ── String parsing builtins ─────────────────────────────────────── */
+
+const char *rt_substring(const char *s, long long start, long long end) {
+    if (!s) { char *e = turbo_alloc(1); e[0] = '\0'; return e; }
+    long long slen = (long long)strlen(s);
+    if (start < 0) start = 0;
+    if (end > slen) end = slen;
+    if (start >= end) { char *e = turbo_alloc(1); e[0] = '\0'; return e; }
+    long long len = end - start;
+    char *result = turbo_alloc((size_t)len + 1);
+    memcpy(result, s + start, (size_t)len);
+    result[len] = '\0';
+    return result;
+}
+
+const char *rt_pad_left(const char *s, long long width, const char *pad_char) {
+    if (!s) s = "";
+    if (!pad_char || pad_char[0] == '\0') pad_char = " ";
+    long long slen = (long long)strlen(s);
+    if (slen >= width) return turbo_strdup(s);
+    long long pad_count = width - slen;
+    char *result = turbo_alloc((size_t)width + 1);
+    char c = pad_char[0];
+    for (long long i = 0; i < pad_count; i++) result[i] = c;
+    memcpy(result + pad_count, s, (size_t)slen);
+    result[width] = '\0';
+    return result;
+}
+
+const char *rt_pad_right(const char *s, long long width, const char *pad_char) {
+    if (!s) s = "";
+    if (!pad_char || pad_char[0] == '\0') pad_char = " ";
+    long long slen = (long long)strlen(s);
+    if (slen >= width) return turbo_strdup(s);
+    long long pad_count = width - slen;
+    char *result = turbo_alloc((size_t)width + 1);
+    memcpy(result, s, (size_t)slen);
+    char c = pad_char[0];
+    for (long long i = 0; i < pad_count; i++) result[slen + i] = c;
+    result[width] = '\0';
+    return result;
+}
+
+void *rt_str_to_int(const char *s) {
+    if (!s) {
+        const char *msg = "cannot parse empty string as integer";
+        char *buf = turbo_alloc(strlen(msg) + 1);
+        memcpy(buf, msg, strlen(msg) + 1);
+        return rt_result_err((long long)(intptr_t)buf);
+    }
+    char *endptr;
+    long long val = strtoll(s, &endptr, 10);
+    if (endptr == s || *endptr != '\0') {
+        const char *prefix = "cannot parse '";
+        const char *suffix = "' as integer";
+        size_t len = strlen(prefix) + strlen(s) + strlen(suffix) + 1;
+        char *buf = turbo_alloc(len);
+        snprintf(buf, len, "%s%s%s", prefix, s, suffix);
+        return rt_result_err((long long)(intptr_t)buf);
+    }
+    return rt_result_ok(val);
+}
+
+void *rt_str_to_float(const char *s) {
+    if (!s) {
+        const char *msg = "cannot parse empty string as float";
+        char *buf = turbo_alloc(strlen(msg) + 1);
+        memcpy(buf, msg, strlen(msg) + 1);
+        return rt_result_err((long long)(intptr_t)buf);
+    }
+    char *endptr;
+    double val = strtod(s, &endptr);
+    if (endptr == s || *endptr != '\0') {
+        const char *prefix = "cannot parse '";
+        const char *suffix = "' as float";
+        size_t len = strlen(prefix) + strlen(s) + strlen(suffix) + 1;
+        char *buf = turbo_alloc(len);
+        snprintf(buf, len, "%s%s%s", prefix, s, suffix);
+        return rt_result_err((long long)(intptr_t)buf);
+    }
+    /* Store the f64 bit pattern in the i64 value slot */
+    long long bits;
+    memcpy(&bits, &val, sizeof(bits));
+    return rt_result_ok(bits);
+}
+
 /* ── Async runtime ─────────────────────────────────────────────── */
 
 #ifdef _WIN32

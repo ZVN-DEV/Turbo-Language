@@ -1,0 +1,35 @@
+fn main() {
+    // substring
+    print(substring("hello world", 0, 5))
+    print(substring("hello world", 6, 11))
+
+    // pad_left and pad_right
+    print(pad_left("42", 5, "0"))
+    print(pad_right("hi", 5, "."))
+
+    // str_to_int
+    let result = str_to_int("123")
+    match result {
+        ok(val) => print(val)
+        err(msg) => print(msg)
+    }
+
+    let bad = str_to_int("abc")
+    match bad {
+        ok(val) => print(val)
+        err(msg) => print(msg)
+    }
+
+    // str_to_float
+    let fresult = str_to_float("3.14")
+    match fresult {
+        ok(val) => print(val)
+        err(msg) => print(msg)
+    }
+
+    let fbad = str_to_float("xyz")
+    match fbad {
+        ok(val) => print(val)
+        err(msg) => print(msg)
+    }
+}

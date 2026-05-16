@@ -1,0 +1,27 @@
+fn main() {
+    // floor, ceil, round
+    print(floor(3.7))
+    print(ceil(3.2))
+    print(round(3.5))
+    print(round(3.4))
+
+    // trig — sin(0) == 0, cos(0) == 1
+    print(sin(0.0))
+    print(cos(0.0))
+
+    // log and exp
+    print(floor(exp(1.0)))
+    print(floor(log(2.718281828)))
+
+    // random: just verify it doesn't crash and is in range
+    let r = random()
+    if r >= 0.0 {
+        print("random ok")
+    }
+
+    // random_range
+    let rr = random_range(1, 10)
+    if rr >= 1 {
+        print("random_range ok")
+    }
+}
