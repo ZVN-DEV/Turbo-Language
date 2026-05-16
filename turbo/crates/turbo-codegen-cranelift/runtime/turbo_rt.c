@@ -962,6 +962,7 @@ const char *rt_substring(const char *s, long long start, long long end) {
 
 const char *rt_pad_left(const char *s, long long width, const char *pad_char) {
     if (!s) s = "";
+    if (width < 0) return turbo_strdup(s);
     if (!pad_char || pad_char[0] == '\0') pad_char = " ";
     long long slen = (long long)strlen(s);
     if (slen >= width) return turbo_strdup(s);
@@ -976,6 +977,7 @@ const char *rt_pad_left(const char *s, long long width, const char *pad_char) {
 
 const char *rt_pad_right(const char *s, long long width, const char *pad_char) {
     if (!s) s = "";
+    if (width < 0) return turbo_strdup(s);
     if (!pad_char || pad_char[0] == '\0') pad_char = " ";
     long long slen = (long long)strlen(s);
     if (slen >= width) return turbo_strdup(s);
@@ -1362,6 +1364,9 @@ static char *rt_json_escape_dup(const char *s) {
 
 /* json_get(json, key) -> str — extract top-level key value from JSON string */
 const char *rt_json_get(const char *json, const char *key) {
+    size_t json_len = strlen(json);
+    const char *json_end = json + json_len;
+
     /* Build search pattern: "key" */
     size_t klen = strlen(key);
     char *search = (char *)turbo_alloc(klen + 3);
@@ -1376,10 +1381,13 @@ const char *rt_json_get(const char *json, const char *key) {
 
     /* Advance past key, skip whitespace and colon */
     pos += klen + 2;
-    while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r') pos++;
-    if (*pos != ':') return turbo_strdup("");
+    if (pos >= json_end) return turbo_strdup("");
+    while (pos < json_end && (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r')) pos++;
+    if (pos >= json_end || *pos != ':') return turbo_strdup("");
     pos++;
-    while (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r') pos++;
+    if (pos >= json_end) return turbo_strdup("");
+    while (pos < json_end && (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r')) pos++;
+    if (pos >= json_end) return turbo_strdup("");
 
     if (*pos == '"') {
         /* String value */
@@ -1422,6 +1430,8 @@ const char *rt_json_root(const char *json) {
     size_t len = strlen(json);
     while (len > 0 && (json[len - 1] == ' ' || json[len - 1] == '\n' || json[len - 1] == '\r' || json[len - 1] == '\t')) len--;
     if (len >= 2 && json[0] == '"' && json[len - 1] == '"') {
+        /* Escape sequences shrink (e.g. \\n -> \n), so output <= input size.
+           len-2 chars of content + NUL = len-1 bytes is always sufficient. */
         char *out = (char *)turbo_alloc(len - 1);
         size_t j = 0;
         for (size_t i = 1; i + 1 < len; i++) {
@@ -1430,6 +1440,9 @@ const char *rt_json_root(const char *json) {
                 switch (json[i]) {
                     case 'n': out[j++] = '\n'; break;
                     case 'r': out[j++] = '\r'; break;
+                    case 't': out[j++] = '\t'; break;
+                    case 'b': out[j++] = '\b'; break;
+                    case 'f': out[j++] = '\f'; break;
                     case '"': out[j++] = '"'; break;
                     case '\\': out[j++] = '\\'; break;
                     default: out[j++] = json[i]; break;
@@ -1969,7 +1982,11 @@ static void *handle_http_conn(void *arg) {
 
         /* Parse request line */
         char method[16] = {0}, raw_path[1024] = {0};
-        sscanf(buf, "%15s %1023s", method, raw_path);
+        if (sscanf(buf, "%15s %1023s", method, raw_path) != 2) {
+            const char *bad = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            write(fd, bad, strlen(bad));
+            goto conn_done;
+        }
 
         /* Split path and query string */
         char path_buf[1024] = {0};
