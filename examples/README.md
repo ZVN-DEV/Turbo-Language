@@ -21,6 +21,7 @@ turbolang run examples/web-dashboard/main.tb
 | [game-of-life](./game-of-life/) | Conway's Game of Life | String-as-grid, char_at, nested loops, algorithms |
 | [simple-script](./simple-script/) | Text Statistics Analyzer | Strings, HashMaps, arrays, pipes, string interpolation |
 | [speed-server](./speed-server/) | REST API Benchmark Server | HTTP server, JSON responses, fibonacci, primes, sorting |
+| [file-analyzer](./file-analyzer/) | Source Code Analyzer | File I/O, line parsing, statistics, progress bars |
 
 ### web-dashboard
 
@@ -69,9 +70,17 @@ A text statistics analyzer that counts words, calculates frequencies, and ranks 
 turbolang run examples/simple-script/main.tb
 ```
 
+### file-analyzer
+
+A source code analyzer that reads its own source file, classifies each line (code, comment, blank), computes statistics (avg/max line length), and displays results with ASCII progress bars. Demonstrates file I/O, string inspection, and formatted output.
+
+```bash
+turbolang run examples/file-analyzer/main.tb
+```
+
 ### speed-server
 
-An HTTP server on port 8080 with endpoints for fibonacci, prime counting, sorting benchmarks, and health checks. Returns JSON responses. Demonstrates Turbo's async HTTP primitives.
+An HTTP server on port 8080 with endpoints for fibonacci, prime counting, sorting benchmarks, and health checks. Returns JSON responses. Demonstrates Turbo's HTTP primitives.
 
 ```bash
 turbolang run examples/speed-server/main.tb
@@ -89,7 +98,14 @@ turbolang run examples/data-pipeline/main.tb
 turbolang run examples/game-of-life/main.tb
 turbolang run examples/simple-script/main.tb
 turbolang run examples/speed-server/main.tb
+turbolang run examples/file-analyzer/main.tb
 ```
+
+---
+
+## TurboServo (External)
+
+For a full-featured web framework example, see [TurboServo](https://github.com/ZVN-DEV/turboservo) — TurboLang's HTTP server framework with SSR HTML, CRUD persistence, compute benchmarks, and a live browser dashboard.
 
 ---
 
