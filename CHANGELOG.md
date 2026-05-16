@@ -5,6 +5,55 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-16 — Batteries-Included Stdlib
+
+Major stdlib expansion: 37 new builtins bringing TurboLang from 67 to 104 built-in functions. Inspired by the batteries-included philosophy — every dependency is liability, the stdlib must be complete enough that developers never need a package manager.
+
+### Added — System Essentials
+- `exit(code)` — exit process with status code
+- `type_of(val)` — get type name as string (compiler intrinsic)
+- `args()` — CLI argument array
+
+### Added — Math (12 functions)
+- `floor(x)`, `ceil(x)`, `round(x)` — float rounding to i64
+- `sin(x)`, `cos(x)`, `tan(x)` — trigonometric functions
+- `log(x)`, `log2(x)`, `log10(x)` — logarithms
+- `exp(x)` — exponential (e^x)
+- `random()` — random f64 in [0.0, 1.0)
+- `random_range(min, max)` — random i64 in [min, max]
+
+### Added — String Parsing
+- `substring(s, start, end)` — extract substring by index
+- `pad_left(s, width, char)`, `pad_right(s, width, char)` — string padding
+- `str_to_int(s)`, `str_to_float(s)` — parse strings to numbers (returns Result)
+
+### Added — Filesystem (8 functions)
+- `file_exists(path)` — check if file exists
+- `delete_file(path)` — delete a file
+- `list_dir(path)` — list directory contents as string array
+- `mkdir(path)` — create directory recursively
+- `path_join(a, b)` — join path segments
+- `path_dir(path)`, `path_base(path)`, `path_ext(path)` — path component extraction
+
+### Added — Collections (5 functions)
+- `sort(arr)` — sort array (COW, returns new array)
+- `reverse(arr)` — reverse array (COW)
+- `array_contains(arr, val)` — check if value in array
+- `slice(arr, start, end)` — sub-array extraction
+
+### Added — Date/Time (3 functions)
+- `time_now()` — current Unix timestamp in seconds (f64)
+- `time_ms()` — current Unix timestamp in milliseconds (i64)
+- `format_time(timestamp, format)` — format timestamp to string
+
+### Added — Examples
+- `examples/file-analyzer/` — 211-line CLI tool showcasing filesystem, string parsing, and struct features; compiles to 95KB AOT binary
+
+### Internal
+- Decomposed codegen `lib.rs` (4,389 lines) into focused modules: `type_conv.rs`, `closures.rs`, `compile.rs`, `tests_codegen.rs`
+- Fixed f64 Result extraction bitcast bug in Cranelift codegen
+- Added `STDLIB-ROADMAP.md` tracking 74 planned builtins across 3 tiers
+
 ## [0.8.2] - 2026-05-10 — Product Hardening Sprint
 
 Follow-up hardening release closing product-review and gold-standard OSS findings around compiler parity, dependency installation safety, HTTP response defaults, CI coverage, and website dependency hygiene.
