@@ -7,6 +7,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+/// Build a `CString` from the given value, falling back to an empty string
+/// if the input contains an interior nul byte.
+fn cstring_or_empty(s: impl Into<Vec<u8>>) -> std::ffi::CString {
+    std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
+}
+
 /// Compute an allocation layout for array-like structures, returning None on overflow.
 /// Format: [refcount: i64][length: i64][elements: len * 8 bytes]
 fn checked_array_layout(len: usize) -> Option<std::alloc::Layout> {
@@ -324,7 +330,7 @@ pub(crate) extern "C" fn rt_str_concat(a: *const u8, b: *const u8) -> *const u8 
     result.push_str(a_str);
     result.push_str(b_str);
     let c_string =
-        std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+        cstring_or_empty(result);
     arena_str(c_string)
 }
 
@@ -378,19 +384,19 @@ pub(crate) extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
 
 pub(crate) extern "C" fn rt_i64_to_str(n: i64) -> *const u8 {
     let s = format!("{}", n);
-    let c = std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let c = cstring_or_empty(s);
     arena_str(c)
 }
 
 pub(crate) extern "C" fn rt_f64_to_str(n: f64) -> *const u8 {
     let s = format!("{}", n);
-    let c = std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let c = cstring_or_empty(s);
     arena_str(c)
 }
 
 pub(crate) extern "C" fn rt_bool_to_str(b: i8) -> *const u8 {
     let s = if b != 0 { "true" } else { "false" };
-    let c = std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let c = cstring_or_empty(s);
     arena_str(c)
 }
 
@@ -524,7 +530,7 @@ pub(crate) extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
     }
     for (i, part) in parts.iter().enumerate() {
         let cs =
-            std::ffi::CString::new(*part).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+            cstring_or_empty(*part);
         let p = arena_str(cs) as i64;
         unsafe {
             *((data_ptr as *mut i64).add(1 + i)) = p;
@@ -539,7 +545,7 @@ pub(crate) extern "C" fn rt_str_trim(s: *const u8) -> *const u8 {
         .unwrap_or("");
     let trimmed = s.trim();
     let cs =
-        std::ffi::CString::new(trimmed).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+        cstring_or_empty(trimmed);
     arena_str(cs)
 }
 
@@ -548,7 +554,7 @@ pub(crate) extern "C" fn rt_str_upper(s: *const u8) -> *const u8 {
         .to_str()
         .unwrap_or("");
     let upper = s.to_uppercase();
-    let cs = std::ffi::CString::new(upper).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let cs = cstring_or_empty(upper);
     arena_str(cs)
 }
 
@@ -557,7 +563,7 @@ pub(crate) extern "C" fn rt_str_lower(s: *const u8) -> *const u8 {
         .to_str()
         .unwrap_or("");
     let lower = s.to_lowercase();
-    let cs = std::ffi::CString::new(lower).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let cs = cstring_or_empty(lower);
     arena_str(cs)
 }
 
@@ -600,7 +606,7 @@ pub(crate) extern "C" fn rt_str_replace(s: *const u8, from: *const u8, to: *cons
         .to_str()
         .unwrap_or("");
     let result = s.replace(from, to_s);
-    let cs = std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let cs = cstring_or_empty(result);
     arena_str(cs)
 }
 
@@ -671,7 +677,7 @@ pub(crate) extern "C" fn rt_str_join(arr: *const u8, sep: *const u8) -> *const u
         parts.push(elem.to_string());
     }
     let joined = parts.join(sep);
-    let cs = std::ffi::CString::new(joined).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let cs = cstring_or_empty(joined);
     arena_str(cs)
 }
 
@@ -709,7 +715,7 @@ pub(crate) extern "C" fn rt_str_repeat(s: *const u8, n: i64) -> *const u8 {
     }
     let repeated = s.repeat(count);
     arena_str(
-        std::ffi::CString::new(repeated).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()),
+        cstring_or_empty(repeated),
     )
 }
 
@@ -718,7 +724,7 @@ pub(crate) extern "C" fn rt_read_line() -> *const u8 {
     std::io::stdin().read_line(&mut line).unwrap_or(0);
     let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
     let cs =
-        std::ffi::CString::new(trimmed).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+        cstring_or_empty(trimmed);
     arena_str(cs)
 }
 
@@ -841,7 +847,7 @@ pub(crate) extern "C" fn rt_exec(cmd: *const u8) -> *const u8 {
         Err(e) => {
             let msg = format!("error: exec failed: {}", e);
             let cs =
-                std::ffi::CString::new(msg).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+                cstring_or_empty(msg);
             arena_str(cs)
         }
     }
@@ -852,7 +858,7 @@ pub(crate) extern "C" fn rt_env_get(name: *const u8) -> *const u8 {
         .to_str()
         .unwrap_or("");
     let val = std::env::var(name).unwrap_or_default();
-    let cs = std::ffi::CString::new(val).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let cs = cstring_or_empty(val);
     arena_str(cs)
 }
 
@@ -991,7 +997,7 @@ pub(crate) extern "C" fn rt_substring(s: *const u8, start: i64, end: i64) -> *co
         return arena_str(std::ffi::CString::new("").unwrap());
     }
     let sub = &s_str[start..end];
-    arena_str(std::ffi::CString::new(sub).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()))
+    arena_str(cstring_or_empty(sub))
 }
 
 pub(crate) extern "C" fn rt_pad_left(s: *const u8, width: i64, pad_char: *const u8) -> *const u8 {
@@ -1017,7 +1023,7 @@ pub(crate) extern "C" fn rt_pad_left(s: *const u8, width: i64, pad_char: *const 
     let slen = s_str.len() as i64;
     if slen >= width {
         return arena_str(
-            std::ffi::CString::new(s_str).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()),
+            cstring_or_empty(s_str),
         );
     }
     let pad_count = (width - slen) as usize;
@@ -1027,7 +1033,7 @@ pub(crate) extern "C" fn rt_pad_left(s: *const u8, width: i64, pad_char: *const 
     }
     result.push_str(s_str);
     arena_str(
-        std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()),
+        cstring_or_empty(result),
     )
 }
 
@@ -1054,7 +1060,7 @@ pub(crate) extern "C" fn rt_pad_right(s: *const u8, width: i64, pad_char: *const
     let slen = s_str.len() as i64;
     if slen >= width {
         return arena_str(
-            std::ffi::CString::new(s_str).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()),
+            cstring_or_empty(s_str),
         );
     }
     let pad_count = (width - slen) as usize;
@@ -1064,7 +1070,7 @@ pub(crate) extern "C" fn rt_pad_right(s: *const u8, width: i64, pad_char: *const
         result.push(c);
     }
     arena_str(
-        std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap()),
+        cstring_or_empty(result),
     )
 }
 
@@ -1284,7 +1290,7 @@ pub(crate) extern "C" fn rt_json_stringify(key: *const u8, value: *const u8) -> 
     );
     let result = serde_json::Value::Object(map).to_string();
     let cs =
-        std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("{}").unwrap());
+        cstring_or_empty(result);
     arena_str(cs)
 }
 
@@ -1297,7 +1303,7 @@ pub(crate) extern "C" fn rt_json_root(json: *const u8) -> *const u8 {
     match parsed {
         Ok(serde_json::Value::String(s)) => {
             let cs =
-                std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+                cstring_or_empty(s);
             arena_str(cs)
         }
         Ok(other) => {
@@ -1764,7 +1770,7 @@ fn req_field(req: *const u8, index: usize) -> *const u8 {
 }
 
 fn rt_alloc_string(s: &str) -> *const u8 {
-    let cs = std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let cs = cstring_or_empty(s);
     arena_str(cs)
 }
 
@@ -2055,7 +2061,7 @@ pub(crate) extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
     }
     for (i, key) in keys.iter().enumerate() {
         let cs =
-            std::ffi::CString::new(*key).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+            cstring_or_empty(*key);
         unsafe {
             *((data_ptr as *mut i64).add(1 + i)) = arena_str(cs) as i64;
         }
@@ -2253,7 +2259,7 @@ pub(crate) extern "C" fn rt_path_join(a: *const u8, b: *const u8) -> *const u8 {
     } else {
         format!("{}/{}", a_str, b_str)
     };
-    let cs = std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let cs = cstring_or_empty(result);
     arena_str(cs)
 }
 
@@ -2270,7 +2276,7 @@ pub(crate) extern "C" fn rt_path_dir(path: *const u8) -> *const u8 {
         _ => ".".to_string(),
     };
     let cs =
-        std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new(".").unwrap());
+        cstring_or_empty(result);
     arena_str(cs)
 }
 
@@ -2287,7 +2293,7 @@ pub(crate) extern "C" fn rt_path_base(path: *const u8) -> *const u8 {
         .and_then(|n| n.to_str())
         .unwrap_or("")
         .to_string();
-    let cs = std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let cs = cstring_or_empty(result);
     arena_str(cs)
 }
 
@@ -2304,7 +2310,7 @@ pub(crate) extern "C" fn rt_path_ext(path: *const u8) -> *const u8 {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_string();
-    let cs = std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let cs = cstring_or_empty(result);
     arena_str(cs)
 }
 
@@ -2524,7 +2530,7 @@ pub(crate) extern "C" fn rt_format_time(timestamp: f64, fmt: *const u8) -> *cons
     // For the JIT we use a simple approach: convert known format specifiers
     let secs = timestamp as i64;
     let naive = chrono_like_format(secs, fmt_str);
-    let cs = std::ffi::CString::new(naive).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    let cs = cstring_or_empty(naive);
     arena_str(cs)
 }
 
@@ -2538,7 +2544,7 @@ fn chrono_like_format(epoch_secs: i64, fmt: &str) -> String {
             return String::new();
         }
         let fmt_c =
-            std::ffi::CString::new(fmt).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+            cstring_or_empty(fmt);
         let mut buf = [0u8; 256];
         let n = libc::strftime(
             buf.as_mut_ptr() as *mut libc::c_char,
