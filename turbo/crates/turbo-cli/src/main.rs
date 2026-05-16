@@ -302,7 +302,10 @@ fn init_project(name: &str) {
             "[package]\nname = \"{pkg_name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n"
         ),
     )
-    .unwrap();
+    .unwrap_or_else(|e| {
+        eprintln!("\x1b[1;31merror\x1b[0m: failed to write turbo.toml: {e}");
+        std::process::exit(1);
+    });
 
     // src/main.tb
     std::fs::write(
@@ -355,7 +358,10 @@ fn main() {{
 "#
         ),
     )
-    .unwrap();
+    .unwrap_or_else(|e| {
+        eprintln!("\x1b[1;31merror\x1b[0m: failed to write src/main.tb: {e}");
+        std::process::exit(1);
+    });
 
     // tests/main_test.tb
     std::fs::write(
@@ -403,10 +409,18 @@ fn area(shape: Shape) -> f64 {
 }
 "#,
     )
-    .unwrap();
+    .unwrap_or_else(|e| {
+        eprintln!("\x1b[1;31merror\x1b[0m: failed to write tests/main_test.tb: {e}");
+        std::process::exit(1);
+    });
 
     // .gitignore
-    std::fs::write(dir.join(".gitignore"), "turbo_modules/\ntarget/\n*.o\n").unwrap();
+    std::fs::write(dir.join(".gitignore"), "turbo_modules/\ntarget/\n*.o\n").unwrap_or_else(
+        |e| {
+            eprintln!("\x1b[1;31merror\x1b[0m: failed to write .gitignore: {e}");
+            std::process::exit(1);
+        },
+    );
 
     eprintln!("\x1b[32m\u{2713}\x1b[0m Created project `{name}`");
     eprintln!("  cd {name} && turbolang run");
