@@ -1,0 +1,23 @@
+// Test pad_left and pad_right edge cases
+fn main() {
+    // Normal case: padding a short string
+    let padded = pad_left("hi", 5, " ")
+    print("'" + padded + "'")
+
+    let padded2 = pad_right("hi", 5, "*")
+    print("'" + padded2 + "'")
+
+    // Width equals string length (no padding needed)
+    let same = pad_left("hello", 5, " ")
+    print("'" + same + "'")
+
+    let same2 = pad_right("hello", 5, "*")
+    print("'" + same2 + "'")
+
+    // Width less than string length (should return original)
+    let short = pad_left("hello", 3, " ")
+    print("'" + short + "'")
+
+    let short2 = pad_right("hello", 3, "*")
+    print("'" + short2 + "'")
+}

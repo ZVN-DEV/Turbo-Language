@@ -1,0 +1,22 @@
+// Test that json_get properly handles JSON escape sequences
+fn main() {
+    // \t escape -> tab character
+    let data = "\{\"msg\":\"hello\\tworld\"}"
+    let val = json_get(data, "msg")
+    print(val)
+
+    // \\ escape -> single backslash
+    let data2 = "\{\"path\":\"a\\\\b\"}"
+    let val2 = json_get(data2, "path")
+    print(val2)
+
+    // \n escape -> newline character
+    let data3 = "\{\"text\":\"line1\\nline2\"}"
+    let val3 = json_get(data3, "text")
+    print(val3)
+
+    // \" escape -> literal quote
+    let data4 = "\{\"quote\":\"say \\\"hi\\\"\"}"
+    let val4 = json_get(data4, "quote")
+    print(val4)
+}
