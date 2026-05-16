@@ -1562,9 +1562,7 @@ impl Parser {
             // position. Top-level declarations are still matched by
             // `parse_item` before we ever reach here.
             Some(t) if Self::soft_keyword_ident(t).is_some() => {
-                let name = Self::soft_keyword_ident(self.peek().unwrap())
-                    .unwrap()
-                    .to_string();
+                let name = Self::soft_keyword_ident(t).unwrap().to_string();
                 let tok = self.advance();
                 Ok(Spanned::new(Expr::Ident(name), tok.span.clone()))
             }
