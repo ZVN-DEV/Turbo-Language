@@ -1354,6 +1354,15 @@ static char *rt_json_escape_dup(const char *s) {
         } else if (c == '\r') {
             out[j++] = '\\';
             out[j++] = 'r';
+        } else if (c == '\t') {
+            out[j++] = '\\';
+            out[j++] = 't';
+        } else if (c == '\b') {
+            out[j++] = '\\';
+            out[j++] = 'b';
+        } else if (c == '\f') {
+            out[j++] = '\\';
+            out[j++] = 'f';
         } else {
             out[j++] = c;
         }
