@@ -191,9 +191,12 @@ pub(crate) fn int_literal_fits_in_type(n: i64, target: &Ty) -> bool {
     match target {
         Ty::U8 => (0..=255).contains(&n),
         Ty::U16 => (0..=65535).contains(&n),
-        Ty::U32 | Ty::U64 => n >= 0,
+        Ty::U32 => n >= 0 && n <= 4_294_967_295,
+        Ty::U64 => n >= 0,
         Ty::I8 => (-128..=127).contains(&n),
         Ty::I16 => (-32768..=32767).contains(&n),
+        Ty::I32 => (-2_147_483_648..=2_147_483_647).contains(&n),
+        Ty::I64 | Ty::F32 | Ty::F64 => true,
         _ => true,
     }
 }

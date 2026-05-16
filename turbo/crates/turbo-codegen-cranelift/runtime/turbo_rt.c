@@ -802,9 +802,9 @@ long long rt_str_index_of(const char *s, const char *sub) {
 
 const char* rt_str_join(const char *arr_ptr, const char *sep) {
     /* arr_ptr is a Turbo array of strings. Layout: [len (8 bytes), elem0, elem1, ...] */
-    if (!arr_ptr) return "";
+    if (!arr_ptr) { char *e = turbo_alloc(1); *(char*)e = '\0'; return e; }
     long long len = *(long long *)arr_ptr;
-    if (len <= 0) return "";
+    if (len <= 0) { char *e = turbo_alloc(1); *(char*)e = '\0'; return e; }
     const char **elems = (const char **)(arr_ptr + 8);
     /* Calculate total length */
     size_t total = 0;
@@ -916,22 +916,29 @@ double rt_log2_builtin(double x) { return log2(x); }
 double rt_log10(double x) { return log10(x); }
 double rt_exp(double x) { return exp(x); }
 
-static int rt_random_seeded = 0;
-double rt_random(void) {
-    if (!rt_random_seeded) {
-        srand((unsigned int)time(NULL));
-        rt_random_seeded = 1;
+static _Thread_local unsigned int rt_rand_state = 0;
+static _Thread_local int rt_rand_initialized = 0;
+
+static unsigned int rt_rand_next(void) {
+    if (!rt_rand_initialized) {
+        rt_rand_state = (unsigned int)time(NULL) ^ (unsigned int)(uintptr_t)&rt_rand_state;
+        rt_rand_initialized = 1;
     }
-    return (double)rand() / (double)RAND_MAX;
+    /* xorshift32 — fast, thread-local, no global state */
+    rt_rand_state ^= rt_rand_state << 13;
+    rt_rand_state ^= rt_rand_state >> 17;
+    rt_rand_state ^= rt_rand_state << 5;
+    return rt_rand_state;
+}
+
+double rt_random(void) {
+    return (double)rt_rand_next() / (double)UINT32_MAX;
 }
 
 long long rt_random_range(long long min_val, long long max_val) {
-    if (!rt_random_seeded) {
-        srand((unsigned int)time(NULL));
-        rt_random_seeded = 1;
-    }
     if (max_val < min_val) return min_val;
-    return min_val + rand() % (max_val - min_val + 1);
+    unsigned long long range = (unsigned long long)(max_val - min_val) + 1;
+    return min_val + (long long)(rt_rand_next() % range);
 }
 
 /* ── System builtins ─────────────────────────────────────────────── */
@@ -1059,11 +1066,15 @@ static void *spawn_thread_fn(void *arg) {
 }
 
 void *rt_spawn_with_args(long long (*thunk)(void *), void *args_ptr) {
-    spawn_ctx *ctx = (spawn_ctx *)turbo_alloc(sizeof(spawn_ctx));
+    /* Use malloc directly — spawn context must outlive the current arena
+     * since the spawned thread runs independently of the request lifecycle. */
+    spawn_ctx *ctx = (spawn_ctx *)malloc(sizeof(spawn_ctx));
+    if (!ctx) { fprintf(stderr, "runtime error: out of memory (spawn)\n"); exit(1); }
     ctx->thunk = thunk;
     ctx->args_ptr = args_ptr;
     ctx->result = 0;
-    pthread_t *handle = (pthread_t *)turbo_alloc(sizeof(pthread_t) + sizeof(spawn_ctx *));
+    pthread_t *handle = (pthread_t *)malloc(sizeof(pthread_t) + sizeof(spawn_ctx *));
+    if (!handle) { fprintf(stderr, "runtime error: out of memory (spawn)\n"); exit(1); }
     /* Store ctx pointer right after the pthread_t */
     *((spawn_ctx **)(handle + 1)) = ctx;
     pthread_create(handle, NULL, spawn_thread_fn, ctx);
@@ -1076,8 +1087,8 @@ long long rt_await_handle(void *handle_ptr) {
     spawn_ctx *ctx = *((spawn_ctx **)(handle + 1));
     pthread_join(*handle, NULL);
     long long result = ctx->result;
-    turbo_free(ctx);
-    turbo_free(handle);
+    free(ctx);
+    free(handle);
     return result;
 }
 
@@ -1526,7 +1537,10 @@ void rt_channel_send(const void *ch, long long value) {
     const channel_handle *h = (const channel_handle *)ch;
     channel_queue *q = (channel_queue *)(size_t)h->sender_ptr;
 
-    channel_node *node = (channel_node *)turbo_alloc(sizeof(channel_node));
+    /* Use malloc — channel nodes cross thread boundaries and must not
+     * be allocated on the per-request arena. */
+    channel_node *node = (channel_node *)malloc(sizeof(channel_node));
+    if (!node) { fprintf(stderr, "runtime error: out of memory (channel)\n"); exit(1); }
     node->value = value;
     node->next = NULL;
 
@@ -1555,7 +1569,7 @@ long long rt_channel_recv(const void *ch) {
     pthread_mutex_unlock(&q->lock);
 
     long long val = node->value;
-    turbo_free(node);
+    free(node);
     return val;
 }
 

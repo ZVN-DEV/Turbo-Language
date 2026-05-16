@@ -544,7 +544,11 @@ fn compile_expr_inner<M: Module>(
             let val_call = cx.builder.ins().call(val_fref, &[result_ptr]);
             let ok_value = cx.builder.inst_results(val_call)[0];
 
-            Ok(Some((ok_value, TurboTy::Int)))
+            let ok_tty = match _result_tty {
+                TurboTy::Result(ref ok, _) => *ok.clone(),
+                _ => TurboTy::Int,
+            };
+            Ok(Some((ok_value, ok_tty)))
         }
 
         Expr::ForIn {

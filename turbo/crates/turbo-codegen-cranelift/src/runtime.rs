@@ -3,7 +3,7 @@
 //! All `extern "C" fn rt_*` functions live here. They are completely
 //! standalone — no Cranelift types, no `Ctx`, no compiler state.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -921,43 +921,47 @@ pub(crate) extern "C" fn rt_exp(x: f64) -> f64 {
     x.exp()
 }
 
-static RANDOM_SEEDED: std::sync::Once = std::sync::Once::new();
+thread_local! {
+    static XORSHIFT_STATE: Cell<u64> = Cell::new(0);
+}
+
+fn xorshift64_next() -> u64 {
+    XORSHIFT_STATE.with(|cell| {
+        let mut s = cell.get();
+        if s == 0 {
+            use std::collections::hash_map::RandomState;
+            use std::hash::{BuildHasher, Hasher};
+            let rs = RandomState::new();
+            let mut h = rs.build_hasher();
+            h.write_u64(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64,
+            );
+            s = h.finish();
+            if s == 0 {
+                s = 1;
+            }
+        }
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        cell.set(s);
+        s
+    })
+}
 
 pub(crate) extern "C" fn rt_random() -> f64 {
-    RANDOM_SEEDED.call_once(|| {
-        // seed not needed for Rust's thread_rng, but we use a simple approach
-    });
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    let s = RandomState::new();
-    let mut hasher = s.build_hasher();
-    hasher.write_usize(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos() as usize,
-    );
-    let bits = hasher.finish();
-    (bits as f64) / (u64::MAX as f64)
+    (xorshift64_next() as f64) / (u64::MAX as f64)
 }
 
 pub(crate) extern "C" fn rt_random_range(min_val: i64, max_val: i64) -> i64 {
     if max_val < min_val {
         return min_val;
     }
-    let range = (max_val - min_val + 1) as u64;
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    let s = RandomState::new();
-    let mut hasher = s.build_hasher();
-    hasher.write_usize(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos() as usize,
-    );
-    let bits = hasher.finish();
-    min_val + (bits % range) as i64
+    let range = (max_val as u64).wrapping_sub(min_val as u64).wrapping_add(1);
+    min_val + (xorshift64_next() % range) as i64
 }
 
 // ── System builtins ────────────────────────────────────────────────
