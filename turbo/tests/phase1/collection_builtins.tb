@@ -1,0 +1,61 @@
+fn main() {
+    // sort - integers
+    let nums: [int] = [3, 1, 4, 1, 5, 9, 2, 6]
+    let sorted = sort(nums)
+    print(sorted[0])
+    print(sorted[1])
+    print(sorted[2])
+    print(sorted[7])
+
+    // sort - strings
+    let words: [str] = ["banana", "apple", "cherry"]
+    let sorted_words = sort(words)
+    print(sorted_words[0])
+    print(sorted_words[1])
+    print(sorted_words[2])
+
+    // reverse
+    let arr: [int] = [1, 2, 3, 4, 5]
+    let rev = reverse(arr)
+    print(rev[0])
+    print(rev[1])
+    print(rev[4])
+
+    // array_contains
+    let has3 = array_contains(arr, 3)
+    print(has3)
+    let has9 = array_contains(arr, 9)
+    print(has9)
+
+    // array_contains - strings
+    let names: [str] = ["alice", "bob", "carol"]
+    print(array_contains(names, "bob"))
+    print(array_contains(names, "dave"))
+
+    // slice
+    let s: [int] = [10, 20, 30, 40, 50]
+    let sub = slice(s, 1, 4)
+    print(len(sub))
+    print(sub[0])
+    print(sub[1])
+    print(sub[2])
+
+    // any / all
+    let vals: [int] = [2, 4, 6, 8]
+    let has_even = any(vals, |x: int| -> bool { x % 2 == 0 })
+    print(has_even)
+    let has_odd = any(vals, |x: int| -> bool { x % 2 == 1 })
+    print(has_odd)
+    let all_even = all(vals, |x: int| -> bool { x % 2 == 0 })
+    print(all_even)
+
+    let mixed: [int] = [2, 3, 4, 6]
+    let all_even2 = all(mixed, |x: int| -> bool { x % 2 == 0 })
+    print(all_even2)
+
+    // COW sort and reverse (mutate in place via COW rewrite)
+    let mut arr2: [int] = [5, 3, 1, 4, 2]
+    arr2 = sort(arr2)
+    print(arr2[0])
+    print(arr2[4])
+}

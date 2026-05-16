@@ -127,6 +127,23 @@ impl Checker {
                 | "pad_right"
                 | "str_to_int"
                 | "str_to_float"
+                | "file_exists"
+                | "delete_file"
+                | "list_dir"
+                | "mkdir"
+                | "path_join"
+                | "path_dir"
+                | "path_base"
+                | "path_ext"
+                | "sort"
+                | "reverse"
+                | "array_contains"
+                | "slice"
+                | "any"
+                | "all"
+                | "time_now"
+                | "time_ms"
+                | "format_time"
         )
     }
 

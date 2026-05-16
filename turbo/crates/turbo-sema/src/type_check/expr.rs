@@ -1208,6 +1208,437 @@ impl Checker {
                         return Ty::Result(Box::new(Ty::F64), Box::new(Ty::Str));
                     }
 
+                    // ── Filesystem builtins ─────────────────────────
+                    // file_exists(path: str) -> bool
+                    if name == "file_exists" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("file_exists() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let path_ty = self.check_expr(&args[0]);
+                        if !path_ty.is_error() && path_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("file_exists() expects str, found `{path_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::Bool;
+                    }
+                    // delete_file(path: str) -> bool
+                    if name == "delete_file" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("delete_file() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let path_ty = self.check_expr(&args[0]);
+                        if !path_ty.is_error() && path_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("delete_file() expects str, found `{path_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::Bool;
+                    }
+                    // list_dir(path: str) -> [str]
+                    if name == "list_dir" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("list_dir() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let path_ty = self.check_expr(&args[0]);
+                        if !path_ty.is_error() && path_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("list_dir() expects str, found `{path_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::Array(Box::new(Ty::Str));
+                    }
+                    // mkdir(path: str) -> bool
+                    if name == "mkdir" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("mkdir() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let path_ty = self.check_expr(&args[0]);
+                        if !path_ty.is_error() && path_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("mkdir() expects str, found `{path_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::Bool;
+                    }
+                    // path_join(a: str, b: str) -> str
+                    if name == "path_join" {
+                        if args.len() != 2 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("path_join() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let a_ty = self.check_expr(&args[0]);
+                        let b_ty = self.check_expr(&args[1]);
+                        if !a_ty.is_error() && a_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("path_join() first argument must be str, found `{a_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        if !b_ty.is_error() && b_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("path_join() second argument must be str, found `{b_ty}`"),
+                                args[1].span.clone(),
+                            );
+                        }
+                        return Ty::Str;
+                    }
+                    // path_dir/path_base/path_ext: (str) -> str
+                    if name == "path_dir" || name == "path_base" || name == "path_ext" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("{name}() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let path_ty = self.check_expr(&args[0]);
+                        if !path_ty.is_error() && path_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("{name}() expects str, found `{path_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::Str;
+                    }
+
+                    // ── Collection builtins ────────────────────────
+                    // sort(arr) -> [T]
+                    if name == "sort" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("sort() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arr_ty = self.check_expr(&args[0]);
+                        match &arr_ty {
+                            Ty::Array(_) => return arr_ty,
+                            _ if arr_ty.is_error() => return Ty::Error,
+                            _ => {
+                                self.error(
+                                    ErrorCode::E0133,
+                                    format!("sort() expects an array, found `{arr_ty}`"),
+                                    args[0].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        }
+                    }
+                    // reverse(arr) -> [T]
+                    if name == "reverse" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("reverse() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arr_ty = self.check_expr(&args[0]);
+                        match &arr_ty {
+                            Ty::Array(_) => return arr_ty,
+                            _ if arr_ty.is_error() => return Ty::Error,
+                            _ => {
+                                self.error(
+                                    ErrorCode::E0133,
+                                    format!("reverse() expects an array, found `{arr_ty}`"),
+                                    args[0].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        }
+                    }
+                    // array_contains(arr, val) -> bool
+                    if name == "array_contains" {
+                        if args.len() != 2 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("array_contains() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arr_ty = self.check_expr(&args[0]);
+                        let val_ty = self.check_expr(&args[1]);
+                        let elem_ty = match &arr_ty {
+                            Ty::Array(inner) => *inner.clone(),
+                            _ if arr_ty.is_error() => Ty::Error,
+                            _ => {
+                                self.error(
+                                    ErrorCode::E0133,
+                                    format!("array_contains() first argument must be an array, found `{arr_ty}`"),
+                                    args[0].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        };
+                        if !elem_ty.is_error() && !val_ty.is_error() && elem_ty != val_ty {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("array_contains() value type `{val_ty}` doesn't match array element type `{elem_ty}`"),
+                                args[1].span.clone(),
+                            );
+                        }
+                        return Ty::Bool;
+                    }
+                    // slice(arr, start, end) -> [T]
+                    if name == "slice" {
+                        if args.len() != 3 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("slice() takes exactly 3 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arr_ty = self.check_expr(&args[0]);
+                        let start_ty = self.check_expr(&args[1]);
+                        let end_ty = self.check_expr(&args[2]);
+                        if !start_ty.is_error() && !start_ty.is_integer() {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("slice() start must be integer, found `{start_ty}`"),
+                                args[1].span.clone(),
+                            );
+                        }
+                        if !end_ty.is_error() && !end_ty.is_integer() {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("slice() end must be integer, found `{end_ty}`"),
+                                args[2].span.clone(),
+                            );
+                        }
+                        match &arr_ty {
+                            Ty::Array(_) => return arr_ty,
+                            _ if arr_ty.is_error() => return Ty::Error,
+                            _ => {
+                                self.error(
+                                    ErrorCode::E0133,
+                                    format!("slice() first argument must be an array, found `{arr_ty}`"),
+                                    args[0].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        }
+                    }
+                    // any(arr, fn) -> bool
+                    if name == "any" {
+                        if args.len() != 2 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!("any() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arr_ty = self.check_expr(&args[0]);
+                        if let Ty::Array(ref inner) = arr_ty {
+                            self.closure_param_hint = Some(vec![*inner.clone()]);
+                        }
+                        let fn_ty = self.check_expr(&args[1]);
+                        let elem_ty = match &arr_ty {
+                            Ty::Array(inner) => *inner.clone(),
+                            _ if arr_ty.is_error() => Ty::Error,
+                            _ => {
+                                self.error(
+                                    ErrorCode::E0133,
+                                    format!("any() first argument must be an array, found `{arr_ty}`"),
+                                    args[0].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        };
+                        match &fn_ty {
+                            Ty::Fn(params, ret) => {
+                                if params.len() != 1 {
+                                    self.error(
+                                        ErrorCode::E0133,
+                                        format!("any() callback must take 1 parameter, takes {}", params.len()),
+                                        args[1].span.clone(),
+                                    );
+                                } else if !elem_ty.is_error() && !params[0].is_error() && elem_ty != params[0] {
+                                    self.error(
+                                        ErrorCode::E0100,
+                                        format!("any() callback parameter type `{}` doesn't match array element type `{}`", params[0], elem_ty),
+                                        args[1].span.clone(),
+                                    );
+                                }
+                                if **ret != Ty::Bool && !ret.is_error() {
+                                    self.error(
+                                        ErrorCode::E0133,
+                                        format!("any() callback must return `bool`, returns `{}`", ret),
+                                        args[1].span.clone(),
+                                    );
+                                }
+                                return Ty::Bool;
+                            }
+                            _ if fn_ty.is_error() => return Ty::Error,
+                            _ => {
+                                self.error(
+                                    ErrorCode::E0133,
+                                    format!("any() second argument must be a function, found `{fn_ty}`"),
+                                    args[1].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        }
+                    }
+                    // all(arr, fn) -> bool
+                    if name == "all" {
+                        if args.len() != 2 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!("all() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arr_ty = self.check_expr(&args[0]);
+                        if let Ty::Array(ref inner) = arr_ty {
+                            self.closure_param_hint = Some(vec![*inner.clone()]);
+                        }
+                        let fn_ty = self.check_expr(&args[1]);
+                        let elem_ty = match &arr_ty {
+                            Ty::Array(inner) => *inner.clone(),
+                            _ if arr_ty.is_error() => Ty::Error,
+                            _ => {
+                                self.error(
+                                    ErrorCode::E0133,
+                                    format!("all() first argument must be an array, found `{arr_ty}`"),
+                                    args[0].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        };
+                        match &fn_ty {
+                            Ty::Fn(params, ret) => {
+                                if params.len() != 1 {
+                                    self.error(
+                                        ErrorCode::E0133,
+                                        format!("all() callback must take 1 parameter, takes {}", params.len()),
+                                        args[1].span.clone(),
+                                    );
+                                } else if !elem_ty.is_error() && !params[0].is_error() && elem_ty != params[0] {
+                                    self.error(
+                                        ErrorCode::E0100,
+                                        format!("all() callback parameter type `{}` doesn't match array element type `{}`", params[0], elem_ty),
+                                        args[1].span.clone(),
+                                    );
+                                }
+                                if **ret != Ty::Bool && !ret.is_error() {
+                                    self.error(
+                                        ErrorCode::E0133,
+                                        format!("all() callback must return `bool`, returns `{}`", ret),
+                                        args[1].span.clone(),
+                                    );
+                                }
+                                return Ty::Bool;
+                            }
+                            _ if fn_ty.is_error() => return Ty::Error,
+                            _ => {
+                                self.error(
+                                    ErrorCode::E0133,
+                                    format!("all() second argument must be a function, found `{fn_ty}`"),
+                                    args[1].span.clone(),
+                                );
+                                return Ty::Error;
+                            }
+                        }
+                    }
+
+                    // ── Date/Time builtins ─────────────────────────
+                    // time_now() -> f64
+                    if name == "time_now" {
+                        if !args.is_empty() {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("time_now() takes 0 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        return Ty::F64;
+                    }
+                    // time_ms() -> i64
+                    if name == "time_ms" {
+                        if !args.is_empty() {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("time_ms() takes 0 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        return Ty::I64;
+                    }
+                    // format_time(timestamp: f64, format: str) -> str
+                    if name == "format_time" {
+                        if args.len() != 2 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("format_time() takes exactly 2 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let ts_ty = self.check_expr(&args[0]);
+                        let fmt_ty = self.check_expr(&args[1]);
+                        if !ts_ty.is_error() && ts_ty != Ty::F64 && ts_ty != Ty::F32 {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("format_time() first argument must be float, found `{ts_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        if !fmt_ty.is_error() && fmt_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0100,
+                                format!("format_time() second argument must be str, found `{fmt_ty}`"),
+                                args[1].span.clone(),
+                            );
+                        }
+                        return Ty::Str;
+                    }
+
                     // sleep(ms: i64) -> () — sleep the current thread
                     if name == "sleep" {
                         if args.len() != 1 {

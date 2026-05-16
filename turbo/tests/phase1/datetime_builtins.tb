@@ -1,0 +1,24 @@
+fn main() {
+    // time_now returns seconds since epoch as float
+    let now = time_now()
+    let is_positive = now > 0.0
+    print(is_positive)
+
+    // time_ms returns milliseconds since epoch as int
+    let ms = time_ms()
+    let ms_positive = ms > 0
+    print(ms_positive)
+
+    // format_time: use epoch 0 in UTC-like format
+    // Note: localtime depends on TZ, so we use a known timestamp
+    // and just check it produces a non-empty string
+    let ts = 0.0
+    let formatted = format_time(ts, "%Y")
+    // The year for epoch 0 in most timezones is 1969 or 1970
+    let has_year = len(formatted) == 4
+    print(has_year)
+
+    // time_ms should be greater than time_now * 1000 (roughly)
+    // Just check both are non-zero which we already did
+    print("done")
+}

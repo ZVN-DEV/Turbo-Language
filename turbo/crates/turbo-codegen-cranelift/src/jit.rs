@@ -207,6 +207,26 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     // ARC runtime
     jit_builder.symbol("rt_retain", rt_retain as *const u8);
     jit_builder.symbol("rt_release", rt_release as *const u8);
+    // Filesystem builtins
+    jit_builder.symbol("rt_file_exists", rt_file_exists as *const u8);
+    jit_builder.symbol("rt_delete_file", rt_delete_file as *const u8);
+    jit_builder.symbol("rt_list_dir", rt_list_dir as *const u8);
+    jit_builder.symbol("rt_mkdir", rt_mkdir as *const u8);
+    jit_builder.symbol("rt_path_join", rt_path_join as *const u8);
+    jit_builder.symbol("rt_path_dir", rt_path_dir as *const u8);
+    jit_builder.symbol("rt_path_base", rt_path_base as *const u8);
+    jit_builder.symbol("rt_path_ext", rt_path_ext as *const u8);
+    // Collection builtins
+    jit_builder.symbol("rt_sort_int", rt_sort_int as *const u8);
+    jit_builder.symbol("rt_sort_str", rt_sort_str as *const u8);
+    jit_builder.symbol("rt_reverse", rt_reverse as *const u8);
+    jit_builder.symbol("rt_array_contains_int", rt_array_contains_int as *const u8);
+    jit_builder.symbol("rt_array_contains_str", rt_array_contains_str as *const u8);
+    jit_builder.symbol("rt_slice", rt_slice as *const u8);
+    // Date/Time builtins
+    jit_builder.symbol("rt_time_now", rt_time_now as *const u8);
+    jit_builder.symbol("rt_time_ms", rt_time_ms as *const u8);
+    jit_builder.symbol("rt_format_time", rt_format_time as *const u8);
     // libm for user extern "C" declarations
     register_libm_symbols(&mut jit_builder);
 
@@ -379,6 +399,26 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_hashmap_get_int", rt_hashmap_get_int as *const u8);
     jit_builder.symbol("rt_retain", rt_retain as *const u8);
     jit_builder.symbol("rt_release", rt_release as *const u8);
+    // Filesystem builtins
+    jit_builder.symbol("rt_file_exists", rt_file_exists as *const u8);
+    jit_builder.symbol("rt_delete_file", rt_delete_file as *const u8);
+    jit_builder.symbol("rt_list_dir", rt_list_dir as *const u8);
+    jit_builder.symbol("rt_mkdir", rt_mkdir as *const u8);
+    jit_builder.symbol("rt_path_join", rt_path_join as *const u8);
+    jit_builder.symbol("rt_path_dir", rt_path_dir as *const u8);
+    jit_builder.symbol("rt_path_base", rt_path_base as *const u8);
+    jit_builder.symbol("rt_path_ext", rt_path_ext as *const u8);
+    // Collection builtins
+    jit_builder.symbol("rt_sort_int", rt_sort_int as *const u8);
+    jit_builder.symbol("rt_sort_str", rt_sort_str as *const u8);
+    jit_builder.symbol("rt_reverse", rt_reverse as *const u8);
+    jit_builder.symbol("rt_array_contains_int", rt_array_contains_int as *const u8);
+    jit_builder.symbol("rt_array_contains_str", rt_array_contains_str as *const u8);
+    jit_builder.symbol("rt_slice", rt_slice as *const u8);
+    // Date/Time builtins
+    jit_builder.symbol("rt_time_now", rt_time_now as *const u8);
+    jit_builder.symbol("rt_time_ms", rt_time_ms as *const u8);
+    jit_builder.symbol("rt_format_time", rt_format_time as *const u8);
     // libm for user extern "C" declarations
     register_libm_symbols(&mut jit_builder);
 

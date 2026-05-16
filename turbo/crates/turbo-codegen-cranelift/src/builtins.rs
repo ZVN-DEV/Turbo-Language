@@ -3291,6 +3291,414 @@ pub(crate) fn compile_builtin_store<M: Module>(
     Ok(None)
 }
 
+// ── Filesystem builtins ──────────────────────────────────────────────
+
+/// file_exists(path) -> bool
+pub(crate) fn compile_file_exists<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (path_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_file_exists"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[path_val]);
+    let result = cx.builder.inst_results(call)[0];
+    // Convert i64 to i8 bool
+    let bool_val = cx.builder.ins().ireduce(types::I8, result);
+    Ok(Some((bool_val, TurboTy::Bool)))
+}
+
+/// delete_file(path) -> bool
+pub(crate) fn compile_delete_file<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (path_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_delete_file"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[path_val]);
+    let result = cx.builder.inst_results(call)[0];
+    let bool_val = cx.builder.ins().ireduce(types::I8, result);
+    Ok(Some((bool_val, TurboTy::Bool)))
+}
+
+/// list_dir(path) -> [str]
+pub(crate) fn compile_list_dir<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (path_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_list_dir"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[path_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Array(Box::new(TurboTy::Str)))))
+}
+
+/// mkdir(path) -> bool
+pub(crate) fn compile_mkdir<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (path_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_mkdir"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[path_val]);
+    let result = cx.builder.inst_results(call)[0];
+    let bool_val = cx.builder.ins().ireduce(types::I8, result);
+    Ok(Some((bool_val, TurboTy::Bool)))
+}
+
+/// path_join(a, b) -> str
+pub(crate) fn compile_path_join<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (a_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (b_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_path_join"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[a_val, b_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// path_dir(path) -> str
+pub(crate) fn compile_path_str1<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+    rt_name: &str,
+) -> Result<MaybeTyped, CodegenError> {
+    let (path_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns[rt_name];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[path_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+// ── Collection builtins ──────────────────────────────────────────────
+
+/// sort(arr) -> [T] (COW)
+pub(crate) fn compile_sort<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (arr_val, arr_tty) = compile_expr(cx, &args[0])?.unwrap();
+    let elem_tty = match &arr_tty {
+        TurboTy::Array(inner) => *inner.clone(),
+        _ => TurboTy::Int,
+    };
+    let rt_name = match &elem_tty {
+        TurboTy::Str => "rt_sort_str",
+        _ => "rt_sort_int",
+    };
+    let fid = cx.rt_fns[rt_name];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[arr_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Array(Box::new(elem_tty)))))
+}
+
+/// reverse(arr) -> [T] (COW)
+pub(crate) fn compile_reverse<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (arr_val, arr_tty) = compile_expr(cx, &args[0])?.unwrap();
+    let elem_tty = match &arr_tty {
+        TurboTy::Array(inner) => *inner.clone(),
+        _ => TurboTy::Int,
+    };
+    let fid = cx.rt_fns["rt_reverse"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[arr_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Array(Box::new(elem_tty)))))
+}
+
+/// array_contains(arr, val) -> bool
+pub(crate) fn compile_array_contains<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (arr_val, arr_tty) = compile_expr(cx, &args[0])?.unwrap();
+    let (val, _val_tty) = compile_expr(cx, &args[1])?.unwrap();
+    let elem_tty = match &arr_tty {
+        TurboTy::Array(inner) => *inner.clone(),
+        _ => TurboTy::Int,
+    };
+    let rt_name = match &elem_tty {
+        TurboTy::Str => "rt_array_contains_str",
+        _ => "rt_array_contains_int",
+    };
+    let fid = cx.rt_fns[rt_name];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[arr_val, val]);
+    let result = cx.builder.inst_results(call)[0];
+    let bool_val = cx.builder.ins().ireduce(types::I8, result);
+    Ok(Some((bool_val, TurboTy::Bool)))
+}
+
+/// slice(arr, start, end) -> [T]
+pub(crate) fn compile_slice<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (arr_val, arr_tty) = compile_expr(cx, &args[0])?.unwrap();
+    let (start_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let (end_val, _) = compile_expr(cx, &args[2])?.unwrap();
+    let elem_tty = match &arr_tty {
+        TurboTy::Array(inner) => *inner.clone(),
+        _ => TurboTy::Int,
+    };
+    // Ensure start and end are i64
+    let start_ty = cx.builder.func.dfg.value_type(start_val);
+    let start_val = if start_ty.bits() < 64 {
+        cx.builder.ins().sextend(types::I64, start_val)
+    } else {
+        start_val
+    };
+    let end_ty = cx.builder.func.dfg.value_type(end_val);
+    let end_val = if end_ty.bits() < 64 {
+        cx.builder.ins().sextend(types::I64, end_val)
+    } else {
+        end_val
+    };
+    let fid = cx.rt_fns["rt_slice"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[arr_val, start_val, end_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Array(Box::new(elem_tty)))))
+}
+
+/// any(arr, closure) -> bool
+pub(crate) fn compile_builtin_any<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (arr_ptr, _arr_tty) = compile_expr(cx, &args[0])?.unwrap();
+    let (closure_ptr, fn_tty) = compile_expr(cx, &args[1])?.unwrap();
+
+    let param_tty = match &fn_tty {
+        TurboTy::Fn(params, _) => params[0].clone(),
+        _ => TurboTy::Int,
+    };
+
+    // Extract fn_ptr and env_ptr from closure pair struct
+    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
+
+    let len_fid = cx.rt_fns["rt_array_len"];
+    let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
+    let call = cx.builder.ins().call(len_ref, &[arr_ptr]);
+    let arr_len = cx.builder.inst_results(call)[0];
+
+    let mut sig = cx.module.make_signature();
+    sig.call_conv = CallConv::Fast;
+    sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
+    let param_cl_ty = turbo_ty_to_cl_type(&param_tty, cx.ptr_type);
+    sig.params.push(AbiParam::new(param_cl_ty));
+    sig.returns.push(AbiParam::new(types::I8)); // bool return
+    let sig_ref = cx.builder.import_signature(sig);
+
+    // result_var: starts as false (0)
+    let result_var = cx.fresh_var(types::I8, TurboTy::Bool);
+    let false_val = cx.builder.ins().iconst(types::I8, 0);
+    cx.builder.def_var(result_var, false_val);
+
+    let idx_var = cx.fresh_var(types::I64, TurboTy::Int);
+    let zero = cx.builder.ins().iconst(types::I64, 0);
+    cx.builder.def_var(idx_var, zero);
+
+    let header_block = cx.builder.create_block();
+    let body_block = cx.builder.create_block();
+    let found_block = cx.builder.create_block();
+    let inc_block = cx.builder.create_block();
+    let exit_block = cx.builder.create_block();
+
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.switch_to_block(header_block);
+    let idx = cx.builder.use_var(idx_var);
+    let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, arr_len);
+    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+
+    cx.builder.switch_to_block(body_block);
+    cx.builder.seal_block(body_block);
+
+    let get_fid = cx.rt_fns["rt_array_get"];
+    let get_ref = cx.module.declare_func_in_func(get_fid, cx.builder.func);
+    let idx_val = cx.builder.use_var(idx_var);
+    let get_call = cx.builder.ins().call(get_ref, &[arr_ptr, idx_val]);
+    let raw_elem = cx.builder.inst_results(get_call)[0];
+
+    let typed_elem = match &param_tty {
+        TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_elem),
+        TurboTy::Float => cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_elem),
+        _ => raw_elem,
+    };
+
+    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[env_ptr, typed_elem]);
+    let pred_result = cx.builder.inst_results(indirect_call)[0];
+    cx.builder.ins().brif(pred_result, found_block, &[], inc_block, &[]);
+
+    // Found: set result to true and exit
+    cx.builder.switch_to_block(found_block);
+    cx.builder.seal_block(found_block);
+    let true_val = cx.builder.ins().iconst(types::I8, 1);
+    cx.builder.def_var(result_var, true_val);
+    cx.builder.ins().jump(exit_block, &[]);
+
+    // Increment and continue
+    cx.builder.switch_to_block(inc_block);
+    cx.builder.seal_block(inc_block);
+    let current_idx = cx.builder.use_var(idx_var);
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let next_idx = cx.builder.ins().iadd(current_idx, one);
+    cx.builder.def_var(idx_var, next_idx);
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.seal_block(header_block);
+    cx.builder.switch_to_block(exit_block);
+    cx.builder.seal_block(exit_block);
+
+    let result = cx.builder.use_var(result_var);
+    Ok(Some((result, TurboTy::Bool)))
+}
+
+/// all(arr, closure) -> bool
+pub(crate) fn compile_builtin_all<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (arr_ptr, _arr_tty) = compile_expr(cx, &args[0])?.unwrap();
+    let (closure_ptr, fn_tty) = compile_expr(cx, &args[1])?.unwrap();
+
+    let param_tty = match &fn_tty {
+        TurboTy::Fn(params, _) => params[0].clone(),
+        _ => TurboTy::Int,
+    };
+
+    let fn_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx.builder.ins().load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
+
+    let len_fid = cx.rt_fns["rt_array_len"];
+    let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
+    let call = cx.builder.ins().call(len_ref, &[arr_ptr]);
+    let arr_len = cx.builder.inst_results(call)[0];
+
+    let mut sig = cx.module.make_signature();
+    sig.call_conv = CallConv::Fast;
+    sig.params.push(AbiParam::new(cx.ptr_type));
+    let param_cl_ty = turbo_ty_to_cl_type(&param_tty, cx.ptr_type);
+    sig.params.push(AbiParam::new(param_cl_ty));
+    sig.returns.push(AbiParam::new(types::I8));
+    let sig_ref = cx.builder.import_signature(sig);
+
+    // result_var: starts as true (1)
+    let result_var = cx.fresh_var(types::I8, TurboTy::Bool);
+    let true_val = cx.builder.ins().iconst(types::I8, 1);
+    cx.builder.def_var(result_var, true_val);
+
+    let idx_var = cx.fresh_var(types::I64, TurboTy::Int);
+    let zero = cx.builder.ins().iconst(types::I64, 0);
+    cx.builder.def_var(idx_var, zero);
+
+    let header_block = cx.builder.create_block();
+    let body_block = cx.builder.create_block();
+    let fail_block = cx.builder.create_block();
+    let inc_block = cx.builder.create_block();
+    let exit_block = cx.builder.create_block();
+
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.switch_to_block(header_block);
+    let idx = cx.builder.use_var(idx_var);
+    let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, arr_len);
+    cx.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+
+    cx.builder.switch_to_block(body_block);
+    cx.builder.seal_block(body_block);
+
+    let get_fid = cx.rt_fns["rt_array_get"];
+    let get_ref = cx.module.declare_func_in_func(get_fid, cx.builder.func);
+    let idx_val = cx.builder.use_var(idx_var);
+    let get_call = cx.builder.ins().call(get_ref, &[arr_ptr, idx_val]);
+    let raw_elem = cx.builder.inst_results(get_call)[0];
+
+    let typed_elem = match &param_tty {
+        TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_elem),
+        TurboTy::Float => cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw_elem),
+        _ => raw_elem,
+    };
+
+    let indirect_call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &[env_ptr, typed_elem]);
+    let pred_result = cx.builder.inst_results(indirect_call)[0];
+    cx.builder.ins().brif(pred_result, inc_block, &[], fail_block, &[]);
+
+    // Fail: set result to false and exit
+    cx.builder.switch_to_block(fail_block);
+    cx.builder.seal_block(fail_block);
+    let false_val = cx.builder.ins().iconst(types::I8, 0);
+    cx.builder.def_var(result_var, false_val);
+    cx.builder.ins().jump(exit_block, &[]);
+
+    // Increment and continue
+    cx.builder.switch_to_block(inc_block);
+    cx.builder.seal_block(inc_block);
+    let current_idx = cx.builder.use_var(idx_var);
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let next_idx = cx.builder.ins().iadd(current_idx, one);
+    cx.builder.def_var(idx_var, next_idx);
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.seal_block(header_block);
+    cx.builder.switch_to_block(exit_block);
+    cx.builder.seal_block(exit_block);
+
+    let result = cx.builder.use_var(result_var);
+    Ok(Some((result, TurboTy::Bool)))
+}
+
+// ── Date/Time builtins ──────────────────────────────────────────────
+
+/// time_now() -> f64
+pub(crate) fn compile_time_now<M: Module>(
+    cx: &mut Ctx<'_, M>,
+) -> Result<MaybeTyped, CodegenError> {
+    let fid = cx.rt_fns["rt_time_now"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Float)))
+}
+
+/// time_ms() -> i64
+pub(crate) fn compile_time_ms<M: Module>(
+    cx: &mut Ctx<'_, M>,
+) -> Result<MaybeTyped, CodegenError> {
+    let fid = cx.rt_fns["rt_time_ms"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
+/// format_time(timestamp, format) -> str
+pub(crate) fn compile_format_time<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (ts_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (fmt_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let fid = cx.rt_fns["rt_format_time"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[ts_val, fmt_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
 /// Optional chaining: expr?.field
 ///
 /// If expr is none, return none. If expr is some(v), unwrap v, access .field,

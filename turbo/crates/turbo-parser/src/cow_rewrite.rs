@@ -49,6 +49,7 @@ use turbo_ast::*;
 /// COW builtins that return a new value instead of mutating in-place.
 const COW_BUILTINS: &[&str] = &[
     "push", "map", "filter", "replace", "upper", "lower", "trim", "repeat", "split",
+    "sort", "reverse",
 ];
 
 /// Apply COW rewrites across the entire module.

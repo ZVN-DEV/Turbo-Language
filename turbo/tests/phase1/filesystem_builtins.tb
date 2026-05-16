@@ -1,0 +1,43 @@
+fn main() {
+    // path_join
+    let p = path_join("/tmp", "turbo_test_dir")
+    print(p)
+
+    // path_dir / path_base / path_ext
+    print(path_dir("/foo/bar/baz.txt"))
+    print(path_base("/foo/bar/baz.txt"))
+    print(path_ext("/foo/bar/baz.txt"))
+    print(path_ext("/foo/bar/noext"))
+    print(path_dir("justfile"))
+
+    // mkdir + file_exists
+    let dir = "/tmp/turbo_fs_test_dir"
+    mkdir(dir)
+    print(file_exists(dir))
+
+    // write_file + file_exists + read_file + delete_file
+    let fpath = path_join(dir, "hello.txt")
+    write_file(fpath, "hello turbo")
+    print(file_exists(fpath))
+    let content = read_file(fpath)
+    print(content)
+    let deleted = delete_file(fpath)
+    print(deleted)
+    print(file_exists(fpath))
+
+    // list_dir - create a couple files then list
+    write_file(path_join(dir, "aaa.txt"), "a")
+    write_file(path_join(dir, "bbb.txt"), "b")
+    let mut entries = list_dir(dir)
+    // Sort for deterministic output
+    entries = sort(entries)
+    let mut i = 0
+    while i < len(entries) {
+        print(entries[i])
+        i = i + 1
+    }
+
+    // cleanup
+    delete_file(path_join(dir, "aaa.txt"))
+    delete_file(path_join(dir, "bbb.txt"))
+}

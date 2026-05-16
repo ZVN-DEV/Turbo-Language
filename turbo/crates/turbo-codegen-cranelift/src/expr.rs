@@ -1533,6 +1533,26 @@ fn compile_call<M: Module>(
         "hashmap_remove" => compile_builtin_hashmap_remove(cx, args),
         "hashmap_set_int" => compile_builtin_hashmap_set_int(cx, args),
         "hashmap_get_int" => compile_builtin_hashmap_get_int(cx, args),
+        // Filesystem builtins
+        "file_exists" => compile_file_exists(cx, args),
+        "delete_file" => compile_delete_file(cx, args),
+        "list_dir" => compile_list_dir(cx, args),
+        "mkdir" => compile_mkdir(cx, args),
+        "path_join" => compile_path_join(cx, args),
+        "path_dir" => compile_path_str1(cx, args, "rt_path_dir"),
+        "path_base" => compile_path_str1(cx, args, "rt_path_base"),
+        "path_ext" => compile_path_str1(cx, args, "rt_path_ext"),
+        // Collection builtins
+        "sort" => compile_sort(cx, args),
+        "reverse" => compile_reverse(cx, args),
+        "array_contains" => compile_array_contains(cx, args),
+        "slice" => compile_slice(cx, args),
+        "any" => compile_builtin_any(cx, args),
+        "all" => compile_builtin_all(cx, args),
+        // Date/Time builtins
+        "time_now" => compile_time_now(cx),
+        "time_ms" => compile_time_ms(cx),
+        "format_time" => compile_format_time(cx, args),
         // Unsafe builtins — raw pointer operations
         "deref" => compile_builtin_deref(cx, args),
         "store" => compile_builtin_store(cx, args),

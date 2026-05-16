@@ -627,6 +627,26 @@ pub(crate) fn compile_module<M: Module>(
     // ARC runtime declarations
     declare_rt_fn(module, &mut rt_fns, "rt_retain", &[ptr_type], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_release", &[ptr_type], None)?;
+    // Filesystem builtins
+    declare_rt_fn(module, &mut rt_fns, "rt_file_exists", &[ptr_type], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_delete_file", &[ptr_type], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_list_dir", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_mkdir", &[ptr_type], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_path_join", &[ptr_type, ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_path_dir", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_path_base", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_path_ext", &[ptr_type], Some(ptr_type))?;
+    // Collection builtins
+    declare_rt_fn(module, &mut rt_fns, "rt_sort_int", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_sort_str", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_reverse", &[ptr_type], Some(ptr_type))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_array_contains_int", &[ptr_type, types::I64], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_array_contains_str", &[ptr_type, ptr_type], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_slice", &[ptr_type, types::I64, types::I64], Some(ptr_type))?;
+    // Date/Time builtins
+    declare_rt_fn(module, &mut rt_fns, "rt_time_now", &[], Some(types::F64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_time_ms", &[], Some(types::I64))?;
+    declare_rt_fn(module, &mut rt_fns, "rt_format_time", &[types::F64, ptr_type], Some(ptr_type))?;
 
     // Build enum variants map
     let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();

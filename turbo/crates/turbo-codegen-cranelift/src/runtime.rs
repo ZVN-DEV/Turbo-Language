@@ -2067,3 +2067,390 @@ pub(crate) extern "C" fn rt_release(data_ptr: *mut u8) {
         // a different thread), we silently skip — better than UB.
     }
 }
+
+// ── Filesystem builtins ────────────────────────────────────────────
+
+pub(crate) extern "C" fn rt_file_exists(path: *const u8) -> i64 {
+    if path.is_null() {
+        return 0;
+    }
+    let path_str = unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    if std::path::Path::new(path_str).exists() {
+        1
+    } else {
+        0
+    }
+}
+
+pub(crate) extern "C" fn rt_delete_file(path: *const u8) -> i64 {
+    if path.is_null() {
+        return 0;
+    }
+    let path_str = unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    if std::fs::remove_file(path_str).is_ok() || std::fs::remove_dir(path_str).is_ok() {
+        1
+    } else {
+        0
+    }
+}
+
+pub(crate) extern "C" fn rt_list_dir(path: *const u8) -> *mut u8 {
+    let path_str = if path.is_null() {
+        "."
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or(".")
+    };
+    let mut entries = Vec::new();
+    if let Ok(dir) = std::fs::read_dir(path_str) {
+        for entry in dir.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                entries.push(name.to_string());
+            }
+        }
+    }
+    let len = entries.len() as i64;
+    let layout = match checked_array_layout(len as usize) {
+        Some(l) => l,
+        None => {
+            eprintln!("runtime error: list_dir result too large");
+            std::process::exit(1);
+        }
+    };
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    register_alloc(ptr, layout);
+    unsafe {
+        *(ptr as *mut i64) = 1; // refcount
+    }
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe {
+        *(data_ptr as *mut i64) = len;
+    }
+    for (i, name) in entries.iter().enumerate() {
+        let cs =
+            std::ffi::CString::new(name.as_str()).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+        unsafe {
+            *((data_ptr as *mut i64).add(1 + i)) = arena_str(cs) as i64;
+        }
+    }
+    data_ptr
+}
+
+pub(crate) extern "C" fn rt_mkdir(path: *const u8) -> i64 {
+    if path.is_null() {
+        return 0;
+    }
+    let path_str = unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    if std::fs::create_dir_all(path_str).is_ok() {
+        1
+    } else {
+        0
+    }
+}
+
+pub(crate) extern "C" fn rt_path_join(a: *const u8, b: *const u8) -> *const u8 {
+    let a_str = if a.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(a as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let b_str = if b.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(b as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let result = if a_str.is_empty() {
+        b_str.to_string()
+    } else if a_str.ends_with('/') {
+        format!("{}{}", a_str, b_str)
+    } else {
+        format!("{}/{}", a_str, b_str)
+    };
+    let cs = std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    arena_str(cs)
+}
+
+pub(crate) extern "C" fn rt_path_dir(path: *const u8) -> *const u8 {
+    let path_str = if path.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let result = match std::path::Path::new(path_str).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_str().unwrap_or(".").to_string(),
+        _ => ".".to_string(),
+    };
+    let cs = std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new(".").unwrap());
+    arena_str(cs)
+}
+
+pub(crate) extern "C" fn rt_path_base(path: *const u8) -> *const u8 {
+    let path_str = if path.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let result = std::path::Path::new(path_str)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let cs = std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    arena_str(cs)
+}
+
+pub(crate) extern "C" fn rt_path_ext(path: *const u8) -> *const u8 {
+    let path_str = if path.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(path as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let result = std::path::Path::new(path_str)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_string();
+    let cs = std::ffi::CString::new(result).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    arena_str(cs)
+}
+
+// ── Collection builtins ────────────────────────────────────────────
+
+pub(crate) extern "C" fn rt_sort_int(arr: *const u8) -> *mut u8 {
+    let len = unsafe { *(arr as *const i64) };
+    let layout = match checked_array_layout(len as usize) {
+        Some(l) => l,
+        None => {
+            eprintln!("runtime error: sort result too large");
+            std::process::exit(1);
+        }
+    };
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    register_alloc(ptr, layout);
+    unsafe { *(ptr as *mut i64) = 1; } // refcount
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe { *(data_ptr as *mut i64) = len; }
+    // Copy elements
+    let src = unsafe { (arr as *const i64).add(1) };
+    let dst = unsafe { (data_ptr as *mut i64).add(1) };
+    unsafe { std::ptr::copy_nonoverlapping(src, dst, len as usize); }
+    // Sort as i64
+    let slice = unsafe { std::slice::from_raw_parts_mut(dst, len as usize) };
+    slice.sort();
+    data_ptr
+}
+
+pub(crate) extern "C" fn rt_sort_str(arr: *const u8) -> *mut u8 {
+    let len = unsafe { *(arr as *const i64) };
+    let layout = match checked_array_layout(len as usize) {
+        Some(l) => l,
+        None => {
+            eprintln!("runtime error: sort result too large");
+            std::process::exit(1);
+        }
+    };
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    register_alloc(ptr, layout);
+    unsafe { *(ptr as *mut i64) = 1; } // refcount
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe { *(data_ptr as *mut i64) = len; }
+    // Copy elements
+    let src = unsafe { (arr as *const i64).add(1) };
+    let dst = unsafe { (data_ptr as *mut i64).add(1) };
+    unsafe { std::ptr::copy_nonoverlapping(src, dst, len as usize); }
+    // Sort as string pointers
+    let slice = unsafe { std::slice::from_raw_parts_mut(dst, len as usize) };
+    slice.sort_by(|a, b| {
+        let a_str = if *a == 0 {
+            ""
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(*a as *const std::ffi::c_char) }
+                .to_str()
+                .unwrap_or("")
+        };
+        let b_str = if *b == 0 {
+            ""
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(*b as *const std::ffi::c_char) }
+                .to_str()
+                .unwrap_or("")
+        };
+        a_str.cmp(b_str)
+    });
+    data_ptr
+}
+
+pub(crate) extern "C" fn rt_reverse(arr: *const u8) -> *mut u8 {
+    let len = unsafe { *(arr as *const i64) };
+    let layout = match checked_array_layout(len as usize) {
+        Some(l) => l,
+        None => {
+            eprintln!("runtime error: reverse result too large");
+            std::process::exit(1);
+        }
+    };
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    register_alloc(ptr, layout);
+    unsafe { *(ptr as *mut i64) = 1; } // refcount
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe { *(data_ptr as *mut i64) = len; }
+    let src = unsafe { (arr as *const i64).add(1) };
+    let dst = unsafe { (data_ptr as *mut i64).add(1) };
+    for i in 0..len as usize {
+        unsafe { *dst.add(i) = *src.add(len as usize - 1 - i); }
+    }
+    data_ptr
+}
+
+pub(crate) extern "C" fn rt_array_contains_int(arr: *const u8, val: i64) -> i64 {
+    let len = unsafe { *(arr as *const i64) };
+    let elems = unsafe { (arr as *const i64).add(1) };
+    for i in 0..len as usize {
+        if unsafe { *elems.add(i) } == val {
+            return 1;
+        }
+    }
+    0
+}
+
+pub(crate) extern "C" fn rt_array_contains_str(arr: *const u8, val: *const u8) -> i64 {
+    let len = unsafe { *(arr as *const i64) };
+    let elems = unsafe { (arr as *const i64).add(1) };
+    let val_str = if val.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(val as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    for i in 0..len as usize {
+        let elem_ptr = unsafe { *elems.add(i) } as *const u8;
+        let elem_str = if elem_ptr.is_null() {
+            ""
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(elem_ptr as *const std::ffi::c_char) }
+                .to_str()
+                .unwrap_or("")
+        };
+        if elem_str == val_str {
+            return 1;
+        }
+    }
+    0
+}
+
+pub(crate) extern "C" fn rt_slice(arr: *const u8, start: i64, end: i64) -> *mut u8 {
+    let len = unsafe { *(arr as *const i64) };
+    let start = start.max(0).min(len);
+    let end = end.max(start).min(len);
+    let new_len = end - start;
+    let layout = match checked_array_layout(new_len as usize) {
+        Some(l) => l,
+        None => {
+            eprintln!("runtime error: slice result too large");
+            std::process::exit(1);
+        }
+    };
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    register_alloc(ptr, layout);
+    unsafe { *(ptr as *mut i64) = 1; } // refcount
+    let data_ptr = unsafe { ptr.add(8) };
+    unsafe { *(data_ptr as *mut i64) = new_len; }
+    let src = unsafe { (arr as *const i64).add(1 + start as usize) };
+    let dst = unsafe { (data_ptr as *mut i64).add(1) };
+    unsafe { std::ptr::copy_nonoverlapping(src, dst, new_len as usize); }
+    data_ptr
+}
+
+// ── Date/Time builtins ─────────────────────────────────────────────
+
+pub(crate) extern "C" fn rt_time_now() -> f64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    now.as_secs_f64()
+}
+
+pub(crate) extern "C" fn rt_time_ms() -> i64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    now.as_millis() as i64
+}
+
+pub(crate) extern "C" fn rt_format_time(timestamp: f64, fmt: *const u8) -> *const u8 {
+    let fmt_str = if fmt.is_null() {
+        "%Y-%m-%d %H:%M:%S"
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(fmt as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("%Y-%m-%d %H:%M:%S")
+    };
+    // Use libc-compatible formatting: convert to time_t then format
+    // For the JIT we use a simple approach: convert known format specifiers
+    let secs = timestamp as i64;
+    let naive = chrono_like_format(secs, fmt_str);
+    let cs = std::ffi::CString::new(naive).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+    arena_str(cs)
+}
+
+/// Simple strftime-like formatter without pulling in chrono.
+fn chrono_like_format(epoch_secs: i64, fmt: &str) -> String {
+    // Use libc localtime + strftime via FFI
+    unsafe {
+        let t = epoch_secs as libc::time_t;
+        let tm = libc::localtime(&t);
+        if tm.is_null() {
+            return String::new();
+        }
+        let fmt_c = std::ffi::CString::new(fmt).unwrap_or_else(|_| std::ffi::CString::new("").unwrap());
+        let mut buf = [0u8; 256];
+        let n = libc::strftime(
+            buf.as_mut_ptr() as *mut libc::c_char,
+            buf.len(),
+            fmt_c.as_ptr(),
+            tm,
+        );
+        if n == 0 {
+            return String::new();
+        }
+        String::from_utf8_lossy(&buf[..n]).to_string()
+    }
+}

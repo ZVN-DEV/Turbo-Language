@@ -44,7 +44,11 @@
 #include <pthread.h>
 #include <math.h>
 #include <time.h>
+#include <sys/time.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
+#include <unistd.h>
+#include <dirent.h>
 
 /* ── Per-request arena (P2 — fixes the rt_release no-op leak) ──────────
  *
@@ -2518,4 +2522,230 @@ void *rt_try_write_file(const char *path, const char *content) {
     fclose(f);
     /* ok(true) — bool payload stored in the 64-bit value slot. */
     return rt_result_ok(1);
+}
+
+/* ── Filesystem builtins ──────────────────────────────────────────── */
+
+long long rt_file_exists(const char *path) {
+    if (!path) return 0;
+    return access(path, F_OK) == 0 ? 1 : 0;
+}
+
+long long rt_delete_file(const char *path) {
+    if (!path) return 0;
+    return remove(path) == 0 ? 1 : 0;
+}
+
+void *rt_list_dir(const char *path) {
+    if (!path) path = ".";
+    DIR *dir = opendir(path);
+    if (!dir) {
+        /* Return empty array */
+        if (!rt_array_len_fits(0)) { fprintf(stderr, "runtime error: array alloc overflow\n"); exit(1); }
+        size_t data_size = 8;
+        long long *arr = (long long *)rt_rc_alloc(data_size, 0);
+        arr[0] = 0;
+        return arr;
+    }
+    /* First pass: collect entries */
+    long long count = 0;
+    long long capacity = 64;
+    char **names = (char **)turbo_alloc((size_t)capacity * sizeof(char *));
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+        if (count >= capacity) {
+            capacity *= 2;
+            names = (char **)turbo_realloc(names, (size_t)capacity * sizeof(char *));
+        }
+        names[count++] = turbo_strdup(entry->d_name);
+    }
+    closedir(dir);
+    /* Build Turbo array */
+    if (!rt_array_len_fits(count)) { fprintf(stderr, "runtime error: array alloc overflow\n"); exit(1); }
+    size_t data_size = 8 + (size_t)count * 8;
+    long long *arr = (long long *)rt_rc_alloc(data_size, count);
+    arr[0] = count;
+    for (long long i = 0; i < count; i++) {
+        arr[1 + i] = (long long)(intptr_t)names[i];
+    }
+    turbo_free(names);
+    return arr;
+}
+
+long long rt_mkdir(const char *path) {
+    if (!path) return 0;
+    /* Recursive mkdir: walk the path and create each component */
+    size_t len = strlen(path);
+    char *buf = turbo_alloc(len + 1);
+    memcpy(buf, path, len + 1);
+    for (size_t i = 1; i <= len; i++) {
+        if (buf[i] == '/' || buf[i] == '\0') {
+            char saved = buf[i];
+            buf[i] = '\0';
+            mkdir(buf, 0755);  /* ignore EEXIST */
+            buf[i] = saved;
+        }
+    }
+    turbo_free(buf);
+    /* Check that final path now exists */
+    struct stat st;
+    return (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) ? 1 : 0;
+}
+
+const char *rt_path_join(const char *a, const char *b) {
+    if (!a) a = "";
+    if (!b) b = "";
+    size_t a_len = strlen(a);
+    size_t b_len = strlen(b);
+    int need_sep = (a_len > 0 && a[a_len - 1] != '/') ? 1 : 0;
+    size_t total = a_len + need_sep + b_len + 1;
+    char *buf = turbo_alloc(total);
+    memcpy(buf, a, a_len);
+    if (need_sep) buf[a_len] = '/';
+    memcpy(buf + a_len + need_sep, b, b_len + 1);
+    return buf;
+}
+
+const char *rt_path_dir(const char *path) {
+    if (!path || !*path) return turbo_strdup(".");
+    const char *last_sep = strrchr(path, '/');
+    if (!last_sep) return turbo_strdup(".");
+    if (last_sep == path) return turbo_strdup("/");
+    size_t len = (size_t)(last_sep - path);
+    char *buf = turbo_alloc(len + 1);
+    memcpy(buf, path, len);
+    buf[len] = '\0';
+    return buf;
+}
+
+const char *rt_path_base(const char *path) {
+    if (!path || !*path) return turbo_strdup("");
+    const char *last_sep = strrchr(path, '/');
+    if (last_sep) return turbo_strdup(last_sep + 1);
+    return turbo_strdup(path);
+}
+
+const char *rt_path_ext(const char *path) {
+    if (!path || !*path) return turbo_strdup("");
+    /* Get the basename first */
+    const char *base = strrchr(path, '/');
+    if (base) base++; else base = path;
+    const char *dot = strrchr(base, '.');
+    if (!dot || dot == base) return turbo_strdup("");
+    return turbo_strdup(dot + 1);
+}
+
+/* ── Collection builtins ──────────────────────────────────────────── */
+
+static int cmp_i64(const void *a, const void *b) {
+    long long va = *(const long long *)a;
+    long long vb = *(const long long *)b;
+    return (va > vb) - (va < vb);
+}
+
+static int cmp_str(const void *a, const void *b) {
+    const char *sa = (const char *)(intptr_t)(*(const long long *)a);
+    const char *sb = (const char *)(intptr_t)(*(const long long *)b);
+    if (!sa) sa = "";
+    if (!sb) sb = "";
+    return strcmp(sa, sb);
+}
+
+void *rt_sort_int(const void *arr) {
+    long long len = *(const long long *)arr;
+    if (!rt_array_len_fits(len)) { fprintf(stderr, "runtime error: array alloc overflow\n"); exit(1); }
+    size_t data_size = 8 + (size_t)len * 8;
+    long long *result = (long long *)rt_rc_alloc(data_size, len);
+    result[0] = len;
+    memcpy(result + 1, ((const long long *)arr) + 1, (size_t)len * 8);
+    if (len > 1) qsort(result + 1, (size_t)len, 8, cmp_i64);
+    return result;
+}
+
+void *rt_sort_str(const void *arr) {
+    long long len = *(const long long *)arr;
+    if (!rt_array_len_fits(len)) { fprintf(stderr, "runtime error: array alloc overflow\n"); exit(1); }
+    size_t data_size = 8 + (size_t)len * 8;
+    long long *result = (long long *)rt_rc_alloc(data_size, len);
+    result[0] = len;
+    memcpy(result + 1, ((const long long *)arr) + 1, (size_t)len * 8);
+    if (len > 1) qsort(result + 1, (size_t)len, 8, cmp_str);
+    return result;
+}
+
+void *rt_reverse(const void *arr) {
+    long long len = *(const long long *)arr;
+    if (!rt_array_len_fits(len)) { fprintf(stderr, "runtime error: array alloc overflow\n"); exit(1); }
+    size_t data_size = 8 + (size_t)len * 8;
+    long long *result = (long long *)rt_rc_alloc(data_size, len);
+    result[0] = len;
+    const long long *src = ((const long long *)arr) + 1;
+    for (long long i = 0; i < len; i++) {
+        result[1 + i] = src[len - 1 - i];
+    }
+    return result;
+}
+
+long long rt_array_contains_int(const void *arr, long long val) {
+    long long len = *(const long long *)arr;
+    const long long *elems = ((const long long *)arr) + 1;
+    for (long long i = 0; i < len; i++) {
+        if (elems[i] == val) return 1;
+    }
+    return 0;
+}
+
+long long rt_array_contains_str(const void *arr, const char *val) {
+    long long len = *(const long long *)arr;
+    const long long *elems = ((const long long *)arr) + 1;
+    if (!val) val = "";
+    for (long long i = 0; i < len; i++) {
+        const char *s = (const char *)(intptr_t)elems[i];
+        if (!s) s = "";
+        if (strcmp(s, val) == 0) return 1;
+    }
+    return 0;
+}
+
+void *rt_slice(const void *arr, long long start, long long end) {
+    long long len = *(const long long *)arr;
+    /* Clamp bounds */
+    if (start < 0) start = 0;
+    if (end > len) end = len;
+    if (start > end) start = end;
+    long long new_len = end - start;
+    if (!rt_array_len_fits(new_len)) { fprintf(stderr, "runtime error: array alloc overflow\n"); exit(1); }
+    size_t data_size = 8 + (size_t)new_len * 8;
+    long long *result = (long long *)rt_rc_alloc(data_size, new_len);
+    result[0] = new_len;
+    const long long *src = ((const long long *)arr) + 1;
+    memcpy(result + 1, src + start, (size_t)new_len * 8);
+    return result;
+}
+
+/* ── Date/Time builtins ───────────────────────────────────────────── */
+
+double rt_time_now(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (double)tv.tv_sec + (double)tv.tv_usec / 1000000.0;
+}
+
+long long rt_time_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (long long)tv.tv_sec * 1000LL + (long long)tv.tv_usec / 1000LL;
+}
+
+const char *rt_format_time(double timestamp, const char *fmt) {
+    if (!fmt) fmt = "%Y-%m-%d %H:%M:%S";
+    time_t t = (time_t)timestamp;
+    struct tm *tm = localtime(&t);
+    if (!tm) return turbo_strdup("");
+    char buf[256];
+    size_t n = strftime(buf, sizeof(buf), fmt, tm);
+    if (n == 0) return turbo_strdup("");
+    return turbo_strdup(buf);
 }
