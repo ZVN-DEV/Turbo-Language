@@ -1240,6 +1240,69 @@ pub(crate) extern "C" fn rt_http_post(url: *const u8, body: *const u8) -> *const
     }
 }
 
+/// HTTP POST with custom headers. `headers` is a newline-separated string of headers.
+pub(crate) extern "C" fn rt_http_post_with_headers(url: *const u8, body: *const u8, headers: *const u8) -> *const u8 {
+    if url.is_null() {
+        eprintln!("[rt_http] blocked non-http(s) URL: (null)");
+        return rt_empty_cstr();
+    }
+    let url = unsafe { std::ffi::CStr::from_ptr(url as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    if !rt_url_is_http(url) {
+        eprintln!("[rt_http] blocked non-http(s) URL: {}", url);
+        return rt_empty_cstr();
+    }
+    let body_str = if body.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(body as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let headers_str = if headers.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(headers as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let mut cmd = std::process::Command::new("curl");
+    cmd.arg("-s")
+        .arg("-L")
+        .arg("--proto")
+        .arg("=http,https")
+        .arg("--max-time")
+        .arg("30")
+        .arg("--max-redirs")
+        .arg("5")
+        .arg("-X")
+        .arg("POST");
+    for header in headers_str.split('\n') {
+        let h = header.trim();
+        if !h.is_empty() {
+            cmd.arg("-H").arg(h);
+        }
+    }
+    let output = cmd
+        .arg("-d")
+        .arg(body_str)
+        .arg("--")
+        .arg(url)
+        .output();
+    match output {
+        Ok(out) => {
+            let resp = String::from_utf8_lossy(&out.stdout).to_string();
+            let cs = cstring_or_empty(resp);
+            arena_str(cs)
+        }
+        Err(e) => {
+            eprintln!("[rt_http] curl exec failed: {}", e);
+            rt_empty_cstr()
+        }
+    }
+}
+
 /// Extract a top-level key from a JSON string. Returns the value as a string.
 /// Handles string values, numbers, booleans, and null.
 pub(crate) extern "C" fn rt_json_get(json: *const u8, key: *const u8) -> *const u8 {
@@ -1288,6 +1351,31 @@ pub(crate) extern "C" fn rt_json_stringify(key: *const u8, value: *const u8) -> 
     arena_str(cs)
 }
 
+/// Build a JSON object from key-value pairs separated by \x1F (unit separator).
+/// Format: "key1\x1Fvalue1\x1Fkey2\x1Fvalue2"
+pub(crate) extern "C" fn rt_json_build(pairs: *const u8) -> *const u8 {
+    let pairs_str = if pairs.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(pairs as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+    };
+    let parts: Vec<&str> = pairs_str.split('\x1F').collect();
+    let mut map = serde_json::Map::new();
+    let mut i = 0;
+    while i + 1 < parts.len() {
+        map.insert(
+            parts[i].to_string(),
+            serde_json::Value::String(parts[i + 1].to_string()),
+        );
+        i += 2;
+    }
+    let result = serde_json::Value::Object(map).to_string();
+    let cs = cstring_or_empty(result);
+    arena_str(cs)
+}
+
 pub(crate) extern "C" fn rt_json_root(json: *const u8) -> *const u8 {
     let json_str = unsafe { std::ffi::CStr::from_ptr(json as *const std::ffi::c_char) }
         .to_str()
@@ -1309,6 +1397,14 @@ pub(crate) extern "C" fn rt_json_root(json: *const u8) -> *const u8 {
             arena_str(cs)
         }
     }
+}
+
+pub(crate) extern "C" fn rt_float_to_int(f: f64) -> i64 {
+    f as i64
+}
+
+pub(crate) extern "C" fn rt_int_to_float(i: i64) -> f64 {
+    i as f64
 }
 
 pub(crate) extern "C" fn rt_str_to_i64(s: *const u8) -> i64 {

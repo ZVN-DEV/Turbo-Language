@@ -163,9 +163,13 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     // HTTP + JSON builtins
     jit_builder.symbol("rt_http_get", rt_http_get as *const u8);
     jit_builder.symbol("rt_http_post", rt_http_post as *const u8);
+    jit_builder.symbol("rt_http_post_with_headers", rt_http_post_with_headers as *const u8);
     jit_builder.symbol("rt_json_get", rt_json_get as *const u8);
     jit_builder.symbol("rt_json_stringify", rt_json_stringify as *const u8);
+    jit_builder.symbol("rt_json_build", rt_json_build as *const u8);
     jit_builder.symbol("rt_json_root", rt_json_root as *const u8);
+    jit_builder.symbol("rt_float_to_int", rt_float_to_int as *const u8);
+    jit_builder.symbol("rt_int_to_float", rt_int_to_float as *const u8);
     jit_builder.symbol("rt_str_to_i64", rt_str_to_i64 as *const u8);
     jit_builder.symbol("rt_str_to_f64", rt_str_to_f64 as *const u8);
     jit_builder.symbol("rt_str_to_bool", rt_str_to_bool as *const u8);
@@ -360,9 +364,13 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_await_handle", rt_await_handle as *const u8);
     jit_builder.symbol("rt_http_get", rt_http_get as *const u8);
     jit_builder.symbol("rt_http_post", rt_http_post as *const u8);
+    jit_builder.symbol("rt_http_post_with_headers", rt_http_post_with_headers as *const u8);
     jit_builder.symbol("rt_json_get", rt_json_get as *const u8);
     jit_builder.symbol("rt_json_stringify", rt_json_stringify as *const u8);
+    jit_builder.symbol("rt_json_build", rt_json_build as *const u8);
     jit_builder.symbol("rt_json_root", rt_json_root as *const u8);
+    jit_builder.symbol("rt_float_to_int", rt_float_to_int as *const u8);
+    jit_builder.symbol("rt_int_to_float", rt_int_to_float as *const u8);
     jit_builder.symbol("rt_str_to_i64", rt_str_to_i64 as *const u8);
     jit_builder.symbol("rt_str_to_f64", rt_str_to_f64 as *const u8);
     jit_builder.symbol("rt_str_to_bool", rt_str_to_bool as *const u8);
