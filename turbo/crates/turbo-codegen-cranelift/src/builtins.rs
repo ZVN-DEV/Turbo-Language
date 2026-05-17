@@ -410,6 +410,19 @@ pub(crate) fn compile_builtin_int_to_float<M: Module>(
     Ok(Some((result, TurboTy::Float)))
 }
 
+/// str_from_char(i64) -> str — convert ASCII code to single-character string
+pub(crate) fn compile_builtin_str_from_char<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_str_from_char"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
 pub(crate) fn compile_to_str_builtin<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],

@@ -1,4 +1,4 @@
-// Test min() and max() with various integer values
+// Test min() and max() with integer and float values
 
 fn main() {
     print(min(3, 7))
@@ -7,4 +7,6 @@ fn main() {
     print(max(-1, 1))
     print(min(0, 0))
     print(max(-100, 100))
+    print(min(2.5, 1.5))
+    print(max(2.5, 1.5))
 }

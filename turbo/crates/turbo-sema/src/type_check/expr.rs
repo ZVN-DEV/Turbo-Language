@@ -347,13 +347,14 @@ impl Checker {
                             return Ty::Error;
                         }
                         let arg_ty = self.check_expr(&args[0]);
-                        if !arg_ty.is_error() && !arg_ty.is_integer() {
+                        if !arg_ty.is_error() && !arg_ty.is_numeric() {
                             self.error(
                                 ErrorCode::E0133,
-                                format!("abs() expects integer, found `{arg_ty}`"),
+                                format!("abs() expects numeric type, found `{arg_ty}`"),
                                 args[0].span.clone(),
                             );
                         }
+                        if arg_ty.is_float() { return Ty::F64; }
                         return Ty::I64;
                     }
                     if name == "min" || name == "max" {
@@ -367,20 +368,21 @@ impl Checker {
                         }
                         let a_ty = self.check_expr(&args[0]);
                         let b_ty = self.check_expr(&args[1]);
-                        if !a_ty.is_error() && !a_ty.is_integer() {
+                        if !a_ty.is_error() && !a_ty.is_numeric() {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("{}() expects integers, found `{a_ty}`", name),
+                                format!("{}() expects numeric types, found `{a_ty}`", name),
                                 args[0].span.clone(),
                             );
                         }
-                        if !b_ty.is_error() && !b_ty.is_integer() {
+                        if !b_ty.is_error() && !b_ty.is_numeric() {
                             self.error(
                                 ErrorCode::E0100,
-                                format!("{}() expects integers, found `{b_ty}`", name),
+                                format!("{}() expects numeric types, found `{b_ty}`", name),
                                 args[1].span.clone(),
                             );
                         }
+                        if a_ty.is_float() || b_ty.is_float() { return Ty::F64; }
                         return Ty::I64;
                     }
                     if name == "to_str" {
@@ -1271,6 +1273,27 @@ impl Checker {
                             );
                         }
                         return Ty::F64;
+                    }
+
+                    // str_from_char(code: int) -> str
+                    if name == "str_from_char" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!("str_from_char() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arg_ty = self.check_expr(&args[0]);
+                        if !arg_ty.is_error() && !arg_ty.is_integer() {
+                            self.error(
+                                ErrorCode::E0133,
+                                format!("str_from_char() argument must be int, found `{arg_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::Str;
                     }
 
                     // ── Filesystem builtins ─────────────────────────

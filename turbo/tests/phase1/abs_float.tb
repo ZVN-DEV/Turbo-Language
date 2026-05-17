@@ -1,4 +1,4 @@
-// Test abs() with various integer values including negatives and zero
+// Test abs() with integer and float values
 
 fn main() {
     let a = abs(-5)
@@ -9,4 +9,8 @@ fn main() {
     print(c)
     let d = abs(-999)
     print(d)
+    let e = abs(-3.14)
+    print(e)
+    let f = abs(2.71)
+    print(f)
 }

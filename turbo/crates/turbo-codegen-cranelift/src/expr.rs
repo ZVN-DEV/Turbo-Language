@@ -1453,6 +1453,7 @@ fn compile_call<M: Module>(
         "max" => compile_max(cx, args),
         "float_to_int" => compile_builtin_float_to_int(cx, args),
         "int_to_float" => compile_builtin_int_to_float(cx, args),
+        "str_from_char" => compile_builtin_str_from_char(cx, args),
         "to_str" => compile_to_str_builtin(cx, args),
         // Stdlib string builtins
         "split" => compile_stdlib_split(cx, args),

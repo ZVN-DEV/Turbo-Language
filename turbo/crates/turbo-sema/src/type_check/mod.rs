@@ -90,6 +90,7 @@ impl Checker {
                 | "json_build"
                 | "float_to_int"
                 | "int_to_float"
+                | "str_from_char"
                 | "http_server"
                 | "http_server_public"
                 | "route"

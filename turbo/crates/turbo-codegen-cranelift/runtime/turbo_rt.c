@@ -1735,6 +1735,13 @@ double rt_int_to_float(long long i) {
     return (double)i;
 }
 
+const char *rt_str_from_char(long long code) {
+    char *s = (char *)turbo_alloc(2);
+    s[0] = (char)(code & 0xFF);
+    s[1] = '\0';
+    return s;
+}
+
 /* ── Channel runtime ────────────────────────────────────────────────── */
 
 /* Channel: a struct of [sender_pipe_write_fd, receiver_pipe_read_fd]

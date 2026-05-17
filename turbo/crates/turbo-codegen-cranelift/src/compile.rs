@@ -542,6 +542,13 @@ pub(crate) fn compile_module<M: Module>(
     declare_rt_fn(
         module,
         &mut rt_fns,
+        "rt_str_from_char",
+        &[types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
         "rt_str_to_i64",
         &[ptr_type],
         Some(types::I64),

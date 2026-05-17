@@ -1407,6 +1407,13 @@ pub(crate) extern "C" fn rt_int_to_float(i: i64) -> f64 {
     i as f64
 }
 
+pub(crate) extern "C" fn rt_str_from_char(code: i64) -> *const u8 {
+    let c = (code & 0xFF) as u8;
+    let s = String::from(c as char);
+    let cs = cstring_or_empty(s);
+    arena_str(cs)
+}
+
 pub(crate) extern "C" fn rt_str_to_i64(s: *const u8) -> i64 {
     if s.is_null() {
         return 0;
