@@ -75,8 +75,14 @@ fn compile_expr_inner<M: Module>(
                 return compile_short_circuit(cx, left, *op, right);
             }
 
-            let (lhs, lhs_tty) = compile_expr(cx, left)?.unwrap();
-            let (rhs, rhs_tty) = compile_expr(cx, right)?.unwrap();
+            let (lhs, lhs_tty) = compile_expr(cx, left)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0100,
+                message: "binary operation on unit type".to_string(),
+            })?;
+            let (rhs, rhs_tty) = compile_expr(cx, right)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0100,
+                message: "binary operation on unit type".to_string(),
+            })?;
 
             // String operations
             if lhs_tty == TurboTy::Str && rhs_tty == TurboTy::Str {
@@ -1445,6 +1451,8 @@ fn compile_call<M: Module>(
         "abs" => compile_abs(cx, args),
         "min" => compile_min(cx, args),
         "max" => compile_max(cx, args),
+        "float_to_int" => compile_builtin_float_to_int(cx, args),
+        "int_to_float" => compile_builtin_int_to_float(cx, args),
         "to_str" => compile_to_str_builtin(cx, args),
         // Stdlib string builtins
         "split" => compile_stdlib_split(cx, args),
@@ -1500,8 +1508,10 @@ fn compile_call<M: Module>(
         // HTTP + JSON builtins
         "http_get" => compile_builtin_http_get(cx, args),
         "http_post" => compile_builtin_http_post(cx, args),
+        "http_post_with_headers" => compile_builtin_http_post_with_headers(cx, args),
         "json_get" => compile_builtin_json_get(cx, args),
         "json_stringify" => compile_builtin_json_stringify(cx, args),
+        "json_build" => compile_builtin_json_build(cx, args),
         // HTTP server builtins
         "http_server" => compile_builtin_http_server(cx, args),
         "http_server_public" => compile_builtin_http_server_public(cx, args),

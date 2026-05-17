@@ -514,6 +514,34 @@ pub(crate) fn compile_module<M: Module>(
     declare_rt_fn(
         module,
         &mut rt_fns,
+        "rt_http_post_with_headers",
+        &[ptr_type, ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_json_build",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_float_to_int",
+        &[types::F64],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_int_to_float",
+        &[types::I64],
+        Some(types::F64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
         "rt_str_to_i64",
         &[ptr_type],
         Some(types::I64),
