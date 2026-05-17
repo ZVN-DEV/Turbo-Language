@@ -1231,6 +1231,48 @@ impl Checker {
                         return Ty::Result(Box::new(Ty::F64), Box::new(Ty::Str));
                     }
 
+                    // float_to_int(f: float) -> int
+                    if name == "float_to_int" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!("float_to_int() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arg_ty = self.check_expr(&args[0]);
+                        if !arg_ty.is_error() && arg_ty != Ty::F64 {
+                            self.error(
+                                ErrorCode::E0133,
+                                format!("float_to_int() argument must be float, found `{arg_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::I64;
+                    }
+
+                    // int_to_float(i: int) -> float
+                    if name == "int_to_float" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!("int_to_float() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let arg_ty = self.check_expr(&args[0]);
+                        if !arg_ty.is_error() && arg_ty != Ty::I64 {
+                            self.error(
+                                ErrorCode::E0133,
+                                format!("int_to_float() argument must be int, found `{arg_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        return Ty::F64;
+                    }
+
                     // ── Filesystem builtins ─────────────────────────
                     // file_exists(path: str) -> bool
                     if name == "file_exists" {
@@ -1784,6 +1826,42 @@ impl Checker {
                         }
                         return Ty::Str;
                     }
+                    // http_post_with_headers(url: str, body: str, headers: str) -> str
+                    if name == "http_post_with_headers" {
+                        if args.len() != 3 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!("http_post_with_headers() takes exactly 3 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let url_ty = self.check_expr(&args[0]);
+                        let body_ty = self.check_expr(&args[1]);
+                        let headers_ty = self.check_expr(&args[2]);
+                        if !url_ty.is_error() && url_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0133,
+                                format!("http_post_with_headers() first argument must be str, found `{url_ty}`"),
+                                args[0].span.clone(),
+                            );
+                        }
+                        if !body_ty.is_error() && body_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0133,
+                                format!("http_post_with_headers() second argument must be str, found `{body_ty}`"),
+                                args[1].span.clone(),
+                            );
+                        }
+                        if !headers_ty.is_error() && headers_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0133,
+                                format!("http_post_with_headers() third argument must be str, found `{headers_ty}`"),
+                                args[2].span.clone(),
+                            );
+                        }
+                        return Ty::Str;
+                    }
 
                     // ── HTTP server builtins ──────────────────────────
                     // http_server(port: i64) -> i64          (binds 127.0.0.1)
@@ -2030,6 +2108,26 @@ impl Checker {
                         }
                         if !value_ty.is_error() && value_ty != Ty::Str {
                             self.error(ErrorCode::E0133, format!("json_stringify() second argument must be str, found `{value_ty}`"), args[1].span.clone());
+                        }
+                        return Ty::Str;
+                    }
+                    // json_build(pairs: str) -> str
+                    if name == "json_build" {
+                        if args.len() != 1 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!("json_build() takes exactly 1 argument, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let pairs_ty = self.check_expr(&args[0]);
+                        if !pairs_ty.is_error() && pairs_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0133,
+                                format!("json_build() argument must be str, found `{pairs_ty}`"),
+                                args[0].span.clone(),
+                            );
                         }
                         return Ty::Str;
                     }
