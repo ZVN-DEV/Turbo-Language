@@ -1,0 +1,10 @@
+// Test min() and max() with various integer values
+
+fn main() {
+    print(min(3, 7))
+    print(max(3, 7))
+    print(min(-1, 1))
+    print(max(-1, 1))
+    print(min(0, 0))
+    print(max(-100, 100))
+}

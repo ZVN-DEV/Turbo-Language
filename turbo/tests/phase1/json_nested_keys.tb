@@ -1,0 +1,14 @@
+// Test json_get with nested objects that contain duplicate key names.
+// json_get uses strstr, so it matches the first "key" occurrence in the
+// raw JSON string.  We put the top-level key before the nested one so
+// the expected result is the top-level value.
+
+fn main() {
+    let json = "\{\"name\":\"outer\",\"user\":\{\"name\":\"inner\"\},\"age\":\"30\"\}"
+    let name = json_get(json, "name")
+    print(name)
+    let age = json_get(json, "age")
+    print(age)
+    let missing = json_get(json, "missing")
+    print(len(missing))
+}
