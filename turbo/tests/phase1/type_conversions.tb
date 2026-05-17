@@ -1,0 +1,15 @@
+// Test float_to_int and int_to_float conversions
+
+fn main() {
+    let f = 3.14
+    let i = float_to_int(f)
+    print(i)
+
+    let n = 42
+    let g = int_to_float(n)
+    print(g)
+
+    let neg = -7.9
+    let neg_i = float_to_int(neg)
+    print(neg_i)
+}

@@ -1,0 +1,12 @@
+// Test abs() with various integer values including negatives and zero
+
+fn main() {
+    let a = abs(-5)
+    print(a)
+    let b = abs(10)
+    print(b)
+    let c = abs(0)
+    print(c)
+    let d = abs(-999)
+    print(d)
+}

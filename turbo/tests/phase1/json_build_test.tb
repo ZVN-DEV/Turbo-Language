@@ -1,0 +1,16 @@
+// Test json_build: constructs a JSON object from key-value pairs
+// separated by ASCII 31 (unit separator).
+// Requires: json_build builtin, str_from_char builtin
+
+fn main() {
+    let sep = str_from_char(31)
+    let pairs = "model" + sep + "claude-3" + sep + "max_tokens" + sep + "1024"
+    let result = json_build(pairs)
+    print(result)
+
+    // Verify round-trip: extract a key from the built JSON
+    let model = json_get(result, "model")
+    print(model)
+    let tokens = json_get(result, "max_tokens")
+    print(tokens)
+}
