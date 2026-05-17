@@ -1236,6 +1236,107 @@ const char *rt_http_post(const char *url, const char *body) {
     return buf;
 }
 
+/* http_post_with_headers(url, body, headers) -> str — HTTP POST with custom
+ * headers via fork+exec (no shell interpolation). The `headers` parameter is
+ * a single string with headers separated by '\n', e.g.:
+ *   "Content-Type: application/json\nAuthorization: Bearer sk-xxx"
+ * Each header becomes a separate -H argument to curl. */
+const char *rt_http_post_with_headers(const char *url, const char *body,
+                                      const char *headers) {
+    if (!rt_url_is_http(url)) {
+        fprintf(stderr, "[rt_http] blocked non-http(s) URL: %s\n",
+                url ? url : "(null)");
+        return rt_http_empty_response();
+    }
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        return turbo_strdup("error: cannot create pipe");
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return turbo_strdup("error: cannot fork");
+    }
+    if (pid == 0) {
+        /* Child: redirect stdout to pipe, exec curl with POST + custom headers */
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+
+        /* Count headers (number of '\n' + 1 if non-empty) */
+        int num_headers = 0;
+        if (headers && headers[0] != '\0') {
+            num_headers = 1;
+            for (const char *h = headers; *h; h++) {
+                if (*h == '\n') num_headers++;
+            }
+        }
+
+        /* Build argv: curl -s -L -X POST [-H hdr]... --proto ... -d body -- url NULL
+         * Fixed args: curl, -s, -L, -X, POST, --proto, =http,https,
+         *             --max-time, 30, --max-redirs, 5, -d, body, --, url, NULL = 16
+         * Each header adds 2 entries: -H, header_value */
+        int fixed_args = 16;
+        int total = fixed_args + num_headers * 2;
+        char **argv = (char **)malloc((size_t)total * sizeof(char *));
+        if (!argv) _exit(1);
+
+        int ai = 0;
+        argv[ai++] = "curl";
+        argv[ai++] = "-s";
+        argv[ai++] = "-L";
+        argv[ai++] = "-X";
+        argv[ai++] = "POST";
+
+        /* Parse headers string and add -H args */
+        if (num_headers > 0) {
+            /* Make a mutable copy to split on '\n' */
+            size_t hlen = strlen(headers);
+            char *hcopy = (char *)malloc(hlen + 1);
+            if (!hcopy) _exit(1);
+            memcpy(hcopy, headers, hlen + 1);
+            char *start = hcopy;
+            for (char *p = hcopy; ; p++) {
+                if (*p == '\n' || *p == '\0') {
+                    char was_end = (*p == '\0');
+                    *p = '\0';
+                    if (start[0] != '\0') { /* skip empty lines */
+                        argv[ai++] = "-H";
+                        argv[ai++] = start;
+                    }
+                    if (was_end) break;
+                    start = p + 1;
+                }
+            }
+            /* Note: hcopy is intentionally leaked in the child — exec replaces
+             * the process image immediately, so no cleanup is needed. */
+        }
+
+        argv[ai++] = "--proto";
+        argv[ai++] = "=http,https";
+        argv[ai++] = "--max-time";
+        argv[ai++] = "30";
+        argv[ai++] = "--max-redirs";
+        argv[ai++] = "5";
+        argv[ai++] = "-d";
+        argv[ai++] = (char *)(body ? body : "");
+        argv[ai++] = "--";
+        argv[ai++] = (char *)url;
+        argv[ai] = NULL;
+
+        execvp("curl", argv);
+        _exit(1);
+    }
+    /* Parent: read from pipe */
+    close(pipefd[1]);
+    char *buf = read_fd_to_string(pipefd[0]);
+    close(pipefd[0]);
+    int status;
+    waitpid(pid, &status, 0);
+    return buf;
+}
+
 /* shell_exec(cmd) / exec(cmd) -> str — execute a command via fork+execvp,
  * capture stdout+stderr.
  *
@@ -1382,25 +1483,70 @@ static char *rt_json_escape_dup(const char *s) {
     return out;
 }
 
-/* json_get(json, key) -> str — extract top-level key value from JSON string */
+/* json_get(json, key) -> str — extract top-level key value from JSON string.
+ * Walks the JSON character-by-character, tracking brace/bracket depth so that
+ * only keys at depth 1 (the top-level object) are matched. Properly skips
+ * over string literals including escaped quotes. */
 const char *rt_json_get(const char *json, const char *key) {
     size_t json_len = strlen(json);
     const char *json_end = json + json_len;
-
-    /* Build search pattern: "key" */
     size_t klen = strlen(key);
-    char *search = (char *)turbo_alloc(klen + 3);
-    search[0] = '"';
-    memcpy(search + 1, key, klen);
-    search[klen + 1] = '"';
-    search[klen + 2] = '\0';
 
-    const char *pos = strstr(json, search);
-    turbo_free(search);
+    /* Walk the JSON, tracking depth. We want to match "key" only at depth 1. */
+    int depth = 0;
+    const char *p = json;
+    const char *pos = NULL;
+
+    while (p < json_end) {
+        char c = *p;
+
+        /* Skip over string literals */
+        if (c == '"') {
+            const char *str_start = p;
+            p++; /* skip opening quote */
+            /* Scan to closing quote, handling backslash escapes */
+            while (p < json_end) {
+                if (*p == '\\') {
+                    p += 2; /* skip escaped character */
+                    continue;
+                }
+                if (*p == '"') break;
+                p++;
+            }
+            /* p now points at closing quote (or end of string) */
+            if (p >= json_end) break;
+
+            /* Check if this quoted string is our key at depth 1 */
+            if (depth == 1) {
+                /* The string content is between str_start+1 and p */
+                size_t slen = (size_t)(p - str_start - 1);
+                if (slen == klen && memcmp(str_start + 1, key, klen) == 0) {
+                    /* Verify this is a key by checking for ':' after the quote */
+                    const char *after = p + 1;
+                    while (after < json_end && (*after == ' ' || *after == '\t' ||
+                           *after == '\n' || *after == '\r')) after++;
+                    if (after < json_end && *after == ':') {
+                        pos = p; /* found our key — pos points at closing quote */
+                        break;
+                    }
+                }
+            }
+            p++; /* skip closing quote */
+            continue;
+        }
+
+        if (c == '{' || c == '[') {
+            depth++;
+        } else if (c == '}' || c == ']') {
+            depth--;
+        }
+        p++;
+    }
+
     if (!pos) return turbo_strdup("");
 
-    /* Advance past key, skip whitespace and colon */
-    pos += klen + 2;
+    /* Advance past closing quote of the key, skip whitespace and colon */
+    pos += 1;
     if (pos >= json_end) return turbo_strdup("");
     while (pos < json_end && (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r')) pos++;
     if (pos >= json_end || *pos != ':') return turbo_strdup("");
@@ -1441,6 +1587,92 @@ const char *rt_json_stringify(const char *key, const char *value) {
     size_t cap = eklen + evlen + 8;
     char *buf = (char *)turbo_alloc(cap);
     snprintf(buf, cap, "{\"%s\":\"%s\"}", esc_key, esc_value);
+    return buf;
+}
+
+/* json_build(pairs) -> str — build a JSON object from key-value pairs.
+ * The `pairs` string uses ASCII Unit Separator (\x1F, 0x1F) as delimiter:
+ *   "key1\x1Fvalue1\x1Fkey2\x1Fvalue2"
+ * Returns: {"key1":"value1","key2":"value2"} */
+const char *rt_json_build(const char *pairs) {
+    if (!pairs || pairs[0] == '\0') return turbo_strdup("{}");
+
+    /* Count tokens (number of \x1F separators + 1) */
+    size_t num_tokens = 1;
+    for (const char *p = pairs; *p; p++) {
+        if (*p == '\x1F') num_tokens++;
+    }
+    /* Must have even number of tokens (key-value pairs) */
+    if (num_tokens % 2 != 0) num_tokens--; /* ignore trailing key with no value */
+    size_t num_pairs = num_tokens / 2;
+    if (num_pairs == 0) return turbo_strdup("{}");
+
+    /* Parse tokens into an array */
+    size_t pairs_len = strlen(pairs);
+    char *copy = (char *)malloc(pairs_len + 1);
+    if (!copy) return turbo_strdup("{}");
+    memcpy(copy, pairs, pairs_len + 1);
+
+    /* Split on \x1F */
+    const char **tokens = (const char **)malloc(num_tokens * sizeof(char *));
+    if (!tokens) { free(copy); return turbo_strdup("{}"); }
+    size_t ti = 0;
+    tokens[ti++] = copy;
+    for (char *p = copy; *p; p++) {
+        if (*p == '\x1F') {
+            *p = '\0';
+            if (ti < num_tokens) tokens[ti++] = p + 1;
+        }
+    }
+
+    /* Escape keys and values, compute total size */
+    size_t total = 2; /* { and } */
+    const char **esc_keys = (const char **)malloc(num_pairs * sizeof(char *));
+    const char **esc_vals = (const char **)malloc(num_pairs * sizeof(char *));
+    size_t *eklen = (size_t *)malloc(num_pairs * sizeof(size_t));
+    size_t *evlen = (size_t *)malloc(num_pairs * sizeof(size_t));
+    if (!esc_keys || !esc_vals || !eklen || !evlen) {
+        free(copy); free(tokens);
+        free(esc_keys); free(esc_vals); free(eklen); free(evlen);
+        return turbo_strdup("{}");
+    }
+
+    for (size_t i = 0; i < num_pairs; i++) {
+        esc_keys[i] = rt_json_escape_dup(tokens[i * 2]);
+        esc_vals[i] = rt_json_escape_dup(tokens[i * 2 + 1]);
+        eklen[i] = strlen(esc_keys[i]);
+        evlen[i] = strlen(esc_vals[i]);
+        /* "key":"value" = 1+eklen+1+1+1+evlen+1 = eklen+evlen+5 */
+        total += eklen[i] + evlen[i] + 5;
+        if (i > 0) total++; /* comma separator */
+    }
+    total++; /* null terminator */
+
+    char *buf = (char *)turbo_alloc(total);
+    size_t pos = 0;
+    buf[pos++] = '{';
+    for (size_t i = 0; i < num_pairs; i++) {
+        if (i > 0) buf[pos++] = ',';
+        buf[pos++] = '"';
+        memcpy(buf + pos, esc_keys[i], eklen[i]); pos += eklen[i];
+        buf[pos++] = '"';
+        buf[pos++] = ':';
+        buf[pos++] = '"';
+        memcpy(buf + pos, esc_vals[i], evlen[i]); pos += evlen[i];
+        buf[pos++] = '"';
+    }
+    buf[pos++] = '}';
+    buf[pos] = '\0';
+
+    /* Cleanup temporary allocations (escaped strings are arena-allocated,
+     * so they don't need free; copy and tokens are malloc'd) */
+    free(copy);
+    free(tokens);
+    free(esc_keys);
+    free(esc_vals);
+    free(eklen);
+    free(evlen);
+
     return buf;
 }
 
@@ -1493,6 +1725,14 @@ double rt_str_to_f64(const char *s) {
 char rt_str_to_bool(const char *s) {
     if (!s) return 0;
     return strcasecmp(s, "true") == 0 ? 1 : 0;
+}
+
+long long rt_float_to_int(double f) {
+    return (long long)f;
+}
+
+double rt_int_to_float(long long i) {
+    return (double)i;
 }
 
 /* ── Channel runtime ────────────────────────────────────────────────── */
@@ -1586,12 +1826,16 @@ void *rt_channel_clone_sender(const void *ch) {
 typedef struct {
     long long value;
     pthread_mutex_t lock;
+    _Atomic int refcount;
 } turbo_mutex;
 
 void *rt_mutex_create(long long value) {
-    turbo_mutex *m = (turbo_mutex *)turbo_alloc(sizeof(turbo_mutex));
+    /* Mutex lives across threads — use malloc, not the arena. */
+    turbo_mutex *m = (turbo_mutex *)malloc(sizeof(turbo_mutex));
+    if (!m) { fprintf(stderr, "runtime error: mutex alloc failed\n"); exit(1); }
     m->value = value;
     pthread_mutex_init(&m->lock, NULL);
+    atomic_store(&m->refcount, 1);
     return m;
 }
 
@@ -1611,9 +1855,9 @@ void rt_mutex_set(const void *mptr, long long value) {
 }
 
 void *rt_mutex_clone(const void *mptr) {
-    /* Mutex is shared — just return the same pointer.
-     * In the C implementation we don't use Arc, so cloning is a no-op. */
-    return (void *)mptr;
+    turbo_mutex *m = (turbo_mutex *)mptr;
+    atomic_fetch_add(&m->refcount, 1);
+    return (void *)m;
 }
 
 /* ── HashMap runtime ─────────────────────────────────────────────────── */
@@ -2590,14 +2834,14 @@ void *rt_list_dir(const char *path) {
     /* First pass: collect entries */
     long long count = 0;
     long long capacity = 64;
-    char **names = (char **)turbo_alloc((size_t)capacity * sizeof(char *));
+    char **names = (char **)malloc((size_t)capacity * sizeof(char *));
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
         if (count >= capacity) {
             capacity *= 2;
-            names = (char **)turbo_realloc(names, (size_t)capacity * sizeof(char *));
+            names = (char **)realloc(names, (size_t)capacity * sizeof(char *));
         }
         names[count++] = turbo_strdup(entry->d_name);
     }
@@ -2610,7 +2854,7 @@ void *rt_list_dir(const char *path) {
     for (long long i = 0; i < count; i++) {
         arr[1 + i] = (long long)(intptr_t)names[i];
     }
-    turbo_free(names);
+    free(names);
     return arr;
 }
 
