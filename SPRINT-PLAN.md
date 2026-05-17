@@ -1,60 +1,71 @@
-# Sprint Plan — TurboLang v0.9.1 Hardening + TurboServo v0.9.0
+# Sprint Plan — TurboLang v0.9.1 (MEDIUM Fixes + P1 Features)
 
-Generated: 2026-05-16
-Based on: Product review conversation findings (5-agent audit)
+Generated: 2026-05-17
+Based on: FINDINGS-REPORT.md (issues #8-13) + strategic gaps
 
 ## Sprint Goal
 
-Fix all security vulnerabilities and engineering quality issues from the product review, then update TurboServo to v0.9.0 as the flagship killer app showcase.
+Fix all 6 remaining MEDIUM-severity bugs and add 3 P1 builtins (http_post_with_headers, json_build, float_to_int/int_to_float) to unblock turbo-agent and harden the runtime.
 
 ## Success Criteria
 
-- [ ] All P0 (CRITICAL/HIGH security) issues resolved
-- [ ] All P1 (MEDIUM security + engineering quality) issues resolved
-- [ ] C runtime hardened: JSON, padding, HTTP parsing
-- [ ] Parser panic on user input eliminated
-- [ ] CLI unwraps replaced with proper error handling
-- [ ] Codegen CString helper extracted (29 duplicates removed)
-- [ ] TurboServo updated to TurboLang v0.9.0
-- [ ] Build passes, all tests pass
+- [ ] All 6 MEDIUM issues resolved
+- [ ] http_post_with_headers builtin working end-to-end (C runtime + JIT + codegen + sema)
+- [ ] json_build builtin working end-to-end
+- [ ] float_to_int / int_to_float builtins working end-to-end
+- [ ] All existing tests still pass
+- [ ] New integration tests for each fix and feature
 
 ## Dev Tracks
 
-### Track 1: C Runtime Security Hardening
+### Track 1: C Runtime Fixes + New Runtime Functions
+**Agent:** C Runtime Specialist
 **Files touched:** `turbo/crates/turbo-codegen-cranelift/runtime/turbo_rt.c`
 **Tasks:**
-- [P0] TASK-01: Fix JSON escape parser in rt_json_root() — add \t \b \f handling, bounds tracking
-- [P0] TASK-02: Validate padding width in rt_pad_left/rt_pad_right — reject negative width
-- [P1] TASK-03: Check sscanf return value in HTTP request parsing
-- [P1] TASK-04: Add bounds checking to rt_json_get pointer arithmetic
+- [ ] TASK-02: Fix `rt_json_get` naive substring search for nested JSON (line ~1375)
+- [ ] TASK-03: Fix `rt_mutex_clone` to use refcounted wrapper (line ~1599)
+- [ ] TASK-06: Fix `rt_list_dir` to use malloc/realloc instead of turbo_alloc/turbo_realloc (line ~2579)
+- [ ] TASK-07a: Implement `rt_http_post_with_headers(url, body, headers)` in C runtime
+- [ ] TASK-08a: Implement `rt_json_build(pairs_csv)` in C runtime
+- [ ] TASK-09a: Implement `rt_float_to_int(f64) -> i64` and `rt_int_to_float(i64) -> f64` in C runtime
 
-### Track 2: Parser Safety
-**Files touched:** `turbo/crates/turbo-parser/src/lib.rs`
+### Track 2: Codegen Fixes + New Builtin Compilation
+**Agent:** Codegen Specialist
+**Files touched:** `turbo/crates/turbo-codegen-cranelift/src/builtins.rs`, `turbo/crates/turbo-codegen-cranelift/src/expr.rs`
 **Tasks:**
-- [P0] TASK-05: Fix parser panic on soft-keyword EOF — replace .unwrap() at line 1565
+- [ ] TASK-01: Replace `.unwrap()` on binary op compile (expr.rs:78) with proper CodegenError
+- [ ] TASK-04: Fix `compile_abs` to handle f64 via fabs
+- [ ] TASK-05: Fix `compile_min`/`compile_max` to use unsigned comparison for unsigned types
+- [ ] TASK-07b: Add `http_post_with_headers` codegen in builtins.rs
+- [ ] TASK-08b: Add `json_build` codegen in builtins.rs
+- [ ] TASK-09b: Add `float_to_int` / `int_to_float` codegen in builtins.rs
 
-### Track 3: CLI Robustness + Build Config
-**Files touched:** `turbo/crates/turbo-cli/src/main.rs`, `turbo/Cargo.toml`
+### Track 3: JIT Runtime + Sema Type Signatures
+**Agent:** Type System Specialist
+**Files touched:** `turbo/crates/turbo-codegen-cranelift/src/jit.rs`, `turbo/crates/turbo-codegen-cranelift/src/runtime.rs`, `turbo/crates/turbo-sema/src/lib.rs`
 **Tasks:**
-- [P1] TASK-06: Replace .unwrap() on fs ops in turbolang init with proper error messages
-- [P1] TASK-07: Add default-run = "turbolang" to workspace Cargo.toml
+- [ ] TASK-07c: Register `rt_http_post_with_headers` in JIT symbol table + add JIT wrapper in runtime.rs
+- [ ] TASK-08c: Register `rt_json_build` in JIT symbol table + add JIT wrapper in runtime.rs
+- [ ] TASK-09c: Register `rt_float_to_int` / `rt_int_to_float` in JIT symbol table + add JIT wrappers
+- [ ] TASK-07d: Add `http_post_with_headers` type signature in sema
+- [ ] TASK-08d: Add `json_build` type signature in sema
+- [ ] TASK-09d: Add `float_to_int` / `int_to_float` type signatures in sema
 
-### Track 4: Codegen Code Quality
-**Files touched:** `turbo/crates/turbo-codegen-cranelift/src/runtime.rs`
+### Track 4: Integration Tests
+**Agent:** Test Engineer
+**Files touched:** `turbo/tests/phase1/` (new .tb + .expected files only)
 **Tasks:**
-- [P2] TASK-08: Extract cstring_or_empty() helper, replace 29 duplicate patterns
+- [ ] TEST-01: `json_nested.tb` — test rt_json_get with nested JSON objects
+- [ ] TEST-02: `list_dir.tb` — test rt_list_dir basic functionality
+- [ ] TEST-03: `http_post_headers.tb` — test http_post_with_headers
+- [ ] TEST-04: `json_build.tb` — test json_build with multiple key-value pairs
+- [ ] TEST-05: `type_conversions.tb` — test float_to_int and int_to_float
+- [ ] TEST-06: `abs_float.tb` — test abs() with float values
+- [ ] TEST-07: `min_max_types.tb` — test min/max with various numeric types
 
-### Track 5: Integration Tests for Security Fixes
-**Files touched:** `turbo/tests/phase1/` (new files only), `turbo/tests/adversarial/` (new files only)
-**Tasks:**
-- [P1] TASK-09: Add test for JSON escape sequences
-- [P1] TASK-10: Add test for padding edge cases
-- [P1] TASK-11: Add test for soft-keyword EOF (expected error)
-
-### Track 6: TurboServo v0.9.0 Update (separate repo)
-**Files touched:** `/Users/macbookpro-kirby/Desktop/Coding/ZVN/turboservo/`
-**Tasks:**
-- [P1] TASK-12: Update TurboServo to compile with TurboLang v0.9.0
-- [P1] TASK-13: Update turbo.toml version to 0.9.0
-- [P1] TASK-14: Update TURBO-LANG-AUDIT.md
-- [P2] TASK-15: Migrate hand-rolled parse_i64 to str_to_int builtin
+## File Conflict Analysis
+- Track 1: turbo_rt.c (exclusive)
+- Track 2: builtins.rs, expr.rs (exclusive)
+- Track 3: jit.rs, runtime.rs, sema/lib.rs (exclusive)
+- Track 4: tests/phase1/*.tb (exclusive, new files only)
+- **No conflicts between tracks.**
