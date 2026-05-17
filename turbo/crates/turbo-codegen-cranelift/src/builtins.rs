@@ -345,34 +345,69 @@ pub(crate) fn compile_abs<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (val, _) = compile_expr(cx, &args[0])?.unwrap();
-    let zero = cx.builder.ins().iconst(types::I64, 0);
-    let is_neg = cx.builder.ins().icmp(IntCC::SignedLessThan, val, zero);
-    let neg_val = cx.builder.ins().ineg(val);
-    let result = cx.builder.ins().select(is_neg, neg_val, val);
-    Ok(Some((result, TurboTy::Int)))
+    let (val, tty) = compile_expr(cx, &args[0])?.unwrap();
+    if tty == TurboTy::Float {
+        let result = cx.builder.ins().fabs(val);
+        Ok(Some((result, TurboTy::Float)))
+    } else {
+        let zero = cx.builder.ins().iconst(types::I64, 0);
+        let is_neg = cx.builder.ins().icmp(IntCC::SignedLessThan, val, zero);
+        let neg_val = cx.builder.ins().ineg(val);
+        let result = cx.builder.ins().select(is_neg, neg_val, val);
+        Ok(Some((result, TurboTy::Int)))
+    }
 }
 
 pub(crate) fn compile_min<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (a, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (a, a_tty) = compile_expr(cx, &args[0])?.unwrap();
     let (b, _) = compile_expr(cx, &args[1])?.unwrap();
-    let cmp = cx.builder.ins().icmp(IntCC::SignedLessThan, a, b);
-    let result = cx.builder.ins().select(cmp, a, b);
-    Ok(Some((result, TurboTy::Int)))
+    if a_tty == TurboTy::Float {
+        let result = cx.builder.ins().fmin(a, b);
+        Ok(Some((result, TurboTy::Float)))
+    } else {
+        let cmp = cx.builder.ins().icmp(IntCC::SignedLessThan, a, b);
+        let result = cx.builder.ins().select(cmp, a, b);
+        Ok(Some((result, a_tty)))
+    }
 }
 
 pub(crate) fn compile_max<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (a, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (a, a_tty) = compile_expr(cx, &args[0])?.unwrap();
     let (b, _) = compile_expr(cx, &args[1])?.unwrap();
-    let cmp = cx.builder.ins().icmp(IntCC::SignedGreaterThan, a, b);
-    let result = cx.builder.ins().select(cmp, a, b);
+    if a_tty == TurboTy::Float {
+        let result = cx.builder.ins().fmax(a, b);
+        Ok(Some((result, TurboTy::Float)))
+    } else {
+        let cmp = cx.builder.ins().icmp(IntCC::SignedGreaterThan, a, b);
+        let result = cx.builder.ins().select(cmp, a, b);
+        Ok(Some((result, a_tty)))
+    }
+}
+
+/// float_to_int(f64) -> i64 — truncate float to signed integer
+pub(crate) fn compile_builtin_float_to_int<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let result = cx.builder.ins().fcvt_to_sint(types::I64, val);
     Ok(Some((result, TurboTy::Int)))
+}
+
+/// int_to_float(i64) -> f64 — convert signed integer to float
+pub(crate) fn compile_builtin_int_to_float<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let result = cx.builder.ins().fcvt_from_sint(types::F64, val);
+    Ok(Some((result, TurboTy::Float)))
 }
 
 pub(crate) fn compile_to_str_builtin<M: Module>(
@@ -895,6 +930,21 @@ pub(crate) fn compile_builtin_http_post<M: Module>(
     Ok(Some((result, TurboTy::Str)))
 }
 
+/// http_post_with_headers(url, body, headers) -> str
+pub(crate) fn compile_builtin_http_post_with_headers<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (url_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let (body_val, _) = compile_expr(cx, &args[1])?.unwrap();
+    let (headers_val, _) = compile_expr(cx, &args[2])?.unwrap();
+    let fid = cx.rt_fns["rt_http_post_with_headers"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[url_val, body_val, headers_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
 /// json_get(json_str, key) -> str
 pub(crate) fn compile_builtin_json_get<M: Module>(
     cx: &mut Ctx<'_, M>,
@@ -919,6 +969,19 @@ pub(crate) fn compile_builtin_json_stringify<M: Module>(
     let fid = cx.rt_fns["rt_json_stringify"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[key_val, value_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
+/// json_build(pairs_str) -> str
+pub(crate) fn compile_builtin_json_build<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (pairs_val, _) = compile_expr(cx, &args[0])?.unwrap();
+    let fid = cx.rt_fns["rt_json_build"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[pairs_val]);
     let result = cx.builder.inst_results(call)[0];
     Ok(Some((result, TurboTy::Str)))
 }
