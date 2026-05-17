@@ -1488,6 +1488,7 @@ static char *rt_json_escape_dup(const char *s) {
  * only keys at depth 1 (the top-level object) are matched. Properly skips
  * over string literals including escaped quotes. */
 const char *rt_json_get(const char *json, const char *key) {
+    if (!json || !key) return turbo_strdup("");
     size_t json_len = strlen(json);
     const char *json_end = json + json_len;
     size_t klen = strlen(key);
@@ -1556,10 +1557,14 @@ const char *rt_json_get(const char *json, const char *key) {
     if (pos >= json_end) return turbo_strdup("");
 
     if (*pos == '"') {
-        /* String value */
+        /* String value — use proper escape scanning like the key scanner */
         pos++;
         const char *start = pos;
-        while (*pos && !(*pos == '"' && *(pos - 1) != '\\')) pos++;
+        while (pos < json_end) {
+            if (*pos == '\\') { pos += 2; continue; }
+            if (*pos == '"') break;
+            pos++;
+        }
         size_t vlen = pos - start;
         char *val = (char *)turbo_alloc(vlen + 1);
         memcpy(val, start, vlen);
@@ -2842,13 +2847,16 @@ void *rt_list_dir(const char *path) {
     long long count = 0;
     long long capacity = 64;
     char **names = (char **)malloc((size_t)capacity * sizeof(char *));
+    if (!names) { closedir(dir); fprintf(stderr, "runtime error: list_dir alloc failed\n"); exit(1); }
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
         if (count >= capacity) {
             capacity *= 2;
-            names = (char **)realloc(names, (size_t)capacity * sizeof(char *));
+            char **tmp = (char **)realloc(names, (size_t)capacity * sizeof(char *));
+            if (!tmp) { free(names); closedir(dir); fprintf(stderr, "runtime error: list_dir realloc failed\n"); exit(1); }
+            names = tmp;
         }
         names[count++] = turbo_strdup(entry->d_name);
     }
