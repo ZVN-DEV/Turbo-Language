@@ -1,0 +1,19 @@
+// Benchmark: String operations (split, join, contains, replace)
+// Measures: string runtime performance, allocation pressure
+// Expected output: 1000
+fn main() {
+    let base = "the quick brown fox jumps over the lazy dog"
+    let mut count = 0
+    let mut i = 0
+    while i < 1000 {
+        let words = split(base, " ")
+        let joined = join(words, "-")
+        let has_fox = contains(joined, "fox")
+        let replaced = replace(joined, "fox", "cat")
+        if has_fox {
+            count = count + 1
+        }
+        i += 1
+    }
+    print(count)
+}

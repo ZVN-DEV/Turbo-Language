@@ -1,0 +1,22 @@
+// Benchmark: Hashmap insert + lookup (100k entries)
+// Measures: hashmap runtime, string allocation
+// Expected output: 100000
+fn main() {
+    let mut m = hashmap()
+    let mut i = 0
+    while i < 100000 {
+        hashmap_set(m, to_str(i), to_str(i * 7))
+        i += 1
+    }
+    // Verify all entries
+    let mut found = 0
+    i = 0
+    while i < 100000 {
+        let v = hashmap_get(m, to_str(i))
+        if v == to_str(i * 7) {
+            found = found + 1
+        }
+        i += 1
+    }
+    print(found)
+}

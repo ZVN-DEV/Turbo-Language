@@ -1,0 +1,15 @@
+// Benchmark: Leibniz formula for pi (50M iterations)
+// Measures: float arithmetic, loop performance
+// Expected output: 3.1415926 (approx)
+fn main() {
+    let mut sum = 0.0
+    let mut sign = 1.0
+    let mut i = 0
+    while i < 50000000 {
+        sum = sum + sign / int_to_float(2 * i + 1)
+        sign = 0.0 - sign
+        i += 1
+    }
+    let pi = sum * 4.0
+    print(pi)
+}
