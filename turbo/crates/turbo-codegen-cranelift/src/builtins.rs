@@ -368,7 +368,12 @@ pub(crate) fn compile_min<M: Module>(
         let result = cx.builder.ins().fmin(a, b);
         Ok(Some((result, TurboTy::Float)))
     } else {
-        let cmp = cx.builder.ins().icmp(IntCC::SignedLessThan, a, b);
+        let cc = if a_tty == TurboTy::U8 || a_tty == TurboTy::U16 {
+            IntCC::UnsignedLessThan
+        } else {
+            IntCC::SignedLessThan
+        };
+        let cmp = cx.builder.ins().icmp(cc, a, b);
         let result = cx.builder.ins().select(cmp, a, b);
         Ok(Some((result, a_tty)))
     }
@@ -384,19 +389,24 @@ pub(crate) fn compile_max<M: Module>(
         let result = cx.builder.ins().fmax(a, b);
         Ok(Some((result, TurboTy::Float)))
     } else {
-        let cmp = cx.builder.ins().icmp(IntCC::SignedGreaterThan, a, b);
+        let cc = if a_tty == TurboTy::U8 || a_tty == TurboTy::U16 {
+            IntCC::UnsignedGreaterThan
+        } else {
+            IntCC::SignedGreaterThan
+        };
+        let cmp = cx.builder.ins().icmp(cc, a, b);
         let result = cx.builder.ins().select(cmp, a, b);
         Ok(Some((result, a_tty)))
     }
 }
 
-/// float_to_int(f64) -> i64 — truncate float to signed integer
+/// float_to_int(f64) -> i64 — truncate float to signed integer (saturating)
 pub(crate) fn compile_builtin_float_to_int<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
     let (val, _) = compile_expr(cx, &args[0])?.unwrap();
-    let result = cx.builder.ins().fcvt_to_sint(types::I64, val);
+    let result = cx.builder.ins().fcvt_to_sint_sat(types::I64, val);
     Ok(Some((result, TurboTy::Int)))
 }
 

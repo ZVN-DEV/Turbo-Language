@@ -1872,6 +1872,15 @@ void *rt_mutex_clone(const void *mptr) {
     return (void *)m;
 }
 
+void rt_mutex_drop(const void *mptr) {
+    if (!mptr) return;
+    turbo_mutex *m = (turbo_mutex *)mptr;
+    if (atomic_fetch_sub(&m->refcount, 1) == 1) {
+        pthread_mutex_destroy(&m->lock);
+        free(m);
+    }
+}
+
 /* ── HashMap runtime ─────────────────────────────────────────────────── */
 
 /* Simple hash table using open addressing with linear probing.
