@@ -81,6 +81,13 @@ pub(crate) fn compile_module<M: Module>(
     declare_rt_fn(
         module,
         &mut rt_fns,
+        "rt_str_concat_inplace",
+        &[ptr_type, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
         "rt_str_eq",
         &[ptr_type, ptr_type],
         Some(types::I8),
@@ -91,6 +98,13 @@ pub(crate) fn compile_module<M: Module>(
         "rt_array_alloc",
         &[types::I64],
         Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_array_oob_exit",
+        &[types::I64, types::I64],
+        None,
     )?;
     declare_rt_fn(
         module,
@@ -1365,6 +1379,7 @@ pub(crate) fn compile_module<M: Module>(
                 constants: &constants_map,
                 struct_derives: &struct_derives,
                 loop_stack: Vec::new(),
+                is_unsafe: f.is_unsafe,
             };
 
             let entry = cx.builder.create_block();
@@ -1501,6 +1516,7 @@ pub(crate) fn compile_module<M: Module>(
                     constants: &constants_map,
                     struct_derives: &struct_derives,
                     loop_stack: Vec::new(),
+                is_unsafe: method.is_unsafe,
                 };
 
                 let entry = cx.builder.create_block();
@@ -1623,6 +1639,7 @@ pub(crate) fn compile_module<M: Module>(
                 constants: &constants_map,
                 struct_derives: &struct_derives,
                 loop_stack: Vec::new(),
+                is_unsafe: false,
             };
 
             let entry = cx.builder.create_block();
@@ -1713,6 +1730,7 @@ pub(crate) fn compile_module<M: Module>(
                 constants: &constants_map,
                 struct_derives: &struct_derives,
                 loop_stack: Vec::new(),
+                is_unsafe: false,
             };
 
             let entry = cx.builder.create_block();
@@ -1897,6 +1915,7 @@ pub(crate) fn compile_module<M: Module>(
                 constants: &constants_map,
                 struct_derives: &struct_derives,
                 loop_stack: Vec::new(),
+                is_unsafe: false,
             };
 
             let entry = cx.builder.create_block();

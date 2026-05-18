@@ -14,11 +14,12 @@ fn cstring_or_empty(s: impl Into<Vec<u8>>) -> std::ffi::CString {
 }
 
 /// Compute an allocation layout for array-like structures, returning None on overflow.
-/// Format: [refcount: i64][length: i64][elements: len * 8 bytes]
-fn checked_array_layout(len: usize) -> Option<std::alloc::Layout> {
-    let elem_bytes = len.checked_mul(8)?;
+/// Format: [cap: i64][refcount: i64][length: i64][elements: cap * 8 bytes]
+/// `cap` is the element capacity (>= len). We allocate for `cap` elements.
+fn checked_array_layout(cap: usize) -> Option<std::alloc::Layout> {
+    let elem_bytes = cap.checked_mul(8)?;
     let data_bytes = elem_bytes.checked_add(8)?; // +8 for length field
-    let total_bytes = data_bytes.checked_add(8)?; // +8 for refcount header
+    let total_bytes = data_bytes.checked_add(16)?; // +16 for cap + refcount header
     std::alloc::Layout::from_size_align(total_bytes, 8).ok()
 }
 
@@ -51,15 +52,22 @@ fn unregister_alloc(raw_ptr: *mut u8) -> Option<std::alloc::Layout> {
 // the pointer here via `arena_str()`. At the end of JIT execution (or
 // after each HTTP request), `rt_arena_reset()` frees them all.
 
+struct ArenaEntry {
+    ptr: *mut u8,
+    cap: usize,
+    is_raw: bool,
+}
+
 thread_local! {
-    static STRING_ARENA: RefCell<Vec<*mut std::ffi::c_char>> = const { RefCell::new(Vec::new()) };
+    static STRING_ARENA: RefCell<Vec<ArenaEntry>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Leak a CString into the arena. Returns the raw pointer for FFI.
 fn arena_str(cs: std::ffi::CString) -> *const u8 {
-    let ptr = cs.into_raw();
+    let cap = cs.as_bytes_with_nul().len();
+    let ptr = cs.into_raw() as *mut u8;
     STRING_ARENA.with(|arena| {
-        arena.borrow_mut().push(ptr);
+        arena.borrow_mut().push(ArenaEntry { ptr, cap, is_raw: false });
     });
     ptr as *const u8
 }
@@ -68,9 +76,14 @@ fn arena_str(cs: std::ffi::CString) -> *const u8 {
 pub(crate) extern "C" fn rt_arena_reset() {
     STRING_ARENA.with(|arena| {
         let mut strings = arena.borrow_mut();
-        for ptr in strings.drain(..) {
+        for entry in strings.drain(..) {
             unsafe {
-                drop(std::ffi::CString::from_raw(ptr));
+                if entry.is_raw {
+                    let layout = std::alloc::Layout::from_size_align(entry.cap, 1).unwrap();
+                    std::alloc::dealloc(entry.ptr, layout);
+                } else {
+                    drop(std::ffi::CString::from_raw(entry.ptr as *mut std::ffi::c_char));
+                }
             }
         }
     });
@@ -173,7 +186,8 @@ pub(crate) extern "C" fn rt_array_alloc(len: i64) -> *mut u8 {
         eprintln!("runtime error: negative array length {}", len);
         std::process::exit(1);
     }
-    let layout = match checked_array_layout(len as usize) {
+    let cap = len as usize;
+    let layout = match checked_array_layout(cap) {
         Some(l) => l,
         None => {
             eprintln!("runtime error: array allocation overflow (length {})", len);
@@ -186,13 +200,14 @@ pub(crate) extern "C" fn rt_array_alloc(len: i64) -> *mut u8 {
         std::process::exit(1);
     }
     register_alloc(ptr, layout);
+    // Layout: [cap: 8][refcount: 8][length: 8][data...]
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount = 1
-    let data_ptr = unsafe { ptr.add(8) }; // pointer past refcount header
-                                          // Store length at the start of the data region
+        *(ptr as *mut i64) = cap as i64; // capacity
+        *(ptr.add(8) as *mut i64) = 1;   // refcount = 1
+    }
+    let data_ptr = unsafe { ptr.add(16) }; // pointer past cap+refcount header
     unsafe {
-        *(data_ptr as *mut i64) = len;
+        *(data_ptr as *mut i64) = len;     // length
     }
     data_ptr
 }
@@ -217,7 +232,8 @@ pub(crate) extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) -> *
         // Copy-on-write: make a private copy
         let len = unsafe { *(arr as *const i64) };
         let data_size = (1 + len as usize) * 8; // length field + elements, for copy
-        let layout = match checked_array_layout(len as usize) {
+        let cap = len as usize;
+        let layout = match checked_array_layout(cap) {
             Some(l) => l,
             None => {
                 eprintln!("runtime error: COW array copy overflow");
@@ -231,9 +247,10 @@ pub(crate) extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) -> *
         }
         register_alloc(new_alloc, layout);
         unsafe {
-            *(new_alloc as *mut i64) = 1;
-        } // new refcount = 1
-        let new_data = unsafe { new_alloc.add(8) };
+            *(new_alloc as *mut i64) = cap as i64; // capacity
+            *(new_alloc.add(8) as *mut i64) = 1;   // refcount = 1
+        }
+        let new_data = unsafe { new_alloc.add(16) };
         unsafe {
             std::ptr::copy_nonoverlapping(arr, new_data, data_size);
         }
@@ -273,15 +290,32 @@ pub(crate) extern "C" fn rt_array_push(arr: *const u8, value: i64) -> *mut u8 {
             std::process::exit(1);
         }
     };
-    let layout = match checked_array_layout(new_len) {
-        Some(l) => l,
-        None => {
-            eprintln!(
-                "runtime error: array allocation overflow (length {})",
-                new_len
-            );
-            std::process::exit(1);
+
+    // Check if we can grow in place (sole owner + capacity available)
+    let rc = unsafe { *(arr.sub(8) as *const i64) };
+    let cap = unsafe { *(arr.sub(16) as *const i64) } as usize;
+
+    if rc == 1 && cap > old_len {
+        // Fast path: write in place
+        unsafe {
+            *((arr as *mut i64).add(1 + old_len)) = value;
+            *(arr as *mut i64) = new_len as i64;
         }
+        return arr as *mut u8;
+    }
+
+    // Slow path: allocate with doubled capacity
+    let new_cap = if cap > 0 { cap * 2 } else { 4 };
+    let new_cap = new_cap.max(new_len);
+    let layout = match checked_array_layout(new_cap) {
+        Some(l) => l,
+        None => match checked_array_layout(new_len) {
+            Some(l) => l,
+            None => {
+                eprintln!("runtime error: array allocation overflow (length {})", new_len);
+                std::process::exit(1);
+            }
+        },
     };
     let new_alloc = unsafe { std::alloc::alloc_zeroed(layout) };
     if new_alloc.is_null() {
@@ -290,16 +324,19 @@ pub(crate) extern "C" fn rt_array_push(arr: *const u8, value: i64) -> *mut u8 {
     }
     register_alloc(new_alloc, layout);
     unsafe {
-        *(new_alloc as *mut i64) = 1; // refcount = 1
+        *(new_alloc as *mut i64) = new_cap as i64; // capacity
+        *(new_alloc.add(8) as *mut i64) = 1;       // refcount = 1
     }
-    let new_data = unsafe { new_alloc.add(8) };
+    let new_data = unsafe { new_alloc.add(16) };
     unsafe {
-        *(new_data as *mut i64) = new_len as i64; // set length
-                                                  // Copy old elements
+        *(new_data as *mut i64) = new_len as i64;
         std::ptr::copy_nonoverlapping(arr.add(8), new_data.add(8), old_len * 8);
-        // Append new element
         *((new_data as *mut i64).add(1 + old_len)) = value;
     }
+    // Decrement old refcount (don't free — JIT may still hold stale register refs
+    // to the old data_ptr between the push call returning and the variable reassignment)
+    let rc_ptr = unsafe { (arr as *mut u8).sub(8) as *mut std::sync::atomic::AtomicI64 };
+    unsafe { (*rc_ptr).fetch_sub(1, std::sync::atomic::Ordering::Release); }
     new_data
 }
 
@@ -332,6 +369,66 @@ pub(crate) extern "C" fn rt_str_concat(a: *const u8, b: *const u8) -> *const u8 
     let c_string =
         cstring_or_empty(result);
     arena_str(c_string)
+}
+
+pub(crate) extern "C" fn rt_str_concat_inplace(a: *const u8, b: *const u8) -> *const u8 {
+    if a.is_null() || b.is_null() {
+        return rt_str_concat(a, b);
+    }
+    let a_len = unsafe { libc_strlen(a) };
+    let b_len = unsafe { libc_strlen(b) };
+    let new_len = a_len + b_len;
+
+    STRING_ARENA.with(|arena| {
+        let mut entries = arena.borrow_mut();
+        if let Some(last) = entries.last_mut() {
+            if last.ptr as *const u8 == a {
+                let needed = new_len + 1;
+                if needed <= last.cap {
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(b, (a as *mut u8).add(a_len), b_len);
+                        *(a as *mut u8).add(new_len) = 0;
+                    }
+                    return a;
+                }
+                let new_cap = (needed * 2).max(64);
+                let layout = std::alloc::Layout::from_size_align(new_cap, 1).unwrap();
+                let new_ptr = unsafe { std::alloc::alloc(layout) };
+                if new_ptr.is_null() {
+                    drop(entries);
+                    return rt_str_concat(a, b);
+                }
+                unsafe {
+                    std::ptr::copy_nonoverlapping(a, new_ptr, a_len);
+                    std::ptr::copy_nonoverlapping(b, new_ptr.add(a_len), b_len);
+                    *new_ptr.add(new_len) = 0;
+                }
+                // Free old allocation
+                unsafe {
+                    if last.is_raw {
+                        let old_layout = std::alloc::Layout::from_size_align(last.cap, 1).unwrap();
+                        std::alloc::dealloc(last.ptr, old_layout);
+                    } else {
+                        drop(std::ffi::CString::from_raw(last.ptr as *mut std::ffi::c_char));
+                    }
+                }
+                last.ptr = new_ptr;
+                last.cap = new_cap;
+                last.is_raw = true;
+                return new_ptr as *const u8;
+            }
+        }
+        drop(entries);
+        rt_str_concat(a, b)
+    })
+}
+
+unsafe fn libc_strlen(s: *const u8) -> usize {
+    let mut len = 0;
+    while *s.add(len) != 0 {
+        len += 1;
+    }
+    len
 }
 
 pub(crate) extern "C" fn rt_str_eq(a: *const u8, b: *const u8) -> i8 {
@@ -368,7 +465,7 @@ pub(crate) extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
             std::process::exit(1);
         }
     };
-    let total_size = data_size + 8; // +8 for refcount header
+    let total_size = data_size + 16; // +16 for cap + refcount header
     let layout = std::alloc::Layout::from_size_align(total_size, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
@@ -376,14 +473,46 @@ pub(crate) extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
         std::process::exit(1);
     }
     register_alloc(ptr, layout);
+    // Layout: [cap: 8 (unused for structs)][refcount: 8][data...]
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount = 1
-    unsafe { ptr.add(8) } // return pointer past refcount header
+        *(ptr as *mut i64) = 0;           // cap = 0 (not an array)
+        *(ptr.add(8) as *mut i64) = 1;    // refcount = 1
+    }
+    unsafe { ptr.add(16) } // return pointer past cap+refcount header
+}
+
+pub(crate) extern "C" fn rt_array_oob_exit(index: i64, len: i64) {
+    eprintln!(
+        "runtime error: array index {} out of bounds (length {})",
+        index, len
+    );
+    std::process::exit(1);
+}
+
+fn fast_i64_to_string(n: i64) -> String {
+    let mut buf = [0u8; 20];
+    let neg = n < 0;
+    let mut v = if neg { (n as i128).unsigned_abs() as u64 } else { n as u64 };
+    let mut pos = 20;
+    if v == 0 {
+        pos -= 1;
+        buf[pos] = b'0';
+    } else {
+        while v > 0 {
+            pos -= 1;
+            buf[pos] = b'0' + (v % 10) as u8;
+            v /= 10;
+        }
+    }
+    if neg {
+        pos -= 1;
+        buf[pos] = b'-';
+    }
+    unsafe { std::str::from_utf8_unchecked(&buf[pos..20]) }.to_owned()
 }
 
 pub(crate) extern "C" fn rt_i64_to_str(n: i64) -> *const u8 {
-    let s = format!("{}", n);
+    let s = fast_i64_to_string(n);
     let c = cstring_or_empty(s);
     arena_str(c)
 }
@@ -403,7 +532,7 @@ pub(crate) extern "C" fn rt_bool_to_str(b: i8) -> *const u8 {
 // ── Result type runtime functions ────────────────────────────────────
 
 pub(crate) extern "C" fn rt_result_ok(value: i64) -> *mut u8 {
-    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
+    let layout = std::alloc::Layout::from_size_align(16 + 16, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         eprintln!("turbo: fatal: memory allocation failed");
@@ -411,9 +540,10 @@ pub(crate) extern "C" fn rt_result_ok(value: i64) -> *mut u8 {
     }
     register_alloc(ptr, layout);
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount = 1
-    let data_ptr = unsafe { ptr.add(8) };
+        *(ptr as *mut i64) = 0; // cap = 0 (not an array)
+        *((ptr as *mut i64).add(1)) = 1; // refcount = 1
+    }
+    let data_ptr = unsafe { ptr.add(16) };
     unsafe {
         *(data_ptr as *mut i64) = 0; // tag = ok
         *((data_ptr as *mut i64).add(1)) = value;
@@ -422,7 +552,7 @@ pub(crate) extern "C" fn rt_result_ok(value: i64) -> *mut u8 {
 }
 
 pub(crate) extern "C" fn rt_result_err(value: i64) -> *mut u8 {
-    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
+    let layout = std::alloc::Layout::from_size_align(16 + 16, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         eprintln!("turbo: fatal: memory allocation failed");
@@ -430,9 +560,10 @@ pub(crate) extern "C" fn rt_result_err(value: i64) -> *mut u8 {
     }
     register_alloc(ptr, layout);
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount = 1
-    let data_ptr = unsafe { ptr.add(8) };
+        *(ptr as *mut i64) = 0; // cap = 0
+        *((ptr as *mut i64).add(1)) = 1; // refcount = 1
+    }
+    let data_ptr = unsafe { ptr.add(16) };
     unsafe {
         *(data_ptr as *mut i64) = 1; // tag = err
         *((data_ptr as *mut i64).add(1)) = value;
@@ -451,7 +582,7 @@ pub(crate) extern "C" fn rt_result_value(result: *const u8) -> i64 {
 // ── Optional type runtime functions ──────────────────────────────────
 
 pub(crate) extern "C" fn rt_option_some(value: i64) -> *mut u8 {
-    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
+    let layout = std::alloc::Layout::from_size_align(16 + 16, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         eprintln!("turbo: fatal: memory allocation failed");
@@ -459,9 +590,10 @@ pub(crate) extern "C" fn rt_option_some(value: i64) -> *mut u8 {
     }
     register_alloc(ptr, layout);
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount = 1
-    let data_ptr = unsafe { ptr.add(8) };
+        *(ptr as *mut i64) = 0; // cap = 0
+        *(ptr.add(8) as *mut i64) = 1; // refcount = 1
+    }
+    let data_ptr = unsafe { ptr.add(16) };
     unsafe {
         *(data_ptr as *mut i64) = 1; // tag = some
         *((data_ptr as *mut i64).add(1)) = value;
@@ -470,7 +602,7 @@ pub(crate) extern "C" fn rt_option_some(value: i64) -> *mut u8 {
 }
 
 pub(crate) extern "C" fn rt_option_none() -> *mut u8 {
-    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap(); // +8 for refcount
+    let layout = std::alloc::Layout::from_size_align(16 + 16, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         eprintln!("turbo: fatal: memory allocation failed");
@@ -478,9 +610,10 @@ pub(crate) extern "C" fn rt_option_none() -> *mut u8 {
     }
     register_alloc(ptr, layout);
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount = 1
-    let data_ptr = unsafe { ptr.add(8) };
+        *(ptr as *mut i64) = 0; // cap = 0
+        *(ptr.add(8) as *mut i64) = 1; // refcount = 1
+    }
+    let data_ptr = unsafe { ptr.add(16) };
     unsafe {
         *(data_ptr as *mut i64) = 0; // tag = none
         *((data_ptr as *mut i64).add(1)) = 0;
@@ -507,7 +640,6 @@ pub(crate) extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
         .unwrap_or("");
     let parts: Vec<&str> = s.split(sep).collect();
     let len = parts.len() as i64;
-    // Array format: [refcount: i64][len: i64][ptr0: i64][ptr1: i64]...
     let layout = match checked_array_layout(len as usize) {
         Some(l) => l,
         None => {
@@ -522,9 +654,10 @@ pub(crate) extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
     }
     register_alloc(ptr, layout);
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount = 1
-    let data_ptr = unsafe { ptr.add(8) };
+        *(ptr as *mut i64) = len; // cap
+        *(ptr.add(8) as *mut i64) = 1; // refcount
+    }
+    let data_ptr = unsafe { ptr.add(16) };
     unsafe {
         *(data_ptr as *mut i64) = len;
     }
@@ -1976,7 +2109,7 @@ pub(crate) extern "C" fn rt_channel_create() -> *mut u8 {
     let tx_box = Box::into_raw(Box::new(tx)) as i64;
     let rx_box = Box::into_raw(Box::new(rx)) as i64;
 
-    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap();
+    let layout = std::alloc::Layout::from_size_align(16 + 16, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         eprintln!("turbo: fatal: memory allocation failed");
@@ -1984,9 +2117,10 @@ pub(crate) extern "C" fn rt_channel_create() -> *mut u8 {
     }
     register_alloc(ptr, layout);
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount = 1
-    let data_ptr = unsafe { ptr.add(8) };
+        *(ptr as *mut i64) = 0; // cap = 0
+        *(ptr.add(8) as *mut i64) = 1; // refcount = 1
+    }
+    let data_ptr = unsafe { ptr.add(16) };
     unsafe {
         *(data_ptr as *mut i64) = tx_box;
         *((data_ptr as *mut i64).add(1)) = rx_box;
@@ -2017,7 +2151,7 @@ pub(crate) extern "C" fn rt_channel_clone_sender(ch: *const u8) -> *mut u8 {
     let new_tx = Box::into_raw(Box::new(cloned)) as i64;
 
     let rx_ptr = unsafe { *((ch as *const i64).add(1)) };
-    let layout = std::alloc::Layout::from_size_align(8 + 16, 8).unwrap();
+    let layout = std::alloc::Layout::from_size_align(16 + 16, 8).unwrap();
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         eprintln!("turbo: fatal: memory allocation failed");
@@ -2025,9 +2159,10 @@ pub(crate) extern "C" fn rt_channel_clone_sender(ch: *const u8) -> *mut u8 {
     }
     register_alloc(ptr, layout);
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount = 1
-    let data_ptr = unsafe { ptr.add(8) };
+        *(ptr as *mut i64) = 0; // cap = 0
+        *(ptr.add(8) as *mut i64) = 1; // refcount = 1
+    }
+    let data_ptr = unsafe { ptr.add(16) };
     unsafe {
         *(data_ptr as *mut i64) = new_tx;
         *((data_ptr as *mut i64).add(1)) = rx_ptr;
@@ -2144,9 +2279,10 @@ pub(crate) extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
     }
     register_alloc(ptr, layout);
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount = 1
-    let data_ptr = unsafe { ptr.add(8) };
+        *(ptr as *mut i64) = len; // cap
+        *(ptr.add(8) as *mut i64) = 1; // refcount
+    }
+    let data_ptr = unsafe { ptr.add(16) };
     unsafe {
         *(data_ptr as *mut i64) = len;
     }
@@ -2226,7 +2362,8 @@ pub(crate) extern "C" fn rt_release(data_ptr: *mut u8) {
     if prev == 1 {
         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
         // Refcount reached 0 — free the allocation.
-        let raw_ptr = unsafe { data_ptr.sub(8) };
+        // Raw allocation base is at data_ptr - 16 (cap + refcount header)
+        let raw_ptr = unsafe { data_ptr.sub(16) };
         if let Some(layout) = unregister_alloc(raw_ptr) {
             unsafe {
                 std::alloc::dealloc(raw_ptr, layout);
@@ -2298,9 +2435,10 @@ pub(crate) extern "C" fn rt_list_dir(path: *const u8) -> *mut u8 {
     }
     register_alloc(ptr, layout);
     unsafe {
-        *(ptr as *mut i64) = 1; // refcount
+        *(ptr as *mut i64) = len; // cap
+        *(ptr.add(8) as *mut i64) = 1; // refcount
     }
-    let data_ptr = unsafe { ptr.add(8) };
+    let data_ptr = unsafe { ptr.add(16) };
     unsafe {
         *(data_ptr as *mut i64) = len;
     }
@@ -2422,9 +2560,10 @@ pub(crate) extern "C" fn rt_sort_int(arr: *const u8) -> *mut u8 {
     }
     register_alloc(ptr, layout);
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount
-    let data_ptr = unsafe { ptr.add(8) };
+        *(ptr as *mut i64) = len; // cap
+        *(ptr.add(8) as *mut i64) = 1; // refcount
+    }
+    let data_ptr = unsafe { ptr.add(16) };
     unsafe {
         *(data_ptr as *mut i64) = len;
     }
@@ -2456,9 +2595,10 @@ pub(crate) extern "C" fn rt_sort_str(arr: *const u8) -> *mut u8 {
     }
     register_alloc(ptr, layout);
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount
-    let data_ptr = unsafe { ptr.add(8) };
+        *(ptr as *mut i64) = len; // cap
+        *(ptr.add(8) as *mut i64) = 1; // refcount
+    }
+    let data_ptr = unsafe { ptr.add(16) };
     unsafe {
         *(data_ptr as *mut i64) = len;
     }
@@ -2506,9 +2646,10 @@ pub(crate) extern "C" fn rt_reverse(arr: *const u8) -> *mut u8 {
     }
     register_alloc(ptr, layout);
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount
-    let data_ptr = unsafe { ptr.add(8) };
+        *(ptr as *mut i64) = len; // cap
+        *(ptr.add(8) as *mut i64) = 1; // refcount
+    }
+    let data_ptr = unsafe { ptr.add(16) };
     unsafe {
         *(data_ptr as *mut i64) = len;
     }
@@ -2578,9 +2719,10 @@ pub(crate) extern "C" fn rt_slice(arr: *const u8, start: i64, end: i64) -> *mut 
     }
     register_alloc(ptr, layout);
     unsafe {
-        *(ptr as *mut i64) = 1;
-    } // refcount
-    let data_ptr = unsafe { ptr.add(8) };
+        *(ptr as *mut i64) = new_len; // cap
+        *(ptr.add(8) as *mut i64) = 1; // refcount
+    }
+    let data_ptr = unsafe { ptr.add(16) };
     unsafe {
         *(data_ptr as *mut i64) = new_len;
     }

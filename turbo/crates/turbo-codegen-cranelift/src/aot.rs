@@ -66,7 +66,7 @@ pub fn aot_compile(
     flag_builder.set("use_colocated_libcalls", "false").unwrap();
     flag_builder.set("is_pic", "true").unwrap(); // Required for AOT linking on macOS
     if optimize {
-        flag_builder.set("opt_level", "speed_and_size").unwrap();
+        flag_builder.set("opt_level", "speed").unwrap();
         let verifier = if cfg!(debug_assertions) {
             "true"
         } else {

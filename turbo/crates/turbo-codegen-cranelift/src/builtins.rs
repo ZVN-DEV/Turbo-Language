@@ -1878,12 +1878,67 @@ pub(crate) fn compile_builtin_reduce<M: Module>(
 
 // ── If expression ───────────────────────────────────────────────────
 
+fn extract_single_assign(branch: &Spanned<Expr>) -> Option<(&str, &Spanned<Expr>)> {
+    match &branch.node {
+        Expr::Block { stmts, tail_expr } if stmts.len() == 1 && tail_expr.is_none() => {
+            if let Stmt::Expr(ref inner) = stmts[0].node {
+                if let Expr::Assign { target, value } = &inner.node {
+                    return Some((target.as_str(), value));
+                }
+            }
+            None
+        }
+        Expr::Assign { target, value } => Some((target.as_str(), value)),
+        _ => None,
+    }
+}
+
+fn is_pure_expr(expr: &Expr) -> bool {
+    match expr {
+        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::Ident(_) => true,
+        Expr::BinaryOp { left, op, right } => {
+            if matches!(op, BinOp::Div | BinOp::Mod) {
+                if !matches!(right.node, Expr::IntLit(n) if n != 0) {
+                    return false;
+                }
+            }
+            is_pure_expr(&left.node) && is_pure_expr(&right.node)
+        }
+        Expr::UnaryOp { expr, .. } => is_pure_expr(&expr.node),
+        _ => false,
+    }
+}
+
 pub(crate) fn compile_if<M: Module>(
     cx: &mut Ctx<'_, M>,
     condition: &Spanned<Expr>,
     then_branch: &Spanned<Expr>,
     else_branch: Option<&Spanned<Expr>>,
 ) -> Result<MaybeTyped, CodegenError> {
+    // Select optimization: if cond { x = a } else { x = b }
+    // → compute both a and b, then x = select(cond, a, b)
+    if let Some(else_br) = else_branch {
+        if let (Some((then_target, then_val)), Some((else_target, else_val))) =
+            (extract_single_assign(then_branch), extract_single_assign(else_br))
+        {
+            if then_target == else_target
+                && is_pure_expr(&then_val.node)
+                && is_pure_expr(&else_val.node)
+            {
+                if let Some((var, _, _)) = cx.vars.get(then_target) {
+                    let var = *var;
+                    let (then_v, _) = compile_expr(cx, then_val)?.unwrap();
+                    let (else_v, _) = compile_expr(cx, else_val)?.unwrap();
+                    let (cond, _) = compile_expr(cx, condition)?.unwrap();
+                    let cond_bool = cx.to_bool(cond);
+                    let result = cx.builder.ins().select(cond_bool, then_v, else_v);
+                    cx.builder.def_var(var, result);
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
     let (cond, _) = compile_expr(cx, condition)?.unwrap();
     let cond_bool = cx.to_bool(cond);
 
@@ -2609,11 +2664,8 @@ pub(crate) fn compile_for_in_array<M: Module>(
     // Compile the array expression
     let (arr_ptr, arr_tty) = compile_expr(cx, iterable)?.unwrap();
 
-    // Get array length via rt_array_len
-    let len_fid = cx.rt_fns["rt_array_len"];
-    let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
-    let call = cx.builder.ins().call(len_ref, &[arr_ptr]);
-    let arr_len = cx.builder.inst_results(call)[0];
+    // Inline array length load (first i64 at arr_ptr)
+    let arr_len = cx.builder.ins().load(types::I64, MemFlags::trusted(), arr_ptr, 0i32);
 
     // Determine element TurboTy from the array type
     let elem_tty = match arr_tty {
@@ -2670,14 +2722,14 @@ pub(crate) fn compile_for_in_array<M: Module>(
     cx.builder.switch_to_block(body_block);
     cx.builder.seal_block(body_block);
 
-    // Load element: arr[idx] via rt_array_get
-    let get_fid = cx.rt_fns["rt_array_get"];
-    let get_ref = cx.module.declare_func_in_func(get_fid, cx.builder.func);
+    // Inline array element load (bounds already checked by idx < len in header)
     let idx_val = cx.builder.use_var(idx_var);
-    let get_call = cx.builder.ins().call(get_ref, &[arr_ptr, idx_val]);
-    let raw_elem = cx.builder.inst_results(get_call)[0];
+    let data_base = cx.builder.ins().iadd_imm(arr_ptr, 8);
+    let byte_offset = cx.builder.ins().ishl_imm(idx_val, 3);
+    let elem_ptr = cx.builder.ins().iadd(data_base, byte_offset);
+    let raw_elem = cx.builder.ins().load(types::I64, MemFlags::trusted(), elem_ptr, 0i32);
 
-    // rt_array_get returns raw i64 bits; convert to the correct type
+    // Raw i64 bits; convert to the correct type
     let typed_elem = match &elem_tty {
         TurboTy::Bool => cx.builder.ins().ireduce(types::I8, raw_elem),
         TurboTy::Float => cx

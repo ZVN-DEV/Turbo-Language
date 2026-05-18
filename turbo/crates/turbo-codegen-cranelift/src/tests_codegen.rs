@@ -123,6 +123,7 @@ fn test_codegen_rejects_pathologically_deep_ast() {
                 constants: &constants,
                 struct_derives: &struct_derives,
                 loop_stack: Vec::new(),
+                is_unsafe: false,
             };
 
             let entry = cx.builder.create_block();
@@ -1043,7 +1044,7 @@ fn test_rt_retain_release_multiple() {
     assert_eq!(unsafe { *rc_ptr }, 1);
 
     // Verify allocation is registered before final release
-    let raw_ptr = unsafe { arr.sub(8) };
+    let raw_ptr = unsafe { arr.sub(16) };
     let registered_before =
         ALLOC_REGISTRY.with(|reg| reg.borrow().contains_key(&(raw_ptr as usize)));
     assert!(
@@ -1580,7 +1581,7 @@ fn test_codegen_error_is_std_error() {
 fn test_rt_release_frees_on_zero_refcount() {
     // Allocate an array, verify it's registered, release it, verify it's freed.
     let arr = rt_array_alloc(3);
-    let raw = unsafe { arr.sub(8) };
+    let raw = unsafe { arr.sub(16) };
 
     // Verify registered
     let before = ALLOC_REGISTRY.with(|reg| reg.borrow().contains_key(&(raw as usize)));
@@ -1601,7 +1602,7 @@ fn test_rt_release_null_is_safe() {
 #[test]
 fn test_rt_release_struct_frees_on_zero() {
     let s = rt_struct_alloc(4);
-    let raw = unsafe { s.sub(8) };
+    let raw = unsafe { s.sub(16) };
 
     let before = ALLOC_REGISTRY.with(|reg| reg.borrow().contains_key(&(raw as usize)));
     assert!(before);
@@ -1614,7 +1615,7 @@ fn test_rt_release_struct_frees_on_zero() {
 #[test]
 fn test_rt_release_result_frees_on_zero() {
     let r = rt_result_ok(42);
-    let raw = unsafe { r.sub(8) };
+    let raw = unsafe { r.sub(16) };
 
     let before = ALLOC_REGISTRY.with(|reg| reg.borrow().contains_key(&(raw as usize)));
     assert!(before);

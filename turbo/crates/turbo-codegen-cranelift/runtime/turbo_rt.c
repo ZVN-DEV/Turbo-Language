@@ -317,6 +317,39 @@ const char* rt_str_concat(const char *a, const char *b) {
     return result;
 }
 
+const char* rt_str_concat_inplace(const char *old, const char *suffix) {
+    if (!suffix || !*suffix) return old ? old : "";
+    if (!old || !*old) {
+        size_t len = strlen(suffix);
+        char *r = turbo_alloc(len + 1);
+        memcpy(r, suffix, len + 1);
+        return r;
+    }
+    size_t old_len = strlen(old);
+    size_t suffix_len = strlen(suffix);
+    if (t_current_arena && t_current_arena->head) {
+        turbo_arena_block *blk = t_current_arena->head;
+        char *block_data = (char *)(blk + 1);
+        size_t old_alloc = (old_len + 1 + 15) & ~((size_t)15);
+        if ((const char *)old >= block_data &&
+            (const char *)old + old_alloc == block_data + blk->used) {
+            size_t new_alloc = (old_len + suffix_len + 1 + 15) & ~((size_t)15);
+            size_t extra = new_alloc - old_alloc;
+            if (extra == 0 || blk->used + extra <= blk->size) {
+                memcpy((char *)old + old_len, suffix, suffix_len + 1);
+                blk->used += extra;
+                t_current_arena->total_alloc += extra;
+                return old;
+            }
+        }
+    }
+    size_t new_len = old_len + suffix_len;
+    char *result = turbo_alloc(new_len + 1);
+    memcpy(result, old, old_len);
+    memcpy(result + old_len, suffix, suffix_len + 1);
+    return result;
+}
+
 char rt_str_eq(const char *a, const char *b) {
     if (!a && !b) return 1;
     if (!a || !b) return 0;
@@ -393,11 +426,15 @@ void* rt_array_alloc(long long len) {
     return data_ptr;
 }
 
+void rt_array_oob_exit(long long index, long long len) {
+    fprintf(stderr, "runtime error: array index %lld out of bounds (length %lld)\n", index, len);
+    exit(1);
+}
+
 long long rt_array_get(const void *arr, long long index) {
     long long len = *(const long long*)arr;
     if (index < 0 || index >= len) {
-        fprintf(stderr, "runtime error: array index %lld out of bounds (length %lld)\n", index, len);
-        exit(1);
+        rt_array_oob_exit(index, len);
     }
     return ((const long long*)arr)[1 + index];
 }
@@ -506,8 +543,16 @@ void* rt_struct_alloc(long long num_fields) {
 }
 
 const char* rt_i64_to_str(long long n) {
-    char *buf = turbo_alloc(32);
-    snprintf(buf, 32, "%lld", n);
+    char tmp[21];
+    char *p = tmp + 20;
+    *p = '\0';
+    unsigned long long v = (n < 0) ? (unsigned long long)(-n) : (unsigned long long)n;
+    if (v == 0) { *--p = '0'; }
+    else { while (v) { *--p = '0' + (char)(v % 10); v /= 10; } }
+    if (n < 0) *--p = '-';
+    size_t len = (size_t)(tmp + 20 - p);
+    char *buf = turbo_alloc(len + 1);
+    memcpy(buf, p, len + 1);
     return buf;
 }
 

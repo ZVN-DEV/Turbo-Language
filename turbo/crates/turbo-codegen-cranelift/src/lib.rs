@@ -129,6 +129,8 @@ pub(crate) struct Ctx<'a, M: Module> {
     pub(crate) struct_derives: &'a HashMap<String, Vec<String>>,
     /// Stack of loop contexts for break/continue: (header_block, exit_block)
     pub(crate) loop_stack: Vec<(cranelift::prelude::Block, cranelift::prelude::Block)>,
+    /// Whether the current function is @unsafe (skips bounds checks on array access)
+    pub(crate) is_unsafe: bool,
 }
 
 impl<'a, M: Module> Ctx<'a, M> {

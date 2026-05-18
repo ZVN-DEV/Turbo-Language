@@ -215,6 +215,24 @@ fn compile_expr_inner<M: Module>(
         }
 
         Expr::Assign { target, value } => {
+            // Optimize s = s + expr → rt_str_concat_inplace(s, expr)
+            if let Expr::BinaryOp { left, op: BinOp::Add, right } = &value.node {
+                if let Expr::Ident(name) = &left.node {
+                    if name == target {
+                        if let Some((var, _, TurboTy::Str)) = cx.vars.get(target) {
+                            let var = *var;
+                            let current = cx.builder.use_var(var);
+                            let (rhs, _) = compile_expr(cx, right)?.unwrap();
+                            let fid = cx.rt_fns["rt_str_concat_inplace"];
+                            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                            let call = cx.builder.ins().call(fref, &[current, rhs]);
+                            let result = cx.builder.inst_results(call)[0];
+                            cx.builder.def_var(var, result);
+                            return Ok(None);
+                        }
+                    }
+                }
+            }
             let rhs_ident = match &value.node {
                 Expr::Ident(name) => Some(name.as_str()),
                 _ => None,
@@ -362,7 +380,6 @@ fn compile_expr_inner<M: Module>(
         } => {
             let (arr, _arr_tty) = compile_expr(cx, object)?.unwrap();
             let (idx, _) = compile_expr(cx, index)?.unwrap();
-            // Widen narrow integer indices to i64 for the runtime call
             let idx = {
                 let idx_ty = cx.builder.func.dfg.value_type(idx);
                 if idx_ty.is_int() && idx_ty.bits() < 64 {
@@ -373,7 +390,6 @@ fn compile_expr_inner<M: Module>(
             };
             let (val, _) = compile_expr(cx, value)?.unwrap();
 
-            // Widen smaller types to 64-bit for uniform storage
             let val_ty = cx.builder.func.dfg.value_type(val);
             let val = if val_ty.bits() < 64 && val_ty.is_int() {
                 cx.builder.ins().sextend(types::I64, val)
@@ -388,17 +404,69 @@ fn compile_expr_inner<M: Module>(
                 val
             };
 
-            // COW-aware set: returns potentially new pointer
-            let set_fid = cx.rt_fns["rt_array_set"];
-            let set_ref = cx.module.declare_func_in_func(set_fid, cx.builder.func);
-            let call = cx.builder.ins().call(set_ref, &[arr, idx, val]);
-            let new_arr = cx.builder.inst_results(call)[0];
+            let trusted = MemFlags::trusted();
 
-            // Update the variable to point to the (possibly new) array
-            if let Expr::Ident(name) = &object.node {
-                if let Some((var, _cl_ty, _tty)) = cx.vars.get(name) {
-                    let var = *var;
-                    cx.builder.def_var(var, new_arr);
+            if cx.is_unsafe {
+                // @unsafe: skip COW check and bounds check — direct store
+                let data_base = cx.builder.ins().iadd_imm(arr, 8);
+                let byte_offset = cx.builder.ins().ishl_imm(idx, 3);
+                let elem_ptr = cx.builder.ins().iadd(data_base, byte_offset);
+                cx.builder.ins().store(trusted, val, elem_ptr, 0i32);
+            } else {
+                // COW check: if refcount > 1, call rt_array_set (slow/copy path)
+                let rc = cx.builder.ins().load(types::I64, MemFlags::new(), arr, -8i32);
+                let shared = cx.builder.ins().icmp_imm(IntCC::SignedGreaterThan, rc, 1);
+
+                let slow_block = cx.builder.create_block();
+                let fast_block = cx.builder.create_block();
+                let merge_block = cx.builder.create_block();
+                cx.builder.append_block_param(merge_block, types::I64);
+
+                cx.builder.ins().brif(shared, slow_block, &[], fast_block, &[]);
+
+                // Slow path: call rt_array_set (handles COW copy)
+                cx.builder.switch_to_block(slow_block);
+                cx.builder.seal_block(slow_block);
+                let set_fid = cx.rt_fns["rt_array_set"];
+                let set_ref = cx.module.declare_func_in_func(set_fid, cx.builder.func);
+                let call = cx.builder.ins().call(set_ref, &[arr, idx, val]);
+                let slow_result = cx.builder.inst_results(call)[0];
+                cx.builder.ins().jump(merge_block, &[slow_result]);
+
+                // Fast path: inline bounds check + store
+                cx.builder.switch_to_block(fast_block);
+                cx.builder.seal_block(fast_block);
+                let len = cx.builder.ins().load(types::I64, trusted, arr, 0i32);
+                let oob = cx.builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, idx, len);
+
+                let oob_block = cx.builder.create_block();
+                let store_block = cx.builder.create_block();
+                cx.builder.ins().brif(oob, oob_block, &[], store_block, &[]);
+
+                cx.builder.switch_to_block(oob_block);
+                cx.builder.seal_block(oob_block);
+                let oob_fid = cx.rt_fns["rt_array_oob_exit"];
+                let oob_ref = cx.module.declare_func_in_func(oob_fid, cx.builder.func);
+                cx.builder.ins().call(oob_ref, &[idx, len]);
+                cx.builder.ins().trap(TrapCode::unwrap_user(1));
+
+                cx.builder.switch_to_block(store_block);
+                cx.builder.seal_block(store_block);
+                let data_base = cx.builder.ins().iadd_imm(arr, 8);
+                let byte_offset = cx.builder.ins().ishl_imm(idx, 3);
+                let elem_ptr = cx.builder.ins().iadd(data_base, byte_offset);
+                cx.builder.ins().store(trusted, val, elem_ptr, 0i32);
+                cx.builder.ins().jump(merge_block, &[arr]);
+
+                cx.builder.switch_to_block(merge_block);
+                cx.builder.seal_block(merge_block);
+                let new_arr = cx.builder.block_params(merge_block)[0];
+
+                if let Expr::Ident(name) = &object.node {
+                    if let Some((var, _cl_ty, _tty)) = cx.vars.get(name) {
+                        let var = *var;
+                        cx.builder.def_var(var, new_arr);
+                    }
                 }
             }
 
@@ -616,7 +684,6 @@ fn compile_expr_inner<M: Module>(
         Expr::Index { object, index } => {
             let (arr, arr_tty) = compile_expr(cx, object)?.unwrap();
             let (idx, _) = compile_expr(cx, index)?.unwrap();
-            // Widen narrow integer indices to i64 for the runtime call
             let idx = {
                 let idx_ty = cx.builder.func.dfg.value_type(idx);
                 if idx_ty.is_int() && idx_ty.bits() < 64 {
@@ -626,18 +693,39 @@ fn compile_expr_inner<M: Module>(
                 }
             };
 
-            let get_fid = cx.rt_fns["rt_array_get"];
-            let get_ref = cx.module.declare_func_in_func(get_fid, cx.builder.func);
-            let call = cx.builder.ins().call(get_ref, &[arr, idx]);
-            let raw = cx.builder.inst_results(call)[0];
+            let trusted = MemFlags::trusted();
 
-            // Extract the element TurboTy from the array type
+            if !cx.is_unsafe {
+                // Bounds check: load length, compare, branch to OOB handler
+                let len = cx.builder.ins().load(types::I64, trusted, arr, 0i32);
+                let oob = cx.builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, idx, len);
+
+                let oob_block = cx.builder.create_block();
+                let ok_block = cx.builder.create_block();
+                cx.builder.ins().brif(oob, oob_block, &[], ok_block, &[]);
+
+                cx.builder.switch_to_block(oob_block);
+                cx.builder.seal_block(oob_block);
+                let oob_fid = cx.rt_fns["rt_array_oob_exit"];
+                let oob_ref = cx.module.declare_func_in_func(oob_fid, cx.builder.func);
+                cx.builder.ins().call(oob_ref, &[idx, len]);
+                cx.builder.ins().trap(TrapCode::unwrap_user(1));
+
+                cx.builder.switch_to_block(ok_block);
+                cx.builder.seal_block(ok_block);
+            }
+
+            // data starts at arr+8 (skip length field)
+            let data_base = cx.builder.ins().iadd_imm(arr, 8);
+            let byte_offset = cx.builder.ins().ishl_imm(idx, 3);
+            let elem_ptr = cx.builder.ins().iadd(data_base, byte_offset);
+            let raw = cx.builder.ins().load(types::I64, trusted, elem_ptr, 0i32);
+
             let elem_tty = match arr_tty {
                 TurboTy::Array(inner) => *inner,
-                _ => TurboTy::Int, // fallback
+                _ => TurboTy::Int,
             };
 
-            // rt_array_get returns raw i64 bits; convert to the correct type
             let (result, result_tty) = match &elem_tty {
                 TurboTy::Bool => {
                     let truncated = cx.builder.ins().ireduce(types::I8, raw);
@@ -647,7 +735,7 @@ fn compile_expr_inner<M: Module>(
                     let f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw);
                     (f, elem_tty)
                 }
-                _ => (raw, elem_tty), // Int, Str, Struct, Enum — raw i64 is correct
+                _ => (raw, elem_tty),
             };
             Ok(Some((result, result_tty)))
         }
@@ -1208,6 +1296,17 @@ pub(crate) fn release_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty
 
 // ── Binary operations ───────────────────────────────────────────────
 
+fn try_iconst_value<M: Module>(cx: &Ctx<'_, M>, val: Value) -> Option<i64> {
+    use cranelift::codegen::ir::InstructionData;
+    let dfg = &cx.builder.func.dfg;
+    let inst = dfg.value_def(val).inst()?;
+    if let InstructionData::UnaryImm { imm, .. } = dfg.insts[inst] {
+        Some(i64::from(imm))
+    } else {
+        None
+    }
+}
+
 fn compile_binop<M: Module>(
     cx: &mut Ctx<'_, M>,
     lhs: Value,
@@ -1265,12 +1364,46 @@ fn compile_binop<M: Module>(
             BinOp::Sub => cx.builder.ins().isub(lhs, rhs),
             BinOp::Mul => cx.builder.ins().imul(lhs, rhs),
             BinOp::Div | BinOp::Mod => {
-                emit_div_zero_check(cx, rhs);
-                emit_int_overflow_check(cx, lhs, rhs);
-                if op == BinOp::Div {
-                    cx.builder.ins().sdiv(lhs, rhs)
+                // Strength-reduce division/modulo by power-of-2 constants
+                if let Some(imm) = try_iconst_value(cx, rhs) {
+                    if imm > 0 && (imm & (imm - 1)) == 0 {
+                        let shift = 63 - (imm as u64).leading_zeros() as i64;
+                        if op == BinOp::Div {
+                            // Signed division by power of 2:
+                            // (x + (x >> 63 & (divisor-1))) >> shift
+                            let sign_bits = cx.builder.ins().sshr_imm(lhs, 63);
+                            let bias = cx.builder.ins().band_imm(sign_bits, imm - 1);
+                            let biased = cx.builder.ins().iadd(lhs, bias);
+                            cx.builder.ins().sshr_imm(biased, shift)
+                        } else {
+                            // Signed modulo by power of 2:
+                            // x - ((x + (x >> 63 & (d-1))) >> shift) * d
+                            // For mod 2 specifically: x & 1 doesn't work for negative
+                            // Use: x - (x / d) * d  with the optimized div above
+                            let sign_bits = cx.builder.ins().sshr_imm(lhs, 63);
+                            let bias = cx.builder.ins().band_imm(sign_bits, imm - 1);
+                            let biased = cx.builder.ins().iadd(lhs, bias);
+                            let quot = cx.builder.ins().sshr_imm(biased, shift);
+                            let prod = cx.builder.ins().imul_imm(quot, imm);
+                            cx.builder.ins().isub(lhs, prod)
+                        }
+                    } else {
+                        emit_div_zero_check(cx, rhs);
+                        emit_int_overflow_check(cx, lhs, rhs);
+                        if op == BinOp::Div {
+                            cx.builder.ins().sdiv(lhs, rhs)
+                        } else {
+                            cx.builder.ins().srem(lhs, rhs)
+                        }
+                    }
                 } else {
-                    cx.builder.ins().srem(lhs, rhs)
+                    emit_div_zero_check(cx, rhs);
+                    emit_int_overflow_check(cx, lhs, rhs);
+                    if op == BinOp::Div {
+                        cx.builder.ins().sdiv(lhs, rhs)
+                    } else {
+                        cx.builder.ins().srem(lhs, rhs)
+                    }
                 }
             }
             BinOp::Eq => cx.builder.ins().icmp(IntCC::Equal, lhs, rhs),

@@ -58,7 +58,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     let mut flag_builder = settings::builder();
     flag_builder.set("use_colocated_libcalls", "false").unwrap();
     flag_builder.set("is_pic", "false").unwrap();
-    flag_builder.set("opt_level", "speed_and_size").unwrap();
+    flag_builder.set("opt_level", "speed").unwrap();
     let verifier = if cfg!(debug_assertions) {
         "true"
     } else {
@@ -93,8 +93,10 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_div_by_zero", rt_div_by_zero as *const u8);
     jit_builder.symbol("rt_int_overflow", rt_int_overflow as *const u8);
     jit_builder.symbol("rt_str_concat", rt_str_concat as *const u8);
+    jit_builder.symbol("rt_str_concat_inplace", rt_str_concat_inplace as *const u8);
     jit_builder.symbol("rt_str_eq", rt_str_eq as *const u8);
     jit_builder.symbol("rt_array_alloc", rt_array_alloc as *const u8);
+    jit_builder.symbol("rt_array_oob_exit", rt_array_oob_exit as *const u8);
     jit_builder.symbol("rt_array_get", rt_array_get as *const u8);
     jit_builder.symbol("rt_array_set", rt_array_set as *const u8);
     jit_builder.symbol("rt_array_len", rt_array_len as *const u8);
@@ -263,7 +265,7 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     let mut flag_builder = settings::builder();
     flag_builder.set("use_colocated_libcalls", "false").unwrap();
     flag_builder.set("is_pic", "false").unwrap();
-    flag_builder.set("opt_level", "speed_and_size").unwrap();
+    flag_builder.set("opt_level", "speed").unwrap();
     let verifier = if cfg!(debug_assertions) {
         "true"
     } else {
@@ -298,8 +300,10 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_div_by_zero", rt_div_by_zero as *const u8);
     jit_builder.symbol("rt_int_overflow", rt_int_overflow as *const u8);
     jit_builder.symbol("rt_str_concat", rt_str_concat as *const u8);
+    jit_builder.symbol("rt_str_concat_inplace", rt_str_concat_inplace as *const u8);
     jit_builder.symbol("rt_str_eq", rt_str_eq as *const u8);
     jit_builder.symbol("rt_array_alloc", rt_array_alloc as *const u8);
+    jit_builder.symbol("rt_array_oob_exit", rt_array_oob_exit as *const u8);
     jit_builder.symbol("rt_array_get", rt_array_get as *const u8);
     jit_builder.symbol("rt_array_set", rt_array_set as *const u8);
     jit_builder.symbol("rt_array_len", rt_array_len as *const u8);
