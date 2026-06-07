@@ -15,6 +15,9 @@ node_modules/
 # Build outputs
 turbo_test_build
 hello
+mock_agent
+simple_agent
+benchmark-final.png
 *.o
 *.d
 *.wasm
@@ -32,6 +35,13 @@ docs/superpowers/
 /PLAN-*.md
 /INDEX.md
 /turbo/cow-bug-audit.md
+/AUDIT-REPORT.md
+/FINDINGS-REPORT.md
+/SPRINT-PLAN.md
+/SPRINT-PLAN-*.md
+/STDLIB-ROADMAP.md
+/TODO.md
+/turbo/PHASE1-POLISH-SPRINT.md
 
 # OMX tooling artifacts (logs, plans, state — local only, never committed)
 /.omx/
