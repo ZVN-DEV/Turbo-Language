@@ -963,7 +963,10 @@ pub(crate) fn compile_builtin_http_post_with_headers<M: Module>(
     let (headers_val, _) = compile_expr(cx, &args[2])?.unwrap();
     let fid = cx.rt_fns["rt_http_post_with_headers"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-    let call = cx.builder.ins().call(fref, &[url_val, body_val, headers_val]);
+    let call = cx
+        .builder
+        .ins()
+        .call(fref, &[url_val, body_val, headers_val]);
     let result = cx.builder.inst_results(call)[0];
     Ok(Some((result, TurboTy::Str)))
 }
@@ -1897,10 +1900,12 @@ fn is_pure_expr(expr: &Expr) -> bool {
     match expr {
         Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::Ident(_) => true,
         Expr::BinaryOp { left, op, right } => {
-            if matches!(op, BinOp::Div | BinOp::Mod) {
-                if !matches!(right.node, Expr::IntLit(n) if n != 0) {
-                    return false;
-                }
+            // Division/modulo by a non-literal (or literal zero) can trap, so
+            // it isn't pure.
+            if matches!(op, BinOp::Div | BinOp::Mod)
+                && !matches!(right.node, Expr::IntLit(n) if n != 0)
+            {
+                return false;
             }
             is_pure_expr(&left.node) && is_pure_expr(&right.node)
         }
@@ -1918,9 +1923,10 @@ pub(crate) fn compile_if<M: Module>(
     // Select optimization: if cond { x = a } else { x = b }
     // → compute both a and b, then x = select(cond, a, b)
     if let Some(else_br) = else_branch {
-        if let (Some((then_target, then_val)), Some((else_target, else_val))) =
-            (extract_single_assign(then_branch), extract_single_assign(else_br))
-        {
+        if let (Some((then_target, then_val)), Some((else_target, else_val))) = (
+            extract_single_assign(then_branch),
+            extract_single_assign(else_br),
+        ) {
             if then_target == else_target
                 && is_pure_expr(&then_val.node)
                 && is_pure_expr(&else_val.node)
@@ -2665,7 +2671,10 @@ pub(crate) fn compile_for_in_array<M: Module>(
     let (arr_ptr, arr_tty) = compile_expr(cx, iterable)?.unwrap();
 
     // Inline array length load (first i64 at arr_ptr)
-    let arr_len = cx.builder.ins().load(types::I64, MemFlags::trusted(), arr_ptr, 0i32);
+    let arr_len = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlags::trusted(), arr_ptr, 0i32);
 
     // Determine element TurboTy from the array type
     let elem_tty = match arr_tty {
@@ -2727,7 +2736,10 @@ pub(crate) fn compile_for_in_array<M: Module>(
     let data_base = cx.builder.ins().iadd_imm(arr_ptr, 8);
     let byte_offset = cx.builder.ins().ishl_imm(idx_val, 3);
     let elem_ptr = cx.builder.ins().iadd(data_base, byte_offset);
-    let raw_elem = cx.builder.ins().load(types::I64, MemFlags::trusted(), elem_ptr, 0i32);
+    let raw_elem = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlags::trusted(), elem_ptr, 0i32);
 
     // Raw i64 bits; convert to the correct type
     let typed_elem = match &elem_tty {

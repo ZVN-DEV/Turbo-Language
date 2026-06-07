@@ -84,18 +84,6 @@ pub(crate) fn resolve_cl_type(
     resolve_cl_type_inner(ty, ptr_type, enum_variants, type_params, &HashMap::new())
 }
 
-/// Resolve Cranelift type, accounting for data-carrying enums that need pointer types.
-#[allow(dead_code)]
-pub(crate) fn resolve_cl_type_with_data(
-    ty: &TypeExpr,
-    ptr_type: types::Type,
-    enum_variants: &HashMap<String, Vec<String>>,
-    type_params: &[String],
-    enum_max_slots: &HashMap<String, usize>,
-) -> Result<types::Type, CodegenError> {
-    resolve_cl_type_inner(ty, ptr_type, enum_variants, type_params, enum_max_slots)
-}
-
 fn resolve_cl_type_inner(
     ty: &TypeExpr,
     ptr_type: types::Type,

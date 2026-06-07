@@ -67,7 +67,11 @@ fn arena_str(cs: std::ffi::CString) -> *const u8 {
     let cap = cs.as_bytes_with_nul().len();
     let ptr = cs.into_raw() as *mut u8;
     STRING_ARENA.with(|arena| {
-        arena.borrow_mut().push(ArenaEntry { ptr, cap, is_raw: false });
+        arena.borrow_mut().push(ArenaEntry {
+            ptr,
+            cap,
+            is_raw: false,
+        });
     });
     ptr as *const u8
 }
@@ -82,7 +86,9 @@ pub(crate) extern "C" fn rt_arena_reset() {
                     let layout = std::alloc::Layout::from_size_align(entry.cap, 1).unwrap();
                     std::alloc::dealloc(entry.ptr, layout);
                 } else {
-                    drop(std::ffi::CString::from_raw(entry.ptr as *mut std::ffi::c_char));
+                    drop(std::ffi::CString::from_raw(
+                        entry.ptr as *mut std::ffi::c_char,
+                    ));
                 }
             }
         }
@@ -203,11 +209,11 @@ pub(crate) extern "C" fn rt_array_alloc(len: i64) -> *mut u8 {
     // Layout: [cap: 8][refcount: 8][length: 8][data...]
     unsafe {
         *(ptr as *mut i64) = cap as i64; // capacity
-        *(ptr.add(8) as *mut i64) = 1;   // refcount = 1
+        *(ptr.add(8) as *mut i64) = 1; // refcount = 1
     }
     let data_ptr = unsafe { ptr.add(16) }; // pointer past cap+refcount header
     unsafe {
-        *(data_ptr as *mut i64) = len;     // length
+        *(data_ptr as *mut i64) = len; // length
     }
     data_ptr
 }
@@ -248,7 +254,7 @@ pub(crate) extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) -> *
         register_alloc(new_alloc, layout);
         unsafe {
             *(new_alloc as *mut i64) = cap as i64; // capacity
-            *(new_alloc.add(8) as *mut i64) = 1;   // refcount = 1
+            *(new_alloc.add(8) as *mut i64) = 1; // refcount = 1
         }
         let new_data = unsafe { new_alloc.add(16) };
         unsafe {
@@ -312,7 +318,10 @@ pub(crate) extern "C" fn rt_array_push(arr: *const u8, value: i64) -> *mut u8 {
         None => match checked_array_layout(new_len) {
             Some(l) => l,
             None => {
-                eprintln!("runtime error: array allocation overflow (length {})", new_len);
+                eprintln!(
+                    "runtime error: array allocation overflow (length {})",
+                    new_len
+                );
                 std::process::exit(1);
             }
         },
@@ -325,7 +334,7 @@ pub(crate) extern "C" fn rt_array_push(arr: *const u8, value: i64) -> *mut u8 {
     register_alloc(new_alloc, layout);
     unsafe {
         *(new_alloc as *mut i64) = new_cap as i64; // capacity
-        *(new_alloc.add(8) as *mut i64) = 1;       // refcount = 1
+        *(new_alloc.add(8) as *mut i64) = 1; // refcount = 1
     }
     let new_data = unsafe { new_alloc.add(16) };
     unsafe {
@@ -336,7 +345,9 @@ pub(crate) extern "C" fn rt_array_push(arr: *const u8, value: i64) -> *mut u8 {
     // Decrement old refcount (don't free — JIT may still hold stale register refs
     // to the old data_ptr between the push call returning and the variable reassignment)
     let rc_ptr = unsafe { (arr as *mut u8).sub(8) as *mut std::sync::atomic::AtomicI64 };
-    unsafe { (*rc_ptr).fetch_sub(1, std::sync::atomic::Ordering::Release); }
+    unsafe {
+        (*rc_ptr).fetch_sub(1, std::sync::atomic::Ordering::Release);
+    }
     new_data
 }
 
@@ -366,8 +377,7 @@ pub(crate) extern "C" fn rt_str_concat(a: *const u8, b: *const u8) -> *const u8 
     let mut result = String::with_capacity(a_str.len() + b_str.len());
     result.push_str(a_str);
     result.push_str(b_str);
-    let c_string =
-        cstring_or_empty(result);
+    let c_string = cstring_or_empty(result);
     arena_str(c_string)
 }
 
@@ -382,7 +392,7 @@ pub(crate) extern "C" fn rt_str_concat_inplace(a: *const u8, b: *const u8) -> *c
     STRING_ARENA.with(|arena| {
         let mut entries = arena.borrow_mut();
         if let Some(last) = entries.last_mut() {
-            if last.ptr as *const u8 == a {
+            if std::ptr::eq(last.ptr as *const u8, a) {
                 let needed = new_len + 1;
                 if needed <= last.cap {
                     unsafe {
@@ -409,7 +419,9 @@ pub(crate) extern "C" fn rt_str_concat_inplace(a: *const u8, b: *const u8) -> *c
                         let old_layout = std::alloc::Layout::from_size_align(last.cap, 1).unwrap();
                         std::alloc::dealloc(last.ptr, old_layout);
                     } else {
-                        drop(std::ffi::CString::from_raw(last.ptr as *mut std::ffi::c_char));
+                        drop(std::ffi::CString::from_raw(
+                            last.ptr as *mut std::ffi::c_char,
+                        ));
                     }
                 }
                 last.ptr = new_ptr;
@@ -475,8 +487,8 @@ pub(crate) extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
     register_alloc(ptr, layout);
     // Layout: [cap: 8 (unused for structs)][refcount: 8][data...]
     unsafe {
-        *(ptr as *mut i64) = 0;           // cap = 0 (not an array)
-        *(ptr.add(8) as *mut i64) = 1;    // refcount = 1
+        *(ptr as *mut i64) = 0; // cap = 0 (not an array)
+        *(ptr.add(8) as *mut i64) = 1; // refcount = 1
     }
     unsafe { ptr.add(16) } // return pointer past cap+refcount header
 }
@@ -492,7 +504,11 @@ pub(crate) extern "C" fn rt_array_oob_exit(index: i64, len: i64) {
 fn fast_i64_to_string(n: i64) -> String {
     let mut buf = [0u8; 20];
     let neg = n < 0;
-    let mut v = if neg { (n as i128).unsigned_abs() as u64 } else { n as u64 };
+    let mut v = if neg {
+        (n as i128).unsigned_abs() as u64
+    } else {
+        n as u64
+    };
     let mut pos = 20;
     if v == 0 {
         pos -= 1;
@@ -662,8 +678,7 @@ pub(crate) extern "C" fn rt_str_split(s: *const u8, sep: *const u8) -> *mut u8 {
         *(data_ptr as *mut i64) = len;
     }
     for (i, part) in parts.iter().enumerate() {
-        let cs =
-            cstring_or_empty(*part);
+        let cs = cstring_or_empty(*part);
         let p = arena_str(cs) as i64;
         unsafe {
             *((data_ptr as *mut i64).add(1 + i)) = p;
@@ -677,8 +692,7 @@ pub(crate) extern "C" fn rt_str_trim(s: *const u8) -> *const u8 {
         .to_str()
         .unwrap_or("");
     let trimmed = s.trim();
-    let cs =
-        cstring_or_empty(trimmed);
+    let cs = cstring_or_empty(trimmed);
     arena_str(cs)
 }
 
@@ -845,17 +859,14 @@ pub(crate) extern "C" fn rt_str_repeat(s: *const u8, n: i64) -> *const u8 {
         return rt_empty_cstr();
     }
     let repeated = s.repeat(count);
-    arena_str(
-        cstring_or_empty(repeated),
-    )
+    arena_str(cstring_or_empty(repeated))
 }
 
 pub(crate) extern "C" fn rt_read_line() -> *const u8 {
     let mut line = String::new();
     std::io::stdin().read_line(&mut line).unwrap_or(0);
     let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-    let cs =
-        cstring_or_empty(trimmed);
+    let cs = cstring_or_empty(trimmed);
     arena_str(cs)
 }
 
@@ -972,8 +983,7 @@ pub(crate) extern "C" fn rt_exec(cmd: *const u8) -> *const u8 {
         }
         Err(e) => {
             let msg = format!("error: exec failed: {}", e);
-            let cs =
-                cstring_or_empty(msg);
+            let cs = cstring_or_empty(msg);
             arena_str(cs)
         }
     }
@@ -1055,7 +1065,7 @@ pub(crate) extern "C" fn rt_exp(x: f64) -> f64 {
 }
 
 thread_local! {
-    static XORSHIFT_STATE: Cell<u64> = Cell::new(0);
+    static XORSHIFT_STATE: Cell<u64> = const { Cell::new(0) };
 }
 
 fn xorshift64_next() -> u64 {
@@ -1093,7 +1103,9 @@ pub(crate) extern "C" fn rt_random_range(min_val: i64, max_val: i64) -> i64 {
     if max_val < min_val {
         return min_val;
     }
-    let range = (max_val as u64).wrapping_sub(min_val as u64).wrapping_add(1);
+    let range = (max_val as u64)
+        .wrapping_sub(min_val as u64)
+        .wrapping_add(1);
     min_val + (xorshift64_next() % range) as i64
 }
 
@@ -1152,9 +1164,7 @@ pub(crate) extern "C" fn rt_pad_left(s: *const u8, width: i64, pad_char: *const 
     let c = pad_str.chars().next().unwrap_or(' ');
     let slen = s_str.len() as i64;
     if slen >= width {
-        return arena_str(
-            cstring_or_empty(s_str),
-        );
+        return arena_str(cstring_or_empty(s_str));
     }
     let pad_count = (width - slen) as usize;
     let mut result = String::with_capacity(width as usize);
@@ -1162,9 +1172,7 @@ pub(crate) extern "C" fn rt_pad_left(s: *const u8, width: i64, pad_char: *const 
         result.push(c);
     }
     result.push_str(s_str);
-    arena_str(
-        cstring_or_empty(result),
-    )
+    arena_str(cstring_or_empty(result))
 }
 
 pub(crate) extern "C" fn rt_pad_right(s: *const u8, width: i64, pad_char: *const u8) -> *const u8 {
@@ -1189,9 +1197,7 @@ pub(crate) extern "C" fn rt_pad_right(s: *const u8, width: i64, pad_char: *const
     let c = pad_str.chars().next().unwrap_or(' ');
     let slen = s_str.len() as i64;
     if slen >= width {
-        return arena_str(
-            cstring_or_empty(s_str),
-        );
+        return arena_str(cstring_or_empty(s_str));
     }
     let pad_count = (width - slen) as usize;
     let mut result = String::with_capacity(width as usize);
@@ -1199,9 +1205,7 @@ pub(crate) extern "C" fn rt_pad_right(s: *const u8, width: i64, pad_char: *const
     for _ in 0..pad_count {
         result.push(c);
     }
-    arena_str(
-        cstring_or_empty(result),
-    )
+    arena_str(cstring_or_empty(result))
 }
 
 pub(crate) extern "C" fn rt_str_to_int(s: *const u8) -> *mut u8 {
@@ -1374,7 +1378,11 @@ pub(crate) extern "C" fn rt_http_post(url: *const u8, body: *const u8) -> *const
 }
 
 /// HTTP POST with custom headers. `headers` is a newline-separated string of headers.
-pub(crate) extern "C" fn rt_http_post_with_headers(url: *const u8, body: *const u8, headers: *const u8) -> *const u8 {
+pub(crate) extern "C" fn rt_http_post_with_headers(
+    url: *const u8,
+    body: *const u8,
+    headers: *const u8,
+) -> *const u8 {
     if url.is_null() {
         eprintln!("[rt_http] blocked non-http(s) URL: (null)");
         return rt_empty_cstr();
@@ -1417,12 +1425,7 @@ pub(crate) extern "C" fn rt_http_post_with_headers(url: *const u8, body: *const 
             cmd.arg("-H").arg(h);
         }
     }
-    let output = cmd
-        .arg("-d")
-        .arg(body_str)
-        .arg("--")
-        .arg(url)
-        .output();
+    let output = cmd.arg("-d").arg(body_str).arg("--").arg(url).output();
     match output {
         Ok(out) => {
             let resp = String::from_utf8_lossy(&out.stdout).to_string();
@@ -1479,8 +1482,7 @@ pub(crate) extern "C" fn rt_json_stringify(key: *const u8, value: *const u8) -> 
         serde_json::Value::String(value_str.to_string()),
     );
     let result = serde_json::Value::Object(map).to_string();
-    let cs =
-        cstring_or_empty(result);
+    let cs = cstring_or_empty(result);
     arena_str(cs)
 }
 
@@ -1517,8 +1519,7 @@ pub(crate) extern "C" fn rt_json_root(json: *const u8) -> *const u8 {
     let parsed: Result<serde_json::Value, _> = serde_json::from_str(json_str);
     match parsed {
         Ok(serde_json::Value::String(s)) => {
-            let cs =
-                cstring_or_empty(s);
+            let cs = cstring_or_empty(s);
             arena_str(cs)
         }
         Ok(other) => {
@@ -2287,8 +2288,7 @@ pub(crate) extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
         *(data_ptr as *mut i64) = len;
     }
     for (i, key) in keys.iter().enumerate() {
-        let cs =
-            cstring_or_empty(*key);
+        let cs = cstring_or_empty(*key);
         unsafe {
             *((data_ptr as *mut i64).add(1 + i)) = arena_str(cs) as i64;
         }
@@ -2503,8 +2503,7 @@ pub(crate) extern "C" fn rt_path_dir(path: *const u8) -> *const u8 {
         Some(p) if !p.as_os_str().is_empty() => p.to_str().unwrap_or(".").to_string(),
         _ => ".".to_string(),
     };
-    let cs =
-        cstring_or_empty(result);
+    let cs = cstring_or_empty(result);
     arena_str(cs)
 }
 
@@ -2775,8 +2774,7 @@ fn chrono_like_format(epoch_secs: i64, fmt: &str) -> String {
         if tm.is_null() {
             return String::new();
         }
-        let fmt_c =
-            cstring_or_empty(fmt);
+        let fmt_c = cstring_or_empty(fmt);
         let mut buf = [0u8; 256];
         let n = libc::strftime(
             buf.as_mut_ptr() as *mut libc::c_char,

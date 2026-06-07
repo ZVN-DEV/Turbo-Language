@@ -1516,7 +1516,7 @@ pub(crate) fn compile_module<M: Module>(
                     constants: &constants_map,
                     struct_derives: &struct_derives,
                     loop_stack: Vec::new(),
-                is_unsafe: method.is_unsafe,
+                    is_unsafe: method.is_unsafe,
                 };
 
                 let entry = cx.builder.create_block();
