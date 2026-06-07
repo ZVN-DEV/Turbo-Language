@@ -1,6 +1,6 @@
 # Compatibility and Stability
 
-Turbo is pre-1.0. This document describes what today's `0.7.x` releases
+Turbo is pre-1.0. This document describes what today's `0.9.x` releases
 guarantee, what is still fluid, and what the `1.0` stability contract
 will mean when we cut it. It is a contract, not a marketing pitch — if
 you are shipping production code against a pre-1.0 Turbo you should
@@ -11,14 +11,13 @@ read this in full.
 > Until `1.0`, expect breaking changes across minor releases.
 > Pin `turbolang --version` and vendor your toolchain for production.
 
-We are intentionally dwelling in the `0.7.x` and then `0.8.x` series
-for a long while, cutting many point releases, rather than racing to
-`1.0`. That means:
+We are intentionally dwelling in the `0.x` series for a long while,
+cutting many point releases, rather than racing to `1.0`. That means:
 
-- **Point releases (`0.7.6` → `0.7.7`)** — additive, bug fixes, no
+- **Point releases (`0.9.0` → `0.9.1`)** — additive, bug fixes, no
   syntactic breaking changes. Safe to auto-update in CI if you re-run
   your test suite.
-- **Minor releases (`0.7.x` → `0.8.0`)** — may break syntax, remove
+- **Minor releases (`0.9.x` → `0.10.0`)** — may break syntax, remove
   deprecated builtins, reshape the stdlib, or renumber error codes in
   the `E05xx` range. Read the CHANGELOG before upgrading.
 - **Major release (`1.0`)** — the stability contract below kicks in.
@@ -47,7 +46,7 @@ not promises today.
 - **Tier-1 platform support.** Every `1.x` release builds and passes
   the integration suite on all tier-1 platforms (see below).
 
-## What Is Explicitly Fluid in `0.7.x` / `0.8.x`
+## What Is Explicitly Fluid in `0.9.x`
 
 Do not build load-bearing production code against these unless you
 are prepared to update it on every minor release.
@@ -72,9 +71,9 @@ are prepared to update it on every minor release.
 - **LSP wire behavior.** Diagnostics, hover contents, and completion
   items may gain or lose fields between minor releases. The editor
   extensions are updated in lockstep.
-- **The experimental backends.** The WASM target and the LLVM backend
-  are flagged experimental in `CHANGELOG.md`; they may be reshaped or
-  temporarily removed.
+- **The experimental WASM target.** The `--target wasm` backend is
+  flagged experimental in `CHANGELOG.md`; it may be reshaped between
+  minor releases.
 
 ## Platform Support Tiers
 
@@ -108,7 +107,7 @@ disclosure policy in `SECURITY.md`.
 
 ## What This Means in Practice
 
-- **If you are experimenting.** Track the latest `0.7.x`. Re-run your
+- **If you are experimenting.** Track the latest `0.9.x`. Re-run your
   tests on every bump. File issues.
 - **If you are shipping something today.** Pin an exact Turbo version
   (`turbolang --version` in CI). Vendor the install script or the

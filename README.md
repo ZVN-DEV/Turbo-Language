@@ -47,7 +47,7 @@ turbolang build hello.tb      # AOT — produce a native binary
 ./hello
 ```
 
-### Known Limitations (v0.8.x)
+### Known Limitations (v0.9.x)
 
 > **Note — runtime string allocation:** The runtime uses a thread-local string arena that is freed after each JIT execution. Long-running AOT servers should be monitored for memory usage. Proper ARC-based string deallocation is planned for a future release.
 >
@@ -97,7 +97,6 @@ Turbo compiles directly to machine code. Programs start instantly and run at nat
 
 - **JIT execution** via `turbolang run` for rapid development (Cranelift)
 - **AOT compilation** via `turbolang build` for production binaries (Cranelift)
-- **Optimized AOT** via `turbolang build --llvm` for maximum performance (LLVM 18)
 - **WASM** via `turbolang build --target wasm` for WebAssembly output
 - **Cross-compilation** via `turbolang build --target linux-arm64` from macOS
 
@@ -166,6 +165,7 @@ fn main() {
 ### Closures & Higher-Order Functions
 
 ```turbo
+// Returned closures use the explicit form so their parameter types are known.
 fn make_adder(n: i64) -> fn(i64) -> i64 {
     |x: i64| -> i64 { x + n }
 }
@@ -173,9 +173,11 @@ fn make_adder(n: i64) -> fn(i64) -> i64 {
 fn main() {
     let add5 = make_adder(5)
     let nums = [1, 2, 3, 4, 5]
-    let doubled = nums.map(|x: i64| -> i64 { x * 2 })
-    let big = nums.filter(|x: i64| -> bool { x > 3 })
-    let sum = reduce(nums, 0, |acc: i64, x: i64| -> i64 { acc + x })
+
+    // In map/filter/reduce, parameter types are inferred — use the short arrow form.
+    let doubled = nums.map((x) => x * 2)
+    let big = nums.filter((x) => x > 3)
+    let sum = reduce(nums, 0, (acc, x) => acc + x)
     print("sum: {sum}")
 }
 ```
@@ -268,7 +270,7 @@ fn main() {
 
 ### Standard Library
 
-64+ built-in functions with no imports required. Method syntax works via UFCS -- `s.trim()` is equivalent to `trim(s)`.
+100+ built-in functions with no imports required. Method syntax works via UFCS -- `s.trim()` is equivalent to `trim(s)`.
 
 | Category | Highlights |
 |----------|------------|
@@ -333,7 +335,6 @@ See [`examples/speed-server/main.tb`](examples/speed-server/main.tb)
 |---------|-------------|
 | `turbolang run <file.tb>` | Compile and run via JIT |
 | `turbolang build <file.tb>` | Compile to native binary (Cranelift) |
-| `turbolang build --llvm <file.tb>` | Compile with LLVM optimizations |
 | `turbolang build --target wasm <file.tb>` | Compile to WebAssembly |
 | `turbolang build --target linux-arm64 <file.tb>` | Cross-compile for Linux ARM64 |
 | `turbolang build --target linux-x86 <file.tb>` | Cross-compile for Linux x86_64 |
@@ -388,11 +389,12 @@ Benchmarked on Apple Silicon (fib(40), recursive):
 | Language | Time | Binary Size |
 |----------|------|-------------|
 | Rust (rustc -O) | 180ms | 441 KB |
-| **Turbo (Cranelift)** | **250ms** | **55 KB** |
+| **Turbo (Cranelift)** | **250ms** | **93 KB** |
 | C (cc -O2) | 290ms | 33 KB |
-| **Turbo (LLVM)** | **290ms** | **55 KB** |
 | Node.js | 580ms | N/A |
 | Python | 13.1s | N/A |
+
+Turbo compiles through a single Cranelift backend — fast JIT for `run`, optimized AOT for `build` — and still edges out `cc -O2` on this benchmark while producing a self-contained ~90 KB binary.
 
 ## Project Structure
 
@@ -422,7 +424,7 @@ Full specification lives in `design/`: [SYNTAX.md](design/SYNTAX.md), [TYPE-SYST
 
 ```bash
 # Unit tests (all crates)
-cargo test --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+cargo test --workspace --manifest-path turbo/Cargo.toml
 
 # Integration tests (requires release build)
 cargo build --release -p turbo-cli --manifest-path turbo/Cargo.toml
@@ -434,26 +436,11 @@ turbolang run turbo/tests/phase1/fibonacci.tb
 
 The test suite spans Rust unit tests, integration fixtures, and parity coverage; run the commands above for the current count.
 
-## LLVM Backend
-
-The LLVM 18 backend ships with the Homebrew install for maximum performance:
-
-```bash
-turbolang build --llvm myapp.tb -o myapp
-```
-
-For building from source with LLVM support:
-
-```bash
-brew install llvm@18
-LLVM_SYS_180_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --release -p turbo-cli --features turbo-cli/llvm
-```
-
 ## Ecosystem
 
 | Tool | Install / Link |
 |------|----------------|
-| **VS Code Extension** | `zvndev.turbo-lang` -- syntax highlighting, 23 snippets, LSP client |
+| **VS Code Extension** | `zvn-dev.turbo-lang` -- syntax highlighting, 25 snippets, LSP client (diagnostics, hover, go-to-definition, completions) |
 | **Tree-sitter Grammar** | [ZVN-DEV/tree-sitter-turbo](https://github.com/ZVN-DEV/tree-sitter-turbo) |
 | **Homebrew** | `brew tap ZVN-DEV/turbo && brew install turbo-lang` |
 | **Docker** | [`distribution/Dockerfile`](distribution/Dockerfile) |

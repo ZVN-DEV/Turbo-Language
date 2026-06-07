@@ -1,5 +1,16 @@
 # Syntax & Ergonomics
 
+> **This is the design vision, not the changelog.** It describes Turbo's full
+> intended surface syntax. Some constructs below are aspirational and not yet
+> implemented (or only partially) — the inline `[Implemented]` / `[Planned]`
+> tags can lag the compiler. The **authoritative** list of what works *today*
+> is [`README.md`](../README.md) plus the compiler itself: if `turbolang check`
+> accepts it, it's real. Notable not-yet-implemented sugar referenced here:
+> anonymous object literals, `{K: V}` map literals with `m[k]` access, optional
+> auto-wrapping (`let x: str? = "hi"`), `loop { break v }` as an expression,
+> `.enumerate()`, default/named parameters, and struct spread. Derive currently
+> supports `Eq`, `Clone`, and `Display` only (not `Debug`/`Hash`/`Serialize`/`Schema`).
+
 ## Elegant by Design
 
 Turbo's surface syntax follows one north star: **JavaScript simplicity on the surface, Rust power underneath. Progressive disclosure.**
@@ -450,7 +461,7 @@ let nums = [1, 2, 3, 4, 5]
 let mut items = [1, 2, 3]
 items.push(4)              // push() builtin [Implemented]
 
-// Maps — JS-like object literal syntax [Implemented]
+// Maps — JS-like object literal syntax [Planned — today use hashmap() + hashmap_set]
 let mut scores = {
   "Alice": 100,
   "Bob": 85,
@@ -570,13 +581,13 @@ struct Config { }
 
 Turbo takes a deliberately minimal approach to metaprogramming. Instead of a macro system, Turbo relies on three mechanisms that cover 95% of use cases with zero magic:
 
-**1. `@derive(...)` — Automatic trait implementations.** The compiler generates boilerplate implementations for common traits. This replaces Rust's `derive` procedural macros with a built-in, well-defined expansion.
+**1. `@derive(...)` — Automatic trait implementations.** The compiler generates boilerplate implementations for common traits. This replaces Rust's `derive` procedural macros with a built-in, well-defined expansion. *Today the compiler implements `Eq`, `Clone`, and `Display`; `Debug`/`Hash`/`Serialize`/`Schema` shown below are planned.*
 
 ```
-@derive(Debug, Eq, Hash, Clone, Serialize, Schema)
+@derive(Eq, Clone, Display)              // implemented today
+// @derive(Debug, Hash, Serialize, Schema)  // planned
 struct User { name: str, age: u32 }
-// The compiler generates: Debug.fmt(), Eq.eq(), Hash.hash(), Clone.clone(),
-// Serialize.serialize(), and a JSON Schema — all from the struct definition.
+// The compiler generates Eq.eq(), Clone.clone(), and Display — from the struct definition.
 ```
 
 **2. `const fn` — Compile-time computation.** Any function marked `const fn` runs at compile time when called in a `const` context. This replaces traditional macro-based code generation with regular, debuggable, type-checked functions.

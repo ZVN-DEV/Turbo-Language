@@ -5,6 +5,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Removed
+- **The experimental LLVM backend (`turbo-codegen-llvm`, `turbolang build --llvm`).**
+  Cranelift is now the single code-generation backend. The LLVM path was a
+  partial second implementation (roughly half the builtins), did not build
+  cleanly from the documented steps, and offered no measured speedup over
+  Cranelift — which already edges out `cc -O2` on the fib benchmark. Removing it
+  eliminates a large duplicated codegen surface and the cost of keeping two
+  backends at parity. A future optimizing backend, if pursued, should lower
+  through a shared mid-level IR rather than re-walking the AST a second time.
+
 ## [0.9.0] - 2026-05-16 — Batteries-Included Stdlib
 
 Major stdlib expansion: 37 new builtins bringing TurboLang from 67 to 104 built-in functions. Inspired by the batteries-included philosophy — every dependency is liability, the stdlib must be complete enough that developers never need a package manager.
