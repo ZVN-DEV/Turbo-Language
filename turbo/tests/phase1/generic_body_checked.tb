@@ -1,0 +1,13 @@
+// Regression: generic function bodies must be type-checked.
+// Previously the checker skipped all generic bodies, so concrete type
+// errors inside them were silently accepted. Type parameters are erased
+// to the Error poison type, so operations over `T` are exempt while a
+// concrete mismatch like this still fires.
+fn bad<T>(x: T) -> T {
+    let y: i64 = "a string"
+    x
+}
+
+fn main() {
+    print("unreachable")
+}

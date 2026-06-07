@@ -1,0 +1,14 @@
+// Regression: indexing a generic array parameter `[T]` used to segfault
+// (the element type was misread as a struct pointer and the refcount path
+// dereferenced an integer). The call site must also recover the concrete
+// element type so a `[str]` argument prints as a string, not a pointer.
+fn firstof<T>(xs: [T]) -> T {
+    xs[0]
+}
+
+fn main() {
+    let nums = [10, 20, 30]
+    let words = ["alpha", "beta"]
+    print(firstof(nums))
+    print(firstof(words))
+}

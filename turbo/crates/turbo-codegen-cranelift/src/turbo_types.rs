@@ -86,24 +86,33 @@ pub(crate) fn turbo_ty_from_type_expr_with_params(
         }
         TypeExpr::Unit => TurboTy::Unit,
         TypeExpr::Array(inner) => {
-            let inner_tty = turbo_ty_from_type_expr(&inner.node, enum_variants);
+            // Thread type_params so the element of a generic array like `[T]`
+            // resolves to `Int` (the uniform type-param representation) rather
+            // than being misread as `Struct("T")`. Getting this wrong makes
+            // indexing return an integer typed as a struct pointer, which the
+            // refcount/retain path then dereferences — a segfault.
+            let inner_tty =
+                turbo_ty_from_type_expr_with_params(&inner.node, enum_variants, type_params);
             TurboTy::Array(Box::new(inner_tty))
         }
         TypeExpr::FnType { params, ret } => {
             let param_tys: Vec<TurboTy> = params
                 .iter()
-                .map(|p| turbo_ty_from_type_expr(&p.node, enum_variants))
+                .map(|p| turbo_ty_from_type_expr_with_params(&p.node, enum_variants, type_params))
                 .collect();
-            let ret_ty = turbo_ty_from_type_expr(&ret.node, enum_variants);
+            let ret_ty = turbo_ty_from_type_expr_with_params(&ret.node, enum_variants, type_params);
             TurboTy::Fn(param_tys, Box::new(ret_ty))
         }
         TypeExpr::Result { ok_type, err_type } => {
-            let ok_tty = turbo_ty_from_type_expr(&ok_type.node, enum_variants);
-            let err_tty = turbo_ty_from_type_expr(&err_type.node, enum_variants);
+            let ok_tty =
+                turbo_ty_from_type_expr_with_params(&ok_type.node, enum_variants, type_params);
+            let err_tty =
+                turbo_ty_from_type_expr_with_params(&err_type.node, enum_variants, type_params);
             TurboTy::Result(Box::new(ok_tty), Box::new(err_tty))
         }
         TypeExpr::Optional(inner) => {
-            let inner_tty = turbo_ty_from_type_expr(&inner.node, enum_variants);
+            let inner_tty =
+                turbo_ty_from_type_expr_with_params(&inner.node, enum_variants, type_params);
             TurboTy::Optional(Box::new(inner_tty))
         }
         // Future<T> is a thread handle pointer (underlying value is i64/ptr)

@@ -31,125 +31,129 @@ use turbo_ast::*;
 
 use crate::scope::VarInfo;
 use crate::{
-    extract_int_literal, int_literal_fits_in_type, is_ffi_safe_type, resolve_type_expr,
-    resolve_type_expr_with_params, types_compatible, Checker, EnumInfo, FnSig, StructInfo,
-    TraitInfo, TraitMethodInfo, Ty, MAX_EXPR_DEPTH,
+    erase_type_params, extract_int_literal, int_literal_fits_in_type, is_ffi_safe_type,
+    resolve_type_expr, resolve_type_expr_with_params, types_compatible, Checker, EnumInfo, FnSig,
+    StructInfo, TraitInfo, TraitMethodInfo, Ty, MAX_EXPR_DEPTH,
 };
 
 mod expr;
 mod stmt;
 
+/// Names recognized as built-in functions. Single source of truth for both the
+/// `is_builtin_function` membership check and "did you mean" suggestions on an
+/// undefined call.
+pub(crate) const BUILTIN_FNS: &[&str] = &[
+    "print",
+    "panic",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "len",
+    "push",
+    "abs",
+    "min",
+    "max",
+    "to_str",
+    "map",
+    "filter",
+    "reduce",
+    "split",
+    "trim",
+    "upper",
+    "lower",
+    "starts_with",
+    "ends_with",
+    "replace",
+    "char_at",
+    "contains",
+    "index_of",
+    "join",
+    "repeat",
+    "read_line",
+    "read_file",
+    "write_file",
+    "try_read_file",
+    "try_write_file",
+    "shell_exec",
+    "exec",
+    "env_get",
+    "pow",
+    "sqrt",
+    "sleep",
+    "http_get",
+    "http_post",
+    "http_post_with_headers",
+    "json_get",
+    "json_stringify",
+    "json_build",
+    "float_to_int",
+    "int_to_float",
+    "str_from_char",
+    "http_server",
+    "http_server_public",
+    "route",
+    "http_listen",
+    "respond",
+    "respond_text",
+    "respond_html",
+    "respond_json",
+    "request_body",
+    "request_method",
+    "request_path",
+    "request_query",
+    "request_header",
+    "channel",
+    "send",
+    "recv",
+    "mutex",
+    "mutex_get",
+    "mutex_set",
+    "clone",
+    "hashmap",
+    "hashmap_set",
+    "hashmap_get",
+    "hashmap_has",
+    "hashmap_len",
+    "hashmap_size",
+    "hashmap_keys",
+    "hashmap_remove",
+    "to_json",
+    "to_json_array",
+    "deref",
+    "store",
+    "args",
+    "type_of",
+    "random",
+    "random_range",
+    "substring",
+    "pad_left",
+    "pad_right",
+    "str_to_int",
+    "str_to_float",
+    "file_exists",
+    "delete_file",
+    "list_dir",
+    "mkdir",
+    "path_join",
+    "path_dir",
+    "path_base",
+    "path_ext",
+    "sort",
+    "reverse",
+    "array_contains",
+    "slice",
+    "any",
+    "all",
+    "time_now",
+    "time_ms",
+    "format_time",
+];
+
 impl Checker {
     // === Check module ===
 
     pub(crate) fn is_builtin_function(name: &str) -> bool {
-        matches!(
-            name,
-            "print"
-                | "panic"
-                | "assert"
-                | "assert_eq"
-                | "assert_ne"
-                | "len"
-                | "push"
-                | "abs"
-                | "min"
-                | "max"
-                | "to_str"
-                | "map"
-                | "filter"
-                | "reduce"
-                | "split"
-                | "trim"
-                | "upper"
-                | "lower"
-                | "starts_with"
-                | "ends_with"
-                | "replace"
-                | "char_at"
-                | "contains"
-                | "index_of"
-                | "join"
-                | "repeat"
-                | "read_line"
-                | "read_file"
-                | "write_file"
-                | "try_read_file"
-                | "try_write_file"
-                | "shell_exec"
-                | "exec"
-                | "env_get"
-                | "pow"
-                | "sqrt"
-                | "sleep"
-                | "http_get"
-                | "http_post"
-                | "http_post_with_headers"
-                | "json_get"
-                | "json_stringify"
-                | "json_build"
-                | "float_to_int"
-                | "int_to_float"
-                | "str_from_char"
-                | "http_server"
-                | "http_server_public"
-                | "route"
-                | "http_listen"
-                | "respond"
-                | "respond_text"
-                | "respond_html"
-                | "respond_json"
-                | "request_body"
-                | "request_method"
-                | "request_path"
-                | "request_query"
-                | "request_header"
-                | "channel"
-                | "send"
-                | "recv"
-                | "mutex"
-                | "mutex_get"
-                | "mutex_set"
-                | "clone"
-                | "hashmap"
-                | "hashmap_set"
-                | "hashmap_get"
-                | "hashmap_has"
-                | "hashmap_len"
-                | "hashmap_size"
-                | "hashmap_keys"
-                | "hashmap_remove"
-                | "to_json"
-                | "to_json_array"
-                | "deref"
-                | "store"
-                | "args"
-                | "type_of"
-                | "random"
-                | "random_range"
-                | "substring"
-                | "pad_left"
-                | "pad_right"
-                | "str_to_int"
-                | "str_to_float"
-                | "file_exists"
-                | "delete_file"
-                | "list_dir"
-                | "mkdir"
-                | "path_join"
-                | "path_dir"
-                | "path_base"
-                | "path_ext"
-                | "sort"
-                | "reverse"
-                | "array_contains"
-                | "slice"
-                | "any"
-                | "all"
-                | "time_now"
-                | "time_ms"
-                | "format_time"
-        )
+        BUILTIN_FNS.contains(&name)
     }
 
     /// Walk a chain of FieldAccess / Index expressions to find the root variable name.
@@ -895,14 +899,30 @@ impl Checker {
             }
         };
 
-        // Skip body checking for generic functions — their bodies
-        // contain type parameters that aren't concrete types.
-        // Type safety is enforced at the call site via inference.
-        if !sig.type_params.is_empty() {
-            return;
-        }
+        // Generic functions are still body-checked, but each type parameter is
+        // erased to `Ty::Error` first. `Error` is the checker's poison type: any
+        // expression that touches it is exempt from further checks, so we don't
+        // emit false positives on legitimate generic operations (`x + 1` where
+        // `x: T`). Concrete bugs that don't involve a type parameter — undefined
+        // names, `let y: i64 = "string"`, a concrete-typed tail that disagrees
+        // with the return type — still surface normally. Call-site inference
+        // (which uses the un-erased signature) is unaffected.
+        let is_generic = !sig.type_params.is_empty();
+        let param_tys: Vec<Ty> = if is_generic {
+            sig.params
+                .iter()
+                .map(|(_, t)| erase_type_params(t))
+                .collect()
+        } else {
+            sig.params.iter().map(|(_, t)| t.clone()).collect()
+        };
+        let ret_ty = if is_generic {
+            erase_type_params(&sig.ret)
+        } else {
+            sig.ret.clone()
+        };
 
-        self.current_return_type = sig.ret.clone();
+        self.current_return_type = ret_ty.clone();
         let prev_unsafe = self.in_unsafe_context;
         self.in_unsafe_context = f.is_unsafe;
 
@@ -911,8 +931,8 @@ impl Checker {
         // Inject module-level constants
         self.inject_constants();
 
-        // Define parameters
-        for (i, (name, ty)) in sig.params.iter().enumerate() {
+        // Define parameters (type-param-erased for generic functions, see above)
+        for (i, (name, _)) in sig.params.iter().enumerate() {
             let (param_span, param_mutable) = if i < f.params.len() {
                 (f.params[i].span.clone(), f.params[i].mutable)
             } else {
@@ -921,7 +941,7 @@ impl Checker {
             self.define_var(
                 name,
                 VarInfo {
-                    ty: ty.clone(),
+                    ty: param_tys[i].clone(),
                     mutable: param_mutable,
                     span: param_span,
                     from_let: false,
@@ -944,10 +964,10 @@ impl Checker {
         } else {
             false
         };
-        if !sig.ret.is_error()
+        if !ret_ty.is_error()
             && !body_ty.is_error()
-            && sig.ret != Ty::Unit
-            && !types_compatible(&sig.ret, &body_ty)
+            && ret_ty != Ty::Unit
+            && !types_compatible(&ret_ty, &body_ty)
             && !body_has_return
         {
             // Allow integer literal coercion for tail expression (e.g., fn foo() -> u8 { 42 })
@@ -958,18 +978,18 @@ impl Checker {
             };
             let is_return_coercion = body_ty == Ty::I64
                 && matches!(
-                    sig.ret,
+                    ret_ty,
                     Ty::I8 | Ty::I16 | Ty::I32 | Ty::U8 | Ty::U16 | Ty::U32 | Ty::U64
                 )
                 && tail_expr
                     .and_then(extract_int_literal)
-                    .is_some_and(|n| int_literal_fits_in_type(n, &sig.ret));
+                    .is_some_and(|n| int_literal_fits_in_type(n, &ret_ty));
             if !is_return_coercion {
                 self.error(
                     ErrorCode::E0109,
                     format!(
                         "function `{}` should return `{}` but body returns `{}`",
-                        f.name, sig.ret, body_ty
+                        f.name, ret_ty, body_ty
                     ),
                     f.body.span.clone(),
                 );

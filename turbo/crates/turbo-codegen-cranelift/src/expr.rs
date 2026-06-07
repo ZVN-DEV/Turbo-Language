@@ -216,7 +216,12 @@ fn compile_expr_inner<M: Module>(
 
         Expr::Assign { target, value } => {
             // Optimize s = s + expr → rt_str_concat_inplace(s, expr)
-            if let Expr::BinaryOp { left, op: BinOp::Add, right } = &value.node {
+            if let Expr::BinaryOp {
+                left,
+                op: BinOp::Add,
+                right,
+            } = &value.node
+            {
                 if let Expr::Ident(name) = &left.node {
                     if name == target {
                         if let Some((var, _, TurboTy::Str)) = cx.vars.get(target) {
@@ -414,7 +419,10 @@ fn compile_expr_inner<M: Module>(
                 cx.builder.ins().store(trusted, val, elem_ptr, 0i32);
             } else {
                 // COW check: if refcount > 1, call rt_array_set (slow/copy path)
-                let rc = cx.builder.ins().load(types::I64, MemFlags::new(), arr, -8i32);
+                let rc = cx
+                    .builder
+                    .ins()
+                    .load(types::I64, MemFlags::new(), arr, -8i32);
                 let shared = cx.builder.ins().icmp_imm(IntCC::SignedGreaterThan, rc, 1);
 
                 let slow_block = cx.builder.create_block();
@@ -422,7 +430,9 @@ fn compile_expr_inner<M: Module>(
                 let merge_block = cx.builder.create_block();
                 cx.builder.append_block_param(merge_block, types::I64);
 
-                cx.builder.ins().brif(shared, slow_block, &[], fast_block, &[]);
+                cx.builder
+                    .ins()
+                    .brif(shared, slow_block, &[], fast_block, &[]);
 
                 // Slow path: call rt_array_set (handles COW copy)
                 cx.builder.switch_to_block(slow_block);
@@ -437,7 +447,10 @@ fn compile_expr_inner<M: Module>(
                 cx.builder.switch_to_block(fast_block);
                 cx.builder.seal_block(fast_block);
                 let len = cx.builder.ins().load(types::I64, trusted, arr, 0i32);
-                let oob = cx.builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, idx, len);
+                let oob = cx
+                    .builder
+                    .ins()
+                    .icmp(IntCC::UnsignedGreaterThanOrEqual, idx, len);
 
                 let oob_block = cx.builder.create_block();
                 let store_block = cx.builder.create_block();
@@ -698,7 +711,10 @@ fn compile_expr_inner<M: Module>(
             if !cx.is_unsafe {
                 // Bounds check: load length, compare, branch to OOB handler
                 let len = cx.builder.ins().load(types::I64, trusted, arr, 0i32);
-                let oob = cx.builder.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, idx, len);
+                let oob = cx
+                    .builder
+                    .ins()
+                    .icmp(IntCC::UnsignedGreaterThanOrEqual, idx, len);
 
                 let oob_block = cx.builder.create_block();
                 let ok_block = cx.builder.create_block();
@@ -1907,16 +1923,29 @@ fn compile_call<M: Module>(
                     if let Some(ret_ty) = &f_def.return_type {
                         if let TypeExpr::Named(ref ret_name) = ret_ty.node {
                             if type_params.contains(ret_name) {
-                                // Find which param has this type parameter
+                                // Find which param carries this type parameter and
+                                // recover the concrete TurboTy from the matching
+                                // argument. We handle two shapes:
+                                //   fn f<T>(x: T)   -> T   — infer T from the arg
+                                //   fn f<T>(xs: [T]) -> T  — infer T from the arg's
+                                //                            array element type
                                 let mut inferred = None;
                                 for (i, param) in f_def.params.iter().enumerate() {
-                                    if let TypeExpr::Named(ref pname) = param.ty.node {
-                                        if pname == ret_name {
-                                            if i < arg_ttys.len() {
-                                                inferred = Some(arg_ttys[i].clone());
-                                            }
+                                    if i >= arg_ttys.len() {
+                                        continue;
+                                    }
+                                    match &param.ty.node {
+                                        TypeExpr::Named(pname) if pname == ret_name => {
+                                            inferred = Some(arg_ttys[i].clone());
                                             break;
                                         }
+                                        TypeExpr::Array(elem) if matches!(&elem.node, TypeExpr::Named(en) if en == ret_name) => {
+                                            if let TurboTy::Array(inner) = &arg_ttys[i] {
+                                                inferred = Some((**inner).clone());
+                                                break;
+                                            }
+                                        }
+                                        _ => {}
                                     }
                                 }
                                 inferred.unwrap_or(ret_tty)

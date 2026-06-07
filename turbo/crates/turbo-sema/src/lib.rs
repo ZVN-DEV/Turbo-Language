@@ -191,7 +191,7 @@ pub(crate) fn int_literal_fits_in_type(n: i64, target: &Ty) -> bool {
     match target {
         Ty::U8 => (0..=255).contains(&n),
         Ty::U16 => (0..=65535).contains(&n),
-        Ty::U32 => n >= 0 && n <= 4_294_967_295,
+        Ty::U32 => (0..=4_294_967_295).contains(&n),
         Ty::U64 => n >= 0,
         Ty::I8 => (-128..=127).contains(&n),
         Ty::I16 => (-32768..=32767).contains(&n),
@@ -218,6 +218,31 @@ pub(crate) fn types_compatible(expected: &Ty, actual: &Ty) -> bool {
             inner1.is_error() || inner2.is_error() || inner1 == inner2
         }
         _ => false,
+    }
+}
+
+/// Replace every generic type parameter inside a type with `Ty::Error`.
+///
+/// `Ty::Error` is the checker's poison type — expressions whose type touches it
+/// are exempt from downstream checks. Erasing a generic function's parameter and
+/// return types to `Error` lets us type-check the *body* (catching undefined
+/// names and concrete-vs-concrete mismatches) without emitting false positives
+/// on legitimate operations over a type parameter (e.g. `x + 1` where `x: T`).
+pub(crate) fn erase_type_params(ty: &Ty) -> Ty {
+    match ty {
+        Ty::TypeParam(_) => Ty::Error,
+        Ty::Array(inner) => Ty::Array(Box::new(erase_type_params(inner))),
+        Ty::Optional(inner) => Ty::Optional(Box::new(erase_type_params(inner))),
+        Ty::Future(inner) => Ty::Future(Box::new(erase_type_params(inner))),
+        Ty::Result(ok, err) => Ty::Result(
+            Box::new(erase_type_params(ok)),
+            Box::new(erase_type_params(err)),
+        ),
+        Ty::Fn(params, ret) => Ty::Fn(
+            params.iter().map(erase_type_params).collect(),
+            Box::new(erase_type_params(ret)),
+        ),
+        other => other.clone(),
     }
 }
 

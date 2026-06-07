@@ -354,7 +354,9 @@ impl Checker {
                                 args[0].span.clone(),
                             );
                         }
-                        if arg_ty.is_float() { return Ty::F64; }
+                        if arg_ty.is_float() {
+                            return Ty::F64;
+                        }
                         return Ty::I64;
                     }
                     if name == "min" || name == "max" {
@@ -382,7 +384,9 @@ impl Checker {
                                 args[1].span.clone(),
                             );
                         }
-                        if a_ty.is_float() || b_ty.is_float() { return Ty::F64; }
+                        if a_ty.is_float() || b_ty.is_float() {
+                            return Ty::F64;
+                        }
                         return Ty::I64;
                     }
                     if name == "to_str" {
@@ -1238,7 +1242,10 @@ impl Checker {
                         if args.len() != 1 {
                             self.error(
                                 ErrorCode::E0513,
-                                format!("float_to_int() takes exactly 1 argument, got {}", args.len()),
+                                format!(
+                                    "float_to_int() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1259,7 +1266,10 @@ impl Checker {
                         if args.len() != 1 {
                             self.error(
                                 ErrorCode::E0513,
-                                format!("int_to_float() takes exactly 1 argument, got {}", args.len()),
+                                format!(
+                                    "int_to_float() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1280,7 +1290,10 @@ impl Checker {
                         if args.len() != 1 {
                             self.error(
                                 ErrorCode::E0513,
-                                format!("str_from_char() takes exactly 1 argument, got {}", args.len()),
+                                format!(
+                                    "str_from_char() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -1854,7 +1867,10 @@ impl Checker {
                         if args.len() != 3 {
                             self.error(
                                 ErrorCode::E0513,
-                                format!("http_post_with_headers() takes exactly 3 arguments, got {}", args.len()),
+                                format!(
+                                    "http_post_with_headers() takes exactly 3 arguments, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -2139,7 +2155,10 @@ impl Checker {
                         if args.len() != 1 {
                             self.error(
                                 ErrorCode::E0513,
-                                format!("json_build() takes exactly 1 argument, got {}", args.len()),
+                                format!(
+                                    "json_build() takes exactly 1 argument, got {}",
+                                    args.len()
+                                ),
                                 callee.span.clone(),
                             );
                             return Ty::Error;
@@ -3114,11 +3133,22 @@ impl Checker {
                                 }
                             }
                         }
-                        self.error(
-                            ErrorCode::E0301,
-                            format!("undefined function `{name}`"),
-                            callee.span.clone(),
-                        );
+                        // Offer a "did you mean" against user-defined functions
+                        // and builtins — typos on common builtins like `print`
+                        // are the most frequent beginner error.
+                        let candidates: Vec<&str> = self
+                            .functions
+                            .keys()
+                            .map(String::as_str)
+                            .chain(crate::type_check::BUILTIN_FNS.iter().copied())
+                            .collect();
+                        let msg = match suggest::suggest_for(name, candidates.iter().copied()) {
+                            Some(hit) => {
+                                format!("undefined function `{name}`. did you mean `{hit}`?")
+                            }
+                            None => format!("undefined function `{name}`"),
+                        };
+                        self.error(ErrorCode::E0301, msg, callee.span.clone());
                         Ty::Error
                     }
                 } else if let Expr::FieldAccess { object, field } = &callee.node {
