@@ -43,7 +43,7 @@ jobs:
           key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('turbo/Cargo.lock') }}
 
       - name: cargo clippy
-        run: cargo clippy --manifest-path turbo/Cargo.toml --workspace --exclude turbo-codegen-llvm --all-targets -- -D warnings
+        run: cargo clippy --manifest-path turbo/Cargo.toml --workspace --all-targets -- -D warnings
 
   doc:
     name: Rustdoc
@@ -65,12 +65,11 @@ jobs:
 
       # Build all crate docs with warnings as errors. Catches broken
       # intra-doc links, invalid HTML in doc comments, and busted Rust
-      # examples in doc-tests. The LLVM backend is excluded to keep this
-      # job hermetic — it has its own dedicated job below.
+      # examples in doc-tests.
       - name: cargo doc
         env:
           RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --no-deps --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+        run: cargo doc --no-deps --workspace --manifest-path turbo/Cargo.toml
 
   test:
     name: Unit tests (${{ matrix.os }})
@@ -95,7 +94,7 @@ jobs:
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('turbo/Cargo.lock') }}
 
       - name: cargo test
-        run: cargo test --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+        run: cargo test --workspace --manifest-path turbo/Cargo.toml
 
   integration:
     name: Integration tests (${{ matrix.os }})
@@ -120,7 +119,7 @@ jobs:
           key: ${{ runner.os }}-cargo-integration-${{ hashFiles('turbo/Cargo.lock') }}
 
       - name: Build release
-        run: cargo build --release --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+        run: cargo build --release --workspace --manifest-path turbo/Cargo.toml
 
       - name: Run integration tests
         run: ./tests/run_tests.sh
@@ -145,7 +144,7 @@ jobs:
           key: ${{ runner.os }}-cargo-overflow-${{ hashFiles('turbo/Cargo.lock') }}
 
       - name: cargo test (overflow-checks enabled)
-        run: cargo test --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+        run: cargo test --workspace --manifest-path turbo/Cargo.toml
         env:
           RUSTFLAGS: "-C overflow-checks=on"
 
@@ -168,7 +167,7 @@ jobs:
           key: ${{ runner.os }}-cargo-build-${{ hashFiles('turbo/Cargo.lock') }}
 
       - name: Build
-        run: cargo build --release --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+        run: cargo build --release --workspace --manifest-path turbo/Cargo.toml
 
       - name: Report binary size
         run: |
@@ -192,67 +191,6 @@ jobs:
       - name: Run C runtime tests
         run: bash tests.sh
         working-directory: turbo/crates/turbo-codegen-cranelift/runtime
-
-  llvm-backend:
-    name: LLVM backend (build + test)
-    runs-on: ubuntu-latest
-    # Hard-required now that struct destructuring, if-let, and optional
-    # chaining are implemented. The three features were the last TODOs
-    # gating the fence; see CHANGELOG.md under [Unreleased] for details.
-    # Only run when LLVM-related files change, or on pushes to master
-    if: >-
-      github.event_name == 'push' ||
-      github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
-        id: filter
-        with:
-          filters: |
-            llvm:
-              - 'turbo/crates/turbo-codegen-llvm/**'
-              - 'turbo/crates/turbo-ast/**'
-              - '.github/workflows/ci.yml'
-
-      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: stable
-        if: steps.filter.outputs.llvm == 'true' || github.event_name == 'push'
-
-      - name: Install LLVM 18
-        if: steps.filter.outputs.llvm == 'true' || github.event_name == 'push'
-        run: |
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-          sudo apt-get update
-          sudo apt-get install -y llvm-18-dev libpolly-18-dev
-
-      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-        if: steps.filter.outputs.llvm == 'true' || github.event_name == 'push'
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            turbo/target
-          key: ${{ runner.os }}-cargo-llvm-${{ hashFiles('turbo/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-llvm-
-
-      - name: Build LLVM backend
-        if: steps.filter.outputs.llvm == 'true' || github.event_name == 'push'
-        run: cargo build --manifest-path turbo/Cargo.toml -p turbo-codegen-llvm
-        env:
-          LLVM_SYS_180_PREFIX: /usr/lib/llvm-18
-
-      - name: Test LLVM backend
-        if: steps.filter.outputs.llvm == 'true' || github.event_name == 'push'
-        run: cargo test --manifest-path turbo/Cargo.toml -p turbo-codegen-llvm
-        env:
-          LLVM_SYS_180_PREFIX: /usr/lib/llvm-18
-
-      - name: Skip notice
-        if: steps.filter.outputs.llvm != 'true' && github.event_name != 'push'
-        run: echo "No LLVM-related files changed — skipping build and test."
 
   website:
     name: Website lint + build
@@ -301,7 +239,7 @@ jobs:
           key: ${{ runner.os }}-cargo-parity-${{ hashFiles('turbo/Cargo.lock') }}
 
       - name: Build release
-        run: cargo build --release --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+        run: cargo build --release --workspace --manifest-path turbo/Cargo.toml
 
       - name: Run parity tests
         run: ./tests/parity/run_parity.sh

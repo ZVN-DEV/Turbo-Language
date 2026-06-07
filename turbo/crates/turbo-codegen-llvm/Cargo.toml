@@ -1,9 +1,0 @@
-[package]
-name = "turbo-codegen-llvm"
-version = "0.9.0"
-edition = "2021"
-rust-version.workspace = true
-
-[dependencies]
-turbo-ast = { path = "../turbo-ast" }
-inkwell = { version = "0.5", features = ["llvm18-0"] }

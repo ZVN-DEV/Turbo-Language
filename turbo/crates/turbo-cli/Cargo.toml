@@ -14,7 +14,6 @@ turbo-lexer = { path = "../turbo-lexer" }
 turbo-ast = { path = "../turbo-ast" }
 turbo-parser = { path = "../turbo-parser" }
 turbo-codegen-cranelift = { path = "../turbo-codegen-cranelift" }
-turbo-codegen-llvm = { path = "../turbo-codegen-llvm", optional = true }
 turbo-sema = { path = "../turbo-sema" }
 clap = { workspace = true }
 ariadne = { workspace = true }
@@ -28,4 +27,3 @@ tempfile = "3"
 
 [features]
 default = []
-llvm = ["dep:turbo-codegen-llvm"]

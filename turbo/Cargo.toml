@@ -4,7 +4,6 @@ members = [
     "crates/turbo-ast",
     "crates/turbo-parser",
     "crates/turbo-codegen-cranelift",
-    "crates/turbo-codegen-llvm",
     "crates/turbo-sema",
     "crates/turbo-cli",
     "crates/turbo-lsp",

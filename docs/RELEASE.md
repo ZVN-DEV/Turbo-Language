@@ -27,7 +27,6 @@ All must agree on the same version:
 | `turbo/crates/turbo-parser/Cargo.toml` | `version` |
 | `turbo/crates/turbo-sema/Cargo.toml` | `version` |
 | `turbo/crates/turbo-codegen-cranelift/Cargo.toml` | `version` |
-| `turbo/crates/turbo-codegen-llvm/Cargo.toml` | `version` |
 | `turbo/crates/turbo-lsp/Cargo.toml` | `version` |
 | `turbo/Cargo.lock` | auto-updated by `cargo build` |
 | `CHANGELOG.md` | `[X.Y.Z] - YYYY-MM-DD` section header |
@@ -81,7 +80,7 @@ Check and update these if they reference version numbers or counts:
 
 ```bash
 # Unit tests (must be 0 failures)
-cargo test --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+cargo test --workspace --manifest-path turbo/Cargo.toml
 
 # Release build
 cargo build --release --manifest-path turbo/Cargo.toml
@@ -117,9 +116,9 @@ git push origin vX.Y.Z
 ```
 
 This triggers `.github/workflows/release.yml` which builds:
-- macOS ARM (aarch64-apple-darwin) — Cranelift + LLVM
-- macOS Intel (x86_64-apple-darwin) — Cranelift only
-- Linux x86_64 (x86_64-unknown-linux-gnu) — Cranelift + LLVM
+- macOS ARM (aarch64-apple-darwin) — Cranelift
+- macOS Intel (x86_64-apple-darwin) — Cranelift
+- Linux x86_64 (x86_64-unknown-linux-gnu) — Cranelift
 
 ### 2.3 Wait for Release CI
 
