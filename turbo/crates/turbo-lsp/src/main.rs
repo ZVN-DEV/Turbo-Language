@@ -405,6 +405,7 @@ fn publish_diagnostics(connection: &Connection, uri: &Uri, source: &str) {
             diagnostics.push(Diagnostic {
                 range: span_to_range(source, &err.span),
                 severity: Some(DiagnosticSeverity::ERROR),
+                code: Some(NumberOrString::String(err.code.as_str().to_string())),
                 message: err.message.clone(),
                 ..Default::default()
             });
@@ -416,6 +417,7 @@ fn publish_diagnostics(connection: &Connection, uri: &Uri, source: &str) {
                 diagnostics.push(Diagnostic {
                     range: span_to_range(source, &err.span),
                     severity: Some(DiagnosticSeverity::ERROR),
+                    code: Some(NumberOrString::String(err.code.as_str().to_string())),
                     message: err.message.clone(),
                     ..Default::default()
                 });
@@ -424,6 +426,7 @@ fn publish_diagnostics(connection: &Connection, uri: &Uri, source: &str) {
                 diagnostics.push(Diagnostic {
                     range: span_to_range(source, &w.span),
                     severity: Some(DiagnosticSeverity::WARNING),
+                    code: Some(NumberOrString::String(w.code.as_str().to_string())),
                     message: w.message.clone(),
                     ..Default::default()
                 });

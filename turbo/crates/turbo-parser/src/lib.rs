@@ -1145,7 +1145,12 @@ impl Parser {
         // Check for range operator (..)
         if matches!(self.peek(), Some(Token::DotDot)) {
             self.advance();
-            let rhs = self.parse_unary()?;
+            // Parse the upper bound as a full binary expression so common
+            // idioms like `0..len + 1` and `1..n - 1` work. Without folding
+            // binary operators here the `+ 1` would be left dangling and the
+            // parse would fail on the trailing operator.
+            let rhs_atom = self.parse_unary()?;
+            let rhs = self.parse_binary(rhs_atom, 0)?;
             let span = lhs.span.start..rhs.span.end;
             return Ok(Spanned::new(
                 Expr::Range {

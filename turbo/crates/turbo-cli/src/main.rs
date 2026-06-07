@@ -74,10 +74,6 @@ enum Commands {
         #[arg(long, short)]
         verbose: bool,
 
-        /// Use LLVM backend instead of Cranelift
-        #[arg(long)]
-        llvm: bool,
-
         /// Compilation target (e.g. "wasm", "linux-arm64", "linux-x86")
         #[arg(long)]
         target: Option<String>,
@@ -177,19 +173,11 @@ fn main() {
             file,
             output,
             verbose,
-            llvm,
             target,
             link,
         } => {
             let path = resolve_entry_file(file);
-            build_file(
-                &path,
-                output.as_deref(),
-                verbose,
-                llvm,
-                target.as_deref(),
-                &link,
-            );
+            build_file(&path, output.as_deref(), verbose, target.as_deref(), &link);
         }
         Commands::Init { name } => init_project(&name),
         Commands::Repl => repl::run_repl(),
@@ -415,12 +403,10 @@ fn area(shape: Shape) -> f64 {
     });
 
     // .gitignore
-    std::fs::write(dir.join(".gitignore"), "turbo_modules/\ntarget/\n*.o\n").unwrap_or_else(
-        |e| {
-            eprintln!("\x1b[1;31merror\x1b[0m: failed to write .gitignore: {e}");
-            std::process::exit(1);
-        },
-    );
+    std::fs::write(dir.join(".gitignore"), "turbo_modules/\ntarget/\n*.o\n").unwrap_or_else(|e| {
+        eprintln!("\x1b[1;31merror\x1b[0m: failed to write .gitignore: {e}");
+        std::process::exit(1);
+    });
 
     eprintln!("\x1b[32m\u{2713}\x1b[0m Created project `{name}`");
     eprintln!("  cd {name} && turbolang run");
@@ -1523,6 +1509,26 @@ fn update_deps() {
 }
 
 /// Print a rich error diagnostic using ariadne.
+/// Produce a (message, help) pair for a lexer error span. A bare "unexpected
+/// character" is unhelpful when the real problem is a numeric literal the lexer
+/// matched but couldn't fit into `i64` (it returns `None`, which surfaces as a
+/// lex error). Detect the all-digits case and say so precisely.
+fn lex_error_message(snippet: &str) -> (String, &'static str) {
+    let is_int_literal =
+        !snippet.is_empty() && snippet.chars().all(|c| c.is_ascii_digit() || c == '_');
+    if is_int_literal {
+        (
+            format!("integer literal `{snippet}` is too large for `i64` (max 9223372036854775807)"),
+            "use a smaller value, or split the computation to stay within i64 range",
+        )
+    } else {
+        (
+            format!("unexpected character `{snippet}`"),
+            "remove this character or check for typos",
+        )
+    }
+}
+
 fn report_error(
     source: &str,
     filename: &str,
@@ -1673,14 +1679,8 @@ fn run_file(path: &std::path::Path, verbose: bool) {
     if !lex_errors.is_empty() {
         for span in &lex_errors {
             let snippet = &source[span.clone()];
-            report_error(
-                &source,
-                &filename,
-                &format!("unexpected character `{snippet}`"),
-                span,
-                Some("remove this character or check for typos"),
-                None,
-            );
+            let (msg, help) = lex_error_message(snippet);
+            report_error(&source, &filename, &msg, span, Some(help), None);
         }
         std::process::exit(1);
     }
@@ -1829,14 +1829,8 @@ fn check_file(path: &std::path::Path) {
     if !lex_errors.is_empty() {
         for span in &lex_errors {
             let snippet = &source[span.clone()];
-            report_error(
-                &source,
-                &filename,
-                &format!("unexpected character `{snippet}`"),
-                span,
-                Some("remove this character or check for typos"),
-                None,
-            );
+            let (msg, help) = lex_error_message(snippet);
+            report_error(&source, &filename, &msg, span, Some(help), None);
         }
         std::process::exit(1);
     }
@@ -1945,14 +1939,8 @@ fn test_file(file: Option<PathBuf>) {
         if !lex_errors.is_empty() {
             for span in &lex_errors {
                 let snippet = &source[span.clone()];
-                report_error(
-                    &source,
-                    &filename,
-                    &format!("unexpected character `{snippet}`"),
-                    span,
-                    Some("remove this character or check for typos"),
-                    None,
-                );
+                let (msg, help) = lex_error_message(snippet);
+                report_error(&source, &filename, &msg, span, Some(help), None);
             }
             std::process::exit(1);
         }
@@ -2306,14 +2294,8 @@ fn test_run_fn(path: &std::path::Path, fn_name: &str) {
     if !lex_errors.is_empty() {
         for span in &lex_errors {
             let snippet = &source[span.clone()];
-            report_error(
-                &source,
-                &filename,
-                &format!("unexpected character `{snippet}`"),
-                span,
-                Some("remove this character or check for typos"),
-                None,
-            );
+            let (msg, help) = lex_error_message(snippet);
+            report_error(&source, &filename, &msg, span, Some(help), None);
         }
         std::process::exit(1);
     }
@@ -2406,7 +2388,6 @@ fn build_file(
     path: &std::path::Path,
     output: Option<&std::path::Path>,
     verbose: bool,
-    use_llvm: bool,
     target: Option<&str>,
     link_libs: &[String],
 ) {
@@ -2457,14 +2438,8 @@ fn build_file(
     if !lex_errors.is_empty() {
         for span in &lex_errors {
             let snippet = &source[span.clone()];
-            report_error(
-                &source,
-                &filename,
-                &format!("unexpected character `{snippet}`"),
-                span,
-                Some("remove this character or check for typos"),
-                None,
-            );
+            let (msg, help) = lex_error_message(snippet);
+            report_error(&source, &filename, &msg, span, Some(help), None);
         }
         std::process::exit(1);
     }
@@ -2553,20 +2528,6 @@ fn build_file(
         let r = turbo_codegen_cranelift::wasm_compile(&module, output_path, use_wasi)
             .map_err(|e| e.to_string());
         (r, "Cranelift/WASM")
-    } else if use_llvm {
-        #[cfg(feature = "llvm")]
-        {
-            let r =
-                turbo_codegen_llvm::aot_compile(&module, output_path).map_err(|e| e.to_string());
-            (r, "LLVM")
-        }
-        #[cfg(not(feature = "llvm"))]
-        {
-            (
-                Err("LLVM backend not available — rebuild with --features llvm".to_string()),
-                "LLVM",
-            )
-        }
     } else {
         let cross_target = resolve_target_triple(target);
         let r = turbo_codegen_cranelift::aot_compile(
@@ -3380,7 +3341,10 @@ fn detailed_explanation(code: ErrorCode) -> Option<&'static str> {
 }
 
 fn explain_error(code_str: &str) {
-    if let Some(code) = ErrorCode::parse(code_str) {
+    // Accept lowercase input (`e0100`) — the codes are conventionally uppercase
+    // but making users match case is needless friction.
+    let normalized = code_str.to_uppercase();
+    if let Some(code) = ErrorCode::parse(&normalized) {
         println!(
             "\x1b[1;33m{}\x1b[0m: \x1b[1m{}\x1b[0m\n",
             code.as_str(),

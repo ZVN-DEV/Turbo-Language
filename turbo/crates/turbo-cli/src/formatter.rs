@@ -15,6 +15,28 @@ pub fn format_file(path: &Path, check: bool) {
         }
     };
 
+    // Refuse to reformat source that doesn't lex/parse. A formatter that
+    // silently reindents broken code can mask or compound the underlying error;
+    // gofmt/rustfmt both decline unparseable input. Leave the file untouched.
+    let (tokens, lex_errors) = turbo_lexer::tokenize(&source);
+    if !lex_errors.is_empty() {
+        eprintln!(
+            "error: {} has syntax errors and was not formatted (run `turbolang check {}`)",
+            path.display(),
+            path.display()
+        );
+        std::process::exit(1);
+    }
+    let (_, parse_errors) = turbo_parser::parse(tokens);
+    if !parse_errors.is_empty() {
+        eprintln!(
+            "error: {} has syntax errors and was not formatted (run `turbolang check {}`)",
+            path.display(),
+            path.display()
+        );
+        std::process::exit(1);
+    }
+
     let formatted = format_source(&source);
 
     if check {
