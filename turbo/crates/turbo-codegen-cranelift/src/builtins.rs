@@ -1956,17 +1956,24 @@ pub(crate) fn compile_if<M: Module>(
         .ins()
         .brif(cond_bool, then_block, &[], else_block, &[]);
 
+    // An `if` yields a value only when it has an `else` and both arms produce
+    // one (checked below). Without an `else` it is a statement, so the
+    // then-branch's value must be discarded — passing it into the merge block
+    // (which then has zero params) produces malformed SSA that crashes
+    // Cranelift's remove_constant_phis pass. This bit gates the then-jump's
+    // argument so its count always matches the merge block's param count.
+    let can_yield_value = else_branch.is_some();
+
     // Then
     cx.builder.switch_to_block(then_block);
     cx.builder.seal_block(then_block);
     let then_result = compile_expr(cx, then_branch)?;
     let then_needs_jump = !cx.builder.is_unreachable();
     if then_needs_jump {
-        if let Some((v, _)) = then_result {
-            cx.builder.ins().jump(merge_block, &[v]);
-        } else {
-            cx.builder.ins().jump(merge_block, &[]);
-        }
+        match then_result {
+            Some((v, _)) if can_yield_value => cx.builder.ins().jump(merge_block, &[v]),
+            _ => cx.builder.ins().jump(merge_block, &[]),
+        };
     }
 
     // Else

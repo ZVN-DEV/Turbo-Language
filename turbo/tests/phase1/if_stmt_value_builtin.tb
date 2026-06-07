@@ -1,0 +1,18 @@
+// Regression: a value-returning builtin (hashmap_set_int returns the map) used
+// as the tail of an `if` block with no `else`, inside a `for` loop, used to
+// crash Cranelift's remove_constant_phis pass (the then->merge edge passed a
+// value into a zero-param merge block). The if is a statement here, so the
+// value must be discarded.
+fn count(words: [str]) -> i64 {
+    let freq = hashmap()
+    for w in words {
+        if len(w) > 0 {
+            hashmap_set_int(freq, w, hashmap_get_int(freq, w) + 1)
+        }
+    }
+    hashmap_get_int(freq, "a")
+}
+
+fn main() {
+    print(count(["a", "b", "a", "", "a"]))
+}
