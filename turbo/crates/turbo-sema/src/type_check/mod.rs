@@ -184,7 +184,15 @@ impl Checker {
             }
             let tp_names: Vec<String> = s.type_param_names();
             let mut fields = Vec::new();
+            let mut seen_fields: std::collections::HashSet<&str> = std::collections::HashSet::new();
             for field in &s.fields {
+                if !seen_fields.insert(field.name.as_str()) {
+                    self.error(
+                        ErrorCode::E0306,
+                        format!("duplicate field `{}` in struct `{}`", field.name, s.name),
+                        field.ty.span.clone(),
+                    );
+                }
                 match resolve_type_expr_with_params(
                     &field.ty.node,
                     Some(&self.structs),
@@ -367,7 +375,18 @@ impl Checker {
             }
 
             let mut params = Vec::new();
+            let mut seen_params: std::collections::HashSet<&str> = std::collections::HashSet::new();
             for param in &f.params {
+                if !seen_params.insert(param.name.as_str()) {
+                    self.error(
+                        ErrorCode::E0308,
+                        format!(
+                            "duplicate parameter `{}` in function `{}`",
+                            param.name, f.name
+                        ),
+                        param.span.clone(),
+                    );
+                }
                 match resolve_type_expr_with_params(
                     &param.ty.node,
                     Some(&self.structs),

@@ -1,0 +1,2 @@
+struct S { a: i64, a: i64 }
+fn main() { let s = S { a: 1, a: 2 } print(s.a) }

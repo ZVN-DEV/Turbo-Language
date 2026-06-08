@@ -800,6 +800,18 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> Result<Spanned<TypeExpr>, ParseError> {
+        // Guard recursion the same way the expression grammar does — array
+        // types `[[[…]]]`, function types `fn(fn(…))`, generic args
+        // `Vec<Vec<…>>`, and result chains `T!E!…` all recurse here, so an
+        // adversarial deeply-nested type would otherwise overflow the stack
+        // (SIGABRT) instead of producing a clean E0516 diagnostic.
+        self.enter_nesting()?;
+        let result = self.parse_type_inner();
+        self.exit_nesting();
+        result
+    }
+
+    fn parse_type_inner(&mut self) -> Result<Spanned<TypeExpr>, ParseError> {
         let start = self.peek_span().start;
 
         // Unit type ()

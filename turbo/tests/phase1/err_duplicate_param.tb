@@ -1,0 +1,2 @@
+fn foo(x: i64, x: i64) -> i64 { x }
+fn main() { print(foo(1, 2)) }
