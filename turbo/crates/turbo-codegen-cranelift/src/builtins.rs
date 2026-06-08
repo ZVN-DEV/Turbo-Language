@@ -2712,6 +2712,14 @@ pub(crate) fn compile_for_in_array<M: Module>(
         _ => cx.builder.ins().iconst(elem_cl_ty, 0),
     };
     cx.builder.def_var(elem_var, default_val);
+    // The loop variable is a *borrow* of an array element, not an owned value:
+    // the loop never retains it (no rt_retain on the element). It must therefore
+    // never be released either, or the same element struct/array gets freed once
+    // per iterating loop — a double-free when several loops walk the same array
+    // (e.g. count_done/count_high/save_tasks all iterating `tasks`). We stash any
+    // prior binding for this name and restore it after the loop so the enclosing
+    // block's cleanup pass never sees the loop var as an owned local to release.
+    let prev_binding = cx.vars.get(var_name).cloned();
     cx.vars.insert(
         var_name.to_string(),
         (elem_var, elem_cl_ty, elem_tty.clone()),
@@ -2784,6 +2792,18 @@ pub(crate) fn compile_for_in_array<M: Module>(
     // Exit
     cx.builder.switch_to_block(exit_block);
     cx.builder.seal_block(exit_block);
+
+    // Restore the prior binding for the loop variable name (or remove it). This
+    // takes the loop var out of scope so the enclosing block won't release it —
+    // it was a borrow of an array element, never retained.
+    match prev_binding {
+        Some(binding) => {
+            cx.vars.insert(var_name.to_string(), binding);
+        }
+        None => {
+            cx.vars.remove(var_name);
+        }
+    }
 
     Ok(None)
 }
