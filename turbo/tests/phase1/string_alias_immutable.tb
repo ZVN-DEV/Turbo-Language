@@ -1,0 +1,10 @@
+fn main() {
+    let mut s = "x" + "y"
+    let alias = s
+    s = s + "z"
+    print("{s} {alias}")
+    let mut t = to_str(42)
+    let t2 = t
+    t = t + "!"
+    print("{t} {t2}")
+}

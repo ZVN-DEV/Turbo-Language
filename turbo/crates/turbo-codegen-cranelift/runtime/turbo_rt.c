@@ -318,6 +318,12 @@ const char* rt_str_concat(const char *a, const char *b) {
 }
 
 const char* rt_str_concat_inplace(const char *old, const char *suffix) {
+    /* `s = s + x` lowers to this. The in-place fast path below used to mutate
+     * the most-recent arena buffer when it equalled `old`, but Turbo strings
+     * carry no refcount, so it could not tell whether that buffer was aliased
+     * by another live binding. `let alias = s; s = s + "z"` then silently
+     * corrupted `alias`. Strings are immutable values, so always allocate a
+     * fresh result — matching the JIT runtime, which made the same change. */
     if (!suffix || !*suffix) return old ? old : "";
     if (!old || !*old) {
         size_t len = strlen(suffix);
@@ -327,22 +333,6 @@ const char* rt_str_concat_inplace(const char *old, const char *suffix) {
     }
     size_t old_len = strlen(old);
     size_t suffix_len = strlen(suffix);
-    if (t_current_arena && t_current_arena->head) {
-        turbo_arena_block *blk = t_current_arena->head;
-        char *block_data = (char *)(blk + 1);
-        size_t old_alloc = (old_len + 1 + 15) & ~((size_t)15);
-        if ((const char *)old >= block_data &&
-            (const char *)old + old_alloc == block_data + blk->used) {
-            size_t new_alloc = (old_len + suffix_len + 1 + 15) & ~((size_t)15);
-            size_t extra = new_alloc - old_alloc;
-            if (extra == 0 || blk->used + extra <= blk->size) {
-                memcpy((char *)old + old_len, suffix, suffix_len + 1);
-                blk->used += extra;
-                t_current_arena->total_alloc += extra;
-                return old;
-            }
-        }
-    }
     size_t new_len = old_len + suffix_len;
     char *result = turbo_alloc(new_len + 1);
     memcpy(result, old, old_len);
@@ -1001,13 +991,29 @@ void *rt_args(void) {
 
 const char *rt_substring(const char *s, long long start, long long end) {
     if (!s) { char *e = turbo_alloc(1); e[0] = '\0'; return e; }
-    long long slen = (long long)strlen(s);
+    // Character-indexed, UTF-8 aware — must match the Rust JIT `rt_substring`,
+    // which slices by `char` count. Walk the string counting char starts (bytes
+    // not of the form 0b10xxxxxx) and translate char indices to byte offsets.
+    long long nbytes = (long long)strlen(s);
     if (start < 0) start = 0;
-    if (end > slen) end = slen;
-    if (start >= end) { char *e = turbo_alloc(1); e[0] = '\0'; return e; }
-    long long len = end - start;
+    if (end < 0) end = 0;
+    long long start_byte = -1, end_byte = nbytes;
+    long long char_idx = 0, i = 0;
+    while (i <= nbytes) {
+        unsigned char c = (unsigned char)s[i];
+        int is_char_start = (i == nbytes) || ((c & 0xC0) != 0x80);
+        if (is_char_start) {
+            if (char_idx == start) start_byte = i;
+            if (char_idx == end) { end_byte = i; break; }
+            char_idx++;
+        }
+        i++;
+    }
+    if (start_byte < 0) start_byte = nbytes; // start past end of string
+    if (start_byte >= end_byte) { char *e = turbo_alloc(1); e[0] = '\0'; return e; }
+    long long len = end_byte - start_byte;
     char *result = turbo_alloc((size_t)len + 1);
-    memcpy(result, s + start, (size_t)len);
+    memcpy(result, s + start_byte, (size_t)len);
     result[len] = '\0';
     return result;
 }

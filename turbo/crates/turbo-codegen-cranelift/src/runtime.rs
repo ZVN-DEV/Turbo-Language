@@ -342,12 +342,14 @@ pub(crate) extern "C" fn rt_array_push(arr: *const u8, value: i64) -> *mut u8 {
         std::ptr::copy_nonoverlapping(arr.add(8), new_data.add(8), old_len * 8);
         *((new_data as *mut i64).add(1 + old_len)) = value;
     }
-    // Decrement old refcount (don't free — JIT may still hold stale register refs
-    // to the old data_ptr between the push call returning and the variable reassignment)
-    let rc_ptr = unsafe { (arr as *mut u8).sub(8) as *mut std::sync::atomic::AtomicI64 };
-    unsafe {
-        (*rc_ptr).fetch_sub(1, std::sync::atomic::Ordering::Release);
-    }
+    // NOTE: we do NOT touch the old array's refcount here. `push` borrows its
+    // input to copy from; ownership of the old value stays with the caller. The
+    // `xs = push(xs, v)` assignment site is responsible for releasing the old
+    // `xs` (it already does, guarded by an old != new pointer check). Decrementing
+    // here as well double-counted a single overwrite: with no aliasing the old
+    // array leaked (refcount hit 0 without freeing), and with an alias
+    // (`let b = xs; xs.push(v)`) it freed an array `b` still pointed at — a
+    // use-after-free. Leaving the refcount alone makes both cases correct.
     new_data
 }
 
@@ -382,65 +384,16 @@ pub(crate) extern "C" fn rt_str_concat(a: *const u8, b: *const u8) -> *const u8 
 }
 
 pub(crate) extern "C" fn rt_str_concat_inplace(a: *const u8, b: *const u8) -> *const u8 {
-    if a.is_null() || b.is_null() {
-        return rt_str_concat(a, b);
-    }
-    let a_len = unsafe { libc_strlen(a) };
-    let b_len = unsafe { libc_strlen(b) };
-    let new_len = a_len + b_len;
-
-    STRING_ARENA.with(|arena| {
-        let mut entries = arena.borrow_mut();
-        if let Some(last) = entries.last_mut() {
-            if std::ptr::eq(last.ptr as *const u8, a) {
-                let needed = new_len + 1;
-                if needed <= last.cap {
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(b, (a as *mut u8).add(a_len), b_len);
-                        *(a as *mut u8).add(new_len) = 0;
-                    }
-                    return a;
-                }
-                let new_cap = (needed * 2).max(64);
-                let layout = std::alloc::Layout::from_size_align(new_cap, 1).unwrap();
-                let new_ptr = unsafe { std::alloc::alloc(layout) };
-                if new_ptr.is_null() {
-                    drop(entries);
-                    return rt_str_concat(a, b);
-                }
-                unsafe {
-                    std::ptr::copy_nonoverlapping(a, new_ptr, a_len);
-                    std::ptr::copy_nonoverlapping(b, new_ptr.add(a_len), b_len);
-                    *new_ptr.add(new_len) = 0;
-                }
-                // Free old allocation
-                unsafe {
-                    if last.is_raw {
-                        let old_layout = std::alloc::Layout::from_size_align(last.cap, 1).unwrap();
-                        std::alloc::dealloc(last.ptr, old_layout);
-                    } else {
-                        drop(std::ffi::CString::from_raw(
-                            last.ptr as *mut std::ffi::c_char,
-                        ));
-                    }
-                }
-                last.ptr = new_ptr;
-                last.cap = new_cap;
-                last.is_raw = true;
-                return new_ptr as *const u8;
-            }
-        }
-        drop(entries);
-        rt_str_concat(a, b)
-    })
-}
-
-unsafe fn libc_strlen(s: *const u8) -> usize {
-    let mut len = 0;
-    while *s.add(len) != 0 {
-        len += 1;
-    }
-    len
+    // The `s = s + x` assignment is rewritten to this in-place concat for speed.
+    // The previous implementation mutated the most-recent arena buffer when it
+    // equalled `a` — but Turbo strings carry no refcount, so it could not tell
+    // whether that buffer was aliased by another live binding. Code like
+    //   let mut s = "x" + "y"; let alias = s; s = s + "z"
+    // silently corrupted `alias` (it observed "xyz"). Strings are values and
+    // must never be mutated through an alias, so we always allocate a fresh
+    // result. (A future safe rope/builder can restore O(1) appends without the
+    // aliasing hazard.)
+    rt_str_concat(a, b)
 }
 
 pub(crate) extern "C" fn rt_str_eq(a: *const u8, b: *const u8) -> i8 {
@@ -1132,13 +1085,18 @@ pub(crate) extern "C" fn rt_substring(s: *const u8, start: i64, end: i64) -> *co
                 .unwrap_or("")
         }
     };
-    let slen = s_str.len() as i64;
-    let start = start.max(0).min(slen) as usize;
-    let end = end.max(0).min(slen) as usize;
+    // Character-indexed (matches `rt_str_char_at`) and panic-proof. Slicing a
+    // `&str` at raw byte offsets would panic if an index landed inside a
+    // multi-byte UTF-8 sequence — and because this is `extern "C"`, that panic
+    // becomes a non-unwinding process abort straight through the JIT frames.
+    let chars: Vec<char> = s_str.chars().collect();
+    let clen = chars.len() as i64;
+    let start = start.max(0).min(clen) as usize;
+    let end = end.max(0).min(clen) as usize;
     if start >= end {
         return arena_str(cstring_or_empty(""));
     }
-    let sub = &s_str[start..end];
+    let sub: String = chars[start..end].iter().collect();
     arena_str(cstring_or_empty(sub))
 }
 

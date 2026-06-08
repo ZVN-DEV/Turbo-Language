@@ -1,0 +1,10 @@
+fn main() {
+    let mut a = [1,2,3]
+    a.push(4)
+    a.push(5)
+    let b = a
+    a.push(6)
+    print("{len(a)} {len(b)}")
+    print(a[5])
+    print(b[4])
+}
