@@ -1,0 +1,12 @@
+fn pick(n: i64) -> i64 {
+    let r = if n > 0 { n * 2 } else { exit(7) }
+    return r
+}
+fn guard(o: i64?) -> i64 {
+    if let some(x) = o { x } else { return -1 }
+}
+fn main() {
+    print(pick(5))
+    print(guard(some(42)))
+    print(guard(none))
+}

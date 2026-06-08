@@ -1858,17 +1858,15 @@ pub(crate) fn compile_module<M: Module>(
             &closure.body.node,
             Expr::Block { stmts, tail_expr: Some(_) } if stmts.is_empty()
         );
-        if let Some(ret_ty) = closure.return_type {
-            cl_ctx
-                .func
-                .signature
-                .returns
-                .push(AbiParam::new(resolve_cl_type(
-                    &ret_ty.node,
-                    ptr_type,
-                    &enum_variants,
-                    &[],
-                )?));
+        // Record the closure's return Cranelift type so the body's result can
+        // be coerced to it before `return_`. Without this, a closure whose body
+        // is a comparison/bool (`|x| x % 2 == 0`) returns an I8 while the
+        // signature declares I64 — malformed IR the Cranelift verifier rejects
+        // (and which release builds, with the verifier off, would JIT unverified).
+        let closure_ret_cl_ty: Option<types::Type> = if let Some(ret_ty) = closure.return_type {
+            let t = resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?;
+            cl_ctx.func.signature.returns.push(AbiParam::new(t));
+            Some(t)
         } else {
             // For closures with inferred params or expression bodies, add i64 return
             let has_inferred_params = closure
@@ -1881,8 +1879,11 @@ pub(crate) fn compile_module<M: Module>(
                     .signature
                     .returns
                     .push(AbiParam::new(types::I64));
+                Some(types::I64)
+            } else {
+                None
             }
-        }
+        };
 
         let mut fn_ctx = FunctionBuilderContext::new();
         {
@@ -1922,6 +1923,11 @@ pub(crate) fn compile_module<M: Module>(
             cx.builder.append_block_params_for_function_params(entry);
             cx.builder.switch_to_block(entry);
             cx.builder.seal_block(entry);
+            // Force the entry block into the layout even if the body emits no
+            // instructions before its tail (e.g. `|x| x`), so `is_unreachable()`
+            // doesn't misreport it as unreachable (layout.entry_block() == None).
+            // The regular-function path does the same.
+            cx.builder.ensure_inserted_block();
 
             // Block param 0 is the env pointer
             let env_ptr_val = cx.builder.block_params(entry)[0];
@@ -1965,10 +1971,37 @@ pub(crate) fn compile_module<M: Module>(
             let result = compile_expr(&mut cx, closure.body)?;
 
             if !cx.builder.is_unreachable() {
-                if let Some((val, _)) = result {
-                    cx.builder.ins().return_(&[val]);
-                } else {
-                    cx.builder.ins().return_(&[]);
+                match (result, closure_ret_cl_ty) {
+                    (Some((val, _)), Some(want_ty)) => {
+                        // Coerce the body value to the declared return ABI type.
+                        let have_ty = cx.builder.func.dfg.value_type(val);
+                        let val = if have_ty == want_ty {
+                            val
+                        } else if have_ty.is_int() && want_ty.is_int() {
+                            if have_ty.bits() < want_ty.bits() {
+                                cx.builder.ins().uextend(want_ty, val)
+                            } else {
+                                cx.builder.ins().ireduce(want_ty, val)
+                            }
+                        } else if (have_ty.is_float() && want_ty == types::I64)
+                            || (have_ty == types::I64 && want_ty.is_float())
+                        {
+                            // Float payload <-> i64 ABI slot (reinterpret bits).
+                            cx.builder.ins().bitcast(want_ty, MemFlags::new(), val)
+                        } else {
+                            val
+                        };
+                        cx.builder.ins().return_(&[val]);
+                    }
+                    (_, None) => {
+                        cx.builder.ins().return_(&[]);
+                    }
+                    (None, Some(_)) => {
+                        // Signature expects a value but the body produced none;
+                        // sema should prevent this — emit a zero as a safety net.
+                        let zero = cx.builder.ins().iconst(types::I64, 0);
+                        cx.builder.ins().return_(&[zero]);
+                    }
                 }
             }
 

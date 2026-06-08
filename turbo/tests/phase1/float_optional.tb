@@ -1,0 +1,12 @@
+fn main() {
+    let a: float? = some(3.5)
+    let m = match a {
+        some(v) => v + 1.0
+        none => 0.0
+    }
+    print(m)
+    if let some(v) = a { print(v + 0.5) }
+    let n: float? = none
+    print(a ?? 9.0)
+    print(n ?? 9.0)
+}

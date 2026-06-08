@@ -1,0 +1,5 @@
+fn main() {
+    print("before")
+    exit(0)
+    print("unreachable")
+}

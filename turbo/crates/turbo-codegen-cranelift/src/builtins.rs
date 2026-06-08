@@ -781,6 +781,16 @@ pub(crate) fn compile_exit<M: Module>(
     let fid = cx.rt_fns["rt_exit"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     cx.builder.ins().call(fref, &[code_val]);
+    // rt_exit never returns (it calls process::exit), but Cranelift can't know
+    // that from the call alone. Emit a trap and move to a fresh sealed,
+    // predecessor-less block — exactly as `compile_panic` does — so that
+    // `is_unreachable()` reports true afterwards. Otherwise `exit` in one arm
+    // of an `if`/`match` leaves the arm looking reachable-but-valueless,
+    // producing a merge-block arg/param arity mismatch (malformed SSA).
+    cx.builder.ins().trap(TrapCode::unwrap_user(1));
+    let new_block = cx.builder.create_block();
+    cx.builder.switch_to_block(new_block);
+    cx.builder.seal_block(new_block);
     Ok(None)
 }
 
@@ -1658,6 +1668,17 @@ pub(crate) fn compile_builtin_filter<M: Module>(
         TurboTy::Fn(params, _) => params[0].clone(),
         _ => TurboTy::Int,
     };
+    // The predicate's return ABI must match the closure's actual signature.
+    // Inferred/expression-body closures are declared with an `int` (i64) return
+    // (see closure declaration in compile.rs); explicit `-> bool` closures use
+    // i8. Derive it from the closure's `fn_tty` exactly as `map`/`reduce` do —
+    // hardcoding the return type disagreed with the closure's real signature
+    // and produced a Cranelift verifier error. `brif` treats either width as
+    // truthy (non-zero), so no narrowing of the result is needed.
+    let pred_ret_tty = match &fn_tty {
+        TurboTy::Fn(_, ret) => *ret.clone(),
+        _ => TurboTy::Int,
+    };
 
     // Extract fn_ptr and env_ptr from closure pair struct
     let fn_ptr = cx
@@ -1684,7 +1705,8 @@ pub(crate) fn compile_builtin_filter<M: Module>(
     sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
     let param_cl_ty = turbo_ty_to_cl_type(&param_tty, cx.ptr_type);
     sig.params.push(AbiParam::new(param_cl_ty));
-    sig.returns.push(AbiParam::new(types::I8));
+    let pred_ret_cl_ty = turbo_ty_to_cl_type(&pred_ret_tty, cx.ptr_type);
+    sig.returns.push(AbiParam::new(pred_ret_cl_ty));
     let sig_ref = cx.builder.import_signature(sig);
 
     let idx_var = cx.fresh_var(types::I64, TurboTy::Int);
@@ -1997,11 +2019,30 @@ pub(crate) fn compile_if<M: Module>(
     cx.builder.switch_to_block(merge_block);
     cx.builder.seal_block(merge_block);
 
-    if let (Some((then_val, then_tty)), Some(_)) = (then_result, else_result) {
-        let ty = cx.builder.func.dfg.value_type(then_val);
+    // A branch contributes a value-carrying edge to the merge block iff it is
+    // reachable (`*_needs_jump`), the `if` can yield a value (`can_yield_value`),
+    // and the branch actually produced one. The merge block needs exactly one
+    // param iff at least one such edge exists. Crucially we must NOT require
+    // *both* arms to yield: when one arm diverges (`exit`/`panic`/`return`) it
+    // emits no jump, so the surviving arm alone defines the value and the merge
+    // block has a single value-carrying predecessor. Requiring both-`Some` here
+    // appended zero params while the live arm still jumped with an argument —
+    // malformed SSA that crashed Cranelift's remove_constant_phis pass.
+    let then_edge = then_needs_jump && can_yield_value;
+    let else_edge = else_needs_jump && can_yield_value;
+    let then_yielded = then_edge && then_result.is_some();
+    let else_yielded = else_edge && else_result.is_some();
+
+    if then_yielded || else_yielded {
+        let (val_for_ty, tty) = match (&then_result, &else_result) {
+            (Some((v, t)), _) if then_yielded => (*v, t.clone()),
+            (_, Some((v, t))) => (*v, t.clone()),
+            _ => unreachable!("then_yielded || else_yielded guarantees one Some"),
+        };
+        let ty = cx.builder.func.dfg.value_type(val_for_ty);
         cx.builder.append_block_param(merge_block, ty);
         let param = cx.builder.block_params(merge_block)[0];
-        Ok(Some((param, then_tty)))
+        Ok(Some((param, tty)))
     } else {
         Ok(None)
     }
@@ -2083,16 +2124,30 @@ pub(crate) fn compile_if_let<M: Module>(
             let val_call = cx.builder.ins().call(val_fref, &[val]);
             let raw_val = cx.builder.inst_results(val_call)[0];
 
-            let var = Variable::new(cx.next_var);
-            cx.next_var += 1;
-            cx.builder.declare_var(var, types::I64);
-            cx.builder.def_var(var, raw_val);
-
             let turbo_ty = match &val_tty {
                 TurboTy::Optional(inner_tty) => *inner_tty.clone(),
                 _ => TurboTy::Int,
             };
-            cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
+
+            // A `float?` stores its payload as raw i64 bits; bind it as F64 so
+            // later float arithmetic doesn't fadd an i64-classed register
+            // (backend register-class panic). Mirrors the Ok/Err arm below.
+            let (cl_ty, bind_val) = if matches!(turbo_ty, TurboTy::Float) {
+                (
+                    types::F64,
+                    cx.builder
+                        .ins()
+                        .bitcast(types::F64, MemFlags::new(), raw_val),
+                )
+            } else {
+                (types::I64, raw_val)
+            };
+
+            let var = Variable::new(cx.next_var);
+            cx.next_var += 1;
+            cx.builder.declare_var(var, cl_ty);
+            cx.builder.def_var(var, bind_val);
+            cx.vars.insert(binding.clone(), (var, cl_ty, turbo_ty));
         }
         Pattern::Ok(binding) | Pattern::Err(binding) => {
             let val_fid = cx.rt_fns["rt_result_value"];
@@ -2165,15 +2220,26 @@ pub(crate) fn compile_if_let<M: Module>(
         }
     }
 
-    // Merge block
+    // Merge block. As in `compile_if`, append the param iff at least one
+    // reachable arm yields a value — requiring both-`Some` would emit zero
+    // params while a live arm jumps with an argument when the other arm
+    // diverges (`exit`/`panic`/`return`), crashing remove_constant_phis.
     cx.builder.switch_to_block(merge_block);
     cx.builder.seal_block(merge_block);
 
-    if let (Some((then_val, then_tty)), Some(_)) = (then_result, else_result) {
-        let ty = cx.builder.func.dfg.value_type(then_val);
+    let then_yielded = then_needs_jump && then_result.is_some();
+    let else_yielded = else_needs_jump && else_result.is_some();
+
+    if then_yielded || else_yielded {
+        let (val_for_ty, tty) = match (&then_result, &else_result) {
+            (Some((v, t)), _) if then_yielded => (*v, t.clone()),
+            (_, Some((v, t))) => (*v, t.clone()),
+            _ => unreachable!("then_yielded || else_yielded guarantees one Some"),
+        };
+        let ty = cx.builder.func.dfg.value_type(val_for_ty);
         cx.builder.append_block_param(merge_block, ty);
         let param = cx.builder.block_params(merge_block)[0];
-        Ok(Some((param, then_tty)))
+        Ok(Some((param, tty)))
     } else {
         Ok(None)
     }
@@ -3010,16 +3076,30 @@ pub(crate) fn compile_match<M: Module>(
                 let val_call = cx.builder.ins().call(val_fref, &[subj_val]);
                 let raw_val = cx.builder.inst_results(val_call)[0];
 
-                let var = Variable::new(cx.next_var);
-                cx.next_var += 1;
-                cx.builder.declare_var(var, types::I64);
-                cx.builder.def_var(var, raw_val);
-
                 let turbo_ty = match &subj_tty {
                     TurboTy::Optional(inner_tty) => *inner_tty.clone(),
                     _ => TurboTy::Int,
                 };
-                cx.vars.insert(binding.clone(), (var, types::I64, turbo_ty));
+
+                // A `float?` payload is stored as raw i64 bits; bind it as F64
+                // so float arithmetic on the binding is well-typed. Mirrors the
+                // Ok/Err arm above (the Some arm previously forgot to bitcast).
+                let (cl_ty, bind_val) = if matches!(turbo_ty, TurboTy::Float) {
+                    (
+                        types::F64,
+                        cx.builder
+                            .ins()
+                            .bitcast(types::F64, MemFlags::new(), raw_val),
+                    )
+                } else {
+                    (types::I64, raw_val)
+                };
+
+                let var = Variable::new(cx.next_var);
+                cx.next_var += 1;
+                cx.builder.declare_var(var, cl_ty);
+                cx.builder.def_var(var, bind_val);
+                cx.vars.insert(binding.clone(), (var, cl_ty, turbo_ty));
             }
             Pattern::VariantDestructure { variant, bindings } => {
                 let field_tys = if let TurboTy::Enum(ref enum_name) = subj_tty {

@@ -164,15 +164,23 @@ fn compile_expr_inner<M: Module>(
         Expr::Block { stmts, tail_expr } => {
             let saved_vars = cx.vars.clone();
 
-            // Collect defer expressions while compiling statements
+            // Collect defer expressions while compiling statements. Stop once a
+            // statement diverges (`exit`/`panic`/`return`) — everything after it
+            // is dead code, and emitting it into the now-unreachable block would
+            // leave that block unterminated (Cranelift finalize panic).
             let mut deferred: Vec<&Spanned<Expr>> = Vec::new();
             for stmt in stmts {
+                if cx.builder.is_unreachable() {
+                    break;
+                }
                 if let Stmt::Defer(ref defer_expr) = stmt.node {
                     deferred.push(defer_expr);
                 }
                 compile_stmt(cx, stmt)?;
             }
-            let result = if let Some(tail) = tail_expr {
+            let result = if cx.builder.is_unreachable() {
+                Ok(None)
+            } else if let Some(tail) = tail_expr {
                 let result = compile_expr(cx, tail)?;
                 if let Some((value, tty)) = result.as_ref() {
                     retain_if_needed(cx, *value, tty);
@@ -1190,11 +1198,23 @@ fn compile_expr_inner<M: Module>(
             };
             cx.builder.ins().jump(merge_block, &[def_val]);
 
-            // Merge block
+            // Merge block. Both edges carry the value as raw i64 bits (the
+            // some-path payload and the float-bitcast default), so the param is
+            // i64. If the result type is Float, bitcast back to F64 before
+            // returning — otherwise the caller would fadd an i64-classed value
+            // (wrong answer + backend register-class panic).
             cx.builder.append_block_param(merge_block, types::I64);
             cx.builder.switch_to_block(merge_block);
             cx.builder.seal_block(merge_block);
             let result = cx.builder.block_params(merge_block)[0];
+
+            let result = if matches!(def_tty, TurboTy::Float) {
+                cx.builder
+                    .ins()
+                    .bitcast(types::F64, MemFlags::new(), result)
+            } else {
+                result
+            };
 
             Ok(Some((result, def_tty)))
         }

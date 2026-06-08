@@ -1,9 +1,10 @@
 fn main() {
     let nums = [1, 2, 3, 4, 5, 6]
-
-    let evens = filter(nums, |x: i64| -> bool { x % 2 == 0 })
-    for n in evens { print(n) }
-
+    // inferred-type predicate (regression: was a Cranelift verifier error)
+    let evens = filter(nums, |x| x % 2 == 0)
+    for v in evens { print(v) }
+    print("--")
+    // explicitly-typed predicate
     let big = filter(nums, |x: i64| -> bool { x > 3 })
-    for n in big { print(n) }
+    for v in big { print(v) }
 }
