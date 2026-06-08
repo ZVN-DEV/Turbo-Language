@@ -76,9 +76,8 @@ fn main() {
 
 const benchmarks = [
   { label: "Rust (rustc -O)", ms: 180, size: "441 KB", highlight: false },
-  { label: "Turbo (Cranelift)", ms: 250, size: "55 KB", highlight: true },
+  { label: "Turbo (Cranelift)", ms: 250, size: "93 KB", highlight: true },
   { label: "C (cc -O2)", ms: 290, size: "33 KB", highlight: false },
-  { label: "Turbo (LLVM)", ms: 290, size: "55 KB", highlight: true },
   { label: "Node.js", ms: 580, size: "--", highlight: false },
   { label: "Python", ms: 13100, size: "--", highlight: false },
 ];
@@ -87,7 +86,7 @@ const features = [
   {
     title: "Native Speed",
     description:
-      "Compiles to machine code via Cranelift (default) or LLVM. No interpreter, no VM. Competitive with C and Rust on real workloads.",
+      "Compiles to machine code via Cranelift. No interpreter, no VM. Competitive with C and Rust on real workloads.",
     icon: (
       <svg
         className="w-6 h-6"
@@ -167,7 +166,7 @@ const features = [
   {
     title: "Zero GC",
     description:
-      "No garbage collector pauses. Deterministic memory management with ~55 KB binaries. Deploy anywhere with no runtime.",
+      "No garbage collector pauses. Deterministic memory management with ~93 KB binaries. Deploy anywhere with no runtime.",
     icon: (
       <svg
         className="w-6 h-6"

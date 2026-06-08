@@ -101,14 +101,7 @@ Hello, world!`}</code>
               <td className="px-4 py-2">
                 <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)] text-xs">turbolang build</code>
               </td>
-              <td className="px-4 py-2">Production binaries (default)</td>
-            </tr>
-            <tr className="border-b border-[#1a1a2e]">
-              <td className="px-4 py-2 text-white font-medium">AOT (LLVM)</td>
-              <td className="px-4 py-2">
-                <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)] text-xs">turbolang build --llvm</code>
-              </td>
-              <td className="px-4 py-2">Production binaries (requires LLVM 18)</td>
+              <td className="px-4 py-2">Production binaries</td>
             </tr>
           </tbody>
         </table>

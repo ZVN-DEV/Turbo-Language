@@ -22,7 +22,7 @@ export default function CliPage() {
           <tbody>
             {[
               ["turbolang run <file.tb>", "Compile and run via JIT (Cranelift)"],
-              ["turbolang build <file.tb>", "Compile to a native binary (AOT). Use --llvm for LLVM backend"],
+              ["turbolang build <file.tb>", "Compile to a native binary (AOT)"],
               ["turbolang test <file.tb>", "Run @test functions"],
               ["turbolang bench <file.tb>", "Benchmark with timing"],
               ["turbolang init <name>", "Create a new project"],
@@ -72,12 +72,8 @@ $ turbolang run --verbose hello.tb`}</code>
         runtime and has no external dependencies.
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`# Compile to native binary (Cranelift backend, default)
+        <code>{`# Compile to a native binary
 $ turbolang build hello.tb
-$ ./hello
-
-# Compile using the LLVM backend (requires LLVM 18)
-$ turbolang build --llvm hello.tb
 $ ./hello
 
 # With custom output name
