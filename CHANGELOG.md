@@ -5,6 +5,43 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-06-08 — Hardening, Security & Correctness
+
+A correctness-and-safety release. A full hardening audit fixed every known
+miscompilation and memory-safety bug across codegen, the C runtime, and the
+frontend; earlier sprints hardened the runtime against malformed input and
+closed remaining stdlib gaps. Validated AddressSanitizer-clean across 200
+programs, with 222 integration tests and the full unit suite passing.
+
+### Fixed
+- **Codegen — control flow & SSA.** Corrected block/merge parameter handling for
+  diverging `else` branches in `if` and `if let`, added missing float bitcasts in
+  `some(v)` and `??`, fixed the closure-return and `exit` calling conventions, and
+  stopped a crash on a value-returning builtin in an else-less `if`. Dead code
+  after a diverging call no longer crashes compilation.
+- **Codegen — memory safety.** Stopped double-freeing struct-array elements across
+  `for` loops.
+- **C runtime.** Closed a use-after-free in copy-on-write `push`, fixed string-alias
+  corruption in in-place concat, and fixed a `substring` abort on multi-byte
+  (UTF-8) input. Earlier hardening: depth-aware `json_get`, JSON escape handling,
+  padding validation, HTTP parsing bounds, mutex refcounting, and `list_dir`
+  allocation checks.
+- **Generics.** Generic function bodies are now type-checked, and `[T]` indexing no
+  longer segfaults.
+- **Frontend.** Deeply-nested types no longer overflow the stack (now a clean
+  `E0516`); duplicate struct fields and duplicate function parameters are rejected;
+  parser soft-keyword double-peek fixed.
+- **DX.** Clearer range-bounds and integer-overflow diagnostics, a safer formatter,
+  corrected LSP error codes, and more robust CLI/`init` error handling.
+
+### Added
+- New builtins and stdlib gap-closing: `http_post_with_headers`, `json_build`,
+  `str_from_char`, unsigned `min`/`max`, saturating `float_to_int`, `mutex_drop`,
+  and float support for `abs`/`min`/`max` in sema.
+- Performance: amortized O(1) array `push`, `select` optimization, and `@unsafe`
+  array access.
+- VS Code: wired-up LSP client and editor snippets.
+
 ### Removed
 - **The experimental LLVM backend (`turbo-codegen-llvm`, `turbolang build --llvm`).**
   Cranelift is now the single code-generation backend. The LLVM path was a
@@ -14,6 +51,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
   eliminates a large duplicated codegen surface and the cost of keeping two
   backends at parity. A future optimizing backend, if pursued, should lower
   through a shared mid-level IR rather than re-walking the AST a second time.
+  (Work continues on the `llvm-backend` branch; it will be reintroduced only when
+  it reaches parity, builds cleanly, and shows a measured speedup.)
 
 ## [0.9.0] - 2026-05-16 — Batteries-Included Stdlib
 
