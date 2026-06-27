@@ -18,6 +18,7 @@ path = "src/main.rs"
 turbo-lexer = { version = "0.9.1", path = "../turbo-lexer" }
 turbo-ast = { version = "0.9.1", path = "../turbo-ast" }
 turbo-parser = { version = "0.9.1", path = "../turbo-parser" }
+turbo-formatter = { version = "0.9.1", path = "../turbo-formatter" }
 turbo-codegen-cranelift = { version = "0.9.1", path = "../turbo-codegen-cranelift" }
 turbo-sema = { version = "0.9.1", path = "../turbo-sema" }
 clap = { workspace = true }

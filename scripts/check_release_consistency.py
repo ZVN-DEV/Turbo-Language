@@ -333,6 +333,7 @@ def write_fixture(root: Path, version: str = "1.2.3") -> None:
         "turbo-ast",
         "turbo-cli",
         "turbo-codegen-cranelift",
+        "turbo-formatter",
         "turbo-lexer",
         "turbo-lsp",
         "turbo-parser",
@@ -370,6 +371,7 @@ end
             "turbo-ast",
             "turbo-cli",
             "turbo-codegen-cranelift",
+            "turbo-formatter",
             "turbo-lexer",
             "turbo-lsp",
             "turbo-parser",
@@ -379,7 +381,14 @@ end
     write(root / "turbo" / "Cargo.lock", f"version = 4\n\n{lock_packages}")
     fuzz_packages = "\n".join(
         f'[[package]]\nname = "{name}"\nversion = "{version}"\n'
-        for name in ["turbo-ast", "turbo-codegen-cranelift", "turbo-lexer", "turbo-parser", "turbo-sema"]
+        for name in [
+            "turbo-ast",
+            "turbo-codegen-cranelift",
+            "turbo-formatter",
+            "turbo-lexer",
+            "turbo-parser",
+            "turbo-sema",
+        ]
     )
     write(root / "turbo" / "fuzz" / "Cargo.lock", f"version = 4\n\n{fuzz_packages}")
     write(root / "CHANGELOG.md", f"# Changelog\n\n## [{version}] - 2099-01-01\n")

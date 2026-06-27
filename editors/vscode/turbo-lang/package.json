@@ -1,7 +1,7 @@
 {
     "name": "turbo-lang",
     "displayName": "Turbo Language",
-    "description": "Syntax highlighting, snippets, and full language support (diagnostics, hover, go-to-definition, completions) for the Turbo programming language",
+    "description": "Syntax highlighting, snippets, formatting, and full language support (diagnostics, hover, go-to-definition, completions) for the Turbo programming language",
     "version": "0.9.1",
     "publisher": "zvn-dev",
     "repository": {
@@ -39,7 +39,7 @@
                 "turbo.lsp.enable": {
                     "type": "boolean",
                     "default": true,
-                    "description": "Enable the Turbo language server (diagnostics, hover, go-to-definition, completions)."
+                    "description": "Enable the Turbo language server (diagnostics, formatting, hover, go-to-definition, completions)."
                 }
             }
         }

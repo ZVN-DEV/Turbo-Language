@@ -14,6 +14,7 @@
 //! * `textDocument/documentSymbol`
 //! * `textDocument/rename` + `textDocument/prepareRename`
 //! * `textDocument/codeAction`
+//! * `textDocument/formatting`
 //! * `textDocument/semanticTokens/full`
 //!
 //! ```text
@@ -50,6 +51,7 @@ fn main() {
         document_symbol_provider: Some(OneOf::Left(true)),
         rename_provider: rename::rename_capability(),
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+        document_formatting_provider: Some(OneOf::Left(true)),
         semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
             SemanticTokensOptions {
                 work_done_progress_options: Default::default(),
@@ -61,13 +63,10 @@ fn main() {
         ..Default::default()
     };
 
-    let init_result = match serde_json::to_value(InitializeResult {
-        capabilities,
-        ..Default::default()
-    }) {
+    let init_result = match serde_json::to_value(capabilities) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("turbo-lsp: failed to serialize InitializeResult: {e}");
+            eprintln!("turbo-lsp: failed to serialize ServerCapabilities: {e}");
             return;
         }
     };
@@ -140,6 +139,7 @@ fn main() {
         }
     }
 
+    drop(connection);
     if let Err(e) = io_threads.join() {
         eprintln!("turbo-lsp: I/O thread error: {e}");
     }
@@ -178,6 +178,7 @@ fn dispatch_request(req: Request, documents: &HashMap<Uri, String>) -> Response 
         "textDocument/prepareRename" => handle_prepare_rename(req.params, documents),
         "textDocument/rename" => handle_rename(req.params, documents),
         "textDocument/codeAction" => handle_code_action(req.params, documents),
+        "textDocument/formatting" => handle_formatting(req.params, documents),
         "textDocument/semanticTokens/full" => handle_semantic_tokens(req.params, documents),
         // Unknown methods get an empty success response: lsp-server already
         // logs them, and some clients probe for optional capabilities this way.
@@ -364,6 +365,55 @@ fn handle_code_action(
     validate_range(params.range, "textDocument/codeAction")?;
     let actions = code_actions::compute_code_actions(&params);
     serde_json::to_value(actions).map_err(serialize_error)
+}
+
+#[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
+fn handle_formatting(
+    params: serde_json::Value,
+    documents: &HashMap<Uri, String>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let params: DocumentFormattingParams =
+        serde_json::from_value(params).map_err(|e| invalid_params("textDocument/formatting", e))?;
+    let uri = &params.text_document.uri;
+    let edits = documents
+        .get(uri)
+        .and_then(|source| compute_formatting_edits(source));
+    serde_json::to_value(edits).map_err(serialize_error)
+}
+
+fn compute_formatting_edits(source: &str) -> Option<Vec<TextEdit>> {
+    if has_syntax_errors(source) {
+        return None;
+    }
+
+    let formatted = turbo_formatter::format_source(source);
+    if formatted == source {
+        return Some(Vec::new());
+    }
+
+    Some(vec![TextEdit {
+        range: full_document_range(source),
+        new_text: formatted,
+    }])
+}
+
+fn has_syntax_errors(source: &str) -> bool {
+    let (tokens, lex_errors) = turbo_lexer::tokenize(source);
+    if !lex_errors.is_empty() {
+        return true;
+    }
+    let (_, parse_errors) = turbo_parser::parse(tokens);
+    !parse_errors.is_empty()
+}
+
+fn full_document_range(source: &str) -> Range {
+    Range {
+        start: Position {
+            line: 0,
+            character: 0,
+        },
+        end: offset_to_position(source, source.len()),
+    }
 }
 
 #[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
@@ -1023,7 +1073,7 @@ fn offset_to_position(source: &str, offset: usize) -> Position {
             line += 1;
             col = 0;
         } else {
-            col += 1;
+            col += c.len_utf16() as u32;
         }
     }
     Position {
@@ -1047,7 +1097,11 @@ fn position_to_offset(source: &str, pos: Position) -> Option<usize> {
             line += 1;
             col = 0;
         } else {
-            col += 1;
+            let next_col = col + c.len_utf16() as u32;
+            if line == pos.line && pos.character < next_col {
+                return Some(i);
+            }
+            col = next_col;
         }
     }
     // Handle position at end of file
@@ -1091,6 +1145,22 @@ mod tests {
                 assert_eq!(back, offset, "roundtrip failed for offset {offset}");
             }
         }
+    }
+
+    #[test]
+    fn unicode_positions_use_lsp_utf16_units() {
+        let src = "let icon = \"🙂\"\nlet x = 1";
+        let emoji_offset = src.find('🙂').unwrap();
+        let after_emoji = emoji_offset + "🙂".len();
+
+        let emoji_pos = offset_to_position(src, emoji_offset);
+        assert_eq!(emoji_pos.line, 0);
+        assert_eq!(emoji_pos.character, 12);
+
+        let after_emoji_pos = offset_to_position(src, after_emoji);
+        assert_eq!(after_emoji_pos.line, 0);
+        assert_eq!(after_emoji_pos.character, 14);
+        assert_eq!(position_to_offset(src, after_emoji_pos), Some(after_emoji));
     }
 
     #[test]
@@ -1406,6 +1476,141 @@ mod tests {
 
     #[test]
     #[allow(clippy::mutable_key_type)]
+    fn formatting_returns_whole_document_edit_for_unformatted_source() {
+        let docs = docs_with("file:///t.tb", "fn main(){\nlet x=1\n}\n");
+        let params = json!({
+            "textDocument": { "uri": "file:///t.tb" },
+            "options": { "tabSize": 4, "insertSpaces": true },
+        });
+        let resp = dispatch_request(make_request("textDocument/formatting", params), &docs);
+        assert!(resp.error.is_none(), "formatting should succeed");
+        let edits: Option<Vec<TextEdit>> =
+            serde_json::from_value(resp.result.expect("expected formatting result")).unwrap();
+        let edits = edits.expect("open document should return formatting edits");
+        assert_eq!(edits.len(), 1, "unformatted source should get one edit");
+        assert_eq!(edits[0].range.start.line, 0);
+        assert_eq!(edits[0].range.start.character, 0);
+        assert_eq!(edits[0].range.end.line, 3);
+        assert_eq!(edits[0].range.end.character, 0);
+        assert!(
+            edits[0].new_text.contains("fn main() {"),
+            "formatter should normalize function spacing: {:?}",
+            edits[0].new_text
+        );
+        assert!(
+            edits[0].new_text.contains("    let x = 1"),
+            "formatter should normalize indentation and assignment spacing: {:?}",
+            edits[0].new_text
+        );
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)]
+    fn formatting_range_covers_non_bmp_final_line_without_trailing_newline() {
+        let source = "fn main(){print(\"🙂\")}";
+        let docs = docs_with("file:///emoji.tb", source);
+        let params = json!({
+            "textDocument": { "uri": "file:///emoji.tb" },
+            "options": { "tabSize": 4, "insertSpaces": true },
+        });
+        let resp = dispatch_request(make_request("textDocument/formatting", params), &docs);
+        assert!(resp.error.is_none(), "formatting should succeed");
+        let edits: Option<Vec<TextEdit>> =
+            serde_json::from_value(resp.result.expect("expected formatting result")).unwrap();
+        let edits = edits.expect("open document should return formatting edits");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].range, full_document_range(source));
+        assert_eq!(edits[0].range.end.line, 0);
+        assert_eq!(edits[0].range.end.character, 22);
+        assert!(
+            edits[0].new_text.ends_with('\n'),
+            "formatter should still normalize trailing newline"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)]
+    fn formatting_returns_empty_edits_for_formatted_source() {
+        let docs = docs_with("file:///t.tb", "fn main() {\n    let x = 1\n}\n");
+        let params = json!({
+            "textDocument": { "uri": "file:///t.tb" },
+            "options": { "tabSize": 4, "insertSpaces": true },
+        });
+        let resp = dispatch_request(make_request("textDocument/formatting", params), &docs);
+        assert!(resp.error.is_none(), "formatting should succeed");
+        let edits: Option<Vec<TextEdit>> =
+            serde_json::from_value(resp.result.expect("expected formatting result")).unwrap();
+        assert_eq!(edits.expect("open document should return edits").len(), 0);
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)]
+    fn formatting_leaves_syntax_errors_untouched() {
+        let docs = docs_with("file:///bad.tb", "fn main( {\n");
+        let params = json!({
+            "textDocument": { "uri": "file:///bad.tb" },
+            "options": { "tabSize": 4, "insertSpaces": true },
+        });
+        let resp = dispatch_request(make_request("textDocument/formatting", params), &docs);
+        assert!(
+            resp.error.is_none(),
+            "syntax errors should not make formatting fail"
+        );
+        assert_eq!(resp.result, Some(serde_json::Value::Null));
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)]
+    fn formatting_returns_null_for_unopened_document() {
+        let params = json!({
+            "textDocument": { "uri": "file:///missing.tb" },
+            "options": { "tabSize": 4, "insertSpaces": true },
+        });
+        let resp = dispatch_request(
+            make_request("textDocument/formatting", params),
+            &empty_docs(),
+        );
+        assert!(resp.error.is_none(), "missing documents should not error");
+        assert_eq!(resp.result, Some(serde_json::Value::Null));
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)]
+    fn formatting_leaves_lex_errors_untouched() {
+        let docs = docs_with("file:///bad.tb", "fn main() {\n    §\n}\n");
+        let params = json!({
+            "textDocument": { "uri": "file:///bad.tb" },
+            "options": { "tabSize": 4, "insertSpaces": true },
+        });
+        let resp = dispatch_request(make_request("textDocument/formatting", params), &docs);
+        assert!(
+            resp.error.is_none(),
+            "lex errors should not make formatting fail"
+        );
+        assert_eq!(resp.result, Some(serde_json::Value::Null));
+    }
+
+    #[test]
+    fn full_document_range_uses_utf16_end_character() {
+        let range = full_document_range("fn main() { print(\"🙂\") }");
+        assert_eq!(range.end.line, 0);
+        assert_eq!(range.end.character, 25);
+    }
+
+    #[test]
+    fn formatting_with_malformed_params_returns_invalid_params() {
+        let resp = dispatch_request(
+            make_request("textDocument/formatting", json!({"bogus": true})),
+            &empty_docs(),
+        );
+        let err = resp
+            .error
+            .expect("expected error for malformed formatting params");
+        assert_eq!(err.code, INVALID_PARAMS);
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)]
     fn hover_on_whitespace_returns_null_not_error() {
         // Per the LSP spec hovering on a non-token location should succeed
         // (usually with `null`), never panic. The lexer treats newline as a
@@ -1463,6 +1668,7 @@ mod tests {
             "textDocument/prepareRename",
             "textDocument/rename",
             "textDocument/codeAction",
+            "textDocument/formatting",
             "textDocument/semanticTokens/full",
         ];
         for method in methods {

@@ -9,6 +9,7 @@ Syntax highlighting, snippets, and full language support for the
 - 25 snippets for common patterns (`fn`, `struct`, `type`, `match`, `for`, `test`, …)
 - Language server integration via `turbo-lsp`:
   - Diagnostics (errors and warnings with `E0NNN` codes)
+  - Format Document
   - Hover
   - Go-to-definition
   - Completions
@@ -40,4 +41,4 @@ code --install-extension turbo-lang-*.vsix
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `turbo.lsp.path` | `turbo-lsp` | Path to the Turbo language server executable. Use `turbolang` only for older installs that require `turbolang lsp`. |
-| `turbo.lsp.enable` | `true` | Enable the language server. |
+| `turbo.lsp.enable` | `true` | Enable diagnostics, formatting, hover, go-to-definition, completions, references, rename, and document symbols. |

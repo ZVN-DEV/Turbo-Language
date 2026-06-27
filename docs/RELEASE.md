@@ -26,6 +26,7 @@ All must agree on the same version:
 | `turbo/crates/turbo-ast/Cargo.toml` | `version` |
 | `turbo/crates/turbo-lexer/Cargo.toml` | `version` |
 | `turbo/crates/turbo-parser/Cargo.toml` | `version` |
+| `turbo/crates/turbo-formatter/Cargo.toml` | `version` |
 | `turbo/crates/turbo-sema/Cargo.toml` | `version` |
 | `turbo/crates/turbo-codegen-cranelift/Cargo.toml` | `version` |
 | `turbo/crates/turbo-lsp/Cargo.toml` | `version` |
@@ -117,10 +118,11 @@ preparation:
 1. `turbo-ast`
 2. `turbo-lexer`
 3. `turbo-parser`
-4. `turbo-sema`
-5. `turbo-codegen-cranelift`
-6. `turbo-cli`
-7. `turbo-lsp`
+4. `turbo-formatter`
+5. `turbo-sema`
+6. `turbo-codegen-cranelift`
+7. `turbo-cli`
+8. `turbo-lsp`
 
 Before publishing higher-level crates, publish or otherwise make their internal
 dependencies available at the same version.
