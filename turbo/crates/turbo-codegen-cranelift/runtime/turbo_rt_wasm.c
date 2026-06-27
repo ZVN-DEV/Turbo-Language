@@ -13,6 +13,13 @@
 #include <string.h>
 #include <math.h>
 
+#define TURBO_F64_FORMAT "%.15g"
+
+static void rt_format_f64(char *buf, size_t cap, double n) {
+    if (n == 0.0) n = 0.0; /* normalize negative zero */
+    snprintf(buf, cap, TURBO_F64_FORMAT, n);
+}
+
 /* ── Checked allocation helpers ──────────────────────────────────── */
 
 static void *turbo_alloc(size_t size) {
@@ -47,7 +54,9 @@ void rt_print_i64(long long n) {
 }
 
 void rt_print_f64(double n) {
-    printf("%.7g\n", n);
+    char buf[64];
+    rt_format_f64(buf, sizeof(buf), n);
+    printf("%s\n", buf);
 }
 
 void rt_print_bool(char b) {
@@ -206,8 +215,8 @@ const char* rt_i64_to_str(long long n) {
 }
 
 const char* rt_f64_to_str(double n) {
-    char *buf = turbo_alloc(32);
-    snprintf(buf, 32, "%.7g", n);
+    char *buf = turbo_alloc(64);
+    rt_format_f64(buf, 64, n);
     return buf;
 }
 

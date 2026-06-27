@@ -15,7 +15,7 @@ ITERATIONS="${TURBO_BENCH_ITERS:-3}"
 BENCHMARKS="${TURBO_BENCHMARKS:-fib ack primes collatz sort string matrix matrix_unsafe float hashmap string_heavy}"
 BUILD_DIR="${TURBO_BENCH_BUILD_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/turbo-bench.XXXXXX")}"
 KEEP_BUILD_DIR="${TURBO_BENCH_KEEP_BUILD_DIR:-0}"
-FLOAT_TOLERANCE="${TURBO_BENCH_FLOAT_TOLERANCE:-0.00001}"
+FLOAT_TOLERANCE="${TURBO_BENCH_FLOAT_TOLERANCE:-0}"
 FAILURES=0
 
 if [ "$KEEP_BUILD_DIR" != "1" ]; then

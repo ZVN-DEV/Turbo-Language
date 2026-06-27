@@ -20,6 +20,11 @@ TURBO_BENCHMARKS=fib TURBO_BENCH_ITERS=1 ./turbo/benchmarks/run_comparison.sh
 removes that directory on exit. Set `TURBO_BENCH_KEEP_BUILD_DIR=1` to inspect the
 generated binaries after a run.
 
+Benchmark output comparisons are exact by default, including float benchmarks.
+Set `TURBO_BENCH_FLOAT_TOLERANCE=<decimal>` only when intentionally comparing an
+approximate external baseline that cannot use Turbo's canonical float display
+policy.
+
 ## Artifact Policy
 
 Do not commit generated benchmark executables. The release consistency check

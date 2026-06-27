@@ -7,6 +7,6 @@ int main() {
         sum += sign / (2 * i + 1);
         sign = -sign;
     }
-    printf("%.16f\n", sum * 4.0);
+    printf("%.15g\n", sum * 4.0);
     return 0;
 }

@@ -43,6 +43,7 @@ extern const char *rt_http_post(const char *url, const char *body);
 extern void rt_arena_begin(void);
 extern void rt_arena_end(void);
 extern const char *rt_str_join(const char *arr_ptr, const char *sep);
+extern const char *rt_f64_to_str(double n);
 extern void *rt_array_alloc(long long len);
 extern long long rt_array_len(const void *arr);
 extern long long rt_array_get(const void *arr, long long index);
@@ -273,7 +274,19 @@ static void test_str_join_null_sep(void) {
     rt_release(arr);
 }
 
-/* ── 19: rt_array_push on an empty array grows correctly ───────────── */
+/* ── 19: canonical float formatting ───────────────────────────────── */
+static void test_f64_to_str_canonical_edges(void) {
+    check("test_f64_to_str_canonical_pi",
+          strcmp(rt_f64_to_str(3.14159 * 5.0 * 5.0), "78.53975") == 0);
+    check("test_f64_to_str_canonical_decimal_noise",
+          strcmp(rt_f64_to_str(0.1 + 0.2), "0.3") == 0);
+    check("test_f64_to_str_canonical_negative_zero",
+          strcmp(rt_f64_to_str(-0.0), "0") == 0);
+    check("test_f64_to_str_canonical_repeating",
+          strcmp(rt_f64_to_str(1.0 / 3.0), "0.333333333333333") == 0);
+}
+
+/* ── 20: rt_array_push on an empty array grows correctly ───────────── */
 static void test_array_push_empty(void) {
     void *arr = rt_array_alloc(0);
     arr = rt_array_push(arr, 42);
@@ -599,6 +612,7 @@ int main(void) {
     test_str_join_one();
     test_str_join_many();
     test_str_join_null_sep();
+    test_f64_to_str_canonical_edges();
     test_array_push_empty();
     test_array_push_1000();
     test_array_push_reuses_buffer();

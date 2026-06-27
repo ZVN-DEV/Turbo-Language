@@ -1,0 +1,11 @@
+fn main() {
+    let pi = 3.14159
+    let r = 5.0
+    let area = pi * r * r
+    print(area)
+    print("area={area}")
+    print(to_str(area))
+    print(0.1 + 0.2)
+    print(to_str(0.0 - 0.0))
+    print(1.0 / 3.0)
+}
