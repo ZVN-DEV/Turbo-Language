@@ -82,6 +82,9 @@ jobs:
       - name: Lint error codes
         run: ./scripts/check_error_codes.sh
 
+      - name: Release consistency
+        run: ./scripts/check_release_consistency.sh
+
       - name: Installer smoke
         run: bash scripts/smoke_install_script.sh
 

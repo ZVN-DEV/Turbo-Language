@@ -198,6 +198,16 @@ fi
 # Extract
 tar xz -C "${TMPDIR}" -f "${TMPDIR}/${TARBALL}"
 
+if [ ! -f "${TMPDIR}/turbolang" ]; then
+    echo "error: release archive did not contain turbolang — refusing to install" >&2
+    exit 1
+fi
+
+if [ ! -f "${TMPDIR}/turbo-lsp" ]; then
+    echo "error: release archive did not contain turbo-lsp — refusing to install" >&2
+    exit 1
+fi
+
 install_binary() {
     local name="$1"
     local src="${TMPDIR}/${name}"
@@ -215,23 +225,12 @@ install_binary() {
     fi
 }
 
-if ! install_binary turbolang; then
-    echo "error: release archive did not contain turbolang — refusing to install" >&2
-    exit 1
-fi
-
-if install_binary turbo-lsp; then
-    LSP_INSTALLED=true
-else
-    LSP_INSTALLED=false
-    echo "warning: release archive did not contain turbo-lsp; installed CLI only" >&2
-fi
+install_binary turbolang
+install_binary turbo-lsp
 
 echo ""
 echo "Turbo v${VERSION} installed to ${INSTALL_DIR}/turbolang"
-if [ "${LSP_INSTALLED}" = "true" ]; then
-    echo "Turbo LSP installed to ${INSTALL_DIR}/turbo-lsp"
-fi
+echo "Turbo LSP installed to ${INSTALL_DIR}/turbo-lsp"
 echo ""
 echo "Get started:"
 echo "  turbolang init myproject"

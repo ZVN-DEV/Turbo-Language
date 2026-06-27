@@ -38,7 +38,7 @@ All must agree on the same version:
 
 Quick verify command:
 ```bash
-grep '^version' turbo/crates/*/Cargo.toml
+./scripts/check_release_consistency.sh
 ```
 
 ---
@@ -47,7 +47,7 @@ grep '^version' turbo/crates/*/Cargo.toml
 
 ### 1.1 Version Bump
 
-Bump all 8 crate `Cargo.toml` files to the new version:
+Bump all workspace crate `Cargo.toml` files to the new version:
 ```bash
 # Find-replace old version → new version in all Cargo.toml
 grep '^version' turbo/crates/*/Cargo.toml  # verify they all match
@@ -92,6 +92,9 @@ cd turbo && ./tests/run_tests.sh && cd ..
 
 # Installer smoke (must install both turbolang and turbo-lsp from a local fixture)
 ./scripts/smoke_install_script.sh
+
+# Release metadata consistency (versions, lockfiles, Homebrew, workflows, Docker, installer)
+./scripts/check_release_consistency.sh
 ```
 
 ### 1.5 Verify Version Output
@@ -245,6 +248,7 @@ turbolang --version
 
 ```bash
 # All must report the same version
+./scripts/check_release_consistency.sh
 turbolang --version
 grep '^version' ~/Desktop/Coding/ZVN/TurboLang/turbo/crates/turbo-cli/Cargo.toml
 grep '"version"' ~/Desktop/Coding/ZVN/TurboLang/editors/vscode/turbo-lang/package.json
@@ -259,5 +263,5 @@ grep 'version "' ~/Desktop/Coding/ZVN/homebrew-turbo/Formula/turbo-lang.rb
 - **Both runtimes**: Any runtime change must update BOTH `turbo_rt.c` (C/AOT) AND `runtime.rs` (Rust/JIT)
 - **Never skip the tag**: The tag triggers release CI. No tag = no release binaries = can't update Homebrew.
 - **Homebrew depends on CI**: Release CI must complete before you can get SHA256 checksums. Don't try to update the formula before the release is built.
-- **Version sync is non-negotiable**: All 8 crates, Homebrew formula, VS Code extension, and CHANGELOG must all show the same version.
+- **Version sync is non-negotiable**: All workspace crates, Homebrew formula, VS Code extension, and CHANGELOG must all show the same version.
 - **Test before tagging**: Once tagged and pushed, the release is public. Run all tests first.

@@ -254,11 +254,12 @@ jobs:
 
             def install
               bin.install "turbolang"
-              bin.install "turbo-lsp" if File.exist?("turbo-lsp")
+              bin.install "turbo-lsp"
             end
 
             test do
               assert_match "turbolang ${VERSION}", shell_output("#{bin}/turbolang --version")
+              assert_predicate bin/"turbo-lsp", :exist?
             end
           end
           EOF

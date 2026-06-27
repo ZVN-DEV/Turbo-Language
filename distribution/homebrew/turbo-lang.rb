@@ -24,7 +24,7 @@ class TurboLang < Formula
 
   def install
     bin.install "turbolang"
-    bin.install "turbo-lsp" if File.exist?("turbo-lsp")
+    bin.install "turbo-lsp"
   end
 
   test do
