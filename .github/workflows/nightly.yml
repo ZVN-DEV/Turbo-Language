@@ -82,6 +82,12 @@ jobs:
       - name: Lint error codes
         run: ./scripts/check_error_codes.sh
 
+      - name: Release consistency
+        run: ./scripts/check_release_consistency.sh
+
+      - name: Installer smoke
+        run: bash scripts/smoke_install_script.sh
+
       - name: Build codegen fuzz binary
         run: cargo build --release --bin codegen-fuzz --manifest-path turbo/fuzz/Cargo.toml
 

@@ -28,8 +28,12 @@ brew tap ZVN-DEV/turbo && brew install turbo-lang
 # Or build from source
 git clone https://github.com/ZVN-DEV/Turbo-Language.git
 cd Turbo-Language/turbo
-cargo build --release -p turbo-cli
+cargo build --release -p turbo-cli -p turbo-lsp
 export PATH="$PWD/target/release:$PATH"
+
+# Verify both toolchain binaries are available
+turbolang --version
+command -v turbo-lsp
 ```
 
 ### Hello, World
@@ -348,7 +352,7 @@ See [`examples/speed-server/main.tb`](examples/speed-server/main.tb)
 | `turbolang init <name>` | Create a new project |
 | `turbolang doc <file.tb>` | Generate documentation |
 | `turbolang repl` | Interactive REPL |
-| `turbolang lsp` | Start Language Server |
+| `turbo-lsp` | Start Language Server |
 | `turbolang explain <code>` | Explain an error code (e.g. `turbolang explain E0100`) |
 
 ### Dependency Installation
@@ -444,7 +448,7 @@ The test suite spans Rust unit tests, integration fixtures, and parity coverage;
 | **Tree-sitter Grammar** | [ZVN-DEV/tree-sitter-turbo](https://github.com/ZVN-DEV/tree-sitter-turbo) |
 | **Homebrew** | `brew tap ZVN-DEV/turbo && brew install turbo-lang` |
 | **Docker** | [`distribution/Dockerfile`](distribution/Dockerfile) |
-| **LSP Server** | `turbolang lsp` -- diagnostics, hover, completions, references, document symbols, go-to-definition |
+| **LSP Server** | `turbo-lsp` -- diagnostics, hover, completions, references, document symbols, go-to-definition. `turbolang lsp` remains available for older editor integrations. |
 | **Install Script** | `curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh \| sh` |
 
 ## Contributing

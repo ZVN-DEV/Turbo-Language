@@ -1,36 +1,47 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Turbo Website
 
-## Getting Started
+This is the Next.js app for the Turbo language website. It contains the landing page, installation docs, examples, CLI reference, and product pages that should stay aligned with the compiler/toolchain in this repository.
 
-First, run the development server:
+## Local Development
+
+Use any supported local Node/npm install. Inside Codex App, start with the repository automation PATH, but use Homebrew Node/npm for `npm run build` if native `.node` bindings fail to load with a macOS code-signature Team ID error.
 
 ```bash
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open <http://localhost:3000>.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Verification
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Run the same gate CI and nightly use for the website:
 
-## Learn More
+```bash
+npm run lint
+npm run build
+npm audit --audit-level=high
+```
 
-To learn more about Next.js, take a look at the following resources:
+As of the 2026-06-27 product cycle, the high-severity audit gate passes. `npm audit` still reports known low/moderate transitive findings in the Next.js toolchain; do not treat those as a high-severity release blocker without a fresh audit result.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Deployment
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+The local checkout is already linked to Vercel metadata in `.vercel/project.json`:
 
-## Deploy on Vercel
+- project: `website`
+- project id: `prj_jvXQLV6BMMoUm2vkT7UOIUil2bFc`
+- org id: `team_zCLdY1qPIO8Foz3XjEbNkGBg`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Do not commit Vercel tokens or print deployment secrets. A deploy-capable shell should use the Vercel CLI with account credentials outside the repository:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run build
+npx vercel deploy --prebuilt
+```
+
+After deployment, smoke the public or preview URL by checking the landing page, installation page, CLI docs, examples page, and any route changed in the commit.
+
+## Content Ownership
+
+When compiler, CLI, release, or packaging behavior changes, update the matching website pages in `website/src/app/**` in the same cycle or record the doc gap in `.omx/product-cycles/open-tasks.md`.

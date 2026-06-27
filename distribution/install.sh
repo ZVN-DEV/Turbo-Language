@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="${TURBO_INSTALL_DIR:-/usr/local/bin}"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -66,7 +66,7 @@ case "${OS}-${ARCH}" in
 esac
 
 TARBALL="turbolang-v${VERSION}-${TARGET}.tar.gz"
-BASE_URL="https://github.com/ZVN-DEV/Turbo-Language/releases/download/v${VERSION}"
+BASE_URL="${TURBO_INSTALL_BASE_URL:-https://github.com/ZVN-DEV/Turbo-Language/releases/download/v${VERSION}}"
 URL="${BASE_URL}/${TARBALL}"
 CHECKSUMS_URL="${BASE_URL}/checksums.txt"
 CHECKSUM_SIG_URL="${BASE_URL}/checksums.txt.sig"
@@ -198,16 +198,39 @@ fi
 # Extract
 tar xz -C "${TMPDIR}" -f "${TMPDIR}/${TARBALL}"
 
-# Install
-if [ -w "${INSTALL_DIR}" ]; then
-    mv "${TMPDIR}/turbolang" "${INSTALL_DIR}/turbolang"
-else
-    echo "Need sudo to install to ${INSTALL_DIR}"
-    sudo mv "${TMPDIR}/turbolang" "${INSTALL_DIR}/turbolang"
+if [ ! -f "${TMPDIR}/turbolang" ]; then
+    echo "error: release archive did not contain turbolang — refusing to install" >&2
+    exit 1
 fi
+
+if [ ! -f "${TMPDIR}/turbo-lsp" ]; then
+    echo "error: release archive did not contain turbo-lsp — refusing to install" >&2
+    exit 1
+fi
+
+install_binary() {
+    local name="$1"
+    local src="${TMPDIR}/${name}"
+    local dest="${INSTALL_DIR}/${name}"
+
+    if [ ! -f "${src}" ]; then
+        return 1
+    fi
+
+    if [ -w "${INSTALL_DIR}" ]; then
+        install -m 0755 "${src}" "${dest}"
+    else
+        echo "Need sudo to install ${name} to ${INSTALL_DIR}"
+        sudo install -m 0755 "${src}" "${dest}"
+    fi
+}
+
+install_binary turbolang
+install_binary turbo-lsp
 
 echo ""
 echo "Turbo v${VERSION} installed to ${INSTALL_DIR}/turbolang"
+echo "Turbo LSP installed to ${INSTALL_DIR}/turbo-lsp"
 echo ""
 echo "Get started:"
 echo "  turbolang init myproject"

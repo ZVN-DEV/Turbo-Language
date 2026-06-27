@@ -220,6 +220,15 @@ jobs:
         run: npm audit --audit-level=high
         working-directory: website
 
+  installer-smoke:
+    name: Installer smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: install.sh local release fixture
+        run: bash scripts/smoke_install_script.sh
+
   parity:
     name: Parity tests
     runs-on: ubuntu-latest
@@ -270,6 +279,15 @@ jobs:
 
       - name: Run check_error_codes.sh
         run: ./scripts/check_error_codes.sh
+
+  release-consistency:
+    name: Release consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Run check_release_consistency.sh
+        run: ./scripts/check_release_consistency.sh
 
   reproducibility:
     name: Reproducibility (advisory, soft-fail)
