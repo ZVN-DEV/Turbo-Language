@@ -12,7 +12,14 @@ pub struct StdlibModule {
 pub const STDLIB_MODULES: &[StdlibModule] = &[
     StdlibModule {
         path: "std/io",
-        functions: &["print", "read_line", "read_file", "write_file"],
+        functions: &[
+            "print",
+            "read_line",
+            "read_file",
+            "write_file",
+            "try_read_file",
+            "try_write_file",
+        ],
     },
     StdlibModule {
         path: "std/string",
@@ -31,19 +38,52 @@ pub const STDLIB_MODULES: &[StdlibModule] = &[
             "repeat",
             "join",
             "to_str",
+            "substring",
+            "pad_left",
+            "pad_right",
+            "str_to_int",
+            "str_to_float",
+            "str_from_char",
         ],
     },
     StdlibModule {
         path: "std/array",
-        functions: &["len", "push"],
+        functions: &["len", "push", "sort", "reverse", "array_contains", "slice"],
     },
     StdlibModule {
         path: "std/functional",
-        functions: &["map", "filter", "reduce"],
+        functions: &["map", "filter", "reduce", "any", "all"],
     },
     StdlibModule {
         path: "std/math",
-        functions: &["abs", "min", "max", "pow", "sqrt"],
+        functions: &[
+            "abs",
+            "min",
+            "max",
+            "pow",
+            "sqrt",
+            "float_to_int",
+            "int_to_float",
+            "random",
+            "random_range",
+        ],
+    },
+    StdlibModule {
+        path: "std/fs",
+        functions: &[
+            "file_exists",
+            "delete_file",
+            "list_dir",
+            "mkdir",
+            "path_join",
+            "path_dir",
+            "path_base",
+            "path_ext",
+        ],
+    },
+    StdlibModule {
+        path: "std/system",
+        functions: &["shell_exec", "exec", "env_get", "args", "type_of"],
     },
     StdlibModule {
         path: "std/collections",
@@ -51,6 +91,8 @@ pub const STDLIB_MODULES: &[StdlibModule] = &[
             "hashmap",
             "hashmap_set",
             "hashmap_get",
+            "hashmap_set_int",
+            "hashmap_get_int",
             "hashmap_has",
             "hashmap_len",
             "hashmap_size",
@@ -60,25 +102,39 @@ pub const STDLIB_MODULES: &[StdlibModule] = &[
     },
     StdlibModule {
         path: "std/json",
-        functions: &["json_get", "json_stringify", "to_json", "to_json_array"],
+        functions: &[
+            "json_get",
+            "json_stringify",
+            "json_build",
+            "to_json",
+            "to_json_array",
+        ],
     },
     StdlibModule {
         path: "std/http",
-        functions: &["http_get", "http_post"],
+        functions: &["http_get", "http_post", "http_post_with_headers"],
     },
     StdlibModule {
         path: "std/http/server",
         functions: &[
             "http_server",
+            "http_server_public",
             "route",
             "http_listen",
             "respond",
+            "respond_text",
+            "respond_html",
+            "respond_json",
             "request_body",
             "request_method",
             "request_path",
             "request_query",
             "request_header",
         ],
+    },
+    StdlibModule {
+        path: "std/time",
+        functions: &["time_now", "time_ms", "format_time"],
     },
     StdlibModule {
         path: "std/concurrency",
@@ -129,8 +185,38 @@ mod tests {
     fn test_find_stdlib_module_http_server() {
         let m = find_stdlib_module("std/http/server").unwrap();
         assert!(m.functions.contains(&"http_server"));
+        assert!(m.functions.contains(&"http_server_public"));
         assert!(m.functions.contains(&"route"));
         assert!(m.functions.contains(&"respond"));
+        assert!(m.functions.contains(&"respond_json"));
+    }
+
+    #[test]
+    fn test_find_stdlib_module_shipped_builtin_expansions() {
+        assert!(find_stdlib_module("std/io")
+            .unwrap()
+            .functions
+            .contains(&"try_read_file"));
+        assert!(find_stdlib_module("std/json")
+            .unwrap()
+            .functions
+            .contains(&"json_build"));
+        assert!(find_stdlib_module("std/collections")
+            .unwrap()
+            .functions
+            .contains(&"hashmap_get_int"));
+        assert!(find_stdlib_module("std/fs")
+            .unwrap()
+            .functions
+            .contains(&"path_join"));
+        assert!(find_stdlib_module("std/system")
+            .unwrap()
+            .functions
+            .contains(&"shell_exec"));
+        assert!(find_stdlib_module("std/time")
+            .unwrap()
+            .functions
+            .contains(&"format_time"));
     }
 
     #[test]
@@ -159,17 +245,20 @@ mod tests {
 
     #[test]
     fn test_all_modules_present() {
-        assert_eq!(STDLIB_MODULES.len(), 12);
+        assert_eq!(STDLIB_MODULES.len(), 15);
         let paths: Vec<&str> = STDLIB_MODULES.iter().map(|m| m.path).collect();
         assert!(paths.contains(&"std/io"));
         assert!(paths.contains(&"std/string"));
         assert!(paths.contains(&"std/array"));
         assert!(paths.contains(&"std/functional"));
         assert!(paths.contains(&"std/math"));
+        assert!(paths.contains(&"std/fs"));
+        assert!(paths.contains(&"std/system"));
         assert!(paths.contains(&"std/collections"));
         assert!(paths.contains(&"std/json"));
         assert!(paths.contains(&"std/http"));
         assert!(paths.contains(&"std/http/server"));
+        assert!(paths.contains(&"std/time"));
         assert!(paths.contains(&"std/concurrency"));
         assert!(paths.contains(&"std/test"));
         assert!(paths.contains(&"std/unsafe"));

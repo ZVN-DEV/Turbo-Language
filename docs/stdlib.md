@@ -739,15 +739,17 @@ Writes a 64-bit integer value to the given memory address.
 | Category | Functions |
 |----------|-----------|
 | **I/O** | `print`, `read_line`, `read_file`, `write_file`, `try_read_file`, `try_write_file` |
-| **Strings** | `len`, `trim`, `upper`, `lower`, `split`, `contains`, `starts_with`, `ends_with`, `replace`, `index_of`, `char_at`, `repeat`, `join`, `to_str` |
-| **Arrays** | `len`, `push` |
-| **Functional** | `map`, `filter`, `reduce` |
-| **Math** | `abs`, `min`, `max`, `pow`, `sqrt` |
+| **Strings** | `len`, `trim`, `upper`, `lower`, `split`, `contains`, `starts_with`, `ends_with`, `replace`, `index_of`, `char_at`, `repeat`, `join`, `to_str`, `substring`, `pad_left`, `pad_right`, `str_to_int`, `str_to_float`, `str_from_char` |
+| **Arrays** | `len`, `push`, `sort`, `reverse`, `array_contains`, `slice` |
+| **Functional** | `map`, `filter`, `reduce`, `any`, `all` |
+| **Math** | `abs`, `min`, `max`, `pow`, `sqrt`, `float_to_int`, `int_to_float`, `random`, `random_range` |
+| **Filesystem** | `file_exists`, `delete_file`, `list_dir`, `mkdir`, `path_join`, `path_dir`, `path_base`, `path_ext` |
 | **HashMap** | `hashmap`, `hashmap_set`, `hashmap_get`, `hashmap_set_int`, `hashmap_get_int`, `hashmap_has`, `hashmap_len`, `hashmap_keys`, `hashmap_remove` |
-| **JSON** | `json_get`, `json_stringify`, `to_json`, `to_json_array` |
-| **HTTP Client** | `http_get`, `http_post` |
-| **HTTP Server** | `http_server`, `http_server_public`, `route`, `http_listen`, `respond_text`, `respond_html`, `respond_json`, `request_body`, `request_method`, `request_path`, `request_query`, `request_header` |
-| **System** | `exec`, `env_get` |
+| **JSON** | `json_get`, `json_stringify`, `json_build`, `to_json`, `to_json_array` |
+| **HTTP Client** | `http_get`, `http_post`, `http_post_with_headers` |
+| **HTTP Server** | `http_server`, `http_server_public`, `route`, `http_listen`, `respond`, `respond_text`, `respond_html`, `respond_json`, `request_body`, `request_method`, `request_path`, `request_query`, `request_header` |
+| **System** | `shell_exec`, `exec`, `env_get`, `args`, `type_of` |
+| **Time** | `time_now`, `time_ms`, `format_time` |
 | **Concurrency** | `channel`, `send`, `recv`, `mutex`, `mutex_get`, `mutex_set`, `sleep`, `clone` |
 | **Testing** | `assert`, `assert_eq`, `assert_ne`, `panic` |
 | **Unsafe** | `deref`, `store` |

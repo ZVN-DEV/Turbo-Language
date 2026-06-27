@@ -1,0 +1,16 @@
+import { try_read_file, try_write_file } from "std/io"
+import { substring, pad_left, pad_right, str_to_int, str_to_float, str_from_char } from "std/string"
+import { sort, reverse, array_contains, slice } from "std/array"
+import { any, all } from "std/functional"
+import { float_to_int, int_to_float, random, random_range } from "std/math"
+import { hashmap_set_int, hashmap_get_int } from "std/collections"
+import { json_build } from "std/json"
+import { http_post_with_headers } from "std/http"
+import { http_server_public, respond_text, respond_html, respond_json } from "std/http/server"
+import { time_now, time_ms, format_time } from "std/time"
+import { shell_exec, args, type_of } from "std/system"
+import { file_exists, delete_file, list_dir, mkdir, path_join, path_dir, path_base, path_ext } from "std/fs"
+
+fn main() {
+    print("stdlib import surface ok")
+}
