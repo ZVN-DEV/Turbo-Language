@@ -3,6 +3,10 @@ name = "turbo-cli"
 version = "0.9.1"
 edition = "2021"
 rust-version.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 default-run = "turbolang"
 
 [[bin]]
@@ -10,11 +14,11 @@ name = "turbolang"
 path = "src/main.rs"
 
 [dependencies]
-turbo-lexer = { path = "../turbo-lexer" }
-turbo-ast = { path = "../turbo-ast" }
-turbo-parser = { path = "../turbo-parser" }
-turbo-codegen-cranelift = { path = "../turbo-codegen-cranelift" }
-turbo-sema = { path = "../turbo-sema" }
+turbo-lexer = { version = "0.9.1", path = "../turbo-lexer" }
+turbo-ast = { version = "0.9.1", path = "../turbo-ast" }
+turbo-parser = { version = "0.9.1", path = "../turbo-parser" }
+turbo-codegen-cranelift = { version = "0.9.1", path = "../turbo-codegen-cranelift" }
+turbo-sema = { version = "0.9.1", path = "../turbo-sema" }
 clap = { workspace = true }
 ariadne = { workspace = true }
 rustyline = "15"

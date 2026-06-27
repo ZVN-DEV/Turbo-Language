@@ -3,10 +3,14 @@ name = "turbo-sema"
 version = "0.9.1"
 edition = "2021"
 rust-version.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
-turbo-ast = { path = "../turbo-ast" }
+turbo-ast = { version = "0.9.1", path = "../turbo-ast" }
 
 [dev-dependencies]
-turbo-lexer = { path = "../turbo-lexer" }
-turbo-parser = { path = "../turbo-parser" }
+turbo-lexer = { version = "0.9.1", path = "../turbo-lexer" }
+turbo-parser = { version = "0.9.1", path = "../turbo-parser" }

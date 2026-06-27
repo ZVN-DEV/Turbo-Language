@@ -25,6 +25,10 @@ resolver = "2"
 # `msrv` field in clippy.toml plus the package rust-version).
 [workspace.package]
 rust-version = "1.75"
+description = "TurboLang compiler, runtime, CLI, and language tooling"
+license = "MIT"
+repository = "https://github.com/ZVN-DEV/Turbo-Language"
+homepage = "https://turbolang.dev"
 
 [workspace.dependencies]
 logos = "0.14"
