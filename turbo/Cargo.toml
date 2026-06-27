@@ -27,6 +27,7 @@ resolver = "2"
 rust-version = "1.75"
 description = "TurboLang compiler, runtime, CLI, and language tooling"
 license = "MIT"
+readme = "../README.md"
 repository = "https://github.com/ZVN-DEV/Turbo-Language"
 homepage = "https://turbolang.dev"
 
