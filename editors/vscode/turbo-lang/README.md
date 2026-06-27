@@ -7,7 +7,7 @@ Syntax highlighting, snippets, and full language support for the
 
 - Syntax highlighting (`.tb` files)
 - 25 snippets for common patterns (`fn`, `struct`, `type`, `match`, `for`, `test`, …)
-- Language server integration via `turbolang lsp`:
+- Language server integration via `turbo-lsp`:
   - Diagnostics (errors and warnings with `E0NNN` codes)
   - Hover
   - Go-to-definition
@@ -16,10 +16,12 @@ Syntax highlighting, snippets, and full language support for the
 
 ## Requirements
 
-The language-server features require the `turbolang` binary on your `PATH`
-(install Turbo via Homebrew or build from source). If it lives elsewhere, set
-`turbo.lsp.path` in your settings. To disable the server and keep only syntax
-highlighting, set `turbo.lsp.enable` to `false`.
+The language-server features require the `turbo-lsp` binary on your `PATH`
+(install Turbo via Homebrew, the curl installer, Docker image, or build from
+source). If it lives elsewhere, set `turbo.lsp.path` in your settings. Older
+installs that only expose `turbolang lsp` can set `turbo.lsp.path` to
+`turbolang`. To disable the server and keep only syntax highlighting, set
+`turbo.lsp.enable` to `false`.
 
 ## Building / packaging locally
 
@@ -37,5 +39,5 @@ code --install-extension turbo-lang-*.vsix
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `turbo.lsp.path` | `turbolang` | Path to the `turbolang` executable used for `turbolang lsp`. |
+| `turbo.lsp.path` | `turbo-lsp` | Path to the Turbo language server executable. Use `turbolang` only for older installs that require `turbolang lsp`. |
 | `turbo.lsp.enable` | `true` | Enable the language server. |

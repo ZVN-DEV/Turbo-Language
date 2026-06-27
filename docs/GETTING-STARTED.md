@@ -532,7 +532,7 @@ The resulting binary is a standalone native executable -- no runtime dependencie
 | `turbolang repl` | Interactive REPL |
 | `turbolang playground` | Browser-based playground |
 | `turbolang explain E0100` | Explain an error code |
-| `turbolang lsp` | Start Language Server (for editor integration) |
+| `turbo-lsp` | Start Language Server (for editor integration). `turbolang lsp` remains available for older integrations. |
 
 ### Editor Support
 

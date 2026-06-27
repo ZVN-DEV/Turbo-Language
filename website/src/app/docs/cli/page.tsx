@@ -31,7 +31,7 @@ export default function CliPage() {
               ["turbolang fmt <file.tb>", "Format source code"],
               ["turbolang doc <file.tb>", "Generate documentation"],
               ["turbolang repl", "Interactive REPL"],
-              ["turbolang lsp", "Start Language Server Protocol server"],
+              ["turbo-lsp", "Start Language Server Protocol server"],
               ["turbolang check <file.tb>", "Type-check without compiling"],
               ["turbolang explain <code>", "Explain an error code (e.g. E0100)"],
               ["turbolang playground", "Launch browser-based playground"],
@@ -128,11 +128,12 @@ turbo> print(x * 2)
       </pre>
 
       <h2 id="lsp" className="text-2xl font-bold text-white mt-10 mb-4">
-        turbolang lsp
+        turbo-lsp
       </h2>
       <p className="mb-4">
         Starts the Language Server Protocol server for editor integration.
-        Provides:
+        The legacy `turbolang lsp` subcommand remains available for older
+        integrations. Provides:
       </p>
       <ul className="list-disc list-inside space-y-2 mb-6">
         <li>Real-time diagnostics and error highlighting</li>
@@ -143,7 +144,7 @@ turbo> print(x * 2)
       </ul>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
         <code>{`# Usually started automatically by your editor
-$ turbolang lsp`}</code>
+$ turbo-lsp`}</code>
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">

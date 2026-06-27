@@ -2,7 +2,7 @@
     "name": "turbo-lang",
     "displayName": "Turbo Language",
     "description": "Syntax highlighting, snippets, and full language support (diagnostics, hover, go-to-definition, completions) for the Turbo programming language",
-    "version": "0.9.0",
+    "version": "0.9.1",
     "publisher": "zvn-dev",
     "repository": {
         "type": "git",
@@ -33,8 +33,8 @@
             "properties": {
                 "turbo.lsp.path": {
                     "type": "string",
-                    "default": "turbolang",
-                    "description": "Path to the `turbolang` executable used to start the language server (`turbolang lsp`). Defaults to `turbolang` on your PATH."
+                    "default": "turbo-lsp",
+                    "description": "Path to the Turbo language server executable. Defaults to `turbo-lsp` on your PATH; set to `turbolang` only for older installs that start the server with `turbolang lsp`."
                 },
                 "turbo.lsp.enable": {
                     "type": "boolean",
