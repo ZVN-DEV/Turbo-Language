@@ -437,6 +437,25 @@ fn test_rt_f64_to_str() {
 }
 
 #[test]
+fn test_rt_f64_to_str_canonical_edges() {
+    let fixture_pi = "3.14159".parse::<f64>().unwrap();
+    let cases = [
+        (fixture_pi * 5.0 * 5.0, "78.53975"),
+        (0.1_f64 + 0.2_f64, "0.3"),
+        (-0.0_f64, "0"),
+        (1.0_f64 / 3.0_f64, "0.333333333333333"),
+        (f64::INFINITY, "inf"),
+        (f64::NEG_INFINITY, "-inf"),
+    ];
+
+    for (value, expected) in cases {
+        let result = rt_f64_to_str(value);
+        let s = unsafe { CStr::from_ptr(result as *const std::ffi::c_char) };
+        assert_eq!(s.to_str().unwrap(), expected);
+    }
+}
+
+#[test]
 fn test_rt_bool_to_str() {
     let t = rt_bool_to_str(1);
     let s = unsafe { CStr::from_ptr(t as *const std::ffi::c_char) };

@@ -7,10 +7,28 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+const F64_FORMAT: &[u8] = b"%.15g\0";
+
 /// Build a `CString` from the given value, falling back to an empty string
 /// if the input contains an interior nul byte.
 fn cstring_or_empty(s: impl Into<Vec<u8>>) -> std::ffi::CString {
     std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
+}
+
+fn format_f64(n: f64) -> String {
+    let n = if n == 0.0 { 0.0 } else { n };
+    let mut buf = [0 as libc::c_char; 64];
+    unsafe {
+        libc::snprintf(
+            buf.as_mut_ptr(),
+            buf.len(),
+            F64_FORMAT.as_ptr() as *const libc::c_char,
+            n,
+        );
+        std::ffi::CStr::from_ptr(buf.as_ptr())
+            .to_string_lossy()
+            .into_owned()
+    }
 }
 
 /// Compute an allocation layout for array-like structures, returning None on overflow.
@@ -111,7 +129,7 @@ pub(crate) extern "C" fn rt_print_i64(n: i64) {
 }
 
 pub(crate) extern "C" fn rt_print_f64(n: f64) {
-    println!("{}", n);
+    println!("{}", format_f64(n));
 }
 
 pub(crate) extern "C" fn rt_print_bool(b: i8) {
@@ -487,7 +505,7 @@ pub(crate) extern "C" fn rt_i64_to_str(n: i64) -> *const u8 {
 }
 
 pub(crate) extern "C" fn rt_f64_to_str(n: f64) -> *const u8 {
-    let s = format!("{}", n);
+    let s = format_f64(n);
     let c = cstring_or_empty(s);
     arena_str(c)
 }

@@ -164,11 +164,12 @@ impl CEmitter {
                         return tag.clone();
                     }
                     match name.as_str() {
-                        "str" | "to_string" | "str_concat" | "str_upper" | "str_lower"
-                        | "str_trim" | "str_replace" | "str_char_at" | "str_repeat"
-                        | "str_join" | "read_line" | "read_file" | "rt_i64_to_str"
-                        | "rt_f64_to_str" | "rt_bool_to_str" | "rt_str_concat" | "json_get"
-                        | "json_stringify" | "http_get" | "http_post" => "str".to_string(),
+                        "str" | "to_string" | "to_str" | "str_concat" | "str_upper"
+                        | "str_lower" | "str_trim" | "str_replace" | "str_char_at"
+                        | "str_repeat" | "str_join" | "read_line" | "read_file"
+                        | "rt_i64_to_str" | "rt_f64_to_str" | "rt_bool_to_str"
+                        | "rt_str_concat" | "json_get" | "json_stringify" | "http_get"
+                        | "http_post" => "str".to_string(),
                         "len" | "str_len" | "str_index_of" | "pow" | "hashmap_len" => {
                             "int".to_string()
                         }
@@ -666,7 +667,13 @@ impl CEmitter {
             }
             "len" => format!("rt_array_len({args_joined})"),
             "push" => format!("rt_array_push({args_joined})"),
-            "str" | "to_string" => format!("rt_i64_to_str({args_joined})"),
+            "str" | "to_string" | "to_str" => {
+                if let Some(arg) = args.first() {
+                    self.expr_to_str_conversion(&arg.node, &arg_strs[0])
+                } else {
+                    "rt_i64_to_str(0)".to_string()
+                }
+            }
             "str_upper" => format!("rt_str_upper({args_joined})"),
             "str_lower" => format!("rt_str_lower({args_joined})"),
             "str_trim" => format!("rt_str_trim({args_joined})"),
@@ -875,11 +882,12 @@ impl CEmitter {
                         return Self::tag_to_c_type(tag);
                     }
                     match name.as_str() {
-                        "str" | "to_string" | "str_concat" | "str_upper" | "str_lower"
-                        | "str_trim" | "str_replace" | "str_char_at" | "str_repeat"
-                        | "str_join" | "read_line" | "read_file" | "rt_i64_to_str"
-                        | "rt_f64_to_str" | "rt_bool_to_str" | "rt_str_concat" | "json_get"
-                        | "json_stringify" | "http_get" | "http_post" => "const char*",
+                        "str" | "to_string" | "to_str" | "str_concat" | "str_upper"
+                        | "str_lower" | "str_trim" | "str_replace" | "str_char_at"
+                        | "str_repeat" | "str_join" | "read_line" | "read_file"
+                        | "rt_i64_to_str" | "rt_f64_to_str" | "rt_bool_to_str"
+                        | "rt_str_concat" | "json_get" | "json_stringify" | "http_get"
+                        | "http_post" => "const char*",
                         "len" | "str_len" | "str_index_of" | "pow" | "hashmap_len" => "long long",
                         "sqrt" => "double",
                         "str_contains" | "str_starts_with" | "str_ends_with" | "hashmap_has"
