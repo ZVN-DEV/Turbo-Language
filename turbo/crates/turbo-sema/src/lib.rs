@@ -691,6 +691,40 @@ fn main() { double("hello") }"#,
         );
     }
 
+    #[test]
+    fn test_shadow_hashmap_int_builtins() {
+        assert_has_error(
+            "fn hashmap_set_int(m: i64, k: str, v: i64) -> i64 { m }\nfn main() { }",
+            "cannot redefine builtin function `hashmap_set_int`",
+        );
+        assert_has_error(
+            "fn hashmap_get_int(m: i64, k: str) -> i64 { 0 }\nfn main() { }",
+            "cannot redefine builtin function `hashmap_get_int`",
+        );
+    }
+
+    #[test]
+    fn test_extern_shadow_hashmap_int_builtin() {
+        assert_has_error(
+            r#"@unsafe extern "C" {
+    fn hashmap_get_int(m: i64, k: str) -> i64
+}
+fn main() { }"#,
+            "cannot define extern function `hashmap_get_int`: name is already defined or is a builtin",
+        );
+    }
+
+    #[test]
+    fn test_hashmap_int_builtin_suggestion() {
+        assert_has_error(
+            r#"fn main() {
+    let m = hashmap()
+    hashmap_get_in(m, "count")
+}"#,
+            "undefined function `hashmap_get_in`. did you mean `hashmap_get_int`?",
+        );
+    }
+
     // === Task 2: Builtin argument count validation ===
 
     #[test]
