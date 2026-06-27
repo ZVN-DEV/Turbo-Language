@@ -104,6 +104,36 @@ cd turbo && ./tests/run_tests.sh && cd ..
 # Must print: turbolang X.Y.Z
 ```
 
+### 1.6 Cargo Package Readiness
+
+TurboLang crates use local `path` dependencies with matching `version`
+requirements. This keeps local builds fast while preserving the metadata Cargo
+needs for registry packaging.
+
+Registry packaging must be checked in dependency order because Cargo rewrites
+publishable path dependencies to crates.io dependencies during package
+preparation:
+
+1. `turbo-ast`
+2. `turbo-lexer`
+3. `turbo-parser`
+4. `turbo-sema`
+5. `turbo-codegen-cranelift`
+6. `turbo-cli`
+7. `turbo-lsp`
+
+Before publishing higher-level crates, publish or otherwise make their internal
+dependencies available at the same version.
+
+```bash
+cargo package --manifest-path turbo/Cargo.toml -p turbo-ast --allow-dirty
+cargo package --manifest-path turbo/Cargo.toml -p turbo-lexer --allow-dirty
+```
+
+If `turbo-cli` or `turbo-lsp` package preparation fails with `no matching
+package named turbo-ast found`, the crate metadata is ready but the registry
+publish order is not complete yet.
+
 ---
 
 ## Phase 2: Ship (git + GitHub)
