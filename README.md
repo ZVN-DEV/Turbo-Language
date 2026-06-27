@@ -338,8 +338,8 @@ See [`examples/speed-server/main.tb`](examples/speed-server/main.tb)
 | `turbolang build --target wasm <file.tb>` | Compile to WebAssembly |
 | `turbolang build --target linux-arm64 <file.tb>` | Cross-compile for Linux ARM64 |
 | `turbolang build --target linux-x86 <file.tb>` | Cross-compile for Linux x86_64 |
-| `turbolang test <file.tb>` | Run `@test` functions |
-| `turbolang bench <file.tb>` | Benchmark with timing |
+| `turbolang test <file-or-dir>` | Run `@test` functions |
+| `turbolang bench <file-or-dir>` | Benchmark with timing |
 | `turbolang check <file.tb>` | Type-check without compiling |
 | `turbolang install` | Install `path` and `github` dependencies from `turbo.toml` |
 | `turbolang update` | Update pinned GitHub dependencies and refresh `turbo.lock` |

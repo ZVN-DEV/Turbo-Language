@@ -23,8 +23,8 @@ export default function CliPage() {
             {[
               ["turbolang run <file.tb>", "Compile and run via JIT (Cranelift)"],
               ["turbolang build <file.tb>", "Compile to a native binary (AOT)"],
-              ["turbolang test <file.tb>", "Run @test functions"],
-              ["turbolang bench <file.tb>", "Benchmark with timing"],
+              ["turbolang test <file-or-dir>", "Run @test functions"],
+              ["turbolang bench <file-or-dir>", "Benchmark with timing"],
               ["turbolang init <name>", "Create a new project"],
               ["turbolang install", "Install dependencies from turbo.toml"],
               ["turbolang update", "Update GitHub dependencies"],

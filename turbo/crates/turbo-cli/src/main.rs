@@ -2250,13 +2250,15 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
     eprintln!("\x1b[1mResults: {passed}/{total} benchmarks passed (JIT/AOT output match)\x1b[0m");
 }
 
-/// Collect benchmark files from a directory: files matching bench_*.tb
+/// Collect benchmark files from a directory tree: files matching bench_*.tb
 fn collect_bench_files(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map(|e| e == "tb").unwrap_or(false) {
+            if path.is_dir() {
+                files.extend(collect_bench_files(&path));
+            } else if path.extension().map(|e| e == "tb").unwrap_or(false) {
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                 if stem.starts_with("bench_") {
                     files.push(path);
@@ -3958,6 +3960,56 @@ fn main() {{
         assert!(main_tb.contains("struct Counter"));
         assert!(main_tb.contains(&format!("Hello from {pkg_name}!")));
         assert!(main_tb.contains("type Shape"));
+    }
+
+    // ── Benchmark discovery ──────────────────────────────────────────
+
+    #[test]
+    fn collect_bench_files_recurses_and_sorts_matches() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).expect("nested dir");
+        std::fs::write(root.join("bench_root.tb"), "fn main() {}").expect("root bench");
+        std::fs::write(nested.join("bench_nested.tb"), "fn main() {}").expect("nested bench");
+        std::fs::write(nested.join("not_a_bench.tb"), "fn main() {}").expect("non bench");
+        std::fs::write(root.join("bench_notes.txt"), "").expect("non tb");
+
+        let files = collect_bench_files(root);
+        let names: Vec<String> = files
+            .iter()
+            .map(|p| {
+                p.strip_prefix(root)
+                    .expect("relative path")
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+
+        assert_eq!(names, vec!["bench_root.tb", "nested/bench_nested.tb"]);
+    }
+
+    #[test]
+    fn collect_test_files_recurses_like_project_tests() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).expect("nested dir");
+        std::fs::write(root.join("main_test.tb"), "fn main() {}").expect("root test");
+        std::fs::write(nested.join("helper.tb"), "fn main() {}").expect("nested test");
+
+        let files = collect_test_files(root);
+        let names: Vec<String> = files
+            .iter()
+            .map(|p| {
+                p.strip_prefix(root)
+                    .expect("relative path")
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+
+        assert_eq!(names, vec!["main_test.tb", "nested/helper.tb"]);
     }
 
     // ── Error code explain ────────────────────────────────────────────
