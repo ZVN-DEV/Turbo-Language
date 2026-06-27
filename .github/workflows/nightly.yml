@@ -110,6 +110,11 @@ jobs:
       - name: Smoke test
         run: ./turbo/target/release/turbolang --version
 
+      - name: Verify packaged toolchain binaries
+        run: |
+          test -x ./turbo/target/release/turbolang
+          test -x ./turbo/target/release/turbo-lsp
+
   canary-publish:
     name: Publish canary
     needs: [gauntlet, release-build]
@@ -128,13 +133,20 @@ jobs:
 
       - name: Package canary
         run: |
+          set -euo pipefail
           DATE=$(date -u +%Y%m%d)
-          VERSION=$(grep '^version' turbo/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          VERSION=$(awk -F'"' '/^version = / {print $2; exit}' turbo/crates/turbo-cli/Cargo.toml)
+          if [ -z "${VERSION}" ]; then
+            echo "error: failed to read turbo-cli version" >&2
+            exit 1
+          fi
           CANARY_VERSION="${VERSION}-nightly.${DATE}"
           TARGET=$(rustc -vV | awk '/^host:/ {print $2}')
           TARBALL="turbolang-v${CANARY_VERSION}-${TARGET}.tar.gz"
-          cp turbo/target/release/turbolang .
-          tar czf "${TARBALL}" turbolang
+          test -x turbo/target/release/turbolang
+          test -x turbo/target/release/turbo-lsp
+          cp turbo/target/release/turbolang turbo/target/release/turbo-lsp .
+          tar czf "${TARBALL}" turbolang turbo-lsp
           sha256sum "${TARBALL}" > checksums.txt
           echo "CANARY_VERSION=${CANARY_VERSION}" >> "$GITHUB_ENV"
           echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
