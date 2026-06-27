@@ -134,6 +134,21 @@ If `turbo-cli` or `turbo-lsp` package preparation fails with `no matching
 package named turbo-ast found`, the crate metadata is ready but the registry
 publish order is not complete yet.
 
+Run the repeatable readiness gate before tagging:
+
+```bash
+./scripts/check_cargo_package_readiness.sh
+```
+
+The gate packages crates that can be prepared locally today and reports
+`registry-blocked` for crates that are only waiting for unpublished internal
+Turbo crates at the same version. Once the internal crates have been published
+in order, rerun the stricter final gate:
+
+```bash
+./scripts/check_cargo_package_readiness.sh --strict-all-published
+```
+
 ---
 
 ## Phase 2: Ship (git + GitHub)

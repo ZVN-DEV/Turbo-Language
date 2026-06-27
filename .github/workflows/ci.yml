@@ -271,6 +271,19 @@ jobs:
         run: cargo audit --deny warnings
         working-directory: turbo
 
+  package-readiness:
+    name: Cargo package readiness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+
+      - name: Cargo package readiness
+        run: ./scripts/check_cargo_package_readiness.sh
+
   lint-error-codes:
     name: Lint error codes
     runs-on: ubuntu-latest
