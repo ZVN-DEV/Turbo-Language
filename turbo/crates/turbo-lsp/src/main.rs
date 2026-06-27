@@ -791,6 +791,17 @@ fn compute_completion_items(source: &str, pos: Position) -> Vec<CompletionItem> 
         push_completion_item(&mut items, &mut seen, &prefix, label, kind, None);
     }
 
+    for label in turbo_sema::builtin_function_names() {
+        push_completion_item(
+            &mut items,
+            &mut seen,
+            &prefix,
+            label,
+            CompletionItemKind::FUNCTION,
+            Some("builtin function"),
+        );
+    }
+
     let (tokens, lex_errors) = turbo_lexer::tokenize(source);
     if lex_errors.is_empty() {
         let (module, parse_errors) = turbo_parser::parse(tokens);
@@ -1244,6 +1255,50 @@ mod tests {
             },
         );
         assert!(items.iter().any(|item| item.label == "spawn"));
+    }
+
+    #[test]
+    fn test_compute_completion_items_builtin_prefix() {
+        let src = "fn main() {\n  pr\n}";
+        let items = compute_completion_items(
+            src,
+            Position {
+                line: 1,
+                character: 4,
+            },
+        );
+        let print = items
+            .iter()
+            .find(|item| item.label == "print")
+            .expect("expected print builtin completion");
+        assert_eq!(print.kind, Some(CompletionItemKind::FUNCTION));
+        assert_eq!(print.detail.as_deref(), Some("builtin function"));
+    }
+
+    #[test]
+    fn test_compute_completion_items_builtin_registry_surface() {
+        let src = "fn main() {\n  hashmap_\n}";
+        let items = compute_completion_items(
+            src,
+            Position {
+                line: 1,
+                character: 10,
+            },
+        );
+        assert!(items.iter().any(|item| item.label == "hashmap_set"));
+        assert!(items.iter().any(|item| item.label == "hashmap_get"));
+        assert!(items.iter().any(|item| item.label == "hashmap_remove"));
+        assert!(!items.iter().any(|item| item.label == "print"));
+
+        let math_src = "fn main() {\n  sq\n}";
+        let math_items = compute_completion_items(
+            math_src,
+            Position {
+                line: 1,
+                character: 4,
+            },
+        );
+        assert!(math_items.iter().any(|item| item.label == "sqrt"));
     }
 
     #[test]

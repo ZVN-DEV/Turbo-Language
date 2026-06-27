@@ -32,6 +32,13 @@ mod type_check;
 
 use scope::Scope;
 
+/// Names of functions recognized by the semantic analyzer as compiler/runtime
+/// builtins. Tooling can use this to keep editor affordances aligned with
+/// the same registry that protects builtin names from user redefinition.
+pub fn builtin_function_names() -> &'static [&'static str] {
+    type_check::BUILTIN_FNS
+}
+
 #[derive(Debug, Clone)]
 pub struct SemaError {
     pub code: ErrorCode,
