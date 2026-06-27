@@ -51,6 +51,36 @@ def package_version_from_cargo_toml(path: Path) -> str:
     raise CheckFailure(f"{rel(path)} has no [package] version")
 
 
+def workspace_readme_from_cargo_toml(path: Path) -> str:
+    in_workspace_package = False
+    for line in read(path).splitlines():
+        stripped = line.strip()
+        if stripped == "[workspace.package]":
+            in_workspace_package = True
+            continue
+        if in_workspace_package and stripped.startswith("[") and stripped.endswith("]"):
+            break
+        if in_workspace_package:
+            match = re.match(r'readme\s*=\s*"([^"]+)"', stripped)
+            if match:
+                return match.group(1)
+    raise CheckFailure(f"{rel(path)} has no [workspace.package] readme")
+
+
+def package_uses_workspace_readme(path: Path) -> bool:
+    in_package = False
+    for line in read(path).splitlines():
+        stripped = line.strip()
+        if stripped == "[package]":
+            in_package = True
+            continue
+        if in_package and stripped.startswith("[") and stripped.endswith("]"):
+            break
+        if in_package and re.match(r"readme\.workspace\s*=\s*true\b", stripped):
+            return True
+    return False
+
+
 def version_from_json(path: Path) -> str:
     try:
         data = json.loads(read(path))
@@ -161,6 +191,21 @@ def check_release_consistency(repo_root: Path = REPO_ROOT) -> list[str]:
 
     crate_manifests = sorted((repo_root / "turbo" / "crates").glob("*/Cargo.toml"))
     require(crate_manifests, "no crate manifests found under turbo/crates")
+
+    workspace_readme = workspace_readme_from_cargo_toml(repo_root / "turbo" / "Cargo.toml")
+    require(
+        workspace_readme == "../README.md",
+        f"turbo/Cargo.toml [workspace.package] readme should point at ../README.md, got {workspace_readme}",
+    )
+    crates_without_workspace_readme = [
+        rel(manifest) for manifest in crate_manifests if not package_uses_workspace_readme(manifest)
+    ]
+    require(
+        not crates_without_workspace_readme,
+        "crate manifests should inherit workspace readme metadata: "
+        + ", ".join(crates_without_workspace_readme),
+    )
+    passed.append("Cargo package README metadata is inherited by all crates")
 
     crate_versions = {manifest.parent.name: package_version_from_cargo_toml(manifest) for manifest in crate_manifests}
     unique_crate_versions = sorted(set(crate_versions.values()))
@@ -280,6 +325,10 @@ def write(path: Path, text: str) -> None:
 
 
 def write_fixture(root: Path, version: str = "1.2.3") -> None:
+    write(
+        root / "turbo" / "Cargo.toml",
+        '[workspace]\nmembers = ["crates/*"]\n\n[workspace.package]\nreadme = "../README.md"\n',
+    )
     for name in [
         "turbo-ast",
         "turbo-cli",
@@ -289,7 +338,10 @@ def write_fixture(root: Path, version: str = "1.2.3") -> None:
         "turbo-parser",
         "turbo-sema",
     ]:
-        write(root / "turbo" / "crates" / name / "Cargo.toml", f'[package]\nname = "{name}"\nversion = "{version}"\n')
+        write(
+            root / "turbo" / "crates" / name / "Cargo.toml",
+            f'[package]\nname = "{name}"\nversion = "{version}"\nreadme.workspace = true\n',
+        )
 
     write(root / "editors" / "vscode" / "turbo-lang" / "package.json", json.dumps({"version": version}))
     write(
@@ -364,6 +416,34 @@ def run_self_test() -> int:
             require("turbo-lsp" in str(exc), f"self-test expected turbo-lsp failure, got: {exc}")
         else:
             raise CheckFailure("self-test expected mutated Homebrew formula to fail")
+
+        workspace_manifest = root / "turbo" / "Cargo.toml"
+        workspace_manifest.write_text(
+            workspace_manifest.read_text(encoding="utf-8").replace('readme = "../README.md"', 'readme = "README.md"'),
+            encoding="utf-8",
+        )
+        try:
+            check_release_consistency(root)
+        except CheckFailure as exc:
+            require("[workspace.package] readme" in str(exc), f"self-test expected workspace readme failure, got: {exc}")
+        else:
+            raise CheckFailure("self-test expected wrong workspace readme metadata to fail")
+        workspace_manifest.write_text(
+            workspace_manifest.read_text(encoding="utf-8").replace('readme = "README.md"', 'readme = "../README.md"'),
+            encoding="utf-8",
+        )
+
+        ast_manifest = root / "turbo" / "crates" / "turbo-ast" / "Cargo.toml"
+        ast_manifest.write_text(
+            ast_manifest.read_text(encoding="utf-8").replace("readme.workspace = true\n", ""),
+            encoding="utf-8",
+        )
+        try:
+            check_release_consistency(root)
+        except CheckFailure as exc:
+            require("workspace readme metadata" in str(exc), f"self-test expected readme metadata failure, got: {exc}")
+        else:
+            raise CheckFailure("self-test expected missing crate readme metadata to fail")
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
