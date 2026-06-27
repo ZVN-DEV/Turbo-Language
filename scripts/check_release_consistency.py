@@ -361,8 +361,19 @@ def run_self_test() -> int:
         subprocess.run(["git", "-C", str(root), "init"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         write(root / "turbo" / "benchmarks" / "c" / "fib", "generated binary placeholder\n")
         write(root / "turbo" / "benchmarks" / "c" / "fib.c", "int main(void) { return 0; }\n")
+        write(root / "turbo" / "benchmarks" / "js" / "fib.js", "console.log(1)\n")
+        write(root / "turbo" / "benchmarks" / "go" / "fib", "generated binary placeholder\n")
         subprocess.run(
-            ["git", "-C", str(root), "add", "turbo/benchmarks/c/fib", "turbo/benchmarks/c/fib.c"],
+            [
+                "git",
+                "-C",
+                str(root),
+                "add",
+                "turbo/benchmarks/c/fib",
+                "turbo/benchmarks/c/fib.c",
+                "turbo/benchmarks/js/fib.js",
+                "turbo/benchmarks/go/fib",
+            ],
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -375,7 +386,7 @@ def run_self_test() -> int:
             raise CheckFailure("self-test expected tracked benchmark artifact to fail")
 
         subprocess.run(
-            ["git", "-C", str(root), "rm", "--cached", "turbo/benchmarks/c/fib"],
+            ["git", "-C", str(root), "rm", "--cached", "turbo/benchmarks/c/fib", "turbo/benchmarks/go/fib"],
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
