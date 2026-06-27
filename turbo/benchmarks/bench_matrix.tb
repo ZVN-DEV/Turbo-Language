@@ -1,6 +1,6 @@
 // Benchmark: Matrix multiplication (150x150)
 // Measures: nested loops, array indexing, arithmetic
-// Expected output: 843750000
+// Expected output: 8274093750
 fn main() {
     let n = 150
     let mut a: [i64] = []
