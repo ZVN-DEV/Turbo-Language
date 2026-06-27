@@ -12,3 +12,16 @@ website/.next/
 fuzz/corpus/
 fuzz/artifacts/
 .playwright-mcp/
+benchmarks/c/*
+!benchmarks/c/*.c
+benchmarks/go/*
+!benchmarks/go/*.go
+benchmarks/js/*
+!benchmarks/js/*.js
+benchmarks/python/*
+!benchmarks/python/*.py
+benchmarks/ruby/*
+!benchmarks/ruby/*.rb
+benchmarks/rust/*
+!benchmarks/rust/*.rs
+benchmarks/**/target/

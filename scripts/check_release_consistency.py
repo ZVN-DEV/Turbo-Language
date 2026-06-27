@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import tempfile
 import sys
 from pathlib import Path
@@ -100,6 +101,59 @@ def local_lock_versions(path: Path, package_names: set[str]) -> dict[str, str]:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise CheckFailure(message)
+
+
+def tracked_files(repo_root: Path, pathspec: str) -> list[Path]:
+    git_dir = repo_root / ".git"
+    if not git_dir.exists():
+        return []
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), "ls-files", pathspec],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise CheckFailure(f"failed to list tracked files for {pathspec}: {result.stderr.strip()}")
+    return [repo_root / line for line in result.stdout.splitlines() if line]
+
+
+def check_benchmark_artifacts(repo_root: Path) -> None:
+    allowed_suffixes = {
+        ".c",
+        ".go",
+        ".js",
+        ".md",
+        ".py",
+        ".rb",
+        ".rs",
+        ".sh",
+        ".tb",
+    }
+    generated_dirs = {
+        "c",
+        "go",
+        "js",
+        "python",
+        "ruby",
+        "rust",
+    }
+    bad: list[str] = []
+    for path in tracked_files(repo_root, "turbo/benchmarks"):
+        rel_parts = path.relative_to(repo_root).parts
+        if len(rel_parts) < 3 or rel_parts[0] != "turbo" or rel_parts[1] != "benchmarks":
+            continue
+        language_dir = rel_parts[2]
+        if language_dir not in generated_dirs:
+            continue
+        if path.suffix not in allowed_suffixes:
+            bad.append(rel(path))
+    require(
+        not bad,
+        "tracked benchmark generated artifacts should be rebuilt from source, not committed: "
+        + ", ".join(sorted(bad)),
+    )
 
 
 def check_release_consistency(repo_root: Path = REPO_ROOT) -> list[str]:
@@ -206,6 +260,9 @@ def check_release_consistency(repo_root: Path = REPO_ROOT) -> list[str]:
     require("./scripts/check_release_consistency.sh" in release_docs, "docs/RELEASE.md does not mention release consistency check")
     passed.append("release runbook includes this consistency gate")
 
+    check_benchmark_artifacts(repo_root)
+    passed.append("benchmark comparison baselines are source-only")
+
     return passed
 
 
@@ -297,6 +354,33 @@ def run_self_test() -> int:
             require("turbo-lsp" in str(exc), f"self-test expected turbo-lsp failure, got: {exc}")
         else:
             raise CheckFailure("self-test expected mutated Homebrew formula to fail")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_fixture(root)
+        subprocess.run(["git", "-C", str(root), "init"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        write(root / "turbo" / "benchmarks" / "c" / "fib", "generated binary placeholder\n")
+        write(root / "turbo" / "benchmarks" / "c" / "fib.c", "int main(void) { return 0; }\n")
+        subprocess.run(
+            ["git", "-C", str(root), "add", "turbo/benchmarks/c/fib", "turbo/benchmarks/c/fib.c"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            check_release_consistency(root)
+        except CheckFailure as exc:
+            require("tracked benchmark generated artifacts" in str(exc), f"self-test expected benchmark artifact failure, got: {exc}")
+        else:
+            raise CheckFailure("self-test expected tracked benchmark artifact to fail")
+
+        subprocess.run(
+            ["git", "-C", str(root), "rm", "--cached", "turbo/benchmarks/c/fib"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        check_release_consistency(root)
 
     print("self-test: release consistency fixture checks passed")
     return 0
