@@ -8,9 +8,10 @@ Everything that must happen when shipping a new version. **A release is not done
 
 | Repo | Path | What lives there |
 |------|------|-----------------|
-| **Turbo-Language** (main) | `~/Desktop/Coding/ZVN/new-language` | Compiler, runtime, docs, local Homebrew formula |
+| **Turbo-Language** (main) | `~/Desktop/Coding/ZVN/TurboLang` | Compiler, runtime, website, bundled VS Code extension, docs, local Homebrew formula |
 | **homebrew-turbo** (tap) | `~/Desktop/Coding/ZVN/homebrew-turbo` | Homebrew tap formula (`brew install turbo-lang`) |
-| **turbo-vscode** | `~/Desktop/Coding/ZVN/turbo-vscode` | VS Code extension (syntax, snippets, LSP client) |
+| **Bundled VS Code extension** | `editors/vscode/turbo-lang` | Syntax, snippets, LSP client, and smoke metadata |
+| **turbo-vscode** (marketplace repo, if still used) | `~/Desktop/Coding/ZVN/turbo-vscode` | Published VS Code extension package |
 | **tree-sitter-turbo** | `~/Desktop/Coding/ZVN/tree-sitter-turbo` | Tree-sitter grammar for editors |
 
 ---
@@ -31,6 +32,7 @@ All must agree on the same version:
 | `turbo/Cargo.lock` | auto-updated by `cargo build` |
 | `CHANGELOG.md` | `[X.Y.Z] - YYYY-MM-DD` section header |
 | `distribution/homebrew/turbo-lang.rb` | `version`, URLs, sha256, test assertion |
+| `editors/vscode/turbo-lang/package.json` | `"version"` |
 | `~/Desktop/Coding/ZVN/homebrew-turbo/Formula/turbo-lang.rb` | same as above (tap copy) |
 | `~/Desktop/Coding/ZVN/turbo-vscode/package.json` | `"version"` |
 
@@ -87,6 +89,9 @@ cargo build --release --manifest-path turbo/Cargo.toml
 
 # Integration tests (must be 0 failures)
 cd turbo && ./tests/run_tests.sh && cd ..
+
+# Installer smoke (must install both turbolang and turbo-lsp from a local fixture)
+./scripts/smoke_install_script.sh
 ```
 
 ### 1.5 Verify Version Output
@@ -128,7 +133,7 @@ gh run list --workflow=release.yml --limit=1
 gh release view vX.Y.Z --repo ZVN-DEV/Turbo-Language
 ```
 
-Confirm: 3 tarballs + `checksums.txt` attached to the release.
+Confirm: 3 tarballs + `checksums.txt` attached to the release. `checksums.txt.sig` is also attached when release signing secrets are configured.
 
 ---
 
@@ -152,7 +157,7 @@ Update version string, download URLs, SHA256 hashes, and test assertion in:
 
 ```bash
 # Main repo
-cd ~/Desktop/Coding/ZVN/new-language
+cd ~/Desktop/Coding/ZVN/TurboLang
 git add distribution/homebrew/turbo-lang.rb
 git commit -m "Update local Homebrew formula with vX.Y.Z SHA256 hashes"
 git push
@@ -227,6 +232,7 @@ cd ~/Desktop/Coding/ZVN/tree-sitter-turbo
 ```bash
 # Download and verify release binary directly
 gh release download vX.Y.Z --repo ZVN-DEV/Turbo-Language --pattern "*darwin-arm64*" -O /tmp/turbo.tar.gz
+rm -rf /tmp/turbo-verify && mkdir -p /tmp/turbo-verify
 tar xzf /tmp/turbo.tar.gz -C /tmp/turbo-verify
 /tmp/turbo-verify/turbolang --version
 ls /tmp/turbo-verify/turbo-lsp  # Must exist
@@ -240,7 +246,8 @@ turbolang --version
 ```bash
 # All must report the same version
 turbolang --version
-grep '^version' ~/Desktop/Coding/ZVN/new-language/turbo/crates/turbo-cli/Cargo.toml
+grep '^version' ~/Desktop/Coding/ZVN/TurboLang/turbo/crates/turbo-cli/Cargo.toml
+grep '"version"' ~/Desktop/Coding/ZVN/TurboLang/editors/vscode/turbo-lang/package.json
 grep '"version"' ~/Desktop/Coding/ZVN/turbo-vscode/package.json
 grep 'version "' ~/Desktop/Coding/ZVN/homebrew-turbo/Formula/turbo-lang.rb
 ```

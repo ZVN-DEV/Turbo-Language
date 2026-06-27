@@ -17,7 +17,7 @@ brew tap ZVN-DEV/turbo && brew install turbo-lang
 ```bash
 git clone https://github.com/ZVN-DEV/Turbo-Language.git
 cd Turbo-Language/turbo
-cargo build --release -p turbo-cli
+cargo build --release -p turbo-cli -p turbo-lsp
 export PATH="$PWD/target/release:$PATH"
 ```
 
@@ -38,6 +38,7 @@ Verify your installation:
 
 ```bash
 turbolang --version
+command -v turbo-lsp
 ```
 
 ---

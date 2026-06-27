@@ -28,8 +28,8 @@ export default function InstallationPage() {
         Option 1: Homebrew (macOS)
       </h2>
       <p className="mb-4">
-        Install on macOS via Homebrew. Requires the Rust toolchain (installed
-        automatically as a build dependency).
+        Install on macOS via Homebrew. The formula installs the CLI and LSP
+        binaries from the release archive.
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
         <code>{`brew tap ZVN-DEV/turbo
@@ -37,7 +37,14 @@ brew install turbo-lang`}</code>
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
-        Option 2: Build from Source
+        Option 2: Curl Installer
+      </h2>
+      <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
+        <code>{`curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh | sh`}</code>
+      </pre>
+
+      <h2 className="text-2xl font-bold text-white mt-10 mb-4">
+        Option 3: Build from Source
       </h2>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
         <code>{`# Clone the repository
@@ -45,9 +52,9 @@ git clone https://github.com/ZVN-DEV/Turbo-Language.git
 cd Turbo-Language/turbo
 
 # Build in release mode
-cargo build --release -p turbo-cli
+cargo build --release -p turbo-cli -p turbo-lsp
 
-# The binary is at target/release/turbolang`}</code>
+# The binaries are at target/release/turbolang and target/release/turbo-lsp`}</code>
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
@@ -66,10 +73,12 @@ export PATH="$HOME/Turbo-Language/turbo/target/release:$PATH"`}</code>
         Verify Installation
       </h2>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`turbolang --version`}</code>
+        <code>{`turbolang --version
+command -v turbo-lsp`}</code>
       </pre>
       <p className="mb-6">
-        You should see the current version number printed to the terminal.
+        You should see the current version number from the CLI and confirm the
+        LSP server binary is available for editors.
       </p>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
