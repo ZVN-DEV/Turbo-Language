@@ -95,9 +95,9 @@ enum Commands {
         #[arg(long, short, default_value = "3000")]
         port: u16,
     },
-    /// Format a Turbo source file
+    /// Format Turbo source files
     Fmt {
-        /// Path to the .tb source file to format
+        /// Path to a .tb source file or directory to format
         file: PathBuf,
         /// Check only, don't modify (exit 1 if unformatted)
         #[arg(long)]
@@ -182,7 +182,7 @@ fn main() {
         Commands::Init { name } => init_project(&name),
         Commands::Repl => repl::run_repl(),
         Commands::Playground { port } => playground::serve(port),
-        Commands::Fmt { file, check } => formatter::format_file(&file, check),
+        Commands::Fmt { file, check } => formatter::format_path(&file, check),
         Commands::Doc { file } => doc_file(&file),
         Commands::Install => install_deps(),
         Commands::Update => update_deps(),

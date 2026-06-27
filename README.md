@@ -344,7 +344,7 @@ See [`examples/speed-server/main.tb`](examples/speed-server/main.tb)
 | `turbolang install` | Install `path` and `github` dependencies from `turbo.toml` |
 | `turbolang update` | Update pinned GitHub dependencies and refresh `turbo.lock` |
 | `turbolang playground` | Launch browser-based playground |
-| `turbolang fmt <file.tb>` | Format source code |
+| `turbolang fmt <file-or-dir>` | Format source code |
 | `turbolang init <name>` | Create a new project |
 | `turbolang doc <file.tb>` | Generate documentation |
 | `turbolang repl` | Interactive REPL |

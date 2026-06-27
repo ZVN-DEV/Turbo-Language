@@ -1,62 +1,152 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Top-level declarations that trigger blank-line separation.
 const TOP_LEVEL_KEYWORDS: &[&str] = &[
     "fn ", "struct ", "type ", "impl ", "trait ", "import ", "extern ", "@unsafe",
 ];
 
-/// Format a Turbo source file in place (or check formatting).
-pub fn format_file(path: &Path, check: bool) {
-    let source = match std::fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: could not read file `{}`: {e}", path.display());
+#[derive(Debug, Default, PartialEq, Eq)]
+struct FormatSummary {
+    checked: usize,
+    changed: usize,
+}
+
+/// Format a Turbo source file or every `.tb` file under a directory.
+pub fn format_path(path: &Path, check: bool) {
+    match format_path_inner(path, check) {
+        Ok(summary) => {
+            if path.is_dir() && summary.checked == 0 {
+                eprintln!("{} contains no .tb files", path.display());
+            }
+        }
+        Err(messages) => {
+            for message in messages {
+                eprintln!("{message}");
+            }
             std::process::exit(1);
         }
+    }
+}
+
+fn format_path_inner(path: &Path, check: bool) -> Result<FormatSummary, Vec<String>> {
+    let files = match turbo_files(path) {
+        Ok(files) => files,
+        Err(message) => return Err(vec![message]),
     };
+
+    let mut summary = FormatSummary::default();
+    let mut errors = Vec::new();
+
+    for file in files {
+        match format_file(&file, check) {
+            Ok(outcome) => {
+                summary.checked += 1;
+                if outcome == FormatOutcome::Changed {
+                    summary.changed += 1;
+                }
+            }
+            Err(message) => errors.push(message),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(summary)
+    } else {
+        Err(errors)
+    }
+}
+
+fn turbo_files(path: &Path) -> Result<Vec<PathBuf>, String> {
+    if path.is_file() {
+        return Ok(vec![path.to_path_buf()]);
+    }
+
+    if !path.is_dir() {
+        return Err(format!(
+            "error: `{}` is not a file or directory",
+            path.display()
+        ));
+    }
+
+    let mut files = Vec::new();
+    collect_turbo_files(path, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn collect_turbo_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("error: could not read directory `{}`: {e}", dir.display()))?;
+
+    for entry in entries {
+        let entry = entry
+            .map_err(|e| format!("error: could not read directory `{}`: {e}", dir.display()))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("error: could not inspect `{}`: {e}", path.display()))?;
+
+        if file_type.is_dir() {
+            collect_turbo_files(&path, files)?;
+        } else if file_type.is_file() && path.extension().is_some_and(|ext| ext == "tb") {
+            files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FormatOutcome {
+    Unchanged,
+    Changed,
+}
+
+/// Format a Turbo source file in place (or check formatting).
+fn format_file(path: &Path, check: bool) -> Result<FormatOutcome, String> {
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| format!("error: could not read file `{}`: {e}", path.display()))?;
 
     // Refuse to reformat source that doesn't lex/parse. A formatter that
     // silently reindents broken code can mask or compound the underlying error;
     // gofmt/rustfmt both decline unparseable input. Leave the file untouched.
     let (tokens, lex_errors) = turbo_lexer::tokenize(&source);
     if !lex_errors.is_empty() {
-        eprintln!(
+        return Err(format!(
             "error: {} has syntax errors and was not formatted (run `turbolang check {}`)",
             path.display(),
             path.display()
-        );
-        std::process::exit(1);
+        ));
     }
     let (_, parse_errors) = turbo_parser::parse(tokens);
     if !parse_errors.is_empty() {
-        eprintln!(
+        return Err(format!(
             "error: {} has syntax errors and was not formatted (run `turbolang check {}`)",
             path.display(),
             path.display()
-        );
-        std::process::exit(1);
+        ));
     }
 
     let formatted = format_source(&source);
 
     if check {
         if source != formatted {
-            eprintln!(
+            return Err(format!(
                 "error: {} is not formatted (run `turbolang fmt {}` to fix)",
                 path.display(),
                 path.display()
-            );
-            std::process::exit(1);
+            ));
         }
     } else if source != formatted {
-        if let Err(e) = std::fs::write(path, &formatted) {
-            eprintln!("error: could not write file `{}`: {e}", path.display());
-            std::process::exit(1);
-        }
+        std::fs::write(path, &formatted)
+            .map_err(|e| format!("error: could not write file `{}`: {e}", path.display()))?;
         eprintln!("\x1b[32m\u{2713}\x1b[0m Formatted {}", path.display());
+        return Ok(FormatOutcome::Changed);
     } else {
         eprintln!("{} already formatted", path.display());
     }
+
+    Ok(FormatOutcome::Unchanged)
 }
 
 /// Apply line-based formatting rules to Turbo source code.
@@ -793,5 +883,63 @@ fn main() {
             "Comment content should be preserved exactly, got:\n{}",
             output
         );
+    }
+
+    #[test]
+    fn directory_discovery_is_recursive_and_sorted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root_file = tmp.path().join("b.tb");
+        let nested = tmp.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let nested_file = nested.join("a.tb");
+        let ignored = nested.join("notes.txt");
+
+        std::fs::write(&root_file, "fn main() {\n}\n").unwrap();
+        std::fs::write(&nested_file, "fn helper() {\n}\n").unwrap();
+        std::fs::write(ignored, "not turbo").unwrap();
+
+        let files = turbo_files(tmp.path()).unwrap();
+        assert_eq!(files, vec![root_file, nested_file]);
+    }
+
+    #[test]
+    fn format_directory_updates_nested_turbo_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("src");
+        std::fs::create_dir(&nested).unwrap();
+        let file = nested.join("main.tb");
+        std::fs::write(&file, "fn main(){\nprint(\"hi\")\n}\n").unwrap();
+
+        let summary = format_path_inner(tmp.path(), false).unwrap();
+
+        assert_eq!(
+            summary,
+            FormatSummary {
+                checked: 1,
+                changed: 1
+            }
+        );
+        assert_eq!(
+            std::fs::read_to_string(file).unwrap(),
+            "fn main() {\n    print(\"hi\")\n}\n"
+        );
+    }
+
+    #[test]
+    fn check_directory_reports_all_unformatted_files_without_writing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let first = tmp.path().join("a.tb");
+        let second = tmp.path().join("b.tb");
+        let source = "fn main(){\nprint(\"hi\")\n}\n";
+        std::fs::write(&first, source).unwrap();
+        std::fs::write(&second, source).unwrap();
+
+        let errors = format_path_inner(tmp.path(), true).unwrap_err();
+
+        assert_eq!(errors.len(), 2);
+        assert!(errors[0].contains("a.tb is not formatted"));
+        assert!(errors[1].contains("b.tb is not formatted"));
+        assert_eq!(std::fs::read_to_string(first).unwrap(), source);
+        assert_eq!(std::fs::read_to_string(second).unwrap(), source);
     }
 }

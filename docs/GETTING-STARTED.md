@@ -527,7 +527,7 @@ The resulting binary is a standalone native executable -- no runtime dependencie
 | `turbolang build file.tb` | Compile to native binary |
 | `turbolang test file.tb` | Run `@test` functions |
 | `turbolang check file.tb` | Type-check without running |
-| `turbolang fmt file.tb` | Format source code |
+| `turbolang fmt file-or-dir` | Format source code |
 | `turbolang repl` | Interactive REPL |
 | `turbolang playground` | Browser-based playground |
 | `turbolang explain E0100` | Explain an error code |

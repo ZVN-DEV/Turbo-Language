@@ -28,7 +28,7 @@ export default function CliPage() {
               ["turbolang init <name>", "Create a new project"],
               ["turbolang install", "Install dependencies from turbo.toml"],
               ["turbolang update", "Update GitHub dependencies"],
-              ["turbolang fmt <file.tb>", "Format source code"],
+              ["turbolang fmt <file-or-dir>", "Format source code"],
               ["turbolang doc <file.tb>", "Generate documentation"],
               ["turbolang repl", "Interactive REPL"],
               ["turbolang lsp", "Start Language Server Protocol server"],
@@ -105,11 +105,12 @@ $ ./my-app`}</code>
         Formats source code according to the standard Turbo style:
       </p>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`# Format a file in place
+        <code>{`# Format a file or every .tb file under a directory
 $ turbolang fmt myfile.tb
+$ turbolang fmt src/
 
 # Check formatting without modifying
-$ turbolang fmt --check myfile.tb`}</code>
+$ turbolang fmt --check src/`}</code>
       </pre>
 
       <h2 id="repl" className="text-2xl font-bold text-white mt-10 mb-4">
