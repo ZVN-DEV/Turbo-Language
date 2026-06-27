@@ -1742,4 +1742,42 @@ fn main() {
         let pos_z = body.find("\"z\"").expect("missing z");
         assert!(pos_b < pos_z, "defer must fire after tail statements");
     }
+
+    #[test]
+    fn float_string_paths_use_float_runtime_conversion() {
+        let c = compile_to_c(
+            r#"
+fn main() {
+    let radius = 5.0
+    let area = 3.14159 * radius * radius
+    print(area)
+    print("area={area}")
+    print(to_str(area))
+}
+"#,
+        );
+        let body = turbo_main_body(&c);
+
+        assert!(
+            body.contains("rt_print_f64(area);"),
+            "print(float) must use the float print runtime:\n{}",
+            body
+        );
+        assert!(
+            body.contains("rt_str_concat(\"area=\", rt_f64_to_str(area))"),
+            "float interpolation must format through rt_f64_to_str:\n{}",
+            body
+        );
+        let float_to_str_calls = body.matches("rt_f64_to_str(area)").count();
+        assert!(
+            float_to_str_calls >= 2,
+            "interpolation and to_str(float) must both use rt_f64_to_str (got {float_to_str_calls}):\n{}",
+            body
+        );
+        assert!(
+            !body.contains("rt_i64_to_str(area)"),
+            "float values must not be formatted through integer conversion:\n{}",
+            body
+        );
+    }
 }
