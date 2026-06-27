@@ -9,7 +9,7 @@ fn main() {
         let words = split(base, " ")
         let joined = join(words, "-")
         let has_fox = contains(joined, "fox")
-        let replaced = replace(joined, "fox", "cat")
+        let _replaced = replace(joined, "fox", "cat")
         if has_fox {
             count = count + 1
         }
