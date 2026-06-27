@@ -192,6 +192,12 @@ if [ "${1:-}" = "package" ]; then
       echo '  no matching package named `turbo-ast` found' >&2
       exit 101
       ;;
+    turbo-formatter)
+      echo 'error: failed to prepare local package for uploading' >&2
+      echo 'Caused by:' >&2
+      echo '  no matching package named `turbo-parser` found' >&2
+      exit 101
+      ;;
     turbo-cli)
       if [ "${FIXTURE_BAD_CLI:-0}" = "1" ]; then
         echo 'error: failed to prepare local package for uploading' >&2
@@ -240,11 +246,18 @@ exit 2
             "dependencies": [{"name": "turbo-ast", "kind": None}, {"name": "turbo-lexer", "kind": None}],
         },
         {
+            "name": "turbo-formatter",
+            "version": "1.2.3",
+            "id": "fixture turbo-formatter",
+            "manifest_path": str(root / "turbo/crates/turbo-formatter/Cargo.toml"),
+            "dependencies": [{"name": "turbo-lexer", "kind": None}, {"name": "turbo-parser", "kind": None}],
+        },
+        {
             "name": "turbo-cli",
             "version": "1.2.3",
             "id": "fixture turbo-cli",
             "manifest_path": str(root / "turbo/crates/turbo-cli/Cargo.toml"),
-            "dependencies": [{"name": "turbo-parser", "kind": "dev"}],
+            "dependencies": [{"name": "turbo-formatter", "kind": None}, {"name": "turbo-parser", "kind": "dev"}],
         },
     ]
     meta = {"packages": packages, "workspace_members": [pkg["id"] for pkg in packages]}
@@ -288,9 +301,12 @@ def run_self_test() -> int:
             statuses = {result.name: result.status for result in results}
             require(statuses["turbo-ast"] == "packageable", "expected turbo-ast packageable")
             require(statuses["turbo-parser"] == "registry-blocked", "expected turbo-parser registry-blocked")
+            require(statuses["turbo-formatter"] == "registry-blocked", "expected turbo-formatter registry-blocked")
 
             meta = json.loads(json.dumps(original_meta))
-            meta["packages"] = [pkg for pkg in meta["packages"] if pkg["name"] != "turbo-parser"]
+            meta["packages"] = [
+                pkg for pkg in meta["packages"] if pkg["name"] not in ("turbo-formatter", "turbo-parser")
+            ]
             meta["workspace_members"] = [pkg["id"] for pkg in meta["packages"]]
             for pkg in meta["packages"]:
                 if pkg["name"] == "turbo-cli":

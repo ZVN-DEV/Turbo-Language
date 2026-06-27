@@ -1298,6 +1298,7 @@ dependencies = [
  "tempfile",
  "turbo-ast",
  "turbo-codegen-cranelift",
+ "turbo-formatter",
  "turbo-lexer",
  "turbo-parser",
  "turbo-sema",
@@ -1324,6 +1325,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "turbo-formatter"
+version = "0.9.1"
+dependencies = [
+ "turbo-lexer",
+ "turbo-parser",
+]
+
+[[package]]
 name = "turbo-lexer"
 version = "0.9.1"
 dependencies = [
@@ -1338,6 +1347,7 @@ dependencies = [
  "lsp-types",
  "serde_json",
  "turbo-ast",
+ "turbo-formatter",
  "turbo-lexer",
  "turbo-parser",
  "turbo-sema",

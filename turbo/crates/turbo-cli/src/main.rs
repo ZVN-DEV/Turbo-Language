@@ -30,7 +30,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use turbo_ast::{ErrorCode, Expr, InterpolPart, Item, Module, Stmt, TypeExpr};
 
-mod formatter;
 mod playground;
 mod repl;
 mod watch;
@@ -182,7 +181,7 @@ fn main() {
         Commands::Init { name } => init_project(&name),
         Commands::Repl => repl::run_repl(),
         Commands::Playground { port } => playground::serve(port),
-        Commands::Fmt { file, check } => formatter::format_file(&file, check),
+        Commands::Fmt { file, check } => turbo_formatter::format_file(&file, check),
         Commands::Doc { file } => doc_file(&file),
         Commands::Install => install_deps(),
         Commands::Update => update_deps(),
