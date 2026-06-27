@@ -258,7 +258,15 @@ def check_release_consistency(repo_root: Path = REPO_ROOT) -> list[str]:
 
     release_docs = read(repo_root / "docs" / "RELEASE.md")
     require("./scripts/check_release_consistency.sh" in release_docs, "docs/RELEASE.md does not mention release consistency check")
-    passed.append("release runbook includes this consistency gate")
+    require(
+        "./scripts/check_cargo_package_readiness.sh" in release_docs,
+        "docs/RELEASE.md does not mention cargo package readiness check",
+    )
+    package_readiness = repo_root / "scripts" / "check_cargo_package_readiness.py"
+    require(package_readiness.exists(), "missing scripts/check_cargo_package_readiness.py")
+    package_readiness_sh = repo_root / "scripts" / "check_cargo_package_readiness.sh"
+    require(package_readiness_sh.exists(), "missing scripts/check_cargo_package_readiness.sh")
+    passed.append("release runbook includes consistency and package-readiness gates")
 
     check_benchmark_artifacts(repo_root)
     passed.append("benchmark comparison baselines are source-only")
@@ -337,7 +345,9 @@ end
     )
     write(root / "distribution" / "install.sh", "install_binary turbolang\ninstall_binary turbo-lsp\nrelease archive did not contain turbo-lsp\n")
     write(root / "scripts" / "smoke_install_script.sh", 'test -x "${INSTALL_DIR}/turbolang"\ntest -x "${INSTALL_DIR}/turbo-lsp"\nBROKEN_STATUS=1\n')
-    write(root / "docs" / "RELEASE.md", "./scripts/check_release_consistency.sh\n")
+    write(root / "scripts" / "check_cargo_package_readiness.py", "# fixture placeholder\n")
+    write(root / "scripts" / "check_cargo_package_readiness.sh", "#!/usr/bin/env bash\n")
+    write(root / "docs" / "RELEASE.md", "./scripts/check_release_consistency.sh\n./scripts/check_cargo_package_readiness.sh\n")
 
 
 def run_self_test() -> int:
