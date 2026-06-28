@@ -408,7 +408,7 @@ export default function Home() {
               Expressive by Default
             </h2>
             <p className="text-gray-400 text-lg max-w-2xl mx-auto">
-              Pattern matching, async concurrency, and HTTP+JSON servers --
+              Pattern matching, thread concurrency, and HTTP+JSON servers --
               all with clean, readable syntax.
             </p>
           </div>

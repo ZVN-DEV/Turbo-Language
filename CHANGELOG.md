@@ -78,7 +78,7 @@ programs, with 222 integration tests and the full unit suite passing.
   Cranelift is now the single code-generation backend. The LLVM path was a
   partial second implementation (roughly half the builtins), did not build
   cleanly from the documented steps, and offered no measured speedup over
-  Cranelift — which already edges out `cc -O2` on the fib benchmark. Removing it
+  Cranelift on the fib benchmark. Removing it
   eliminates a large duplicated codegen surface and the cost of keeping two
   backends at parity. A future optimizing backend, if pursued, should lower
   through a shared mid-level IR rather than re-walking the AST a second time.

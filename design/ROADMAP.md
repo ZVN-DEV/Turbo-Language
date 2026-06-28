@@ -22,9 +22,9 @@ Everything in the current design documents. What ships on day one.
   code-generation backend
 - ~~LLVM backend for optimized release builds (x86-64, AArch64, RISC-V)~~
   **Removed/deferred in 0.9.1.** The experimental LLVM backend was dropped:
-  Cranelift is now the only backend (it already edges out `cc -O2` on the fib
-  microbenchmark, and the LLVM path was a partial duplicate with no measured
-  speedup). It is parked on the `llvm-backend` branch and will be reintroduced
+  Cranelift is now the only backend (the LLVM path was a partial duplicate that
+  built incompletely and showed no measured speedup over Cranelift on the fib
+  microbenchmark). It is parked on the `llvm-backend` branch and will be reintroduced
   only if a future optimizing backend reaches parity, builds cleanly, and shows
   a measured win — ideally lowering through a shared mid-level IR.
 - WebAssembly target (`wasm32-wasi`) with dedicated optimization pipeline
