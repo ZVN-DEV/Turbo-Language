@@ -396,6 +396,9 @@ impl<'a> Printer<'a> {
         if f.is_test {
             head.push_str("@test ");
         }
+        if f.is_bench {
+            head.push_str("@bench ");
+        }
         if f.is_unsafe {
             head.push_str("@unsafe ");
         }

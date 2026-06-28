@@ -231,6 +231,10 @@ pub struct FnDef {
     pub is_async: bool,
     /// Whether this function is a `@test fn` (test function)
     pub is_test: bool,
+    /// Whether this function is a `@bench fn` (benchmark function).
+    /// Like `@test`, this is a marker: the function compiles as an ordinary
+    /// function but is also recognized by `turbolang bench` for labeling.
+    pub is_bench: bool,
     /// Whether this function is an `@unsafe fn` (can use raw pointer operations)
     pub is_unsafe: bool,
     pub type_params: Vec<TypeParam>,
