@@ -1,5 +1,9 @@
 fn main() {
-    // args() returns an array of strings
+    // args() returns the program's CLI arguments as [str] (argv[1..],
+    // excluding the binary path). The phase1 harness runs `turbolang run`
+    // with no extra args, so this is the empty-args case: len == 0.
+    // End-to-end arg passing (run -- a b c / built binary) is covered by
+    // tests/args/run_args_tests.sh.
     let a = args()
     print(len(a))
 

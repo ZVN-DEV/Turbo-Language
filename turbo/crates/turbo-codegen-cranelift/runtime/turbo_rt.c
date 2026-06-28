@@ -1084,9 +1084,45 @@ void rt_exit(long long code) {
     exit((int)code);
 }
 
+/* CLI argument storage. Captured once at process startup (main() calls
+ * rt_set_args before turbo_main) so args() can return the program's own
+ * arguments. argv lives for the whole process, so storing the pointers is
+ * safe; rt_args copies each string into runtime memory when materializing
+ * the [str]. */
+static int rt_prog_argc = 0;
+static char **rt_prog_argv = NULL;
+
+void rt_set_args(int argc, char **argv) {
+    rt_prog_argc = argc;
+    rt_prog_argv = argv;
+}
+
 void *rt_args(void) {
-    /* Return an empty array — CLI arg passing is not yet wired. */
-    return rt_array_alloc(0);
+    /* Return the program's CLI arguments as a Turbo [str].
+     *
+     * Convention: args()[0] is the FIRST user argument — argv[0] (the binary
+     * path) is excluded. This is the AOT twin of `rt_args` in runtime.rs; both
+     * expose the identical argv[1..] convention so a program produces the same
+     * args() whether run via `turbolang run f.tb -- a b c` or built and invoked
+     * as `./bin a b c`.
+     *
+     * Each element is copied through the runtime allocator so it follows the
+     * same ownership model as rt_str_split's parts. Array layout matches
+     * rt_str_split: [len][ptr0][ptr1]... */
+    long long count = (rt_prog_argc > 1) ? (long long)(rt_prog_argc - 1) : 0;
+    if (!rt_array_len_fits(count)) {
+        fprintf(stderr, "runtime error: too many CLI arguments (%lld)\n", count);
+        exit(1);
+    }
+    size_t data_size = 8 + (size_t)count * 8;
+    long long *arr = (long long *)rt_rc_alloc(data_size, count);
+    arr[0] = count;
+    for (long long i = 0; i < count; i++) {
+        const char *src = rt_prog_argv[i + 1];
+        char *copy = turbo_strdup(src ? src : "");
+        arr[1 + i] = (long long)(size_t)copy;
+    }
+    return arr;
 }
 
 /* ── String parsing builtins ─────────────────────────────────────── */
@@ -3187,7 +3223,8 @@ void rt_release(void *data_ptr) {
  * the harness's own `main`. */
 #ifndef RT_TEST_BUILD
 extern void turbo_main(void);
-int main(void) {
+int main(int argc, char **argv) {
+    rt_set_args(argc, argv);
     turbo_main();
     return 0;
 }

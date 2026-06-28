@@ -38,6 +38,9 @@ pub(crate) use turbo_types::*;
 
 mod runtime;
 pub(crate) use runtime::*;
+// Public so the CLI can install the program's CLI args before `jit_run`
+// (the JIT twin of the AOT `main(argc, argv)` -> rt_set_args path).
+pub use runtime::set_program_args;
 
 mod builtins;
 pub(crate) use builtins::*;

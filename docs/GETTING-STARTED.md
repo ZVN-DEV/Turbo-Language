@@ -548,6 +548,7 @@ The resulting binary is a standalone native executable -- no runtime dependencie
 | Command | What it does |
 |---------|-------------|
 | `turbolang run file.tb` | Compile and run via JIT |
+| `turbolang run file.tb -- a b c` | Run, forwarding `a b c` to the program's `args()` |
 | `turbolang build file.tb` | Compile to native binary |
 | `turbolang test file.tb` | Run `@test` functions |
 | `turbolang check file.tb` | Type-check without running |

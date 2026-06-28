@@ -90,6 +90,41 @@ print("Home directory: {home}")
 
 Returns the value of an environment variable as a string. Returns an empty string if the variable is not set.
 
+### args
+
+```turbo
+fn main() {
+    let a = args()
+    print(len(a))
+    let mut i = 0
+    while i < len(a) {
+        print(a[i])
+        i = i + 1
+    }
+}
+```
+
+Returns the program's command-line arguments as a `[str]`. The argument list
+**excludes** the program name / binary path: `args()[0]` is the *first* user
+argument (the convention is `argv[1..]`). When the program is invoked with no
+arguments, `args()` returns an empty array.
+
+The same convention applies whether the program is run through the JIT or built
+to a native binary, so `args()` returns identical values either way:
+
+```bash
+# JIT — pass arguments after the source file. Use `--` to forward
+# hyphen-leading arguments to the program instead of to turbolang:
+turbolang run app.tb -- alpha beta
+turbolang run app.tb -- --name alice
+
+# Native binary — arguments are passed directly:
+turbolang build app.tb -o app
+./app alpha beta
+```
+
+Both forms above make `args()` return `["alpha", "beta"]`.
+
 ### exit
 
 ```turbo
