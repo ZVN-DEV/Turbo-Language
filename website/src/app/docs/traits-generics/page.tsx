@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+
+export const metadata: Metadata = {
+  title: "Traits & Generics",
+  description:
+    "Define shared behavior with traits and write polymorphic, reusable code with generics and trait bounds in Turbo's static type system.",
+};
 
 export default function TraitsGenericsPage() {
   return (

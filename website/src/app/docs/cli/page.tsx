@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+
+export const metadata: Metadata = {
+  title: "CLI Reference",
+  description:
+    "Reference for the turbolang CLI: run, build, test, bench, init, fmt, repl, and lsp, plus formatting, the REPL, the LSP server, and built-in functions.",
+};
 
 export default function CliPage() {
   return (

@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+
+export const metadata: Metadata = {
+  title: "Variables & Types",
+  description:
+    "Declare variables with let and let mut in Turbo's statically typed system. Covers type inference, primitive types, constants, and built-in collections.",
+};
 
 export default function VariablesTypesPage() {
   return (

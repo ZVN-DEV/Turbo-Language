@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+
+export const metadata: Metadata = {
+  title: "Hello World",
+  description:
+    "Write your first Turbo program, then run it instantly with turbolang run (JIT) or compile a self-contained native binary with turbolang build (AOT).",
+};
 
 export default function HelloWorldPage() {
   return (

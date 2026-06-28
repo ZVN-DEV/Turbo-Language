@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+
+export const metadata: Metadata = {
+  title: "Introduction",
+  description:
+    "Turbo is a compiled, type-safe language that builds straight to machine code via Cranelift — no VM, no garbage collector. Generics, traits, and pattern matching.",
+};
 
 export default function DocsPage() {
   return (

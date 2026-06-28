@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+
+export const metadata: Metadata = {
+  title: "Structs & Enums",
+  description:
+    "Model data in Turbo with structs and algebraic enums, then handle failures explicitly with Result and Optional types for safe error handling.",
+};
 
 export default function StructsEnumsPage() {
   return (

@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+
+export const metadata: Metadata = {
+  title: "Examples",
+  description:
+    "Turbo examples in two tiers: runnable projects that compile with today's toolchain, and roadmap examples documenting planned, not-yet-compiling features.",
+};
 
 export default function ExamplesPage() {
   return (

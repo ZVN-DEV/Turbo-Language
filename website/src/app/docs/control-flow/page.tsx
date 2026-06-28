@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+
+export const metadata: Metadata = {
+  title: "Control Flow",
+  description:
+    "Turbo's control flow is expression-based: if/else and while return values, and exhaustive match enables pattern matching you can bind directly.",
+};
 
 export default function ControlFlowPage() {
   return (

@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+
+export const metadata: Metadata = {
+  title: "Functions",
+  description:
+    "Define functions in Turbo with typed parameters and return types. First-class functions, pipe composition, closures, and recursion explained.",
+};
 
 export default function FunctionsPage() {
   return (

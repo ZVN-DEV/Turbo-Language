@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+
+export const metadata: Metadata = {
+  title: "Testing",
+  description:
+    "Turbo's built-in test framework: mark functions with @test, check expectations with assert and assert_eq, and run your whole suite with turbolang test.",
+};
 
 export default function TestingPage() {
   return (

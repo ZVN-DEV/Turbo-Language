@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Navbar from "@/components/navbar";
 import Footer from "@/components/footer";
+import { SITE_URL } from "@/lib/site";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -15,14 +16,26 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Turbo — Fast, Type-Safe, Compiled Language",
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: "Turbo — Fast, Type-Safe, Compiled Language",
+    template: "%s — Turbo",
+  },
   description:
     "A compiled programming language with JavaScript's developer experience and Rust's performance. Native speed, tiny binaries, zero GC, small core.",
   openGraph: {
+    type: "website",
+    siteName: "Turbo",
+    url: "/",
     title: "Turbo — Fast, Type-Safe, Compiled Language",
     description:
       "JavaScript's soul. Rust's speed. A small, honest core that ships today.",
-    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Turbo — Fast, Type-Safe, Compiled Language",
+    description:
+      "JavaScript's soul. Rust's speed. A small, honest core that ships today.",
   },
 };
 
