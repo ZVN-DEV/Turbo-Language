@@ -52,10 +52,12 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
   restricted type instead.) **AC:** an f32 spawn arg / generic type-arg / closure param round-trips
   correctly on JIT and AOT, parity-tested.
 
-- [ ] **BL-4 — LSP scope/binding resolution.** Hover, go-to-def, references, and rename are token-text +
-  top-level only (`turbo-lsp/src`); locals/fields/methods aren't navigable and shadowed names over-rename.
-  Add real binding/scope resolution. **AC:** rename of a local only touches its scope; go-to-def resolves
-  a local/param/field to its declaration; tests assert exact edit sets.
+- [x] **BL-4 — LSP scope/binding resolution.** _Done (commit 4ff0476, merged to master)._ New
+  `turbo-lsp/src/resolve.rs` walks the AST with a lexical scope stack mapping each ident occurrence (by
+  span) to its declaration, respecting shadowing; rewired go-to-def, references, rename, hover, and a new
+  document-highlight to be scope-precise (shadowed inner `x` no longer renamed with an outer `x`).
+  Correct-over-complete: field-access-to-struct-field resolution still falls back (needs type inference).
+  LSP tests 50 → 70. **Follow-on (future):** field/method resolution once a span→type map exists.
 
 - [ ] **BL-5 — AST-based formatter.** `turbo-formatter` is a line-based brace/space tidier; it doesn't
   space arithmetic operators, `:` in params, or `->`, and won't expand inline blocks. Replace with a real
