@@ -2386,6 +2386,68 @@ impl Checker {
                         }
                         return Ty::Unit;
                     }
+                    // mutex_update(m: i64, f: fn(i64) -> i64) -> i64
+                    // Runs `f(old)` atomically under the lock and stores the
+                    // result — the only way to express a correct read-modify-write
+                    // (e.g. a shared counter) over a mutex.
+                    if name == "mutex_update" {
+                        if args.len() != 2 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!(
+                                    "mutex_update() takes exactly 2 arguments, got {}",
+                                    args.len()
+                                ),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let m_ty = self.check_expr(&args[0]);
+                        if !m_ty.is_error() && !m_ty.is_integer() {
+                            self.error(ErrorCode::E0133, format!("mutex_update() first argument must be a mutex (integer), found `{m_ty}`"), args[0].span.clone());
+                        }
+                        // Hint the closure's parameter type so `|x| ...` infers `x: i64`.
+                        self.closure_param_hint = Some(vec![Ty::I64]);
+                        let fn_ty = self.check_expr(&args[1]);
+                        match &fn_ty {
+                            Ty::Fn(params, ret) => {
+                                if params.len() != 1 {
+                                    self.error(
+                                        ErrorCode::E0133,
+                                        format!(
+                                            "mutex_update() callback must take 1 parameter, takes {}",
+                                            params.len()
+                                        ),
+                                        args[1].span.clone(),
+                                    );
+                                } else if !params[0].is_error() && !params[0].is_integer() {
+                                    self.error(
+                                        ErrorCode::E0133,
+                                        format!("mutex_update() callback parameter must be integer, found `{}`", params[0]),
+                                        args[1].span.clone(),
+                                    );
+                                }
+                                if !ret.is_error() && !ret.is_integer() {
+                                    self.error(
+                                        ErrorCode::E0133,
+                                        format!(
+                                            "mutex_update() callback must return integer, returns `{ret}`"
+                                        ),
+                                        args[1].span.clone(),
+                                    );
+                                }
+                            }
+                            _ if fn_ty.is_error() => {}
+                            _ => {
+                                self.error(
+                                    ErrorCode::E0133,
+                                    format!("mutex_update() second argument must be a function `fn(int) -> int`, found `{fn_ty}`"),
+                                    args[1].span.clone(),
+                                );
+                            }
+                        }
+                        return Ty::I64;
+                    }
 
                     // clone(val) -> T (requires @derive(Clone))
                     if name == "clone" {

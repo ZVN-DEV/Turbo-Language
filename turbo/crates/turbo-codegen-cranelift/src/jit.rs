@@ -204,6 +204,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_mutex_create", rt_mutex_create as *const u8);
     jit_builder.symbol("rt_mutex_get", rt_mutex_get as *const u8);
     jit_builder.symbol("rt_mutex_set", rt_mutex_set as *const u8);
+    jit_builder.symbol("rt_mutex_update", rt_mutex_update as *const u8);
     jit_builder.symbol("rt_mutex_clone", rt_mutex_clone as *const u8);
     // HashMap builtins
     jit_builder.symbol("rt_hashmap_new", rt_hashmap_new as *const u8);
@@ -409,6 +410,7 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_mutex_create", rt_mutex_create as *const u8);
     jit_builder.symbol("rt_mutex_get", rt_mutex_get as *const u8);
     jit_builder.symbol("rt_mutex_set", rt_mutex_set as *const u8);
+    jit_builder.symbol("rt_mutex_update", rt_mutex_update as *const u8);
     jit_builder.symbol("rt_mutex_clone", rt_mutex_clone as *const u8);
     jit_builder.symbol("rt_hashmap_new", rt_hashmap_new as *const u8);
     jit_builder.symbol("rt_hashmap_set", rt_hashmap_set as *const u8);

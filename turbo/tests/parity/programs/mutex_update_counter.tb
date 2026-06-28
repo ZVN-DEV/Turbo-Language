@@ -1,0 +1,25 @@
+// JIT<->AOT parity for the atomic mutex critical section (BL-18).
+// Four worker threads each increment a shared counter 25000 times via
+// `mutex_update`. The read-modify-write runs under a single held lock, so
+// both backends must deterministically print exactly 100000.
+fn worker(m: i64, iters: i64) -> i64 {
+    let mut i = 0
+    while i < iters {
+        mutex_update(m, |x| x + 1)
+        i = i + 1
+    }
+    0
+}
+
+fn main() {
+    let m = mutex(0)
+    let a = spawn worker(m, 25000)
+    let b = spawn worker(m, 25000)
+    let c = spawn worker(m, 25000)
+    let d = spawn worker(m, 25000)
+    await a
+    await b
+    await c
+    await d
+    print(mutex_get(m))
+}

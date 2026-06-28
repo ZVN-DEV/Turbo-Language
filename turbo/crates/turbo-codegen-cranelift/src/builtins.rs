@@ -3961,6 +3961,46 @@ pub(crate) fn compile_builtin_mutex_set<M: Module>(
     Ok(None)
 }
 
+/// mutex_update(m, closure) -> i64
+/// Runs `closure(old)` under the lock, stores the result, and returns the new
+/// value. The closure is `(int) -> int`; it executes inside `rt_mutex_update`
+/// while the lock is held, so a read-modify-write is one atomic critical
+/// section. We pass the closure exactly like `map`/`route` do: extract the
+/// `fn_ptr` (offset 0) and `env_ptr` (offset 8) from the closure pair and hand
+/// both to the runtime, which calls back into the closure.
+pub(crate) fn compile_builtin_mutex_update<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (m_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+        code: ErrorCode::E0400,
+        message:
+            "compile_builtin_mutex_update: `&args[0]` produced no value during code generation"
+                .to_string(),
+    })?;
+    let (closure_ptr, _fn_tty) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+        code: ErrorCode::E0400,
+        message:
+            "compile_builtin_mutex_update: `&args[1]` produced no value during code generation"
+                .to_string(),
+    })?;
+    // Extract fn_ptr and env_ptr from the closure pair struct
+    // (offset 0 = fn_ptr, offset 8 = env_ptr).
+    let fn_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
+    let fid = cx.rt_fns["rt_mutex_update"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[m_val, fn_ptr, env_ptr]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
 // ── HashMap builtins ────────────────────────────────────────────────
 
 /// hashmap() -> HashMap (opaque pointer)

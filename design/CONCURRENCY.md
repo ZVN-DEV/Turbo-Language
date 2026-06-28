@@ -315,6 +315,17 @@ let uppercase_stream = token_stream("Hello")
 | `Semaphore` | Limit concurrent access to a resource | Like a concurrency limiter (e.g., `p-limit` npm package) |
 | `Once<T>` | Lazy initialization (thread-safe) | Like a lazy singleton -- initialize once, use everywhere |
 
+> **Implemented today (integer mutex builtin).** The table above is the
+> aspirational `Mutex<T>` surface. What ships right now is an integer mutex:
+> `mutex(0)`, `mutex_get(m)`, `mutex_set(m, v)`, and `mutex_update(m, f)`.
+> `mutex_get` and `mutex_set` are each *individually* atomic, but they do **not**
+> give you exclusive access across a read *and* a write — `mutex_set(m, mutex_get(m) + 1)`
+> is two separate locked operations and races under contention, losing updates.
+> For an atomic read-modify-write (a counter, an accumulator, compare-and-set),
+> use `mutex_update(m, |old| ...)`: the closure runs while the lock is held, so the
+> read, the computation, and the write are one critical section. See
+> [docs/stdlib.md](../docs/stdlib.md#mutex_update) for a correct shared-counter example.
+
 ## Runtime Variants
 
 ### Tokio-style (default)

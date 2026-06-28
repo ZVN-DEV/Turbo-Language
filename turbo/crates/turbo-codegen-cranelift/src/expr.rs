@@ -1882,6 +1882,7 @@ fn compile_call<M: Module>(
         "mutex" => compile_builtin_mutex(cx, args),
         "mutex_get" => compile_builtin_mutex_get(cx, args),
         "mutex_set" => compile_builtin_mutex_set(cx, args),
+        "mutex_update" => compile_builtin_mutex_update(cx, args),
         // Derive builtins
         "clone" => compile_clone(cx, args),
         // HashMap builtins

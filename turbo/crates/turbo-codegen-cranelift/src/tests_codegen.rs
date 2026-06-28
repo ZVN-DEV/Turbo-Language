@@ -529,6 +529,45 @@ fn test_rt_mutex_clone() {
     assert_eq!(rt_mutex_get(m2 as *const u8), 99);
 }
 
+extern "C" fn mutex_update_add_one(_env: *const u8, x: i64) -> i64 {
+    x + 1
+}
+
+#[test]
+fn test_rt_mutex_update_runs_callback_under_lock() {
+    let m = rt_mutex_create(0);
+    let n1 = rt_mutex_update(m, mutex_update_add_one as *const u8, std::ptr::null());
+    assert_eq!(n1, 1);
+    assert_eq!(rt_mutex_get(m), 1);
+    let n2 = rt_mutex_update(m, mutex_update_add_one as *const u8, std::ptr::null());
+    assert_eq!(n2, 2);
+    assert_eq!(rt_mutex_get(m), 2);
+}
+
+#[test]
+fn test_rt_mutex_update_is_atomic_under_contention() {
+    // The whole point of rt_mutex_update: a read-modify-write under one held
+    // lock. With 4 threads each doing 25_000 increments, the final total must
+    // be EXACTLY 100_000 — no lost updates. (The equivalent get-then-set loop
+    // races and loses ~57% of updates, which is the BL-18 bug this fixes.)
+    let m = rt_mutex_create(0);
+    let addr = m as usize; // usize is Send; move the address across threads.
+    let threads: Vec<_> = (0..4)
+        .map(|_| {
+            std::thread::spawn(move || {
+                let mptr = addr as *const u8;
+                for _ in 0..25_000 {
+                    rt_mutex_update(mptr, mutex_update_add_one as *const u8, std::ptr::null());
+                }
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+    assert_eq!(rt_mutex_get(m as *const u8), 100_000);
+}
+
 // ── HashMap runtime functions ──────────────────────────────────
 
 #[test]

@@ -2196,6 +2196,27 @@ void rt_mutex_set(const void *mptr, long long value) {
     pthread_mutex_unlock(&m->lock);
 }
 
+/* Closure callback ABI: (env_ptr, old_value) -> new_value.
+ * Closures are passed as a (fn_ptr, env_ptr) pair; see rt_http_route. */
+typedef long long (*mutex_update_fn)(const void *, long long);
+
+/* Atomic read-modify-write: runs `closure(old)` UNDER the lock, stores the
+ * result, and returns the new value. This is the only way to express a
+ * critical section spanning both a read and a write (e.g. a shared counter).
+ * The closure must NOT touch the same mutex — pthread mutexes are not
+ * recursive and would deadlock. The lock is released on the single normal
+ * exit path; Turbo runtime errors abort the process rather than unwinding
+ * through C, so the lock is never silently leaked into continued execution. */
+long long rt_mutex_update(const void *mptr, const void *fn, const void *env_ptr) {
+    turbo_mutex *m = (turbo_mutex *)mptr;
+    mutex_update_fn cb = (mutex_update_fn)fn;
+    pthread_mutex_lock(&m->lock);
+    long long new_val = cb(env_ptr, m->value);
+    m->value = new_val;
+    pthread_mutex_unlock(&m->lock);
+    return new_val;
+}
+
 void *rt_mutex_clone(const void *mptr) {
     turbo_mutex *m = (turbo_mutex *)mptr;
     atomic_fetch_add(&m->refcount, 1);

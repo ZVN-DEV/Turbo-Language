@@ -2567,6 +2567,35 @@ pub(crate) extern "C" fn rt_mutex_set(m: *const u8, value: i64) {
     let _ = std::sync::Arc::into_raw(arc); // don't drop
 }
 
+/// Mutex update callback ABI: `(env_ptr, old_value) -> new_value`.
+/// Closures are compiled with `CallConv::Fast`, which is ABI-compatible with
+/// `extern "C"` for integer/pointer signatures on the supported targets — the
+/// same assumption `RouteHandler` relies on for HTTP route callbacks.
+pub(crate) type MutexUpdateFn = extern "C" fn(*const u8, i64) -> i64;
+
+/// Atomically read-modify-write the value inside a mutex. The closure
+/// (`fn_ptr` + `env_ptr` pair) runs while the lock guard is held, so a
+/// read AND a write happen as one critical section (e.g. a shared counter).
+/// Returns the new value. The `MutexGuard` is RAII: even if the callback
+/// unwinds, the lock is released as the guard drops. The closure must not
+/// touch the same mutex (`std::sync::Mutex` is non-reentrant — it deadlocks).
+pub(crate) extern "C" fn rt_mutex_update(
+    m: *const u8,
+    fn_ptr: *const u8,
+    env_ptr: *const u8,
+) -> i64 {
+    let arc = unsafe { std::sync::Arc::from_raw(m as *const std::sync::Mutex<i64>) };
+    let cb: MutexUpdateFn = unsafe { std::mem::transmute(fn_ptr) };
+    let new_val = {
+        let mut guard = arc.lock().unwrap();
+        let new = cb(env_ptr, *guard);
+        *guard = new;
+        new
+    };
+    let _ = std::sync::Arc::into_raw(arc); // don't drop
+    new_val
+}
+
 /// Clone a mutex handle (increments the Arc refcount). Returns a new pointer.
 pub(crate) extern "C" fn rt_mutex_clone(m: *const u8) -> *mut u8 {
     let arc = unsafe { std::sync::Arc::from_raw(m as *const std::sync::Mutex<i64>) };
