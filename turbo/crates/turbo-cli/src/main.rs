@@ -1819,7 +1819,7 @@ fn run_file(path: &std::path::Path, verbose: bool) {
                 &filename,
                 &err.message,
                 &err.span,
-                None,
+                parse_help(&err.message).as_deref(),
                 Some(err.code),
             );
         }
@@ -1952,7 +1952,7 @@ fn check_file(path: &std::path::Path) {
                 &filename,
                 &err.message,
                 &err.span,
-                None,
+                parse_help(&err.message).as_deref(),
                 Some(err.code),
             );
         }
@@ -2054,7 +2054,7 @@ fn test_file(file: Option<PathBuf>) {
                     &filename,
                     &err.message,
                     &err.span,
-                    None,
+                    parse_help(&err.message).as_deref(),
                     Some(err.code),
                 );
             }
@@ -2441,7 +2441,7 @@ fn test_run_fn(path: &std::path::Path, fn_name: &str) {
                 &filename,
                 &err.message,
                 &err.span,
-                None,
+                parse_help(&err.message).as_deref(),
                 Some(err.code),
             );
         }
@@ -2585,7 +2585,7 @@ fn build_file(
                 &filename,
                 &err.message,
                 &err.span,
-                None,
+                parse_help(&err.message).as_deref(),
                 Some(err.code),
             );
         }
@@ -3293,6 +3293,14 @@ fn resolve_imports(
     Ok(())
 }
 
+/// Generate contextual help text for common parse error patterns.
+fn parse_help(message: &str) -> Option<String> {
+    if message.contains("import") || message.contains("`from`") || message.contains("path string") {
+        return Some("imports look like `import { sqrt, pi } from \"./math.tb\"`".to_string());
+    }
+    None
+}
+
 /// Generate contextual help text for common sema error patterns.
 fn sema_help(message: &str) -> Option<String> {
     if message.contains("undefined variable") {
@@ -3345,7 +3353,84 @@ fn sema_help(message: &str) -> Option<String> {
             "conditions must be `bool`; use a comparison like `x > 0` instead".to_string(),
         );
     }
-    if message.contains("expects") && message.contains("argument(s) but") {
+    if message.contains("match is not exhaustive") {
+        // The sema message already names the missing variants after
+        // `missing variants:` — turn them into an actionable suggestion.
+        if let Some(rest) = message.split("missing variants:").nth(1) {
+            let missing: Vec<&str> = rest
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if let Some(first) = missing.first() {
+                if missing.len() == 1 {
+                    return Some(format!(
+                        "add an arm '{first} => ...' or a catch-all '_ => ...'"
+                    ));
+                }
+                return Some(format!(
+                    "add arms for {} or a catch-all '_ => ...'",
+                    missing.join(", ")
+                ));
+            }
+        }
+        return Some(
+            "add a match arm for each remaining case, or a catch-all '_ => ...'".to_string(),
+        );
+    }
+    if message.contains("has no field") {
+        // The sema message embeds the struct's field list after
+        // `available fields:` and, when close, a `did you mean` suggestion.
+        if let Some(struct_name) = extract_backtick_name(message) {
+            let fields = message.split("available fields:").nth(1).map(|s| {
+                s.trim()
+                    .trim_end_matches(')')
+                    .trim()
+                    .split(',')
+                    .map(|f| format!("'{}'", f.trim()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            });
+            let suggestion = if message.contains("did you mean") {
+                nth_backtick_name(message, 3)
+            } else {
+                None
+            };
+            match (fields, suggestion) {
+                (Some(fields), Some(sug)) => {
+                    return Some(format!(
+                        "'{struct_name}' has fields {fields} — did you mean '{sug}'?"
+                    ))
+                }
+                (Some(fields), None) => {
+                    return Some(format!("'{struct_name}' has fields {fields}"))
+                }
+                (None, Some(sug)) => return Some(format!("did you mean '{sug}'?")),
+                (None, None) => {}
+            }
+        }
+        return Some("check the field name against the struct definition".to_string());
+    }
+    if message.contains("argument(s) but") {
+        // The user-function arity site embeds the full signature after
+        // `signature ` — echo it plus what was actually passed.
+        if let (Some(name), Some(params)) = (
+            extract_backtick_name(message),
+            parse_signature_params(message),
+        ) {
+            let count = if params.trim().is_empty() {
+                0
+            } else {
+                params.split(',').count()
+            };
+            let noun = if count == 1 { "arg" } else { "args" };
+            return Some(match parse_count_after(message, "but ") {
+                Some(passed) => {
+                    format!("'{name}' takes {count} {noun} ({params}); you passed {passed}")
+                }
+                None => format!("'{name}' takes {count} {noun} ({params})"),
+            });
+        }
         return Some(
             "check the function signature for the correct number of arguments".to_string(),
         );
@@ -3361,9 +3446,39 @@ fn sema_help(message: &str) -> Option<String> {
 
 /// Extract the first name enclosed in backticks from a message.
 fn extract_backtick_name(message: &str) -> Option<&str> {
-    let start = message.find('`')? + 1;
-    let end = message[start..].find('`')? + start;
-    Some(&message[start..end])
+    nth_backtick_name(message, 1)
+}
+
+/// Extract the `n`th (1-based) backtick-enclosed name from a message.
+fn nth_backtick_name(message: &str, n: usize) -> Option<&str> {
+    let mut rest = message;
+    let mut seen = 0;
+    loop {
+        let open = rest.find('`')? + 1;
+        let close = rest[open..].find('`')? + open;
+        seen += 1;
+        if seen == n {
+            return Some(&rest[open..close]);
+        }
+        rest = &rest[close + 1..];
+    }
+}
+
+/// Extract the parameter list from an arity message's embedded
+/// `signature `name(params)`` clause (returns `params` without the parens).
+fn parse_signature_params(message: &str) -> Option<&str> {
+    let after = message.split("signature `").nth(1)?;
+    let sig = after.split('`').next()?;
+    let open = sig.find('(')?;
+    let close = sig.rfind(')')?;
+    (close > open).then(|| sig[open + 1..close].trim())
+}
+
+/// Parse the run of digits immediately following `marker` in `message`.
+fn parse_count_after(message: &str, marker: &str) -> Option<usize> {
+    let after = message.split(marker).nth(1)?;
+    let digits: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
 }
 
 // =============================================================================
@@ -3478,10 +3593,28 @@ fn detailed_explanation(code: ErrorCode) -> Option<&'static str> {
     }
 }
 
+/// Normalize a user-supplied error code into the canonical `E0NNN` form.
+///
+/// Accepts the conventional spelling plus the common shorthands a user is
+/// likely to type: `100`, `e100`, `E100`, `e0100` and `E0100` all resolve to
+/// `E0100`. Anything that isn't `E?<digits>` is upper-cased and returned as-is
+/// so genuinely unknown input still falls through to the "unknown code" path.
+fn normalize_error_code(input: &str) -> String {
+    let upper = input.trim().to_uppercase();
+    let digits = upper.strip_prefix('E').unwrap_or(&upper);
+    if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+        if let Ok(n) = digits.parse::<u32>() {
+            return format!("E{n:04}");
+        }
+    }
+    upper
+}
+
 fn explain_error(code_str: &str) {
-    // Accept lowercase input (`e0100`) — the codes are conventionally uppercase
-    // but making users match case is needless friction.
-    let normalized = code_str.to_uppercase();
+    // Accept lowercase input (`e0100`) and shorthands (`100`, `E100`) — the
+    // codes are conventionally `E0NNN` but making users match the exact form is
+    // needless friction.
+    let normalized = normalize_error_code(code_str);
     if let Some(code) = ErrorCode::parse(&normalized) {
         println!(
             "\x1b[1;33m{}\x1b[0m: \x1b[1m{}\x1b[0m\n",
@@ -4229,5 +4362,111 @@ fn main() {{
         let comment = &docs[&1];
         assert_eq!(comment.len(), 1);
         assert_eq!(comment[0], "This is a doc comment");
+    }
+
+    // ── Error `Help:` quality (sema_help) ─────────────────────────────
+
+    #[test]
+    fn sema_help_arity_echoes_signature_and_passed_count() {
+        let msg = "function `add` expects 2 argument(s) but 1 were given; signature `add(a: int, b: int)`";
+        assert_eq!(
+            sema_help(msg).as_deref(),
+            Some("'add' takes 2 args (a: int, b: int); you passed 1")
+        );
+    }
+
+    #[test]
+    fn sema_help_arity_without_signature_falls_back() {
+        // Closure/method arity messages carry no embedded signature; they keep
+        // the generic guidance.
+        let msg = "closure expects 2 argument(s) but 1 were given";
+        assert_eq!(
+            sema_help(msg).as_deref(),
+            Some("check the function signature for the correct number of arguments")
+        );
+    }
+
+    #[test]
+    fn sema_help_match_exhaustive_single_variant() {
+        let msg = "match is not exhaustive; missing variants: Blue";
+        assert_eq!(
+            sema_help(msg).as_deref(),
+            Some("add an arm 'Blue => ...' or a catch-all '_ => ...'")
+        );
+    }
+
+    #[test]
+    fn sema_help_match_exhaustive_multiple_variants() {
+        let msg = "match is not exhaustive; missing variants: Green, Blue";
+        assert_eq!(
+            sema_help(msg).as_deref(),
+            Some("add arms for Green, Blue or a catch-all '_ => ...'")
+        );
+    }
+
+    #[test]
+    fn sema_help_field_lists_fields_and_suggestion() {
+        let msg = "struct `Rect` has no field `widht`. did you mean `width`? (available fields: width, height)";
+        assert_eq!(
+            sema_help(msg).as_deref(),
+            Some("'Rect' has fields 'width', 'height' — did you mean 'width'?")
+        );
+    }
+
+    #[test]
+    fn sema_help_field_lists_fields_without_suggestion() {
+        let msg = "struct `Point` has no field `z` (available fields: x, y)";
+        assert_eq!(
+            sema_help(msg).as_deref(),
+            Some("'Point' has fields 'x', 'y'")
+        );
+    }
+
+    // ── Parse `Help:` quality (parse_help) ────────────────────────────
+
+    #[test]
+    fn parse_help_teaches_import_syntax() {
+        for msg in [
+            "expected `{` to begin the import list",
+            "expected `from` after the import list",
+            "expected a path string after `from` in import",
+        ] {
+            assert_eq!(
+                parse_help(msg).as_deref(),
+                Some("imports look like `import { sqrt, pi } from \"./math.tb\"`"),
+                "message `{msg}` should get import-syntax help"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_help_ignores_unrelated_messages() {
+        assert_eq!(parse_help("expected `}`, found end of file"), None);
+    }
+
+    // ── explain code normalization ────────────────────────────────────
+
+    #[test]
+    fn normalize_error_code_accepts_shorthands() {
+        for input in ["100", "e100", "E100", "0100", "e0100", "E0100"] {
+            assert_eq!(
+                normalize_error_code(input),
+                "E0100",
+                "`{input}` should normalize to E0100"
+            );
+        }
+        assert_eq!(normalize_error_code("7"), "E0007");
+        // Genuinely unknown / non-numeric input is upper-cased and left for the
+        // unknown-code path to reject.
+        assert_eq!(normalize_error_code("bogus"), "BOGUS");
+    }
+
+    #[test]
+    fn normalize_error_code_resolves_via_parse() {
+        assert_eq!(
+            ErrorCode::parse(&normalize_error_code("100")),
+            Some(ErrorCode::E0100)
+        );
+        assert_eq!(ErrorCode::parse(&normalize_error_code("9999")), None);
     }
 }

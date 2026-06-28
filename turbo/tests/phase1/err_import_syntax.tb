@@ -1,0 +1,5 @@
+import sqrt from "./math.tb"
+
+fn main() {
+    print(1)
+}
