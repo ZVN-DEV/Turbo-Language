@@ -526,7 +526,7 @@ The resulting binary is a standalone native executable -- no runtime dependencie
 
 ### Language References
 
-- **[Standard Library Reference](stdlib.md)** -- all 104 built-in functions with examples
+- **[Standard Library Reference](stdlib.md)** -- 100+ built-in functions with examples
 - **[Error Code Reference](errors.md)** -- every compiler error code explained
 - **[Safety Narrative](SAFETY.md)** -- what Turbo guarantees and what it does not
 

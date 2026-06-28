@@ -274,7 +274,7 @@ fn main() {
 
 ### Standard Library
 
-104 built-in functions with no imports required. Method syntax works via UFCS -- `s.trim()` is equivalent to `trim(s)`.
+100+ built-in functions with no imports required. Method syntax works via UFCS -- `s.trim()` is equivalent to `trim(s)`.
 
 | Category | Highlights |
 |----------|------------|

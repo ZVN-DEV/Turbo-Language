@@ -149,11 +149,12 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   "run code in 5s" is the highest-converting action. **AC:** host the existing playground at `turbolang.dev/play`
   and add it as the hero's primary secondary-CTA ("Try in browser →") + a persistent nav item.
 
-- [ ] **BL-15 — Website SEO: duplicate metadata, no sitemap/robots/OG card.** _[frontend#1,#3]_ All ~16 routes
-  ship one `<title>`/description (docs pages compete/get filtered); no `sitemap.ts`, `robots.ts`, `metadataBase`,
-  `og:image`, or Twitter card (links shared in Slack/X/Discord show a bare snippet). **AC:** root `title.template`
-  + `metadataBase`; unique per-route `metadata` on the 15 docs pages; `sitemap.ts` + `robots.ts` + an
-  `opengraph-image`.
+- [x] **BL-15 — Website SEO: duplicate metadata, no sitemap/robots/OG card.** _[frontend#1,#3] Done (commit
+  `4482ae9`, merged to master)._ Root layout sets `metadataBase` (turbolang.dev) + a `title` template; all 15
+  docs routes now carry unique titles + content-derived descriptions; added `app/sitemap.ts` (reads the docs
+  dir from disk so it can't drift), `app/robots.ts`, and a generated `next/og` `opengraph-image` + Twitter
+  `summary_large_image` card. All 21 routes stay static SSG; lint + tsc clean. Per-page `og:title`/`og:desc`
+  left inheriting the brand default (noted as a one-helper follow-up).
 
 - [ ] **BL-16 — Commit the embeddable-typed-scripting wedge: `libturbo` C API spike.** _[strategist] STRATEGIC._
   The biggest gap is positioning, not code: as a "general-purpose compiled language" Turbo loses to Go/Rust on
@@ -167,12 +168,13 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
 
 ### P2 — robustness, language depth, conversion
 
-- [ ] **BL-17 — AOT HTTP correctness (JIT divergences).** _[backend F2,F3]_ (a) `rt_parse_response` colon-fallback
-  uses `atoi` → a plain-string handler return like `"time is 12:30"` emits `HTTP/1.1 0 OK` + body truncated at the
-  first colon (JIT uses strict `parse::<u16>()` → correct 200). (b) The AOT server reads requests through a single
-  `char buf[16384]` and returns a misleading `431` for bodies >~16KB (JIT `read_exact`s up to 32MB). **AC:** C
-  colon-fallback requires a fully-numeric valid status prefix else treats the whole string as a 200 body; AOT reads
-  bodies >buffer into a heap alloc sized to `content_length`; AOT==JIT parity tests for raw-return + 50KB POST.
+- [x] **BL-17 — AOT HTTP correctness (JIT divergences).** _[backend F2,F3] Done (commit `f929328`, merged to
+  master)._ F2: `rt_parse_response` colon-fallback now uses a strict `rt_parse_status_u16` (mirrors the JIT's
+  `parse::<u16>()`) — a non-numeric prefix is sent as a 200 body instead of `HTTP/1.1 0 OK` + colon-truncated
+  body. F3: request bodies that don't fit the 16KB stack buffer are read into a `content_length`-sized heap
+  buffer (capped by `RT_HTTP_MAX_BODY`), mirroring the JIT's `read_exact` — no more spurious `431` on >16KB
+  POSTs; all existing guards preserved. +2 JIT/AOT parity programs (`http_colon_response`, `http_body_limits`);
+  fail-before-fix proven by stashing the C change.
 
 - [ ] **BL-18 — Mutex can't express atomic read-modify-write.** _[backend F4]_ Only `mutex`/`mutex_get`/`mutex_set`
   exist; `mutex_set(m, mutex_get(m)+1)` across 4 threads loses ~57% of updates. `docs/stdlib.md` + `CONCURRENCY.md`
@@ -203,11 +205,15 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   a `CopyButton` over each block copying the raw command (no `$`); one primary CTA + "Try in browser" secondary;
   relabel "Run"→"See" (or wire to playground); lead Installation with Homebrew.
 
-- [ ] **BL-23 — `stdlib.md` is missing ~18 working builtins.** _[e2e]_ Absent from the "all 104 builtins" doc:
-  `str_to_int`, `str_to_float` (the ONLY way to parse input text → numbers; return `Result`), `sort`, `slice`,
+- [x] **BL-23 — `stdlib.md` is missing ~18 working builtins.** _[e2e] Done (commit `a5d74fc`, merged to
+  master)._ Documented all 19 (`str_to_int`/`str_to_float` with their `Result` returns, `sort`, `slice`,
   `random`, `random_range`, `pad_left/right`, `list_dir`, `mkdir`, `delete_file`, `file_exists`, `path_join`,
-  `time_now`, `time_ms`, `format_time`, `exit`, `str_from_char`, `type_of`. **AC:** document them (note the
-  `Result` returns); reconcile the "104" count with the real set.
+  `time_now`, `time_ms`, `format_time`, `exit`, `str_from_char`, `type_of`) with compile-verified signatures
+  read from the sema built-in env; added Filesystem + Date/Time sections. Count reconciliation: the brittle/
+  false "all 104 built-in functions" claims in `README.md` + `GETTING-STARTED.md` were softened to "100+"
+  (drops the inaccurate exact count AND the false "all", since the docs still aren't exhaustive). _stdlib.md
+  still omits some builtins (substring, args, reverse, array_contains, any, all, int/float casts, math family)
+  — a future doc pass, not blocking._
 
 - [ ] **BL-24 — Website a11y defects.** _[frontend#4-#7]_ Nested `<main>` on every `/docs/*` route (invalid
   landmark); sub-AA contrast on `text-gray-500/600` small text; no `:focus-visible` styles, unlabeled navs, no
