@@ -50,7 +50,13 @@ let user = response.json<User>()?       // Type-safe parsing
 let city = user?.address?.city ?? "Unknown"  // Safe optional access
 ```
 
-> **Status legend:** `[Implemented]` = compiles and runs today. `[Planned]` = language design only, not yet in compiler.
+> **Status legend (describes the current release binary, not the design vision):**
+> `[Implemented]` = compiles and runs on the current release binary today.
+> `[Partial]` = the section is a mix — some forms compile, others are not yet
+> accepted; read the inline notes for the specifics. `[Planned]` = language
+> design only, not yet accepted by the compiler. If `turbolang run` rejects it,
+> it is not `[Implemented]` — these tags exist so this reference can't quietly
+> drift back into promising syntax that doesn't compile.
 
 ## Design Principles
 - Readability over writability
@@ -159,14 +165,19 @@ const MAX_SIZE: usize = 1024
 const PI: f64 = 3.14159265358979
 ```
 
-### Functions `[Implemented]`
+### Functions `[Partial]`
+
+Basic, generic, and `async` functions are implemented. Slice patterns,
+default parameters, and named arguments are not yet parsed (see inline tags).
+
 ```
-// Basic function
+// Basic function [Implemented]
 fn add(a: i32, b: i32) -> i32 {
   a + b  // last expression is return value
 }
 
-// Generic function
+// Generic function [Implemented]
+// (the [head, ..] slice pattern in the body is [Planned] — not yet parsed)
 fn first<T>(items: [T]) -> T? {
   match items {
     [head, ..] => head    // auto-wrapped into T?
@@ -174,12 +185,12 @@ fn first<T>(items: [T]) -> T? {
   }
 }
 
-// Default parameters
+// Default parameters [Planned] — not yet parsed
 fn greet(name: str, greeting: str = "Hello") -> str {
   "{greeting}, {name}!"
 }
 
-// Named arguments at call site
+// Named arguments at call site [Planned] — not yet parsed
 greet(name: "Alice", greeting: "Hi")
 
 // Closures / lambdas (arrow syntax is preferred; pipe syntax also works)
@@ -197,15 +208,22 @@ async fn fetch(url: str) -> Response ! Error {
 }
 ```
 
-### Arrow Functions `[Implemented]`
-Arrow functions work just like JavaScript — concise syntax for lambdas and callbacks.
+### Arrow Functions `[Partial]`
+Arrow functions work just like JavaScript — concise syntax for lambdas and
+callbacks. Type-annotated params and closures passed straight into a
+higher-order function (`map`/`filter`/...) work today. A closure *bound to a
+`let` with un-annotated params* needs the type to be inferable, and the
+`.parse<T>()` turbofish form is not yet parsed (see inline tags).
 
 ```
-// Short lambdas (single expression, implicit return)
-let double = (x) => x * 2
-let add = (a, b) => a + b
+// Short lambdas — inferred params [Partial]
+// Works when the param type is inferable (e.g. passed to `.map`); a bare
+// `let double = (x) => x * 2` needs a type annotation today (E0126).
+let double = (x: i32) => x * 2
+let add = (a: i32, b: i32) => a + b
 
-// With type annotations when needed
+// With type annotations when needed [Implemented]
+// (the `.parse<i32>()` turbofish call form is [Planned] — not yet parsed)
 let parse = (s: str) => s.parse<i32>()
 
 // Multi-line with braces (last expression is return value)
@@ -226,33 +244,38 @@ let arrow = items.map((x) => x * 2)  // preferred
 let short = items.map(|x| x * 2)     // also works (Rust-style shorthand)
 ```
 
-### Destructuring `[Implemented]`
-Destructuring works just like JavaScript/TypeScript — pull values out of objects and arrays with clean syntax.
+### Destructuring `[Partial]`
+Flat object destructuring works today. Object rest (`...rest`), array
+destructuring, parameter destructuring, nested destructuring, defaults,
+for-loop destructuring, and object patterns inside `match` are not yet parsed.
 
 ```
-// Object destructuring
+// Object destructuring (flat) [Implemented]
+let { name, age } = user
+
+// Object destructuring with rest [Planned] — `...rest` not yet parsed
 let { name, age, ...rest } = user
 
-// Array destructuring
+// Array destructuring [Planned] — not yet parsed
 let [first, second, ...tail] = items
 
-// In function parameters — no need to unpack inside the body
+// In function parameters — no need to unpack inside the body [Planned] — not yet parsed
 fn greet({ name, title }: User) -> str {
   "{title} {name}"
 }
 
-// Nested destructuring
+// Nested destructuring [Planned] — not yet parsed
 let { address: { city, zip } } = user
 
-// With defaults (like JS default values)
+// With defaults (like JS default values) [Planned] — not yet parsed
 let { name, role = "user" } = config
 
-// Destructuring in for loops
+// Destructuring in for loops [Planned] — not yet parsed
 for { name, score } in students {
   print("{name}: {score}")
 }
 
-// Combine with pattern matching
+// Combine with pattern matching [Planned] — object patterns in match not yet parsed
 match response {
   ok({ status: 200, body }) => process(body)
   ok({ status: 404, .. }) => print("Not found")
@@ -283,33 +306,40 @@ let upper_name = user?.name?.to_upper() ?? "UNKNOWN"
 let city = await fetch_user(id)?.address?.city ?? "Unknown"
 ```
 
-### Types `[Implemented]`
+### Types `[Partial]`
+Structs, positional algebraic data types, traits, and `impl` are implemented.
+Named variant fields, `@derive(Debug)`/`@derive(Serialize)`, type aliases, and
+tuple types are not yet supported (see inline tags).
+
 ```
-// Structs
-@derive(Debug, Eq, Serialize)
+// Structs [Implemented]
+// @derive: `Eq`, `Clone`, `Display` work today; `Debug`/`Serialize` are [Planned]
+@derive(Eq, Clone, Display)
 struct User {
   name: str
   email: str
   age: u32
 }
 
-// Struct instantiation
+// Struct instantiation [Implemented]
 let user = User { name: "Alice", email: "alice@example.com", age: 30 }
 
-// Algebraic data types (enums with data)
+// Algebraic data types (enums with data) [Partial]
+// Positional variants like `Circle(f64)` work; the named variant fields
+// shown here are [Planned] — not yet parsed.
 type Shape {
   Circle(radius: f64)
   Rectangle(width: f64, height: f64)
   Triangle(a: f64, b: f64, c: f64)
 }
 
-// Type aliases
+// Type aliases [Planned] — not yet parsed (`type X { ... }` declares an ADT, not an alias)
 type UserId = u64
 
-// Tuple types
+// Tuple types [Planned] — not yet parsed
 type Point = (f64, f64)
 
-// Traits (interfaces)
+// Traits (interfaces) [Implemented]
 trait Drawable {
   fn draw(self, canvas: &Canvas)
   fn bounds(self) -> Rect
@@ -329,9 +359,12 @@ impl Drawable for Circle {
 }
 ```
 
-### Pattern Matching `[Implemented]`
+### Pattern Matching `[Partial]`
+`match` expressions and guards are implemented. Destructuring `let` bindings
+(struct/array/tuple patterns) and function-head patterns are not yet parsed.
+
 ```
-// Match expressions (exhaustive)
+// Match expressions (exhaustive) [Implemented]
 fn area(shape: Shape) -> f64 {
   match shape {
     Circle(r) => PI * r * r
@@ -343,7 +376,7 @@ fn area(shape: Shape) -> f64 {
   }
 }
 
-// Match with guards
+// Match with guards [Implemented]
 fn classify(n: i32) -> str {
   match n {
     0 => "zero"
@@ -352,12 +385,12 @@ fn classify(n: i32) -> str {
   }
 }
 
-// Destructuring in let
+// Destructuring in let [Planned] — struct/array/tuple `let` patterns not yet parsed
 let User { name, age, .. } = user
 let [first, second, ..rest] = items
 let (x, y) = point
 
-// Pattern matching in function heads
+// Pattern matching in function heads [Planned] — not yet parsed
 fn factorial(0) -> u64 { 1 }
 fn factorial(n: u64) -> u64 { n * factorial(n - 1) }
 ```
