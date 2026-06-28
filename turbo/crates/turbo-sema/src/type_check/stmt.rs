@@ -7,7 +7,8 @@ use turbo_ast::*;
 
 use crate::scope::VarInfo;
 use crate::{
-    extract_int_literal, int_literal_fits_in_type, resolve_type_expr, types_compatible, Checker, Ty,
+    array_literal_coerces, extract_int_literal, int_literal_fits_in_type, literal_coerces_to,
+    resolve_type_expr, types_compatible, Checker, Ty,
 };
 
 impl Checker {
@@ -46,25 +47,14 @@ impl Checker {
                                 && !types_compatible(&t, &val_ty)
                                 && t != val_ty
                             {
-                                // Allow integer literal coercion: i64 literal -> narrower int types
-                                let is_int_literal_coercion = val_ty == Ty::I64
-                                    && matches!(
-                                        t,
-                                        Ty::I8
-                                            | Ty::I16
-                                            | Ty::I32
-                                            | Ty::U8
-                                            | Ty::U16
-                                            | Ty::U32
-                                            | Ty::U64
-                                    )
-                                    && extract_int_literal(&value.node)
-                                        .is_some_and(|n| int_literal_fits_in_type(n, &t));
-                                // Allow float literal coercion: f64 literal -> f32
-                                let is_float_literal_coercion = val_ty == Ty::F64
-                                    && t == Ty::F32
-                                    && matches!(&value.node, Expr::FloatLit(_));
-                                if !is_int_literal_coercion && !is_float_literal_coercion {
+                                // Allow annotated-literal coercion:
+                                //   * a scalar int/float literal into a sized
+                                //     numeric type (`let x: u32 = 30`), and
+                                //   * an array literal element-wise into a sized
+                                //     array type (`let b: [u8] = [104, 105]`).
+                                let is_literal_coercion = literal_coerces_to(&value.node, &t)
+                                    || array_literal_coerces(&value.node, &t);
+                                if !is_literal_coercion {
                                     self.error(ErrorCode::E0110,
                                         format!(
                                             "type annotation `{t}` doesn't match value type `{val_ty}`"

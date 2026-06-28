@@ -204,6 +204,9 @@ pub(crate) fn collect_free_vars(expr: &Expr, bound: &mut Vec<String>, free: &mut
         Expr::Await(inner) | Expr::Spawn(inner) | Expr::Try(inner) => {
             collect_free_vars(&inner.node, bound, free);
         }
+        Expr::Cast { expr, .. } => {
+            collect_free_vars(&expr.node, bound, free);
+        }
         Expr::MapLit(entries) => {
             for (k, v) in entries {
                 collect_free_vars(&k.node, bound, free);
@@ -372,6 +375,9 @@ fn extract_closures_from_expr<'a>(
         }
         Expr::Await(inner) | Expr::Spawn(inner) | Expr::Try(inner) => {
             extract_closures_from_expr(inner, out, counter);
+        }
+        Expr::Cast { expr, .. } => {
+            extract_closures_from_expr(expr, out, counter);
         }
         Expr::OptionalChain { object, .. } => {
             extract_closures_from_expr(object, out, counter);

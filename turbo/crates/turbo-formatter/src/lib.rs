@@ -945,6 +945,12 @@ impl<'a> Printer<'a> {
             Expr::Await(v) => format!("await {}", self.paren_atom(v)),
             Expr::Spawn(v) => format!("spawn {}", self.paren_atom(v)),
             Expr::Try(v) => format!("{}?", self.paren_postfix(v)),
+            // `as` binds looser than any binary operator, so parenthesise a
+            // binary/range/assign operand (`(a + b) as u8`); atoms, unary and
+            // postfix forms need no parens.
+            Expr::Cast { expr, ty } => {
+                format!("{} as {}", self.paren_atom(expr), self.type_str(ty))
+            }
             Expr::Break => "break".to_string(),
             Expr::Continue => "continue".to_string(),
             Expr::MapLit(entries) => {

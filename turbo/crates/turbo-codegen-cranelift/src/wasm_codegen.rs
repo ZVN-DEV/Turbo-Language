@@ -83,6 +83,7 @@ impl CEmitter {
         match expr {
             Expr::Spawn(_) => "spawn expressions",
             Expr::Await(_) => "await expressions",
+            Expr::Cast { .. } => "cast (`as`) expressions",
             Expr::Closure { .. } => "closure expressions",
             // NB: `Expr::Match` is fully handled in `emit_expr` (compiled to a
             // nested ternary), so it never reaches this fallback path.

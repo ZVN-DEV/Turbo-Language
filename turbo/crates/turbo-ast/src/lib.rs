@@ -332,6 +332,13 @@ pub enum Expr {
         op: UnaryOp,
         expr: Box<Spanned<Expr>>,
     },
+    /// Explicit type cast: `expr as Type`. Used for numeric conversions
+    /// (int↔int widths, int↔float, signed↔unsigned). The result type is the
+    /// target type written after `as`.
+    Cast {
+        expr: Box<Spanned<Expr>>,
+        ty: Spanned<TypeExpr>,
+    },
     /// Function call: callee(args...)
     Call {
         callee: Box<Spanned<Expr>>,

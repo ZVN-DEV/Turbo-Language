@@ -1083,7 +1083,7 @@ impl Parser {
     }
 
     fn parse_expr_inner(&mut self) -> Result<Spanned<Expr>, ParseError> {
-        let lhs = self.parse_unary()?;
+        let lhs = self.parse_cast()?;
 
         // Check for assignment
         if let Expr::Ident(ref name) = lhs.node {
@@ -1161,7 +1161,7 @@ impl Parser {
             // idioms like `0..len + 1` and `1..n - 1` work. Without folding
             // binary operators here the `+ 1` would be left dangling and the
             // parse would fail on the trailing operator.
-            let rhs_atom = self.parse_unary()?;
+            let rhs_atom = self.parse_cast()?;
             let rhs = self.parse_binary(rhs_atom, 0)?;
             let span = lhs.span.start..rhs.span.end;
             return Ok(Spanned::new(
@@ -1178,7 +1178,7 @@ impl Parser {
         // Null coalescing operator ?? (low precedence, left-associative)
         while matches!(self.peek(), Some(Token::QuestionQuestion)) {
             self.advance(); // consume ??
-            let rhs_start = self.parse_unary()?;
+            let rhs_start = self.parse_cast()?;
             let rhs = self.parse_binary(rhs_start, 0)?;
             let span = result.span.start..rhs.span.end;
             result = Spanned::new(
@@ -1195,7 +1195,7 @@ impl Parser {
         while matches!(self.peek(), Some(Token::Pipe)) {
             self.advance(); // consume |>
                             // Parse RHS at full binary precedence (everything binds tighter than pipe)
-            let rhs_start = self.parse_unary()?;
+            let rhs_start = self.parse_cast()?;
             let rhs = self.parse_binary(rhs_start, 0)?;
             // Desugar based on RHS shape
             let result_start = result.span.start;
@@ -1252,7 +1252,7 @@ impl Parser {
                 break;
             }
             self.advance(); // consume operator
-            let mut rhs = self.parse_unary()?;
+            let mut rhs = self.parse_cast()?;
 
             while let Some(next_op) = self.peek_binop() {
                 let next_prec = next_op.precedence();
@@ -1350,6 +1350,27 @@ impl Parser {
         }
 
         self.parse_postfix()
+    }
+
+    /// Parse postfix `expr as Type` casts. Precedence sits between unary
+    /// operators (which bind tighter: `-x as u8` == `(-x) as u8`) and binary
+    /// operators (which bind looser: `a as u8 + b` == `(a as u8) + b`), matching
+    /// Rust. Chained casts associate left: `x as i64 as u8` == `(x as i64) as u8`.
+    fn parse_cast(&mut self) -> Result<Spanned<Expr>, ParseError> {
+        let mut expr = self.parse_unary()?;
+        while matches!(self.peek(), Some(Token::As)) {
+            self.advance(); // consume `as`
+            let ty = self.parse_type()?;
+            let span = expr.span.start..ty.span.end;
+            expr = Spanned::new(
+                Expr::Cast {
+                    expr: Box::new(expr),
+                    ty,
+                },
+                span,
+            );
+        }
+        Ok(expr)
     }
 
     fn parse_postfix(&mut self) -> Result<Spanned<Expr>, ParseError> {
@@ -3013,6 +3034,62 @@ mod tests {
                 assert!(matches!(tail.node, Expr::Spawn(_)));
             } else {
                 panic!("Expected tail expr");
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_expr() {
+        let source = "fn main() { let x = 300 as u8 }";
+        let module = parse_source(source);
+        if let Item::Function(f) = &module.items[0].node {
+            if let Expr::Block { stmts, .. } = &f.body.node {
+                if let Stmt::Let { value, .. } = &stmts[0].node {
+                    match &value.node {
+                        Expr::Cast { expr, ty } => {
+                            assert!(matches!(expr.node, Expr::IntLit(300)));
+                            assert!(matches!(&ty.node, TypeExpr::Named(n) if n == "u8"));
+                        }
+                        other => panic!("Expected cast, got {other:?}"),
+                    }
+                } else {
+                    panic!("Expected let statement");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_precedence_binds_tighter_than_binary() {
+        // `a as u8 + b` must parse as `(a as u8) + b`, and `x as i64 as u8`
+        // must associate left as `(x as i64) as u8`.
+        let module = parse_source("fn main() { let r = a as u8 + b }");
+        if let Item::Function(f) = &module.items[0].node {
+            if let Expr::Block { stmts, .. } = &f.body.node {
+                if let Stmt::Let { value, .. } = &stmts[0].node {
+                    match &value.node {
+                        Expr::BinaryOp { left, op, .. } => {
+                            assert_eq!(*op, BinOp::Add);
+                            assert!(matches!(left.node, Expr::Cast { .. }));
+                        }
+                        other => panic!("Expected `(a as u8) + b`, got {other:?}"),
+                    }
+                }
+            }
+        }
+
+        let module = parse_source("fn main() { let r = x as i64 as u8 }");
+        if let Item::Function(f) = &module.items[0].node {
+            if let Expr::Block { stmts, .. } = &f.body.node {
+                if let Stmt::Let { value, .. } = &stmts[0].node {
+                    match &value.node {
+                        Expr::Cast { expr, ty } => {
+                            assert!(matches!(&ty.node, TypeExpr::Named(n) if n == "u8"));
+                            assert!(matches!(expr.node, Expr::Cast { .. }));
+                        }
+                        other => panic!("Expected left-associated cast chain, got {other:?}"),
+                    }
+                }
             }
         }
     }

@@ -277,6 +277,10 @@ fn rewrite_expr(expr: &mut Expr, value_ctx: bool, fn_value_ctx: bool) {
         Expr::Await(inner) | Expr::Spawn(inner) | Expr::Try(inner) => {
             rewrite_expr(&mut inner.node, true, fn_value_ctx);
         }
+        Expr::Cast { expr, .. } => {
+            // The cast operand is always in value position.
+            rewrite_expr(&mut expr.node, true, fn_value_ctx);
+        }
         Expr::Interpolation(parts) => {
             for p in parts.iter_mut() {
                 if let InterpolPart::Expr(e) = p {

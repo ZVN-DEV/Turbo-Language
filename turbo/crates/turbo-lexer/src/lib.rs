@@ -112,6 +112,8 @@ pub enum Token {
     Continue,
     #[token("extern")]
     Extern,
+    #[token("as")]
+    As,
 
     // --- Literals ---
     #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*", |lex| Some(lex.slice().replace('_', "")))]
@@ -455,6 +457,7 @@ impl fmt::Display for Token {
             Token::Break => write!(f, "break"),
             Token::Continue => write!(f, "continue"),
             Token::Extern => write!(f, "extern"),
+            Token::As => write!(f, "as"),
             Token::Float(v) => write!(f, "{v}"),
             Token::Int(v) => write!(f, "{v}"),
             Token::String(s) => write!(f, "\"{s}\""),
@@ -671,6 +674,7 @@ mod tests {
             ("break", Token::Break),
             ("continue", Token::Continue),
             ("extern", Token::Extern),
+            ("as", Token::As),
         ];
         for (source, expected) in keywords {
             let (tokens, errors) = tokenize(source);

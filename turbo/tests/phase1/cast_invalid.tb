@@ -1,0 +1,6 @@
+// A non-numeric `as` cast is rejected. Numeric ↔ numeric is the only allowed
+// conversion (plus a no-op identity cast); `str as i32` is nonsensical.
+fn main() {
+    let s: str = "hi"
+    print(s as i32)
+}

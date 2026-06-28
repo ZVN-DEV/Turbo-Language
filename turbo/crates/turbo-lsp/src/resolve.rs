@@ -370,6 +370,7 @@ impl Builder<'_> {
                 self.walk_expr(right);
             }
             Expr::UnaryOp { expr: inner, .. } => self.walk_expr(inner),
+            Expr::Cast { expr: inner, .. } => self.walk_expr(inner),
             Expr::Call { callee, args } => {
                 self.walk_expr(callee);
                 for a in args {

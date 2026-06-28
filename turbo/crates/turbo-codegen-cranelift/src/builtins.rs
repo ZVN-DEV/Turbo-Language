@@ -38,13 +38,25 @@ pub(crate) fn compile_print<M: Module>(
                 cx.rt_call("rt_print_bool", &[v]);
             }
             TurboTy::I8 | TurboTy::I16 => {
-                // Sign-extend to i64 for printing
-                let v = cx.builder.ins().sextend(types::I64, v);
+                // Sign-extend to i64 for printing. Guard on the IR width: a
+                // narrow-tagged value that already rides a full i64 slot (e.g.
+                // a cast result) must not be re-extended, or Cranelift panics.
+                let ty = cx.builder.func.dfg.value_type(v);
+                let v = if ty.bits() < 64 {
+                    cx.builder.ins().sextend(types::I64, v)
+                } else {
+                    v
+                };
                 cx.rt_call("rt_print_i64", &[v]);
             }
             TurboTy::U8 | TurboTy::U16 => {
-                // Zero-extend to i64 for printing
-                let v = cx.builder.ins().uextend(types::I64, v);
+                // Zero-extend to i64 for printing (see note above on the guard).
+                let ty = cx.builder.func.dfg.value_type(v);
+                let v = if ty.bits() < 64 {
+                    cx.builder.ins().uextend(types::I64, v)
+                } else {
+                    v
+                };
                 cx.rt_call("rt_print_i64", &[v]);
             }
             TurboTy::Int => {
