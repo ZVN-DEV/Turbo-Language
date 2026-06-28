@@ -1,0 +1,41 @@
+// BL-10 JIT<->AOT parity: struct copy-on-write value semantics must be
+// identical on both backends. Covers the three aliasing sites that used to
+// silently share heap storage: `let b = a`, a `mut` parameter, and a struct
+// copied out of an array element — plus multi-field independence.
+struct Point { x: i64, y: i64 }
+struct V3 { x: i64, y: i64, z: i64 }
+
+fn bump(mut p: Point) {
+    p.x = 100
+    print(p.x)
+}
+
+fn main() {
+    // 1. let-copy independence
+    let mut a = Point { x: 1, y: 2 }
+    let mut b = a
+    b.x = 99
+    print(a.x)
+    print(b.x)
+
+    // 2. mut parameter does not mutate the caller
+    let mut c = Point { x: 7, y: 8 }
+    bump(c)
+    print(c.x)
+
+    // 3. struct copied out of an array element is independent
+    let arr = [Point { x: 1, y: 2 }]
+    let mut s = arr[0]
+    s.x = 55
+    print(arr[0].x)
+    print(s.x)
+
+    // 4. multi-field: untouched fields survive the copy
+    let mut m = V3 { x: 1, y: 2, z: 3 }
+    let mut n = m
+    n.y = 99
+    print(m.x)
+    print(m.y)
+    print(m.z)
+    print(n.y)
+}

@@ -1,0 +1,11 @@
+// BL-10: passing a struct to a `mut` parameter must not mutate the caller's
+// value. The callee receives an independent copy on first field write.
+struct Point { x: i64, y: i64 }
+fn bump(mut p: Point) {
+    p.x = 100
+}
+fn main() {
+    let mut a = Point { x: 1, y: 2 }
+    bump(a)
+    print(a.x)
+}

@@ -38,9 +38,20 @@ pub(crate) fn compile_stmt<M: Module>(
             } else {
                 (types::I64, TurboTy::Unit, None)
             };
-            // COW: if the RHS is another variable with a heap type, retain it
-            // so the shared object has correct refcount for both references
-            if rhs_is_ident {
+            // COW: retain when the RHS aliases an existing heap allocation so
+            // the shared object's refcount reflects both bindings (which is
+            // what triggers copy-on-write on a later mutation):
+            //   - any heap value bound from another variable (`let b = a`)
+            //   - a struct copied out of an array element (`let s = arr[0]`):
+            //     the array keeps its reference to that struct, so the new
+            //     binding must be counted too — otherwise a later `s.x = ..`
+            //     sees refcount 1, mutates in place, and silently aliases the
+            //     array element (BL-10). Gated to structs so array indexing is
+            //     left byte-for-byte unchanged.
+            let rhs_retains = rhs_is_ident
+                || (matches!(&value.node, Expr::Index { .. })
+                    && matches!(&turbo_ty, TurboTy::Struct(_)));
+            if rhs_retains {
                 if let Some(v) = val {
                     retain_if_needed(cx, v, &turbo_ty);
                 }

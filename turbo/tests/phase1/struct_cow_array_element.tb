@@ -1,0 +1,10 @@
+// BL-10: a struct copied out of an array element must be independent of the
+// array. Mutating `s.x` must not change `arr[0].x`.
+struct Point { x: i64, y: i64 }
+fn main() {
+    let arr = [Point { x: 1, y: 2 }]
+    let mut s = arr[0]
+    s.x = 99
+    print(arr[0].x)
+    print(s.x)
+}

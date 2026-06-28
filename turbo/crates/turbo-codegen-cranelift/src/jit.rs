@@ -103,6 +103,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_array_push", rt_array_push as *const u8);
     jit_builder.symbol("rt_str_len", rt_str_len as *const u8);
     jit_builder.symbol("rt_struct_alloc", rt_struct_alloc as *const u8);
+    jit_builder.symbol("rt_struct_cow", rt_struct_cow as *const u8);
     jit_builder.symbol("rt_i64_to_str", rt_i64_to_str as *const u8);
     jit_builder.symbol("rt_f64_to_str", rt_f64_to_str as *const u8);
     jit_builder.symbol("rt_bool_to_str", rt_bool_to_str as *const u8);
@@ -313,6 +314,7 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_array_push", rt_array_push as *const u8);
     jit_builder.symbol("rt_str_len", rt_str_len as *const u8);
     jit_builder.symbol("rt_struct_alloc", rt_struct_alloc as *const u8);
+    jit_builder.symbol("rt_struct_cow", rt_struct_cow as *const u8);
     jit_builder.symbol("rt_i64_to_str", rt_i64_to_str as *const u8);
     jit_builder.symbol("rt_f64_to_str", rt_f64_to_str as *const u8);
     jit_builder.symbol("rt_bool_to_str", rt_bool_to_str as *const u8);

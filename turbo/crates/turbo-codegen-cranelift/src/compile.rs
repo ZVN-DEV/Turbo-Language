@@ -151,6 +151,13 @@ pub(crate) fn compile_module<M: Module>(
     declare_rt_fn(
         module,
         &mut rt_fns,
+        "rt_struct_cow",
+        &[ptr_type, types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
         "rt_i64_to_str",
         &[types::I64],
         Some(ptr_type),

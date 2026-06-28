@@ -464,6 +464,60 @@ pub(crate) extern "C" fn rt_struct_alloc(num_fields: i64) -> *mut u8 {
     unsafe { ptr.add(16) } // return pointer past cap+refcount header
 }
 
+/// Copy-on-write guard for struct field assignment.
+///
+/// Structs carry the same `[cap][refcount]` allocation header as arrays
+/// (see `rt_struct_alloc`), so a `let b = a` / `mut`-param / array-element
+/// copy can leave two live bindings pointing at one allocation. Mutating a
+/// field through either would alias the other. This mirrors the copy-on-write
+/// dance in `rt_array_set`: if the refcount is > 1, allocate a private copy,
+/// memcpy the `num_fields` data slots, drop our reference to the shared
+/// original, and return the copy. When the refcount is 1 (sole owner) the
+/// original pointer is returned unchanged and the field store proceeds in
+/// place. `num_fields` matches the count passed to `rt_struct_alloc`.
+pub(crate) extern "C" fn rt_struct_cow(s: *mut u8, num_fields: i64) -> *mut u8 {
+    if s.is_null() {
+        return s;
+    }
+    let rc_ptr = unsafe { s.sub(8) as *mut std::sync::atomic::AtomicI64 };
+    let rc = unsafe { (*rc_ptr).load(std::sync::atomic::Ordering::Acquire) };
+    if rc <= 1 {
+        return s;
+    }
+    if num_fields < 0 {
+        eprintln!("runtime error: negative struct field count {}", num_fields);
+        std::process::exit(1);
+    }
+    let data_size = match (num_fields as usize).checked_mul(8) {
+        Some(s) => s.max(8),
+        None => {
+            eprintln!("runtime error: struct COW copy overflow");
+            std::process::exit(1);
+        }
+    };
+    let total_size = data_size + 16; // +16 for cap + refcount header
+    let layout = std::alloc::Layout::from_size_align(total_size, 8).unwrap();
+    let new_alloc = unsafe { std::alloc::alloc_zeroed(layout) };
+    if new_alloc.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    register_alloc(new_alloc, layout);
+    unsafe {
+        *(new_alloc as *mut i64) = 0; // cap = 0 (not an array)
+        *(new_alloc.add(8) as *mut i64) = 1; // refcount = 1
+    }
+    let new_data = unsafe { new_alloc.add(16) };
+    unsafe {
+        std::ptr::copy_nonoverlapping(s, new_data, data_size);
+    }
+    // Drop our reference to the shared original now that this binding owns a copy.
+    unsafe {
+        (*rc_ptr).fetch_sub(1, std::sync::atomic::Ordering::Release);
+    }
+    new_data
+}
+
 pub(crate) extern "C" fn rt_array_oob_exit(index: i64, len: i64) {
     eprintln!(
         "runtime error: array index {} out of bounds (length {})",

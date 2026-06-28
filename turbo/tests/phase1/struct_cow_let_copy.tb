@@ -1,0 +1,10 @@
+// BL-10: `let b = a` must copy the struct, not alias its heap storage.
+// Mutating `b.x` must leave `a.x` untouched (copy-on-write value semantics).
+struct Point { x: i64, y: i64 }
+fn main() {
+    let mut a = Point { x: 1, y: 2 }
+    let mut b = a
+    b.x = 99
+    print(a.x)
+    print(b.x)
+}
