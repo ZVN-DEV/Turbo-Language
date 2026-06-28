@@ -59,6 +59,12 @@ enum Commands {
         /// Watch for file changes and auto-reload
         #[arg(long, short)]
         watch: bool,
+
+        /// Arguments forwarded to the program's `args()` builtin. Everything
+        /// after the source file (use `--` to separate hyphen-leading args),
+        /// e.g. `turbolang run app.tb -- --name alice`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Compile a Turbo source file to a native binary
     Build {
@@ -160,8 +166,13 @@ fn main() {
             file,
             verbose,
             watch,
+            args,
         } => {
             let path = resolve_entry_file(file);
+            // Install the program's CLI args so its `args()` builtin returns
+            // them. Set before run (and watch re-runs) so every JIT execution
+            // sees them. Matches the AOT convention (argv[1..]).
+            turbo_codegen_cranelift::set_program_args(args);
             if watch {
                 watch::run_watch(&path, verbose);
             } else {

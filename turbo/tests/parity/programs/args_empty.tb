@@ -1,0 +1,11 @@
+// Parity: args() with no CLI arguments returns an empty [str].
+//
+// The parity harness runs both the JIT (`turbolang run`) and the built
+// binary with no extra arguments, so both backends must agree that the
+// program saw zero args. (End-to-end arg passing is covered by
+// tests/args/run_args_tests.sh, which the parity harness can't express.)
+fn main() {
+    let a = args()
+    print(len(a))
+    print("done")
+}

@@ -185,6 +185,20 @@ for f in tests/adversarial/*.tb; do
     [ -f "$f" ] && run_test "$f"
 done
 
+# CLI argument passing can't go through run_test() because that harness always
+# invokes `turbolang run <file>` with no extra args. Delegate to the dedicated
+# args runner, which exercises `run -- a b c`, trailing args, and a built
+# binary, asserting JIT ≡ AOT.
+echo ""
+echo "=== CLI Args Tests ==="
+if tests/args/run_args_tests.sh; then
+    PASS=$((PASS + 1))
+else
+    printf "  FAIL  cli_args\n"
+    FAIL=$((FAIL + 1))
+    ERRORS="$ERRORS\n  - cli_args (tests/args/run_args_tests.sh)"
+fi
+
 echo ""
 echo "================================"
 printf "Results: %d passed, %d failed, %d skipped\n" "$PASS" "$FAIL" "$SKIP"

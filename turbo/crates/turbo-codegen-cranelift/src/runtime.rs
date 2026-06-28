@@ -1181,9 +1181,65 @@ pub(crate) extern "C" fn rt_exit(code: i64) {
     std::process::exit(code as i32);
 }
 
+// ── CLI argument storage (JIT) ───────────────────────────────────────
+//
+// The CLI (`turbolang run <file> -- <args>`) installs the program's own
+// arguments here via `set_program_args` before calling `jit_run`. `rt_args`
+// then materializes them as a Turbo `[str]`. This is the JIT twin of the AOT
+// path, where `main(argc, argv)` in turbo_rt.c calls `rt_set_args`; both
+// expose the same argv convention — the program's own arguments, excluding
+// the binary path (AOT) / the `.tb` source file (JIT).
+
+static PROGRAM_ARGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Install the program's CLI arguments for `args()` to return.
+///
+/// Called by the CLI before `jit_run`. The list is exactly the program's own
+/// arguments (the trailing args after the source file / `--`), matching what
+/// the AOT runtime exposes from `argv[1..]`. With no args the list is empty
+/// and `args()` returns an empty `[str]`.
+pub fn set_program_args(args: Vec<String>) {
+    if let Ok(mut slot) = PROGRAM_ARGS.lock() {
+        *slot = args;
+    }
+}
+
 pub(crate) extern "C" fn rt_args() -> *mut u8 {
-    // Return an empty array for now
-    rt_array_alloc(0)
+    // Build a Turbo `[str]` from the CLI arguments installed by the CLI via
+    // `set_program_args`. Mirrors `rt_str_split`'s array-of-string layout
+    // ([len][ptr0][ptr1]...), with each string interned in the thread-local
+    // arena so it's freed by `rt_arena_reset` after main returns.
+    let args = PROGRAM_ARGS.lock().map(|g| g.clone()).unwrap_or_default();
+    let len = args.len() as i64;
+    let layout = match checked_array_layout(len as usize) {
+        Some(l) => l,
+        None => {
+            eprintln!("runtime error: too many CLI arguments ({})", len);
+            std::process::exit(1);
+        }
+    };
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    register_alloc(ptr, layout);
+    unsafe {
+        *(ptr as *mut i64) = len; // cap
+        *(ptr.add(8) as *mut i64) = 1; // refcount
+    }
+    let data_ptr = unsafe { ptr.add(16) };
+    unsafe {
+        *(data_ptr as *mut i64) = len; // length
+    }
+    for (i, arg) in args.iter().enumerate() {
+        let cs = cstring_or_empty(arg.as_str());
+        let p = arena_str(cs) as i64;
+        unsafe {
+            *((data_ptr as *mut i64).add(1 + i)) = p;
+        }
+    }
+    data_ptr
 }
 
 // ── String parsing builtins ────────────────────────────────────────
