@@ -1,0 +1,29 @@
+// BL-27 Part A JIT<->AOT parity: array copy-on-write value semantics must be
+// identical on both backends. Covers the three aliasing sites — `let b = a`
+// (already correct pre-fix), a `mut` parameter, and an inner array copied out
+// of a nested-array element. Mirrors struct_value_semantics.tb for arrays.
+fn bump(mut a: [i64]) {
+    a[0] = 100
+    print(a[0])
+}
+
+fn main() {
+    // 1. let-copy independence
+    let mut a = [1, 2, 3]
+    let mut b = a
+    b[0] = 99
+    print(a[0])
+    print(b[0])
+
+    // 2. mut parameter does not mutate the caller
+    let arr = [7, 8, 9]
+    bump(arr)
+    print(arr[0])
+
+    // 3. inner array copied out of a nested-array element is independent
+    let grid = [[1, 2], [3, 4]]
+    let mut row = grid[0]
+    row[0] = 55
+    print(grid[0][0])
+    print(row[0])
+}

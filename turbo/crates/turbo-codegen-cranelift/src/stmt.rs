@@ -42,15 +42,17 @@ pub(crate) fn compile_stmt<M: Module>(
             // the shared object's refcount reflects both bindings (which is
             // what triggers copy-on-write on a later mutation):
             //   - any heap value bound from another variable (`let b = a`)
-            //   - a struct copied out of an array element (`let s = arr[0]`):
-            //     the array keeps its reference to that struct, so the new
-            //     binding must be counted too — otherwise a later `s.x = ..`
+            //   - a struct or inner array copied out of an array element
+            //     (`let s = arr[0]` / `let row = grid[0]`): the outer array
+            //     keeps its reference to that element, so the new binding must
+            //     be counted too — otherwise a later `s.x = ..` / `row[0] = ..`
             //     sees refcount 1, mutates in place, and silently aliases the
-            //     array element (BL-10). Gated to structs so array indexing is
-            //     left byte-for-byte unchanged.
+            //     array element (structs: BL-10; nested arrays: BL-27 Part A).
+            //     Gated to struct/array element types so scalar indexing (e.g.
+            //     `let x = ints[0]`) is left byte-for-byte unchanged.
             let rhs_retains = rhs_is_ident
                 || (matches!(&value.node, Expr::Index { .. })
-                    && matches!(&turbo_ty, TurboTy::Struct(_)));
+                    && matches!(&turbo_ty, TurboTy::Struct(_) | TurboTy::Array(_)));
             if rhs_retains {
                 if let Some(v) = val {
                     retain_if_needed(cx, v, &turbo_ty);

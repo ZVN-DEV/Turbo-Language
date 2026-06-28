@@ -1,0 +1,11 @@
+// BL-27 Part A: an inner array copied out of a nested-array element must be
+// independent of the outer array. `let row = grid[0]; row[0] = 99` must not
+// change `grid[0][0]` (copy-on-write value semantics), mirroring struct COW
+// for `let s = arr[0]` (BL-10).
+fn main() {
+    let grid = [[1, 2], [3, 4]]
+    let mut row = grid[0]
+    row[0] = 99
+    print(grid[0][0])
+    print(row[0])
+}

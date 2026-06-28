@@ -2159,15 +2159,19 @@ fn compile_call<M: Module>(
                     } else {
                         val
                     };
-                    // COW: passing a named struct to a function aliases the
-                    // caller's binding — the callee receives the same pointer.
-                    // Retain it so the shared allocation's refcount reflects
-                    // both references; a `mut`-param field write inside the
-                    // callee then sees refcount > 1 and copies instead of
-                    // mutating the caller's struct in place (BL-10). Fresh
-                    // temporaries (non-idents) are not aliased, so they are
-                    // left alone to avoid needless copies.
-                    if matches!(&arg.node, Expr::Ident(_)) && matches!(&tty, TurboTy::Struct(_)) {
+                    // COW: passing a named struct or array to a function
+                    // aliases the caller's binding — the callee receives the
+                    // same pointer. Retain it so the shared allocation's
+                    // refcount reflects both references; a `mut`-param write
+                    // inside the callee then sees refcount > 1 and copies
+                    // instead of mutating the caller's value in place
+                    // (`p.x = ..` via rt_struct_cow for structs, BL-10;
+                    // `a[i] = ..` via rt_array_set for arrays, BL-27 Part A).
+                    // Fresh temporaries (non-idents) are not aliased, so they
+                    // are left alone to avoid needless copies.
+                    if matches!(&arg.node, Expr::Ident(_))
+                        && matches!(&tty, TurboTy::Struct(_) | TurboTy::Array(_))
+                    {
                         retain_if_needed(cx, val, &tty);
                     }
                     arg_values.push(val);
