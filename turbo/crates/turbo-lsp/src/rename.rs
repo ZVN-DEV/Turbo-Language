@@ -1,21 +1,21 @@
 //! `textDocument/rename` and `textDocument/prepareRename` handlers.
 //!
-//! This implements **intra-file** rename for top-level functions, structs,
-//! enums, traits, and *local* identifiers (variables, fields, params)
-//! that share a name with no other binding in the same file.
+//! This implements **intra-file**, scope-aware rename for top-level functions,
+//! structs, enums, traits, consts, and *local* identifiers (parameters, `let`
+//! bindings, closure params, `for` binders, and match/`if let` pattern
+//! bindings).
 //!
-//! Cross-file renames are P3 work. The strategy here is purposely simple:
-//! 1. Lex the buffer.
-//! 2. Find the identifier under the cursor.
-//! 3. Replace every other occurrence of that identifier in the buffer
-//!    with the new name.
+//! The occurrence set comes from [`crate::symbol_occurrences`], which walks the
+//! parsed AST with a lexical scope stack:
+//! * renaming a local edits only that binding's occurrences, so a shadowed
+//!   inner `x` is untouched when renaming an outer `x` (and vice-versa);
+//! * renaming a top-level item edits every textual occurrence of the name
+//!   *except* the spans that bind to a same-named local, so a global rename
+//!   never sweeps up a shadowing local.
 //!
-//! Rename is currently token-text based, so in files with shadowed names
-//! (e.g. a local `x` shadowing a top-level `fn x`) it may over-rename — every
-//! token spelled `x` will be rewritten regardless of its binding. Scope-aware
-//! rename driven by sema binding spans is a P3 follow-up. For the common
-//! refactor case ("rename this top-level function") this v1 strategy is
-//! correct and matches what most LSP clients ship as a first-pass rename.
+//! When the buffer does not parse, it falls back to a pure textual match (the
+//! original first-pass behaviour) so broken files still get a best-effort edit.
+//! Cross-file renames remain P3 work.
 
 use std::collections::HashMap;
 
@@ -24,7 +24,7 @@ use lsp_types::{
     TextEdit, Uri, WorkspaceEdit,
 };
 
-use crate::{identifier_at_position, span_to_range};
+use crate::{identifier_at_position, span_to_range, symbol_occurrences};
 
 /// Compute the prepare-rename response: returns the range of the identifier
 /// under the cursor (so the editor can validate the name and pre-fill the
@@ -54,16 +54,26 @@ pub(crate) fn compute_rename(source: &str, params: &RenameParams) -> Option<Work
         return None;
     }
 
-    let target = identifier_at_position(source, pos)?;
-    if target == new_name {
+    let (target_span, target_name) = crate::ident_token_at(source, pos)?;
+    if target_name == new_name {
         return None;
     }
 
-    let uri = params.text_document_position.text_document.uri.clone();
-    let edits = collect_rename_edits(source, &target, new_name);
-    if edits.is_empty() {
+    let spans = symbol_occurrences(source, &target_span, &target_name);
+    if spans.occurrences.is_empty() {
         return None;
     }
+
+    let edits: Vec<TextEdit> = spans
+        .occurrences
+        .iter()
+        .map(|span| TextEdit {
+            range: span_to_range(source, span),
+            new_text: new_name.to_string(),
+        })
+        .collect();
+
+    let uri = params.text_document_position.text_document.uri.clone();
 
     #[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
     let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
@@ -74,26 +84,6 @@ pub(crate) fn compute_rename(source: &str, params: &RenameParams) -> Option<Work
         document_changes: None,
         change_annotations: None,
     })
-}
-
-fn collect_rename_edits(source: &str, target: &str, new_name: &str) -> Vec<TextEdit> {
-    let (tokens, lex_errors) = turbo_lexer::tokenize(source);
-    if !lex_errors.is_empty() {
-        return Vec::new();
-    }
-
-    let mut edits = Vec::new();
-    for tok in &tokens {
-        if let turbo_lexer::Token::Ident(name) = &tok.value {
-            if name == target {
-                edits.push(TextEdit {
-                    range: span_to_range(source, &tok.span),
-                    new_text: new_name.to_string(),
-                });
-            }
-        }
-    }
-    edits
 }
 
 fn identifier_range_at(source: &str, pos: Position, target: &str) -> Option<Range> {
@@ -167,6 +157,121 @@ mod tests {
         for e in edits {
             assert_eq!(e.new_text, "hello");
         }
+    }
+
+    /// Sorted byte-offsets of every edit's start position.
+    fn edit_offsets(src: &str, edit: &WorkspaceEdit) -> Vec<usize> {
+        #[allow(clippy::mutable_key_type)]
+        let changes = edit.changes.as_ref().unwrap();
+        let edits = changes.values().next().unwrap();
+        let mut offsets: Vec<usize> = edits
+            .iter()
+            .map(|e| crate::position_to_offset(src, e.range.start).unwrap())
+            .collect();
+        offsets.sort_unstable();
+        offsets
+    }
+
+    #[test]
+    fn rename_inner_shadowed_local_does_not_touch_outer() {
+        // Two `let x` in the same block; the second shadows the first.
+        let src = "fn main() {\n    let x = 1\n    print(x)\n    let x = 2\n    print(x)\n}";
+        // Cursor on the SECOND `let x` (idx 2 of four `x`s).
+        let x2 = src.match_indices('x').nth(2).unwrap().0;
+        let pos = crate::offset_to_position(src, x2);
+        let params = RenameParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: "file:///t.tb".parse::<Uri>().unwrap(),
+                },
+                position: pos,
+            },
+            new_name: "z".to_string(),
+            work_done_progress_params: Default::default(),
+        };
+        let edit = compute_rename(src, &params).expect("rename produces edits");
+        let got = edit_offsets(src, &edit);
+
+        let decl2 = src.match_indices('x').nth(2).unwrap().0;
+        let use2 = src.match_indices('x').nth(3).unwrap().0;
+        // EXACT edit set: only the inner binding + its single use.
+        assert_eq!(got, vec![decl2, use2]);
+    }
+
+    #[test]
+    fn rename_outer_shadowed_local_does_not_touch_inner() {
+        let src = "fn main() {\n    let x = 1\n    print(x)\n    let x = 2\n    print(x)\n}";
+        // Cursor on the FIRST `let x` (idx 0).
+        let x0 = src.match_indices('x').next().unwrap().0;
+        let pos = crate::offset_to_position(src, x0);
+        let params = RenameParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: "file:///t.tb".parse::<Uri>().unwrap(),
+                },
+                position: pos,
+            },
+            new_name: "z".to_string(),
+            work_done_progress_params: Default::default(),
+        };
+        let edit = compute_rename(src, &params).expect("rename produces edits");
+        let got = edit_offsets(src, &edit);
+
+        let decl1 = src.match_indices('x').next().unwrap().0;
+        let use1 = src.match_indices('x').nth(1).unwrap().0;
+        assert_eq!(got, vec![decl1, use1]);
+    }
+
+    #[test]
+    fn rename_top_level_fn_skips_a_shadowing_local() {
+        // Global `fn value`, called from `other` (unshadowed), plus a local
+        // `value` in `main` that shadows it. Renaming the global rewrites the
+        // global decl + the unshadowed call only; the local stays put.
+        let src = "fn value() {}\nfn other() {\n    value()\n}\nfn main() {\n    let value = 1\n    print(value)\n}";
+        // Cursor on the global declaration `fn value`.
+        let decl = src.match_indices("value").next().unwrap().0;
+        let pos = crate::offset_to_position(src, decl);
+        let params = RenameParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: "file:///t.tb".parse::<Uri>().unwrap(),
+                },
+                position: pos,
+            },
+            new_name: "compute".to_string(),
+            work_done_progress_params: Default::default(),
+        };
+        let edit = compute_rename(src, &params).expect("rename produces edits");
+        let got = edit_offsets(src, &edit);
+
+        let call = src.match_indices("value").nth(1).unwrap().0; // value() in other
+                                                                 // Only the global decl + its call; the local decl/use are excluded.
+        assert_eq!(got, vec![decl, call]);
+    }
+
+    #[test]
+    fn rename_local_param_edits_only_that_function() {
+        // Same name `n` declared independently in two functions.
+        let src = "fn a(n: int) {\n    print(n)\n}\nfn b(n: int) {\n    print(n)\n}";
+        // Cursor on `a`'s parameter `n` (first `(n` occurrence).
+        let a_param = src.match_indices("(n").next().unwrap().0 + 1;
+        let pos = crate::offset_to_position(src, a_param);
+        let params = RenameParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: "file:///t.tb".parse::<Uri>().unwrap(),
+                },
+                position: pos,
+            },
+            new_name: "m".to_string(),
+            work_done_progress_params: Default::default(),
+        };
+        let edit = compute_rename(src, &params).expect("rename produces edits");
+        let got = edit_offsets(src, &edit);
+
+        // a's param decl + a's single use; b's `n`s are untouched.
+        let a_use = src.match_indices("(n)").next().unwrap().0 + 1;
+        assert_eq!(got, vec![a_param, a_use]);
     }
 
     #[test]

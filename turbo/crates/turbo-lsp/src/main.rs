@@ -37,6 +37,7 @@ const INTERNAL_ERROR: i32 = ErrorCode::InternalError as i32;
 
 mod code_actions;
 mod rename;
+mod resolve;
 mod semantic_tokens;
 
 fn main() {
@@ -48,6 +49,7 @@ fn main() {
         definition_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions::default()),
         references_provider: Some(OneOf::Left(true)),
+        document_highlight_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
         rename_provider: rename::rename_capability(),
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
@@ -174,6 +176,7 @@ fn dispatch_request(req: Request, documents: &HashMap<Uri, String>) -> Response 
         "textDocument/definition" => handle_definition(req.params, documents),
         "textDocument/completion" => handle_completion(req.params, documents),
         "textDocument/references" => handle_references(req.params, documents),
+        "textDocument/documentHighlight" => handle_document_highlight(req.params, documents),
         "textDocument/documentSymbol" => handle_document_symbol(req.params, documents),
         "textDocument/prepareRename" => handle_prepare_rename(req.params, documents),
         "textDocument/rename" => handle_rename(req.params, documents),
@@ -301,6 +304,21 @@ fn handle_references(
         .get(uri)
         .map(|text| compute_references(text, pos, uri, params.context.include_declaration));
     serde_json::to_value(refs).map_err(serialize_error)
+}
+
+#[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
+fn handle_document_highlight(
+    params: serde_json::Value,
+    documents: &HashMap<Uri, String>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let params: DocumentHighlightParams = serde_json::from_value(params)
+        .map_err(|e| invalid_params("textDocument/documentHighlight", e))?;
+    let uri = &params.text_document_position_params.text_document.uri;
+    let pos = params.text_document_position_params.position;
+    let highlights = documents
+        .get(uri)
+        .map(|text| compute_document_highlights(text, pos));
+    serde_json::to_value(highlights).map_err(serialize_error)
 }
 
 #[allow(clippy::mutable_key_type)] // Uri uses interior mutability for caching
@@ -518,9 +536,13 @@ fn compute_hover(source: &str, pos: Position) -> Option<Hover> {
         if tok.span.contains(&offset) {
             let content = match &tok.value {
                 turbo_lexer::Token::Ident(name) => {
-                    // Try to find more info from the AST
-                    let extra = identifier_info(source, name);
-                    if let Some(info) = extra {
+                    // Prefer scope-aware resolution: if the cursor is on a
+                    // local/param/pattern binding, show that binding (and its
+                    // declared type when the source spelled one out). Otherwise
+                    // fall back to top-level item info, then a bare identifier.
+                    if let Some(local) = local_hover(source, &tok.span) {
+                        local
+                    } else if let Some(info) = identifier_info(source, name) {
                         info
                     } else {
                         format!("identifier: `{name}`")
@@ -666,6 +688,30 @@ fn identifier_info(source: &str, name: &str) -> Option<String> {
     None
 }
 
+/// Hover text for a local binding (param, `let`, closure param, `for` binder,
+/// or match/`if let` binding) when the cursor span resolves to one. Shows the
+/// binding kind, name, and declared type if the source annotated it. Returns
+/// `None` when the span is not a local occurrence so the caller falls back to
+/// top-level item info.
+fn local_hover(source: &str, span: &std::ops::Range<usize>) -> Option<String> {
+    let (tokens, lex_errors) = turbo_lexer::tokenize(source);
+    if !lex_errors.is_empty() {
+        return None;
+    }
+    let (module, parse_errors) = turbo_parser::parse(tokens.clone());
+    if !parse_errors.is_empty() {
+        return None;
+    }
+    let resolution = resolve::resolve_module(&module, &tokens);
+    let decl = resolution.local_at(span)?;
+    let ty = decl
+        .ty
+        .as_ref()
+        .map(|t| format!(": {t}"))
+        .unwrap_or_default();
+    Some(format!("{}: `{}`{ty}", decl.kind.label(), decl.name))
+}
+
 /// Format a TypeExpr into a human-readable string.
 fn format_type(ty: &turbo_ast::TypeExpr) -> String {
     match ty {
@@ -704,20 +750,30 @@ fn compute_definition(source: &str, pos: Position, uri: &Uri) -> Option<Location
         return None;
     }
 
-    // Find which identifier is at the cursor
-    let target_name = tokens.iter().find_map(|tok| {
+    // Find which identifier is at the cursor (both name and exact span).
+    let (target_span, target_name) = tokens.iter().find_map(|tok| {
         if tok.span.contains(&offset) {
             if let turbo_lexer::Token::Ident(name) = &tok.value {
-                return Some(name.clone());
+                return Some((tok.span.clone(), name.clone()));
             }
         }
         None
     })?;
 
     // Parse to find definitions
-    let (module, parse_errors) = turbo_parser::parse(tokens);
+    let (module, parse_errors) = turbo_parser::parse(tokens.clone());
     if !parse_errors.is_empty() {
         return None;
+    }
+
+    // Scope-aware resolution first: a local/param/pattern binding jumps to its
+    // exact declaration span rather than the first textual match.
+    let resolution = resolve::resolve_module(&module, &tokens);
+    if let Some(decl) = resolution.local_at(&target_span) {
+        return Some(Location {
+            uri: uri.clone(),
+            range: span_to_range(source, &decl.decl_span),
+        });
     }
 
     for item in &module.items {
@@ -775,32 +831,147 @@ fn compute_references(
     uri: &Uri,
     include_declaration: bool,
 ) -> Vec<Location> {
-    let Some(target_name) = identifier_at_position(source, pos) else {
+    let Some((target_span, target_name)) = ident_token_at(source, pos) else {
         return Vec::new();
     };
 
-    let declaration_span = find_top_level_declaration_span(source, &target_name);
+    let symbol = symbol_occurrences(source, &target_span, &target_name);
+    symbol
+        .occurrences
+        .into_iter()
+        .filter(|span| include_declaration || Some(span) != symbol.decl.as_ref())
+        .map(|span| Location {
+            uri: uri.clone(),
+            range: span_to_range(source, &span),
+        })
+        .collect()
+}
+
+/// `textDocument/documentHighlight` — like references, but scoped to one file
+/// and tagged as read/write/text. We reuse the same binding-precise occurrence
+/// set so a highlighted `x` never bleeds into a shadowed/unrelated `x`.
+fn compute_document_highlights(source: &str, pos: Position) -> Vec<DocumentHighlight> {
+    let Some((target_span, target_name)) = ident_token_at(source, pos) else {
+        return Vec::new();
+    };
+
+    let symbol = symbol_occurrences(source, &target_span, &target_name);
+    symbol
+        .occurrences
+        .into_iter()
+        .map(|span| {
+            let kind = if Some(&span) == symbol.decl.as_ref() {
+                DocumentHighlightKind::WRITE
+            } else {
+                DocumentHighlightKind::READ
+            };
+            DocumentHighlight {
+                range: span_to_range(source, &span),
+                kind: Some(kind),
+            }
+        })
+        .collect()
+}
+
+/// The identifier token at a cursor position: its exact span plus spelling.
+/// Returns `None` when the cursor is not on an identifier (or the buffer does
+/// not lex cleanly).
+pub(crate) fn ident_token_at(
+    source: &str,
+    pos: Position,
+) -> Option<(std::ops::Range<usize>, String)> {
+    let offset = position_to_offset(source, pos)?;
     let (tokens, lex_errors) = turbo_lexer::tokenize(source);
     if !lex_errors.is_empty() {
-        return Vec::new();
+        return None;
     }
-
-    let mut refs = Vec::new();
-    for tok in &tokens {
-        if let turbo_lexer::Token::Ident(name) = &tok.value {
-            if name == &target_name {
-                let is_decl = declaration_span.as_ref() == Some(&tok.span);
-                if is_decl && !include_declaration {
-                    continue;
-                }
-                refs.push(Location {
-                    uri: uri.clone(),
-                    range: span_to_range(source, &tok.span),
-                });
+    tokens.iter().find_map(|tok| {
+        if tok.span.contains(&offset) {
+            if let turbo_lexer::Token::Ident(name) = &tok.value {
+                return Some((tok.span.clone(), name.clone()));
             }
         }
+        None
+    })
+}
+
+/// The set of identifier spans that denote the **same symbol** as the token at
+/// `target_span` (spelled `target_name`), plus that symbol's declaration span.
+///
+/// Resolution strategy (correct over complete):
+/// * If the cursor identifier resolves to a **local** binding (param, `let`,
+///   closure param, `for` binder, match/`if let` binding), return exactly that
+///   binding's occurrences — scope- and shadowing-correct.
+/// * Otherwise (top-level item, builtin, or unresolved) return every textual
+///   occurrence of the name **except** those that bind to a local of the same
+///   name. Subtracting the local-bound spans is what stops a textual rename of
+///   a global from rewriting a shadowed inner binding.
+/// * If the buffer does not parse, fall back to a pure textual match (the
+///   original behaviour) so partially-broken files still get a best-effort
+///   answer.
+pub(crate) struct SymbolSpans {
+    pub(crate) occurrences: Vec<std::ops::Range<usize>>,
+    pub(crate) decl: Option<std::ops::Range<usize>>,
+}
+
+pub(crate) fn symbol_occurrences(
+    source: &str,
+    target_span: &std::ops::Range<usize>,
+    target_name: &str,
+) -> SymbolSpans {
+    let (tokens, lex_errors) = turbo_lexer::tokenize(source);
+    if !lex_errors.is_empty() {
+        return SymbolSpans {
+            occurrences: Vec::new(),
+            decl: None,
+        };
     }
-    refs
+
+    let (module, parse_errors) = turbo_parser::parse(tokens.clone());
+    if parse_errors.is_empty() {
+        let resolution = resolve::resolve_module(&module, &tokens);
+
+        // Local binding: precise, scope-aware occurrence set.
+        if let Some(decl) = resolution.local_at(target_span) {
+            return SymbolSpans {
+                occurrences: resolution.occurrences_at(target_span),
+                decl: Some(decl.decl_span.clone()),
+            };
+        }
+
+        // Top-level / global / builtin: textual match minus any span that
+        // binds to a local of the same name (so shadowed locals are spared).
+        let occurrences: Vec<std::ops::Range<usize>> = tokens
+            .iter()
+            .filter_map(|tok| {
+                if let turbo_lexer::Token::Ident(name) = &tok.value {
+                    if name == target_name && !resolution.is_local_occurrence(&tok.span) {
+                        return Some(tok.span.clone());
+                    }
+                }
+                None
+            })
+            .collect();
+        let decl = top_level_decl_span(&module, &tokens, target_name);
+        return SymbolSpans { occurrences, decl };
+    }
+
+    // Unparseable buffer — best-effort textual fall-back.
+    let occurrences: Vec<std::ops::Range<usize>> = tokens
+        .iter()
+        .filter_map(|tok| {
+            if let turbo_lexer::Token::Ident(name) = &tok.value {
+                if name == target_name {
+                    return Some(tok.span.clone());
+                }
+            }
+            None
+        })
+        .collect();
+    SymbolSpans {
+        occurrences,
+        decl: None,
+    }
 }
 
 fn compute_completion_items(source: &str, pos: Position) -> Vec<CompletionItem> {
@@ -1017,26 +1188,25 @@ fn compute_document_symbols(source: &str) -> Vec<DocumentSymbol> {
     out
 }
 
-fn find_top_level_declaration_span(source: &str, name: &str) -> Option<std::ops::Range<usize>> {
-    let (tokens, lex_errors) = turbo_lexer::tokenize(source);
-    if !lex_errors.is_empty() {
-        return None;
-    }
-    let (module, parse_errors) = turbo_parser::parse(tokens.clone());
-    if !parse_errors.is_empty() {
-        return None;
-    }
-
+/// Span of a top-level item's *name* token (function/struct/enum/trait/const),
+/// recovered from an already-parsed module + token stream. Used so a rename of
+/// a global can omit/keep the declaration site per `includeDeclaration`.
+fn top_level_decl_span(
+    module: &turbo_ast::Module,
+    tokens: &[turbo_lexer::Spanned<turbo_lexer::Token>],
+    name: &str,
+) -> Option<std::ops::Range<usize>> {
     for item in &module.items {
         let matches = match &item.node {
             turbo_ast::Item::Function(f) => f.name == name,
             turbo_ast::Item::Struct(s) => s.name == name,
             turbo_ast::Item::Enum(e) => e.name == name,
             turbo_ast::Item::Trait(t) => t.name == name,
+            turbo_ast::Item::Const(c) => c.name == name,
             _ => false,
         };
         if matches {
-            for tok in &tokens {
+            for tok in tokens {
                 if tok.span.start < item.span.start || tok.span.end > item.span.end {
                     continue;
                 }
@@ -1301,6 +1471,168 @@ mod tests {
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].range.start.line, 2);
         assert_eq!(refs[1].range.start.line, 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Scope-aware resolution (BL-4): go-to-def, references, highlights, hover.
+    // These prove that locals/params resolve by *binding*, not by textual
+    // name, and that shadowing is respected in both directions.
+    // -----------------------------------------------------------------------
+
+    /// Position of the `n`-th (0-based) byte-occurrence of `needle` in `src`.
+    fn pos_of_nth(src: &str, needle: &str, n: usize) -> Position {
+        let offset = src.match_indices(needle).nth(n).expect("needle present").0;
+        offset_to_position(src, offset)
+    }
+
+    fn offset_of_range_start(src: &str, range: &Range) -> usize {
+        position_to_offset(src, range.start).expect("valid range start")
+    }
+
+    #[test]
+    fn definition_on_local_use_resolves_to_let_declaration() {
+        let src = "fn main() {\n    let value = 1\n    print(value)\n}";
+        let uri = "file:///t.tb".parse::<Uri>().unwrap();
+        // Cursor on the `value` use inside print(value).
+        let pos = pos_of_nth(src, "value", 1);
+        let loc = compute_definition(src, pos, &uri).expect("local def resolves");
+        // Should point at the `value` binder in `let value = 1`.
+        let decl_offset = src.match_indices("value").next().unwrap().0;
+        assert_eq!(offset_of_range_start(src, &loc.range), decl_offset);
+    }
+
+    #[test]
+    fn definition_on_parameter_use_resolves_to_param_declaration() {
+        let src = "fn f(n: int) {\n    print(n)\n}";
+        let uri = "file:///t.tb".parse::<Uri>().unwrap();
+        // Cursor on the `n` use; the only `n` substrings that are ident tokens
+        // are the param decl and the use, but "int" also contains 'n', so we
+        // target the exact `(n)` use.
+        let use_offset = src.match_indices("(n)").next().unwrap().0 + 1;
+        let pos = offset_to_position(src, use_offset);
+        let loc = compute_definition(src, pos, &uri).expect("param def resolves");
+        let decl_offset = src.match_indices("(n:").next().unwrap().0 + 1;
+        assert_eq!(offset_of_range_start(src, &loc.range), decl_offset);
+        // The declaration range is exactly the one-char name.
+        assert_eq!(
+            position_to_offset(src, loc.range.end).unwrap(),
+            decl_offset + 1
+        );
+    }
+
+    #[test]
+    fn references_on_local_returns_exactly_its_bound_occurrences() {
+        let src = "fn main() {\n    let x = 1\n    print(x)\n    let x = 2\n    print(x)\n}";
+        let uri = "file:///t.tb".parse::<Uri>().unwrap();
+        // Cursor on the FIRST `x` use (idx 1 of the four `x` occurrences).
+        let pos = pos_of_nth(src, "x", 1);
+        let refs = compute_references(src, pos, &uri, true);
+        let mut offsets: Vec<usize> = refs
+            .iter()
+            .map(|l| offset_of_range_start(src, &l.range))
+            .collect();
+        offsets.sort_unstable();
+
+        let decl1 = src.match_indices("x").next().unwrap().0;
+        let use1 = src.match_indices("x").nth(1).unwrap().0;
+        assert_eq!(offsets, vec![decl1, use1]);
+    }
+
+    #[test]
+    fn references_on_shadowing_inner_local_excludes_outer() {
+        let src = "fn main() {\n    let x = 1\n    print(x)\n    let x = 2\n    print(x)\n}";
+        let uri = "file:///t.tb".parse::<Uri>().unwrap();
+        // Cursor on the SECOND `let x` (idx 2 of four `x`s).
+        let pos = pos_of_nth(src, "x", 2);
+        let refs = compute_references(src, pos, &uri, true);
+        let mut offsets: Vec<usize> = refs
+            .iter()
+            .map(|l| offset_of_range_start(src, &l.range))
+            .collect();
+        offsets.sort_unstable();
+
+        let decl2 = src.match_indices("x").nth(2).unwrap().0;
+        let use2 = src.match_indices("x").nth(3).unwrap().0;
+        assert_eq!(offsets, vec![decl2, use2]);
+    }
+
+    #[test]
+    fn references_exclude_declaration_when_requested() {
+        let src = "fn main() {\n    let x = 1\n    print(x)\n}";
+        let uri = "file:///t.tb".parse::<Uri>().unwrap();
+        let pos = pos_of_nth(src, "x", 1); // the use
+        let refs = compute_references(src, pos, &uri, false);
+        // Only the use remains.
+        assert_eq!(refs.len(), 1);
+        let use_offset = src.match_indices("x").nth(1).unwrap().0;
+        assert_eq!(offset_of_range_start(src, &refs[0].range), use_offset);
+    }
+
+    #[test]
+    fn references_on_top_level_fn_skip_a_shadowing_local() {
+        // Top-level `fn value`, called from `other` (where it is NOT shadowed),
+        // plus a local `value` in `main` that DOES shadow it. References of the
+        // global must include the global decl + the unshadowed call, but not
+        // the local's occurrences (and the call inside `main` binds to the
+        // local, which is correct lexical scoping).
+        let src = "fn value() {}\nfn other() {\n    value()\n}\nfn main() {\n    let value = 1\n    print(value)\n}";
+        let uri = "file:///t.tb".parse::<Uri>().unwrap();
+        // Cursor on the global declaration `fn value` (occurrence 0).
+        let decl = src.match_indices("value").next().unwrap().0;
+        let pos = offset_to_position(src, decl);
+        let refs = compute_references(src, pos, &uri, true);
+        let mut offsets: Vec<usize> = refs
+            .iter()
+            .map(|l| offset_of_range_start(src, &l.range))
+            .collect();
+        offsets.sort_unstable();
+
+        let call = src.match_indices("value").nth(1).unwrap().0; // value() in other
+                                                                 // local `let value` and `print(value)` in main are excluded.
+        assert_eq!(offsets, vec![decl, call]);
+    }
+
+    #[test]
+    fn document_highlights_mark_declaration_as_write() {
+        let src = "fn main() {\n    let x = 1\n    print(x)\n}";
+        let pos = pos_of_nth(src, "x", 1); // the use
+        let highlights = compute_document_highlights(src, pos);
+        assert_eq!(highlights.len(), 2);
+        let decl_offset = src.match_indices("x").next().unwrap().0;
+        let decl = highlights
+            .iter()
+            .find(|h| offset_of_range_start(src, &h.range) == decl_offset)
+            .expect("declaration highlighted");
+        assert_eq!(decl.kind, Some(DocumentHighlightKind::WRITE));
+    }
+
+    #[test]
+    fn hover_on_local_shows_kind_and_declared_type() {
+        let src = "fn f(count: int) {\n    print(count)\n}";
+        let pos = pos_of_nth(src, "count", 1); // the use
+        let hover = compute_hover(src, pos).expect("hover present");
+        let content = match hover.contents {
+            HoverContents::Scalar(MarkedString::String(s)) => s,
+            _ => panic!("unexpected hover contents"),
+        };
+        assert!(content.contains("parameter"), "got: {content}");
+        assert!(content.contains("count"), "got: {content}");
+        assert!(content.contains("int"), "got: {content}");
+    }
+
+    #[test]
+    fn hover_on_let_without_annotation_omits_type() {
+        let src = "fn main() {\n    let total = 1\n    print(total)\n}";
+        let pos = pos_of_nth(src, "total", 1);
+        let hover = compute_hover(src, pos).expect("hover present");
+        let content = match hover.contents {
+            HoverContents::Scalar(MarkedString::String(s)) => s,
+            _ => panic!("unexpected hover contents"),
+        };
+        assert!(content.contains("local variable"), "got: {content}");
+        // No fabricated type: the text ends at the name, with no `: <type>`
+        // suffix appended after it.
+        assert_eq!(content, "local variable: `total`", "got: {content}");
     }
 
     #[test]
