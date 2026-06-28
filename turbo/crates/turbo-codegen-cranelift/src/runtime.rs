@@ -71,7 +71,7 @@ fn str_index_oob(index: i64, len: usize) -> ! {
 fn format_f64(n: f64) -> String {
     let n = if n == 0.0 { 0.0 } else { n };
     let mut buf = [0 as libc::c_char; 64];
-    unsafe {
+    let formatted = unsafe {
         libc::snprintf(
             buf.as_mut_ptr(),
             buf.len(),
@@ -81,7 +81,28 @@ fn format_f64(n: f64) -> String {
         std::ffi::CStr::from_ptr(buf.as_ptr())
             .to_string_lossy()
             .into_owned()
+    };
+    // BL-26: under `%g` a whole-valued float renders without a fractional
+    // part (`2.0` -> "2"), which is indistinguishable from the int `2`.
+    // Append a trailing `.0` so floats are always unambiguous. We only do
+    // this when the rendered text is a bare integer (`[-]?[0-9]+`) — anything
+    // already carrying a `.`/`e`/`E` (fractional or exponential form) or a
+    // special value (inf/-inf/nan) contains a non-digit and is left as-is.
+    // The AOT C runtime (`rt_format_f64`) applies the identical rule so JIT
+    // and AOT stay byte-identical.
+    if f64_text_is_integral(&formatted) {
+        formatted + ".0"
+    } else {
+        formatted
     }
+}
+
+/// True when `s` is a bare integer literal (`[-]?[0-9]+`), i.e. a whole-valued
+/// float that `%g` rendered with no fractional part. Returns false for
+/// fractional/exponential forms and for `inf`/`-inf`/`nan`.
+fn f64_text_is_integral(s: &str) -> bool {
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// Compute an allocation layout for array-like structures, returning None on overflow.

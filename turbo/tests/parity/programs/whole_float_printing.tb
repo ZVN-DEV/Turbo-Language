@@ -1,0 +1,22 @@
+// BL-26 parity: whole-valued floats render with a trailing `.0`, and this
+// must be byte-identical between the JIT runtime (runtime.rs) and the AOT
+// C runtime (turbo_rt.c). Covers bare print, to_str, arrays, interpolation,
+// and struct fields, including special values (inf/nan are left untouched).
+struct Box { v: float }
+
+fn main() {
+    print(2.0)
+    print(-3.0)
+    print(0.0)
+    print(1000000.0)
+    print(3.14)
+    print(0.5)
+    print(to_str(7.0))
+    print([1.0, 2.5])
+
+    let f = 4.0
+    print("x={f}")
+
+    let b = Box { v: 5.0 }
+    print(b)
+}

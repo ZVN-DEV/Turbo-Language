@@ -1,0 +1,32 @@
+// BL-26: whole-number floats must render with an explicit trailing `.0`
+// so they stay visually distinct from ints (matching Python/Swift/Kotlin).
+// Non-whole floats are unchanged. This covers every float render path:
+// bare print, to_str, interpolation, floats in arrays, and float struct
+// fields (the BL-11 compound renderer).
+struct Box { v: float }
+
+fn main() {
+    // Bare print of whole-valued floats
+    print(2.0)
+    print(-3.0)
+    print(0.0)
+    print(1000000.0)
+
+    // Non-whole floats are untouched
+    print(3.14)
+    print(0.5)
+
+    // to_str of a whole float
+    print(to_str(7.0))
+
+    // Float inside an array (mix of whole and non-whole)
+    print([1.0, 2.5])
+
+    // Float inside string interpolation
+    let f = 4.0
+    print("x={f}")
+
+    // Whole float as a struct field, via the compound renderer
+    let b = Box { v: 5.0 }
+    print(b)
+}
