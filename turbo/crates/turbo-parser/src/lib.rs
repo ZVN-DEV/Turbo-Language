@@ -2938,6 +2938,49 @@ mod tests {
     }
 
     #[test]
+    fn test_raw_string_parses_to_string_lit() {
+        // BL-26: a raw string reuses the regular `Token::String`, so it must
+        // parse into the same `Expr::StringLit` node with backslashes literal.
+        let source = r#"fn main() { let p = r"C:\new\path" }"#;
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[0].node else {
+            panic!("Expected function")
+        };
+        let Expr::Block { stmts, .. } = &f.body.node else {
+            panic!("Expected block, got: {:?}", f.body.node);
+        };
+        let Stmt::Let { value, .. } = &stmts[0].node else {
+            panic!("Expected let, got: {:?}", stmts[0].node);
+        };
+        assert!(
+            matches!(&value.node, Expr::StringLit(s) if s == r"C:\new\path"),
+            "Expected StringLit, got: {:?}",
+            value.node
+        );
+    }
+
+    #[test]
+    fn test_raw_string_braces_are_literal_not_interpolation() {
+        // Braces inside a raw string must stay literal — never an Interpolation.
+        let source = r#"fn main() { let j = r"{a}" }"#;
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[0].node else {
+            panic!("Expected function")
+        };
+        let Expr::Block { stmts, .. } = &f.body.node else {
+            panic!("Expected block, got: {:?}", f.body.node);
+        };
+        let Stmt::Let { value, .. } = &stmts[0].node else {
+            panic!("Expected let, got: {:?}", stmts[0].node);
+        };
+        assert!(
+            matches!(&value.node, Expr::StringLit(s) if s == "{a}"),
+            "Expected literal StringLit (no interpolation), got: {:?}",
+            value.node
+        );
+    }
+
+    #[test]
     fn test_interpolation_expr_span_points_at_use_site() {
         // The span of an interpolated expression must index into the *original*
         // source so diagnostics underline the `{...}` use site — not byte 0 of a

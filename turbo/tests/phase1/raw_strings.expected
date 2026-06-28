@@ -1,0 +1,8 @@
+C:\new\path
+\d+\.\d+
+{not_interpolated}
+\{raw\}
+
+a\b
+a\\b
+ok

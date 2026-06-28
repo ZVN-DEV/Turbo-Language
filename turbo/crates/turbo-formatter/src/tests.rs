@@ -26,6 +26,9 @@ const CORPUS: &[&str] = &[
     "fn main() {\n    let r = if c { 1 } else { 2 }\n    print(r)\n}\n",
     "@test fn test_math() {\n    assert(1 + 1 == 2, \"math\")\n}\n",
     "fn main() {\n    let s = \"hello\\nworld\"\n    print(s)\n}\n",
+    // BL-26: raw strings must round-trip verbatim (backslashes + literal braces).
+    "fn main() {\n    let p = r\"C:\\new\\path\"\n    print(p)\n}\n",
+    "fn main() {\n    print(r\"{a: 1}\")\n}\n",
 ];
 
 fn assert_idempotent(input: &str) {
@@ -341,4 +344,40 @@ fn test_cow_push_roundtrips() {
     let input = "fn main() {\n    let mut xs = [1, 2, 3]\n    xs.push(4)\n}\n";
     let output = format_source(input);
     assert!(output.contains("xs.push(4)"), "got:\n{output}");
+}
+
+#[test]
+fn test_raw_string_roundtrips() {
+    // BL-26: a raw string must survive the format pass verbatim. Messy spacing
+    // (`p=r"..."`) forces a real reformat, so a safety-gate bail — which returns
+    // the source unchanged and would leave `p=r` unspaced — fails the assert.
+    let input = "fn main() {\n    let p=r\"C:\\new\\path\"\n}\n";
+    let output = format_source(input);
+    assert!(
+        output.contains("let p = r\"C:\\new\\path\""),
+        "raw string should round-trip through formatting, got:\n{output}"
+    );
+}
+
+#[test]
+fn test_raw_string_with_braces_roundtrips() {
+    // Braces in a raw string are literal (not interpolation); the AST-equality
+    // safety gate must still accept the reformatted program.
+    let input = "fn main() {\n    let j=r\"{a: 1}\"\n}\n";
+    let output = format_source(input);
+    assert!(
+        output.contains("let j = r\"{a: 1}\""),
+        "raw string with braces should round-trip, got:\n{output}"
+    );
+}
+
+#[test]
+fn test_raw_string_is_parse_stable() {
+    // Explicitly assert the AST-equality safety gate holds for raw strings.
+    let input = "fn main() {\n    print(r\"\\d+\\.\\d+\")\n}\n";
+    let output = format_source(input);
+    assert!(
+        ast_equivalent(input, &output),
+        "parse(format(x)) != parse(x) for raw string, got:\n{output}"
+    );
 }
