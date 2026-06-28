@@ -1,0 +1,11 @@
+// BL-27 Part A: passing an array to a `mut` parameter must not mutate the
+// caller's array. The callee receives an independent copy on first element
+// write (copy-on-write value semantics), mirroring struct COW (BL-10).
+fn bump(mut a: [i64]) {
+    a[0] = 99
+}
+fn main() {
+    let arr = [1, 2, 3]
+    bump(arr)
+    print(arr[0])
+}

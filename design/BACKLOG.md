@@ -234,15 +234,44 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   skeptic runs it for real (also blocks a persistent embedded VM for BL-16). **AC:** fix the long-lived-process
   memory model, OR demote "server" from flagship to a terminating demo and stop leading with it. (Investigate first.)
 
-- [ ] **BL-27 — COW parity gaps surfaced by BL-10.** _[backend, follow-on]_ While fixing struct COW it was
-  confirmed that **arrays have the same aliasing at two of three sites**: passing an array to a `mut` param and
-  `let s = arr2d[0]; s[0]=…` still alias the source (only `let b = a` array copy was correct). BL-10's struct
-  retains are gated to `TurboTy::Struct(_)`, so this array gap is pre-existing and untouched. Separately, the
-  **WASM backend** (`wasm_codegen.rs` / `turbo_rt_wasm.c`) has the analogous struct-store aliasing (direct store
-  while its `IndexAssign` uses `rt_array_set`). **AC:** extend the COW retain/`rt_*_cow` discipline to arrays at
-  the mut-param + array-element sites, and to WASM struct stores; parity tests for both (native + WASM). Also:
-  BL-10 left a small bounded leak — a named struct passed to a *read-only* callee is retained without a matching
-  release (callee never COWs); tighten if the embedded/long-running memory model (BL-25/BL-16) needs it.
+- [ ] **BL-27 — COW parity gaps surfaced by BL-10.** _[backend, follow-on]_ Two parts: native arrays (Part A,
+  **DONE**) and the WASM backend (Part B, **still open**).
+  - **Part A — native arrays (DONE, this commit).** Confirmed that arrays had the same aliasing at two of three
+    sites: passing an array to a `mut` param and `let row = grid[0]; row[0]=…` still aliased the source (only
+    `let b = a` array copy was correct). The array COW machinery already existed (`rt_array_set`'s
+    `refcount>1 → private copy` + the `IndexAssign` binding repoint); only the refcount was dishonest because
+    BL-10's retains were gated to `TurboTy::Struct(_)`. Fix: widened both retain-site gates to
+    `TurboTy::Struct(_) | TurboTy::Array(_)` — the `mut`-param arg retain in `compile_call` (`src/expr.rs`) and
+    the array-element extraction retain in `let` (`src/stmt.rs`). No runtime change (rt_array_set self-sizes its
+    copy). +2 phase1 tests (`array_cow_mut_param`, `array_cow_nested_element`) + 1 JIT/AOT parity test
+    (`array_value_semantics`); JIT≡AOT verified on both reproductions.
+  - **Part B — WASM backend struct + array value semantics (STILL OPEN, deferred).** The WASM C-transpiler
+    (`wasm_codegen.rs` / `turbo_rt_wasm.c`) aliases on EVERY binding site for BOTH structs and arrays, and is a
+    genuinely larger fix than Part A — deferred rather than shipped half-done. Confirmed under `wasmtime`:
+    `let b = a; b.x=99` (struct) and `let b = a; b[0]=99` (array) and array-`mut`-param all print the mutated
+    value (e.g. `99 99` where native prints `1 99`); a struct passed to a fn does not even compile
+    (`void bump(long long p)` vs a `void*` arg → clang `-Wint-conversion`), and nested-array element extraction
+    (`let row = grid[0]`) likewise fails to compile. **Root cause (why it is bigger than Part A):** (1) the WASM
+    transpiler never emits `rt_retain` at ANY binding site, so the refcount is always 1 → `rt_array_set`'s COW
+    never fires and there is no struct COW at all; (2) there is no `rt_struct_cow` in `turbo_rt_wasm.c` and
+    `FieldAssign` does a direct store; (3) the stmt-context `IndexAssign` discards `rt_array_set`'s return, so
+    even with honest refcounts the COW copy's write would be lost rather than repointed; (4) the coarse
+    string type-tags (`var_types`) don't track struct *names* (needed to size `rt_struct_cow`'s field count) or
+    array *element types* (needed to safely gate a retain on `grid[0]` vs a scalar `ints[0]`); (5) the
+    struct/array param ABI is typed `long long` while values are `void*`. **Exact remaining scope:** (a) fix the
+    struct/array param ABI typing; (b) enrich `var_types`/inference to carry struct name + array element type;
+    (c) port `rt_struct_cow` to `turbo_rt_wasm.c` (8-byte refcount header, no cap field) and call it in
+    `FieldAssign` with a binding repoint; (d) emit `rt_retain` at the three binding sites (`let b = a`,
+    `mut`-param arg, array/struct element extraction), gated on the enriched types; (e) make the stmt-context
+    `IndexAssign` repoint `obj = rt_array_set(obj, idx, val)` when `obj` is an lvalue; (f) add
+    `turbo/tests/wasm/` value-semantics coverage + a WASM↔native parity case. **Why deferred:** a partial WASM
+    change is either a no-op (no retains ⇒ COW never triggers) or actively unsafe (a mis-gated `rt_retain` on a
+    scalar treats an integer as `addr-8` and corrupts memory — strictly worse than the current honest
+    aliasing). Per the "don't make it worse" bar, the WASM gap is recorded here rather than half-fixed.
+  - **Known bounded leak (unchanged):** BL-10 left a small bounded leak — a named struct (now also array) passed
+    to a *read-only* callee is retained without a matching release (callee never COWs); the Part A array widening
+    inherits the same shape but does not worsen it. Tighten if the embedded/long-running memory model
+    (BL-25/BL-16) needs it.
 
 ### P3 — polish (batch; do NOT spawn busywork PRs — fold opportunistically)
 
