@@ -1,0 +1,74 @@
+// Benchmark: word-frequency count over a generated multi-MB text file.
+//
+// Reads the file named by the WORDCOUNT_INPUT env var (falling back to
+// "wordcount_input.txt" in the working directory), tokenizes it on whitespace,
+// counts word frequencies in a hashmap, then prints the top-20 words by
+// frequency (ties broken by ascending word order), followed by a final
+// "TOTAL <words> <unique>" summary line.
+//
+// The C, Rust, and Go baselines in benchmarks/{c,rust,go}/wordcount.* implement
+// the identical algorithm over the identical input; run_wordcount.sh enforces
+// byte-for-byte output equality across all four languages.
+fn main() {
+    let mut path = env_get("WORDCOUNT_INPUT")
+    if path == "" {
+        path = "wordcount_input.txt"
+    }
+    let text = read_file(path)
+
+    // Fold newlines to spaces, split on spaces, skip empty tokens. The input is
+    // already lowercase ASCII, so no case folding is needed.
+    let folded = replace(text, "\n", " ")
+    let words = split(folded, " ")
+
+    let counts = hashmap()
+    let mut total = 0
+    let n = len(words)
+    let mut i = 0
+    while i < n {
+        let w = words[i]
+        if len(w) > 0 {
+            let prev = hashmap_get_int(counts, w)
+            hashmap_set_int(counts, w, prev + 1)
+            total = total + 1
+        }
+        i = i + 1
+    }
+
+    // hashmap_keys() returns distinct keys in ascending lexicographic order.
+    let keys = hashmap_keys(counts)
+    let unique = len(keys)
+
+    // Select the top 20 by (count desc, word asc). Because keys arrive already
+    // in ascending order, using a strict ">" when picking the best remaining
+    // entry keeps the lexicographically smaller word ahead whenever counts tie.
+    let top_n = 20
+    let mut used: [i64] = []
+    let mut k = 0
+    while k < unique {
+        used = push(used, 0)
+        k = k + 1
+    }
+
+    let mut printed = 0
+    while printed < top_n && printed < unique {
+        let mut best = -1
+        let mut best_count = -1
+        let mut j = 0
+        while j < unique {
+            if used[j] == 0 {
+                let c = hashmap_get_int(counts, keys[j])
+                if c > best_count {
+                    best_count = c
+                    best = j
+                }
+            }
+            j = j + 1
+        }
+        used[best] = 1
+        print(keys[best] + " " + to_str(best_count))
+        printed = printed + 1
+    }
+
+    print("TOTAL " + to_str(total) + " " + to_str(unique))
+}
