@@ -1,0 +1,9 @@
+// Interpolating a unit-typed expression (a call to a function that returns
+// nothing) has no value to format. Sema rejects this instead of panicking
+// in codegen.
+fn f() {}
+
+fn main() {
+    let x = "v=${f()}"
+    print(x)
+}

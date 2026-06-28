@@ -3736,10 +3736,25 @@ impl Checker {
                     );
                     return Ty::Error;
                 }
-                let first_ty = self.check_expr(&elements[0]);
+                let mut first_ty = self.check_expr(&elements[0]);
+                if first_ty == Ty::Unit {
+                    self.error(
+                        ErrorCode::E0100,
+                        "cannot use unit value `()` as an array element".to_string(),
+                        elements[0].span.clone(),
+                    );
+                    // Poison to suppress cascading element-mismatch errors.
+                    first_ty = Ty::Error;
+                }
                 for elem in &elements[1..] {
                     let elem_ty = self.check_expr(elem);
-                    if !elem_ty.is_error() && !first_ty.is_error() && elem_ty != first_ty {
+                    if elem_ty == Ty::Unit {
+                        self.error(
+                            ErrorCode::E0100,
+                            "cannot use unit value `()` as an array element".to_string(),
+                            elem.span.clone(),
+                        );
+                    } else if !elem_ty.is_error() && !first_ty.is_error() && elem_ty != first_ty {
                         self.error(ErrorCode::E0114,
                             format!("array elements must all have the same type, expected `{first_ty}` but found `{elem_ty}`"),
                             elem.span.clone(),
@@ -4358,7 +4373,15 @@ impl Checker {
             Expr::Interpolation(parts) => {
                 for part in parts {
                     if let InterpolPart::Expr(expr) = part {
-                        self.check_expr(expr);
+                        let part_ty = self.check_expr(expr);
+                        if part_ty == Ty::Unit {
+                            self.error(
+                                ErrorCode::E0100,
+                                "cannot interpolate unit value `()`: expression produces no value"
+                                    .to_string(),
+                                expr.span.clone(),
+                            );
+                        }
                     }
                 }
                 Ty::Str
