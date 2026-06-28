@@ -1,0 +1,4 @@
+ok(14)
+good = ok(14)
+err(negative)
+ok([1, 2, 3])

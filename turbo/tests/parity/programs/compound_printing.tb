@@ -1,0 +1,49 @@
+// BL-11 parity: compound value rendering (arrays, structs, results,
+// optionals, and their nestings) must be byte-identical between the JIT
+// and AOT backends.
+struct Point { x: int, y: int }
+struct Line { start: Point, size: int }
+struct Bag { items: [int], label: str }
+
+fn checked(n: i64) -> i64 ! str {
+    if n < 0 {
+        err("negative")
+    } else {
+        ok(n * 2)
+    }
+}
+
+fn main() {
+    // Arrays
+    print(to_str([1, 2, 3]))
+    print("interp: {[1, 2, 3]}")
+    let empty: [int] = []
+    print(to_str(empty))
+    print(to_str(["a", "b", "c"]))
+    print(to_str([1.5, 2.5]))
+    print(to_str([true, false]))
+    print(to_str([[1, 2], [3]]))
+
+    // Structs
+    let p = Point { x: 9, y: 2 }
+    print(to_str(p))
+    print("p = {p}")
+    print(to_str(Line { start: Point { x: 5, y: 6 }, size: 10 }))
+    print(to_str(Bag { items: [10, 20, 30], label: "nums" }))
+    print(to_str([Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]))
+
+    // Results
+    print(to_str(checked(7)))
+    print(to_str(checked(-1)))
+    print(to_str(ok([1, 2, 3])))
+
+    // Optionals (incl. non-int payloads)
+    let oi: i64? = some(42)
+    print(oi)
+    let of: float? = some(3.5)
+    print(of)
+    let ob: bool? = some(true)
+    print(ob)
+    let on: float? = none
+    print(on)
+}

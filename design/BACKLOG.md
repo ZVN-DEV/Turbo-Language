@@ -115,11 +115,16 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   tests + 1 JIT/AOT parity test (`struct_value_semantics`); 241 integration / 19 parity green. _Surfaced
   BL-27._
 
-- [ ] **BL-11 — Printing a compound value yields an opaque placeholder.** _[e2e]_ `print(arr)` / interpolating
-  an array → `[array]`; structs → `[struct P]`; results → `[result]` (only scalars + Optionals render). The
-  official Collections tutorial visibly emits `[array]`. Biggest day-1 debugging wall. **AC:** arrays/structs/
-  results get a real recursive `Display`/`Debug` rendering (`[20, 40, 60]`, `{x: 9}`, `ok(7)`) via `to_str`/
-  interpolation; tests assert rendered contents on both JIT and AOT.
+- [x] **BL-11 — Printing a compound value yields an opaque placeholder.** _[e2e]_ Done (branch
+  `fix/bl11-compound-printing`). `print(arr)` / interpolating an array → `[array]`; structs → `[struct P]`;
+  results → `[result]` (only scalars + Optionals rendered). The official Collections tutorial visibly emitted
+  `[array]`. Biggest day-1 debugging wall. **Fix:** extended the codegen-side recursive renderer
+  (`convert_to_str` in `turbo-codegen-cranelift/src/builtins.rs`, the shared `to_str`/interpolation path) to
+  walk arrays (`[1, 2, 3]`, `[]`, nested), structs (`Point { x: 9, y: 2 }` — distinct from `to_json`'s
+  `{"x":9}`), and results (`ok(7)` / `err(reason)`), mirroring the existing Optional `some(x)`/`none`
+  mechanism; `print()` now delegates all compound types to it. Strings render unquoted to match
+  `some("hi")` → `some(hi)`. Also fixed a latent bug where float/bool optional payloads rendered garbage.
+  +4 phase1 tests + 1 JIT/AOT parity test (`compound_printing`); 245 integration / 20 parity green.
 
 - [x] **BL-12 — Docs lie about syntax (`explain` examples + SYNTAX.md `[Implemented]`).** _[designer#1, e2e]
   Done (commit `57bab40`, merged to master)._ Corrected the `enum`/`::` snippets in `explain` docs

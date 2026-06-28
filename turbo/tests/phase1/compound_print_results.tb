@@ -1,0 +1,21 @@
+// BL-11: results render `ok(value)` / `err(value)` (not "[result]"),
+// mirroring how optionals render `some(value)` / `none`.
+fn checked(n: i64) -> i64 ! str {
+    if n < 0 {
+        err("negative")
+    } else {
+        ok(n * 2)
+    }
+}
+
+fn main() {
+    let good = checked(7)
+    print(to_str(good))
+    print("good = {good}")
+
+    let bad = checked(-1)
+    print(to_str(bad))
+
+    // Result carrying a compound payload renders recursively.
+    print(to_str(ok([1, 2, 3])))
+}

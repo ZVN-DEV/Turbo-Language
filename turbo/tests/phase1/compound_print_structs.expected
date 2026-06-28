@@ -1,0 +1,5 @@
+Point { x: 9, y: 2 }
+p = Point { x: 9, y: 2 }
+Line { start: Point { x: 5, y: 6 }, size: 10 }
+Bag { items: [10, 20, 30], label: nums }
+[Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
