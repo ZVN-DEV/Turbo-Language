@@ -90,6 +90,109 @@ print("Home directory: {home}")
 
 Returns the value of an environment variable as a string. Returns an empty string if the variable is not set.
 
+### exit
+
+```turbo
+exit(0)    // terminate successfully
+exit(1)    // terminate with a failure code
+```
+
+Immediately terminates the process with the given integer exit code. This call never returns — any code after it, including the rest of `main`, does not run.
+
+### type_of
+
+```turbo
+let a = type_of(42)         // "i64"
+let b = type_of(3.14)       // "f64"
+let c = type_of("hello")    // "str"
+let d = type_of(true)       // "bool"
+let e = type_of([1, 2, 3])  // "array"
+```
+
+Returns the name of a value's type as a string. The type is resolved at compile time. Structs and enums return their declared name; arrays return `"array"`.
+
+---
+
+## Filesystem
+
+> Paths are resolved relative to the current working directory unless they are absolute.
+
+### file_exists
+
+```turbo
+if file_exists("config.toml") {
+    print("found config")
+}
+```
+
+Returns `true` if a file or directory exists at the given path, `false` otherwise.
+
+### mkdir
+
+```turbo
+let ok = mkdir("build/cache")    // creates parents as needed
+print(ok)                        // true
+```
+
+Creates a directory at the given path, including any missing parent directories (like `mkdir -p`). Returns `true` if the directory exists afterwards.
+
+### delete_file
+
+```turbo
+let removed = delete_file("build/cache/old.txt")    // true
+```
+
+Deletes the file (or empty directory) at the given path. Returns `true` on success, or `false` if the path could not be removed.
+
+### list_dir
+
+```turbo
+let entries = list_dir(".")
+print(entries)    // e.g. ["main.tb", "data.txt"]
+```
+
+Returns an array of the entry names in a directory, excluding `.` and `..`. Returns an empty array if the path is not a readable directory.
+
+### path_join
+
+```turbo
+let p = path_join("logs", "app.txt")    // "logs/app.txt"
+```
+
+Joins two path segments with a `/` separator, inserting one only when it is needed.
+
+---
+
+## Date / Time
+
+### time_now
+
+```turbo
+let now = time_now()    // seconds since the Unix epoch, as a float
+```
+
+Returns the current wall-clock time as the number of seconds since the Unix epoch (1970-01-01 UTC), with sub-second precision.
+
+### time_ms
+
+```turbo
+let start = time_ms()
+// ... do some work ...
+let elapsed = time_ms() - start
+print("took {elapsed} ms")
+```
+
+Returns the current time as an integer number of milliseconds since the Unix epoch. Useful for timing and measuring elapsed durations.
+
+### format_time
+
+```turbo
+let label = format_time(0.0, "%Y-%m-%d")               // "1970-01-01"
+let stamp = format_time(time_now(), "%Y-%m-%d %H:%M:%S")
+```
+
+Formats a Unix timestamp (seconds since the epoch, such as the value from `time_now`) into a string using a `strftime`-style format. The timestamp is interpreted in the machine's local time zone.
+
 ---
 
 ## String Operations
@@ -221,6 +324,55 @@ let s = to_str(3.14)     // "3.14"
 
 Converts any value to its string representation.
 
+### str_to_int
+
+```turbo
+match str_to_int("42") {
+    ok(n)  => print("parsed {n}")       // parsed 42
+    err(e) => print("bad number: {e}")
+}
+```
+
+Parses a string into a 64-bit integer. Returns a `Result`: `ok(n)` on success, or `err(message)` if the string is not a valid integer. Pattern match to handle both cases. Together with `str_to_float`, this is the way to turn input text or file contents into numbers.
+
+### str_to_float
+
+```turbo
+match str_to_float("3.14") {
+    ok(x)  => print("parsed {x}")       // parsed 3.14
+    err(e) => print("bad float: {e}")
+}
+```
+
+Parses a string into a 64-bit float. Returns a `Result`: `ok(x)` on success, or `err(message)` if the string is not a valid number. Pattern match to handle both cases.
+
+### str_from_char
+
+```turbo
+let a = str_from_char(65)    // "A"
+let z = str_from_char(122)   // "z"
+```
+
+Returns a one-character string for the given byte value (0–255). Only the low 8 bits of the code are used, so it is intended for ASCII characters.
+
+### pad_left
+
+```turbo
+let n = pad_left("7", 3, "0")     // "007"
+let s = pad_left("hi", 5, " ")    // "   hi"
+```
+
+Left-pads a string to the given width using the first character of the pad string. If the string is already at least `width` characters long it is returned unchanged (never truncated).
+
+### pad_right
+
+```turbo
+let n = pad_right("7", 3, "0")    // "700"
+let s = pad_right("hi", 5, ".")   // "hi..."
+```
+
+Right-pads a string to the given width using the first character of the pad string. If the string is already at least `width` characters long it is returned unchanged.
+
 ---
 
 ## Array Operations
@@ -243,6 +395,23 @@ arr = push(arr, 5)         // [1, 2, 3, 4, 5]
 ```
 
 Appends an element to the end of an array. Returns a new array (copy-on-write semantics). Reassign the result to the original variable.
+
+### sort
+
+```turbo
+let nums = sort([3, 1, 2])                       // [1, 2, 3]
+let words = sort(["banana", "apple", "cherry"])  // ["apple", "banana", "cherry"]
+```
+
+Returns a new array with the elements sorted in ascending order. Works on arrays of integers, floats, or strings. The input array is not modified.
+
+### slice
+
+```turbo
+let mid = slice([10, 20, 30, 40, 50], 1, 3)    // [20, 30]
+```
+
+Returns a new array containing the elements from index `start` (inclusive) to `end` (exclusive). The original array is unchanged.
 
 ---
 
@@ -323,6 +492,22 @@ let s = sqrt(2.0)      // 1.4142135623730951
 ```
 
 Returns the square root of a floating-point number.
+
+### random
+
+```turbo
+let r = random()    // a float in [0.0, 1.0)
+```
+
+Returns a pseudo-random float uniformly distributed in the range `[0.0, 1.0)`.
+
+### random_range
+
+```turbo
+let dice = random_range(1, 6)    // an integer from 1 to 6
+```
+
+Returns a pseudo-random integer uniformly distributed between `min` and `max`, **inclusive of both bounds**.
 
 ---
 
@@ -739,15 +924,17 @@ Writes a 64-bit integer value to the given memory address.
 | Category | Functions |
 |----------|-----------|
 | **I/O** | `print`, `read_line`, `read_file`, `write_file`, `try_read_file`, `try_write_file` |
-| **Strings** | `len`, `trim`, `upper`, `lower`, `split`, `contains`, `starts_with`, `ends_with`, `replace`, `index_of`, `char_at`, `repeat`, `join`, `to_str` |
-| **Arrays** | `len`, `push` |
+| **Strings** | `len`, `trim`, `upper`, `lower`, `split`, `contains`, `starts_with`, `ends_with`, `replace`, `index_of`, `char_at`, `repeat`, `join`, `to_str`, `str_to_int`, `str_to_float`, `str_from_char`, `pad_left`, `pad_right` |
+| **Arrays** | `len`, `push`, `sort`, `slice` |
 | **Functional** | `map`, `filter`, `reduce` |
-| **Math** | `abs`, `min`, `max`, `pow`, `sqrt` |
+| **Math** | `abs`, `min`, `max`, `pow`, `sqrt`, `random`, `random_range` |
 | **HashMap** | `hashmap`, `hashmap_set`, `hashmap_get`, `hashmap_set_int`, `hashmap_get_int`, `hashmap_has`, `hashmap_len`, `hashmap_keys`, `hashmap_remove` |
 | **JSON** | `json_get`, `json_stringify`, `to_json`, `to_json_array` |
 | **HTTP Client** | `http_get`, `http_post` |
 | **HTTP Server** | `http_server`, `http_server_public`, `route`, `http_listen`, `respond_text`, `respond_html`, `respond_json`, `request_body`, `request_method`, `request_path`, `request_query`, `request_header` |
-| **System** | `exec`, `env_get` |
+| **System** | `exec`, `env_get`, `exit`, `type_of` |
+| **Filesystem** | `file_exists`, `mkdir`, `delete_file`, `list_dir`, `path_join` |
+| **Date / Time** | `time_now`, `time_ms`, `format_time` |
 | **Concurrency** | `channel`, `send`, `recv`, `mutex`, `mutex_get`, `mutex_set`, `sleep`, `clone` |
 | **Testing** | `assert`, `assert_eq`, `assert_ne`, `panic` |
 | **Unsafe** | `deref`, `store` |
