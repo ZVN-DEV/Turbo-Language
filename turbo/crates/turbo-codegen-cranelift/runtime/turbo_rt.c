@@ -546,6 +546,41 @@ void* rt_struct_alloc(long long num_fields) {
     return rt_rc_alloc(data_size, 0);
 }
 
+/* Copy-on-write guard for struct field assignment.
+ *
+ * Structs carry the same [cap][refcount] header as arrays (see
+ * rt_struct_alloc / rt_rc_alloc), so a `let b = a` / `mut`-param /
+ * array-element copy can leave two live bindings pointing at one
+ * allocation. Mutating a field through either would alias the other.
+ * This mirrors the copy-on-write dance in rt_array_set: if the refcount
+ * is > 1, allocate a private copy, memcpy the `num_fields` data slots,
+ * drop our reference to the shared original, and return the copy. When
+ * the refcount is 1 (sole owner) the original pointer is returned
+ * unchanged and the field store proceeds in place. `num_fields` matches
+ * the count passed to rt_struct_alloc. */
+void* rt_struct_cow(void *s, long long num_fields) {
+    if (!s) return s;
+    long long *rc_ptr = rt_rc_refcount_ptr(s);
+    long long rc = __atomic_load_n(rc_ptr, __ATOMIC_ACQUIRE);
+    if (rc <= 1) {
+        return s;
+    }
+    if (num_fields < 0) {
+        fprintf(stderr, "rt_struct_cow: negative num_fields\n");
+        abort();
+    }
+    size_t data_size;
+    if (__builtin_mul_overflow((size_t)num_fields, (size_t)8, &data_size)) {
+        fprintf(stderr, "rt_struct_cow: overflow\n");
+        abort();
+    }
+    if (data_size < 8) data_size = 8;
+    void *new_data = rt_rc_alloc(data_size, 0);
+    memcpy(new_data, s, data_size);
+    __sync_fetch_and_sub(rc_ptr, 1);
+    return new_data;
+}
+
 const char* rt_i64_to_str(long long n) {
     char tmp[21];
     char *p = tmp + 20;

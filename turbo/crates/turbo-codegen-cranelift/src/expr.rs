@@ -376,6 +376,32 @@ fn compile_expr_inner<M: Module>(
 
             let offset = (field_index * 8) as i32;
 
+            // Copy-on-write: structs carry the same refcount header as arrays,
+            // so a `let b = a` / `mut`-param / array-element copy can leave two
+            // live bindings aliasing one allocation. Before mutating a field,
+            // make a private copy if the allocation is shared (refcount > 1),
+            // exactly as `IndexAssign` does for arrays via `rt_array_set`. When
+            // the struct is the sole owner the original pointer is returned and
+            // the store happens in place.
+            let num_fields = cx
+                .builder
+                .ins()
+                .iconst(types::I64, struct_layout.len() as i64);
+            let cow_fid = cx.rt_fns["rt_struct_cow"];
+            let cow_ref = cx.module.declare_func_in_func(cow_fid, cx.builder.func);
+            let cow_call = cx.builder.ins().call(cow_ref, &[obj_ptr, num_fields]);
+            let target = cx.builder.inst_results(cow_call)[0];
+
+            // If we mutated through a named binding, repoint it at the (possibly
+            // new) copy so subsequent reads see the mutation. Mirrors the
+            // variable rebind in `IndexAssign`.
+            if let Expr::Ident(name) = &object.node {
+                if let Some((var, _cl_ty, _tty)) = cx.vars.get(name) {
+                    let var = *var;
+                    cx.builder.def_var(var, target);
+                }
+            }
+
             // Widen smaller types to 64-bit for uniform storage
             let val_ty = cx.builder.func.dfg.value_type(val);
             let val = if val_ty.bits() < 64 && val_ty.is_int() {
@@ -396,13 +422,11 @@ fn compile_expr_inner<M: Module>(
                 let old_val = cx
                     .builder
                     .ins()
-                    .load(cx.ptr_type, MemFlags::new(), obj_ptr, offset);
+                    .load(cx.ptr_type, MemFlags::new(), target, offset);
                 release_if_needed(cx, old_val, &field_tty);
             }
 
-            cx.builder
-                .ins()
-                .store(MemFlags::new(), val, obj_ptr, offset);
+            cx.builder.ins().store(MemFlags::new(), val, target, offset);
             Ok(None)
         }
 
@@ -2064,6 +2088,17 @@ fn compile_call<M: Module>(
                     } else {
                         val
                     };
+                    // COW: passing a named struct to a function aliases the
+                    // caller's binding — the callee receives the same pointer.
+                    // Retain it so the shared allocation's refcount reflects
+                    // both references; a `mut`-param field write inside the
+                    // callee then sees refcount > 1 and copies instead of
+                    // mutating the caller's struct in place (BL-10). Fresh
+                    // temporaries (non-idents) are not aliased, so they are
+                    // left alone to avoid needless copies.
+                    if matches!(&arg.node, Expr::Ident(_)) && matches!(&tty, TurboTy::Struct(_)) {
+                        retain_if_needed(cx, val, &tty);
+                    }
                     arg_values.push(val);
                     arg_ttys.push(tty);
                 }
