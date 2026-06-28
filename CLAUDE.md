@@ -59,6 +59,7 @@ Codegen (turbo-codegen-cranelift)  →  JIT execution  or  AOT .o file
 | `turbo-parser` | `crates/turbo-parser/` | Recursive descent parser. Entry: `parse(tokens) -> (Module, Vec<ParseError>)`, which also runs a post-parse COW rewrite pass (`cow_rewrite.rs`) before returning. |
 | `turbo-sema` | `crates/turbo-sema/` | Semantic analysis and type checking. Entry: `check(module) -> SemaResult` (errors + warnings). |
 | `turbo-codegen-cranelift` | `crates/turbo-codegen-cranelift/` | Cranelift JIT + AOT backend. Entries: `jit_run()`, `aot_compile()`. |
+| `turbo-formatter` | `crates/turbo-formatter/` | Source formatter. Entry: `format_source()` / `format_file()`. Used by `turbolang fmt`. |
 | `turbo-cli` | `crates/turbo-cli/` | CLI frontend (clap). Commands: run, build, test, fmt, init, lsp, repl, bench, doc, playground. |
 | `turbo-lsp` | `crates/turbo-lsp/` | LSP server (lsp-server crate). Provides diagnostics, hover, and go-to-definition. |
 
@@ -80,7 +81,7 @@ Codegen (turbo-codegen-cranelift)  →  JIT execution  or  AOT .o file
 - `ErrorCode` — unique error code enum (E0001-E0515). Defined in `turbo-ast/src/errors.rs`. Used by all error types. See `docs/errors.md` for the full table.
 
 **turbo-sema**:
-- `Ty` — internal type representation: `I8`, `I16`, `I32`, `I64`, `U8`, `U16`, `U32`, `U64`, `F32`, `F64`, `Bool`, `Str`, `Unit`, `Array(Box<Ty>)`, `Struct(String)`, `Enum(String)`, `Fn(Vec<Ty>, Box<Ty>)`, `Result`, `Optional`, `Future`, `TypeParam`, `Agent`, `Error`. `int` is an alias for `I64`, `float` for `F64`, `usize` for `U64`.
+- `Ty` — internal type representation: `I8`, `I16`, `I32`, `I64`, `U8`, `U16`, `U32`, `U64`, `F32`, `F64`, `Bool`, `Str`, `Unit`, `Array(Box<Ty>)`, `Struct(String)`, `Enum(String)`, `Fn(Vec<Ty>, Box<Ty>)`, `Result`, `Optional`, `Future`, `TypeParam`, `Error`. `int` is an alias for `I64`, `float` for `F64`, `usize` for `U64`.
 - `SemaError` — `{ code: ErrorCode, message: String, span: Span }`.
 
 **turbo-codegen-cranelift**:
@@ -156,7 +157,7 @@ cargo run --manifest-path turbo/Cargo.toml -- run turbo/tests/phase1/fibonacci.t
 3. **Parser** (`turbo/crates/turbo-parser/src/lib.rs`): parse the new syntax into the new AST node.
 4. **Sema** (`turbo/crates/turbo-sema/src/lib.rs`): add type-checking logic for the new node.
 5. **Codegen** (`turbo/crates/turbo-codegen-cranelift/src/lib.rs`): add code generation for the new node.
-6. **Formatter** (`turbo/crates/turbo-cli/src/formatter.rs`): handle pretty-printing if applicable.
+6. **Formatter** (`turbo/crates/turbo-formatter/src/lib.rs`): handle pretty-printing if applicable.
 
 ### Adding a new type
 
@@ -188,7 +189,8 @@ turbo/
       src/stmt.rs           # Statement-level helpers
       src/turbo_types.rs    # TurboTy enum
       runtime/turbo_rt.c    # C runtime linked into AOT binaries
-    turbo-cli/            # CLI entry point + formatter + REPL + playground
+    turbo-formatter/      # Source formatter (turbolang fmt)
+    turbo-cli/            # CLI entry point + REPL + playground
     turbo-lsp/            # Language Server Protocol server
   tests/
     phase1/               # Integration tests (.tb + .expected pairs)

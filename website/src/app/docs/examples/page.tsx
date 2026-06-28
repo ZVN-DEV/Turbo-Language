@@ -219,7 +219,7 @@ let upper = cleaned |> upper`}
         <p className="text-gray-300 mb-0">
           Browse the full set of runnable and roadmap examples in the {" "}
           <a
-            href="https://github.com/ZVN-DEV/Turbo-Language/tree/main/examples"
+            href="https://github.com/ZVN-DEV/Turbo-Language/tree/master/examples"
             target="_blank"
             rel="noopener noreferrer"
             className="text-[#00ff88] hover:underline"

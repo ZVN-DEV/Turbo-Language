@@ -60,9 +60,12 @@ export default function AgentsPage() {
       </p>
       <p className="mb-4">
         By keeping the core small, we can promise{" "}
-        <Link href="/docs/compatibility" className="text-[#00ff88] underline">
+        <a
+          href="https://github.com/ZVN-DEV/Turbo-Language/blob/master/COMPATIBILITY.md"
+          className="text-[#00ff88] underline"
+        >
           real stability
-        </Link>{" "}
+        </a>{" "}
         at 1.0. A future{" "}
         <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">
           turbo-agent
