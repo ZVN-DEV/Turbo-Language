@@ -44,7 +44,14 @@ fn main() {
     let prev_hook = panic::take_hook();
     panic::set_hook(Box::new(|_info| {}));
 
-    let crashes = AtomicUsize::new(0);
+    // Phase 0 (BL-1): deterministic codegen-robustness corpus. These programs
+    // deliberately *bypass sema* and feed the backend unit-typed values in the
+    // positions that used to `?.unwrap()` a compiled subexpression. Without the
+    // fix each panics the process (exit 101); with it codegen returns a clean
+    // `CodegenError`. Any panic here is a regression of the retired panic class.
+    let corpus_crashes = run_robustness_corpus();
+
+    let crashes = AtomicUsize::new(corpus_crashes);
     let sema_clean = AtomicUsize::new(0);
     let codegen_attempted = AtomicUsize::new(0);
 
@@ -64,10 +71,7 @@ fn main() {
             crash_seeds.push(seed);
             // Print a short, single-line crash report (no backtrace) so
             // CI failures are easy to triage.
-            eprintln!(
-                "CRASH at seed {seed}: input = {:?}",
-                truncate(&input, 200)
-            );
+            eprintln!("CRASH at seed {seed}: input = {:?}", truncate(&input, 200));
         }
 
         if (seed + 1) % 50 == 0 {
@@ -95,11 +99,7 @@ fn main() {
 
 /// One pipeline pass. Errors at any stage are fine; only panics matter
 /// (and panics are caught by the outer `catch_unwind`).
-fn run_pipeline(
-    input: &str,
-    sema_clean: &AtomicUsize,
-    codegen_attempted: &AtomicUsize,
-) {
+fn run_pipeline(input: &str, sema_clean: &AtomicUsize, codegen_attempted: &AtomicUsize) {
     let (tokens, _lex_errors) = turbo_lexer::tokenize(input);
     let (module, parse_errors) = turbo_parser::parse(tokens);
     if !parse_errors.is_empty() {
@@ -118,8 +118,7 @@ fn run_pipeline(
     codegen_attempted.fetch_add(1, Ordering::Relaxed);
 
     let tmp_dir = env::temp_dir();
-    let out_path: PathBuf =
-        tmp_dir.join(format!("turbo_codegen_fuzz_{}", std::process::id()));
+    let out_path: PathBuf = tmp_dir.join(format!("turbo_codegen_fuzz_{}", std::process::id()));
     // Errors here are fine — we only care about panics. Linker failures
     // on garbage are expected.
     let _ = turbo_codegen_cranelift::aot_compile(&module, &out_path, false, None, &[]);
@@ -133,6 +132,126 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         format!("{}...[{} bytes total]", &s[..max], s.len())
     }
+}
+
+// ---------------------------------------------------------------------------
+// BL-1 codegen-robustness corpus.
+//
+// Every program below is *parseable* but puts a unit-typed (`print(...)` →
+// void) value where codegen must read a real value — exactly the positions
+// that used to `?.unwrap()` the `Option` returned by compiling a subexpression
+// (builtin args, control-flow heads, short-circuit operands, method receiver,
+// enum data args, UFCS first arg). Sema rejects them in the real pipeline, so
+// here we deliberately run them *without sema* to make the defensive
+// `ok_or_else` paths execute. A clean `Err` is success; a panic is a
+// regression of the retired panic class.
+// ---------------------------------------------------------------------------
+
+const CODEGEN_ROBUSTNESS_CORPUS: &[&str] = &[
+    // builtin first-argument position
+    "fn main() { let v = len(print(0)) }",
+    "fn main() { let v = abs(print(0)) }",
+    "fn main() { let v = sqrt(print(0)) }",
+    "fn main() { let v = upper(print(0)) }",
+    "fn main() { let v = lower(print(0)) }",
+    "fn main() { let v = trim(print(0)) }",
+    "fn main() { let v = split(print(0), \",\") }",
+    "fn main() { let v = char_at(print(0), 0) }",
+    "fn main() { let v = repeat(print(0), 2) }",
+    "fn main() { let v = substring(print(0), 0, 1) }",
+    "fn main() { let v = pad_left(print(0), 4, \"x\") }",
+    "fn main() { let v = str_to_int(print(0)) }",
+    "fn main() { let v = to_str(print(0)) }",
+    "fn main() { let v = type_of(print(0)) }",
+    "fn main() { let v = clone(print(0)) }",
+    "fn main() { let v = sort(print(0)) }",
+    "fn main() { let v = reverse(print(0)) }",
+    "fn main() { let v = slice(print(0), 0, 1) }",
+    "fn main() { let v = array_contains(print(0), 1) }",
+    "fn main() { let v = hashmap_get(print(0), \"k\") }",
+    "fn main() { let v = hashmap_has(print(0), \"k\") }",
+    "fn main() { let v = hashmap_keys(print(0)) }",
+    "fn main() { let v = read_file(print(0)) }",
+    "fn main() { let v = file_exists(print(0)) }",
+    "fn main() { let v = path_dir(print(0)) }",
+    "fn main() { let v = http_get(print(0)) }",
+    "fn main() { let v = json_get(print(0), \"k\") }",
+    "fn main() { let v = to_json(print(0)) }",
+    "fn main() { exit(print(0)) }",
+    "fn main() { sleep(print(0)) }",
+    "fn main() { panic(print(0)) }",
+    "fn main() { assert(print(0)) }",
+    // builtin non-first-argument position
+    "fn main() { let v = min(1, print(0)) }",
+    "fn main() { let v = max(1, print(0)) }",
+    "fn main() { let v = pow(2, print(0)) }",
+    "fn main() { let v = push([1], print(0)) }",
+    "fn main() { let v = replace(\"a\", print(0), \"b\") }",
+    "fn main() { let v = substring(\"abc\", print(0), 2) }",
+    "fn main() { let v = substring(\"abc\", 0, print(0)) }",
+    "fn main() { let v = join([\"a\"], print(0)) }",
+    "fn main() { write_file(\"p\", print(0)) }",
+    "fn main() { let v = http_post(\"u\", print(0)) }",
+    "fn main() { assert_eq(1, print(0)) }",
+    // closure-taking builtins (first arg is the unit value)
+    "fn main() { let v = map(print(0), |x: int| -> int { x }) }",
+    "fn main() { let v = filter(print(0), |x: int| -> bool { true }) }",
+    "fn main() { let v = reduce(print(0), 0, |a: int, b: int| -> int { a }) }",
+    // control-flow heads
+    "fn main() { if print(0) { print(1) } }",
+    "fn main() { while print(0) { print(1) } }",
+    "fn main() { for x in print(0) { print(x) } }",
+    "fn main() { match print(0) { _ => print(1) } }",
+    // expr.rs sites: short-circuit operands, method receiver, enum data arg,
+    // UFCS first arg
+    "fn main() { let b = print(0) && true }",
+    "fn main() { let b = true || print(0) }",
+    "fn main() { let x = print(0).foo() }",
+    "fn main() { let x = notafn(print(0)) }",
+    "type Shape { Circle(i64) }\nfn main() { let s = Shape.Circle(print(0)) }",
+];
+
+/// Run the deterministic BL-1 codegen-robustness corpus (sema bypassed).
+/// Returns the number of panics (regressions); 0 means the panic class stays
+/// retired.
+fn run_robustness_corpus() -> usize {
+    let mut crashes = 0usize;
+    let mut reached = 0usize;
+    let tmp_dir = env::temp_dir();
+
+    for (i, src) in CODEGEN_ROBUSTNESS_CORPUS.iter().enumerate() {
+        let (tokens, _lex_errors) = turbo_lexer::tokenize(src);
+        let (module, parse_errors) = turbo_parser::parse(tokens);
+        if !parse_errors.is_empty() {
+            eprintln!(
+                "  bl1-corpus[{i}] did not parse (skipped): {:?}",
+                truncate(src, 80)
+            );
+            continue;
+        }
+        reached += 1;
+
+        let out_path: PathBuf =
+            tmp_dir.join(format!("turbo_bl1_corpus_{}_{i}", std::process::id()));
+        // Sema is deliberately NOT run: codegen must face the unit value
+        // directly. An `Err` is the expected, healthy outcome; only a panic
+        // (the pre-BL-1 `?.unwrap()` behavior) counts as a crash.
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let _ = turbo_codegen_cranelift::aot_compile(&module, &out_path, false, None, &[]);
+        }));
+        let _ = std::fs::remove_file(&out_path);
+
+        if result.is_err() {
+            crashes += 1;
+            eprintln!("BL1-CORPUS CRASH at index {i}: {:?}", truncate(src, 120));
+        }
+    }
+
+    println!(
+        "== bl1-corpus: {} programs, {reached} reached codegen, {crashes} crashes ==",
+        CODEGEN_ROBUSTNESS_CORPUS.len()
+    );
+    crashes
 }
 
 // ---------------------------------------------------------------------------

@@ -1592,7 +1592,11 @@ fn compile_short_circuit<M: Module>(
     op: BinOp,
     right: &Spanned<Expr>,
 ) -> Result<MaybeTyped, CodegenError> {
-    let (lhs, _) = compile_expr(cx, left)?.unwrap();
+    let (lhs, _) = compile_expr(cx, left)?.ok_or_else(|| CodegenError {
+        code: ErrorCode::E0400,
+        message: "compile_short_circuit: `left` produced no value during code generation"
+            .to_string(),
+    })?;
     let lhs_bool = cx.to_bool(lhs);
 
     let eval_rhs_block = cx.builder.create_block();
@@ -1617,7 +1621,11 @@ fn compile_short_circuit<M: Module>(
 
     cx.builder.switch_to_block(eval_rhs_block);
     cx.builder.seal_block(eval_rhs_block);
-    let (rhs, _) = compile_expr(cx, right)?.unwrap();
+    let (rhs, _) = compile_expr(cx, right)?.ok_or_else(|| CodegenError {
+        code: ErrorCode::E0400,
+        message: "compile_short_circuit: `right` produced no value during code generation"
+            .to_string(),
+    })?;
 
     let rhs_as_i8 = cx.to_bool(rhs);
 
@@ -1643,7 +1651,10 @@ fn compile_call<M: Module>(
         ref field,
     } = callee.node
     {
-        let (obj_val, obj_tty) = compile_expr(cx, object)?.unwrap();
+        let (obj_val, obj_tty) = compile_expr(cx, object)?.ok_or_else(|| CodegenError {
+            code: ErrorCode::E0400,
+            message: "compile_call: `object` produced no value during code generation".to_string(),
+        })?;
         if let TurboTy::Struct(ref type_name) = obj_tty {
             let mangled = format!("{}__{}", type_name, field);
             if let Some(&fid) = cx.user_fns.get(&mangled) {
@@ -1848,7 +1859,7 @@ fn compile_call<M: Module>(
 
                                 // Store each field at offset (i+1)*8
                                 for (i, arg) in data_args.iter().enumerate() {
-                                    let (val, _tty) = compile_expr(cx, arg)?.unwrap();
+                                    let (val, _tty) = compile_expr(cx, arg)?.ok_or_else(|| CodegenError { code: ErrorCode::E0400, message: "compile_call: `arg` produced no value during code generation".to_string() })?;
                                     let offset = ((i + 1) * 8) as i32;
 
                                     // Widen/convert to i64 for uniform storage
@@ -1887,7 +1898,13 @@ fn compile_call<M: Module>(
             // Check if this is a method call (UFCS: parser rewrites obj.method(args) -> method(obj, args))
             if cx.user_fns.get(name.as_str()).is_none() && !args.is_empty() {
                 // Compile first arg to get its type, then check for method
-                let (first_val, first_tty) = compile_expr(cx, &args[0])?.unwrap();
+                let (first_val, first_tty) =
+                    compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+                        code: ErrorCode::E0400,
+                        message:
+                            "compile_call: `&args[0]` produced no value during code generation"
+                                .to_string(),
+                    })?;
                 if let TurboTy::Struct(ref type_name) = first_tty {
                     let mangled = format!("{}__{}", type_name, name);
                     if let Some(&fid) = cx.user_fns.get(&mangled) {
@@ -1983,10 +2000,10 @@ fn compile_call<M: Module>(
                     if matches!(ret_tty, TurboTy::Float) {
                         let rty = cx.builder.func.dfg.value_type(result);
                         if rty.is_int() && rty.bits() == 64 {
-                            result =
-                                cx.builder
-                                    .ins()
-                                    .bitcast(types::F64, MemFlags::new(), result);
+                            result = cx
+                                .builder
+                                .ins()
+                                .bitcast(types::F64, MemFlags::new(), result);
                         }
                     }
                     return Ok(Some((result, ret_tty)));

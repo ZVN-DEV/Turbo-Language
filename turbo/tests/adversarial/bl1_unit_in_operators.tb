@@ -1,0 +1,9 @@
+// BL-1 adversarial: unit/void values in short-circuit operands and method
+// receiver position (the expr.rs sites that used to `?.unwrap()`). Parseable;
+// sema rejects them with a clean diagnostic and a non-zero (non-101) exit.
+fn main() {
+    let a = print(0) && true
+    let b = false || print(0)
+    let c = print(0).foo()
+    print(a)
+}
