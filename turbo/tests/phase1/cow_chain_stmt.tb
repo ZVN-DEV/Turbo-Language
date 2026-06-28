@@ -1,0 +1,31 @@
+// Regression test for the COW-rewrite fix: a chained COW builtin call in
+// statement position (e.g. `s.trim().upper()`, which desugars to
+// `upper(trim(s))`) must rewrite into a self-assignment of the chain's
+// root receiver (`s = upper(trim(s))`). Before the fix the chained call
+// fell through the rewrite and the new string was silently discarded, so
+// the variable never updated.
+
+fn main() {
+    // Two-deep chain rooted in a mutable variable.
+    let mut s = "  hello world  "
+    s.trim().upper()
+    print(s)
+
+    // Three-deep chain: trim then lower.
+    let mut t = "  Mixed Case  "
+    t.trim().lower()
+    print(t)
+
+    // Chain inside an if used purely for its side effect (statement
+    // position) — the root variable must still be reassigned.
+    let mut u = "  spaced out  "
+    if true {
+        u.trim().upper()
+    }
+    print(u)
+
+    // Replace then upper, chained as a statement.
+    let mut v = "hello world"
+    v.replace("world", "turbo").upper()
+    print(v)
+}
