@@ -11,7 +11,8 @@ use turbo_ast::*;
 use crate::scope::VarInfo;
 use crate::suggest;
 use crate::{
-    extract_int_literal, int_literal_fits_in_type, resolve_type_expr, types_compatible, Checker, Ty,
+    extract_int_literal, int_literal_fits_in_type, literal_coerces_to, resolve_type_expr,
+    types_compatible, Checker, Ty,
 };
 
 impl Checker {
@@ -83,6 +84,18 @@ impl Checker {
                             return Ty::Error;
                         }
                         if lhs != rhs {
+                            // An untyped numeric *literal* operand coerces into
+                            // the other operand's sized numeric type, so idioms
+                            // like `n + 1` (where `n: i32`) or `x * 2.0` (where
+                            // `x: f32`) type-check to the sized type. Two
+                            // differently-typed sized values still mismatch and
+                            // require an explicit `as` cast.
+                            if literal_coerces_to(&right.node, &lhs) {
+                                return lhs;
+                            }
+                            if literal_coerces_to(&left.node, &rhs) {
+                                return rhs;
+                            }
                             self.error(
                                 ErrorCode::E0102,
                                 format!("mismatched types in arithmetic: `{lhs}` and `{rhs}`"),
@@ -181,6 +194,41 @@ impl Checker {
                             Ty::Bool
                         }
                     }
+                }
+            }
+
+            Expr::Cast { expr: inner, ty } => {
+                let from = self.check_expr(inner);
+                let Some(target) =
+                    resolve_type_expr(&ty.node, Some(&self.structs), Some(&self.enums))
+                else {
+                    if let TypeExpr::Named(name) = &ty.node {
+                        self.error(
+                            ErrorCode::E0305,
+                            format!("unknown type `{name}` in cast"),
+                            ty.span.clone(),
+                        );
+                    }
+                    return Ty::Error;
+                };
+                if from.is_error() {
+                    // Suppress cascading errors but adopt the user's intended
+                    // target type so downstream checks see something concrete.
+                    return target;
+                }
+                // Allowed casts: any numeric ↔ numeric conversion, plus a
+                // no-op identity cast. Everything else (e.g. `str as i32`) is
+                // rejected with the general type-mismatch code E0100 — there is
+                // no dedicated cast error code, and E0100 reads naturally here.
+                if (from.is_numeric() && target.is_numeric()) || from == target {
+                    target
+                } else {
+                    self.error(
+                        ErrorCode::E0100,
+                        format!("cannot cast `{from}` to `{target}`"),
+                        expr.span.clone(),
+                    );
+                    Ty::Error
                 }
             }
 
@@ -3835,6 +3883,10 @@ impl Checker {
                         } else if !val_ty.is_error()
                             && !expected_ty.is_error()
                             && &val_ty != *expected_ty
+                            // An untyped numeric literal coerces into the
+                            // field's sized numeric type, e.g. `U { age: 30 }`
+                            // where `age: u32`.
+                            && !literal_coerces_to(&value.node, expected_ty)
                         {
                             self.error(ErrorCode::E0100,
                                 format!(

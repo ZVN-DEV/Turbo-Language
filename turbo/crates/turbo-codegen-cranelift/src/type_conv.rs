@@ -73,6 +73,79 @@ pub(crate) fn coerce_value<M: Module>(
     }
 }
 
+/// Whether a `TurboTy` is one of the scalar numeric tags an `as` cast operates
+/// on. (`Bool` is *not* numeric here — sema rejects `bool as int`.)
+pub(crate) fn is_numeric_tty(tty: &TurboTy) -> bool {
+    matches!(
+        tty,
+        TurboTy::I8 | TurboTy::I16 | TurboTy::U8 | TurboTy::U16 | TurboTy::Int | TurboTy::Float
+    )
+}
+
+/// Whether a target type expression names an unsigned integer. Used to pick the
+/// signed vs unsigned float→int conversion: `i32`/`i64` and the `Int` tag default
+/// to signed, while `u8…u64`/`usize` use the unsigned conversion. This matters
+/// only for `float as u32`/`u64`, since those widths ride the uniform 64-bit
+/// `Int` slot and so can't be told apart by `TurboTy` alone.
+pub(crate) fn type_expr_is_unsigned(te: &TypeExpr) -> bool {
+    matches!(
+        te,
+        TypeExpr::Named(name)
+            if matches!(name.as_str(), "u8" | "u16" | "u32" | "u64" | "usize")
+    )
+}
+
+/// Lower a numeric `as` cast value from `from` to `to`. Both are expected to be
+/// numeric `TurboTy`s (sema rejects everything else). Semantics:
+///
+/// * **int → int**: normalise the source to a 64-bit value (sign/zero-extending
+///   per the source's signedness) then narrow to the target. Narrowing to
+///   `i8`/`i16`/`u8`/`u16` wraps via `ireduce` (two's-complement truncation, so
+///   `300 as u8 == 44`). `i32`/`u32`/`u64`/`i64` all share one 64-bit slot
+///   internally (`TurboTy::Int`), so casts among them are identity at the IR
+///   level — only the 8/16-bit types have a distinct width that can wrap.
+/// * **int → float**: widen to i64 then `fcvt_from_sint` (unsigned narrow
+///   sources are zero-extended first, so they convert correctly; only `u64`
+///   values ≥ 2⁶³ would differ, an accepted edge of the uniform-i64 model).
+/// * **float → int**: saturating `fcvt_to_{s,u}int_sat` (NaN → 0, out-of-range
+///   clamps) then narrow to the target width. Truncates toward zero, so
+///   `3.9 as i64 == 3`.
+/// * **float → float**: identity — `f32` and `f64` share one F64 slot
+///   internally (BL-3), so `as f32` is a no-op except at the C FFI boundary.
+pub(crate) fn numeric_cast<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    val: Value,
+    from: &TurboTy,
+    to: &TurboTy,
+    to_unsigned: bool,
+) -> (Value, TurboTy) {
+    let from_is_float = matches!(from, TurboTy::Float);
+    let to_is_float = matches!(to, TurboTy::Float);
+    match (from_is_float, to_is_float) {
+        (false, false) => {
+            // int -> int: widen to i64, then narrow to the target width.
+            let (i64v, _) = coerce_value(cx, val, from, &TurboTy::Int);
+            coerce_value(cx, i64v, &TurboTy::Int, to)
+        }
+        (false, true) => {
+            // int -> float
+            let (i64v, _) = coerce_value(cx, val, from, &TurboTy::Int);
+            let f = cx.builder.ins().fcvt_from_sint(types::F64, i64v);
+            (f, TurboTy::Float)
+        }
+        (true, false) => {
+            // float -> int (saturating), then narrow to the target width.
+            let i64v = if to_unsigned {
+                cx.builder.ins().fcvt_to_uint_sat(types::I64, val)
+            } else {
+                cx.builder.ins().fcvt_to_sint_sat(types::I64, val)
+            };
+            coerce_value(cx, i64v, &TurboTy::Int, to)
+        }
+        (true, true) => (val, TurboTy::Float),
+    }
+}
+
 // ── TypeExpr → Cranelift type resolution ──────────────────────────
 
 /// Resolve a Turbo `TypeExpr` to the Cranelift IR type used for *internal*

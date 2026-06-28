@@ -201,6 +201,43 @@ pub(crate) fn int_literal_fits_in_type(n: i64, target: &Ty) -> bool {
     }
 }
 
+/// Whether an *untyped numeric literal* `expr` may implicitly coerce into the
+/// sized scalar type `target`.
+///
+/// This is the single rule behind annotated-literal coercion, shared by `let`
+/// bindings, `return` values, struct-field initialisers, array literals, and
+/// literal-operand arithmetic:
+///   * an integer literal coerces into any integer type it numerically fits in
+///     (`let x: u8 = 30`, `n + 1` where `n: i32`),
+///   * a float literal coerces into `f32`/`f64`.
+///
+/// Only *literals* coerce. Two differently-typed sized values (e.g. an `i32`
+/// variable used where `u8` is expected) still require an explicit `as` cast —
+/// `extract_int_literal` returns `None` for non-literal operands, so this
+/// function rejects them.
+pub(crate) fn literal_coerces_to(expr: &Expr, target: &Ty) -> bool {
+    if let Some(n) = extract_int_literal(expr) {
+        return target.is_integer() && int_literal_fits_in_type(n, target);
+    }
+    if matches!(expr, Expr::FloatLit(_)) {
+        return target.is_float();
+    }
+    false
+}
+
+/// Whether an array *literal* coerces element-wise into the annotated array
+/// type `target`, e.g. `let b: [u8] = [104, 105]`. Every element must itself be
+/// a literal that coerces into the declared element type (see
+/// [`literal_coerces_to`]). Empty literals are handled separately by the `let`
+/// checker's empty-array special case, so they are not accepted here.
+pub(crate) fn array_literal_coerces(expr: &Expr, target: &Ty) -> bool {
+    if let (Expr::ArrayLit(elems), Ty::Array(elem_ty)) = (expr, target) {
+        !elems.is_empty() && elems.iter().all(|e| literal_coerces_to(&e.node, elem_ty))
+    } else {
+        false
+    }
+}
+
 /// Check if two types are compatible (allowing partial Result types where Error = unknown).
 pub(crate) fn types_compatible(expected: &Ty, actual: &Ty) -> bool {
     if expected == actual {

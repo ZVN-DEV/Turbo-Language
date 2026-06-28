@@ -1,0 +1,30 @@
+// Parity: `as` casts and sized-int literal coercion must produce byte-identical
+// output under the JIT and the AOT (Cranelift) backends.
+struct Box {
+    w: u8
+    h: i16
+}
+
+fn main() {
+    // Casts: narrowing wrap, widening, int<->float.
+    print(300 as u8)            // 44
+    print(-1 as u8)             // 255
+    print(200 as u8 as i64)     // 200
+    print(3.9 as i64)           // 3
+    print(-2.5 as i64)          // -2
+    print(10 as float / 4.0)    // 2.5
+    print(4000000000.0 as u32)  // 4000000000
+
+    // Literal coercion into sized array elements.
+    let bytes: [u8] = [1, 2, 254]
+    print(bytes[0] + bytes[2])  // 255 (u8 arithmetic)
+
+    // Literal coercion into struct fields.
+    let b: Box = Box { w: 250, h: -3 }
+    print(b.w as i64 + 10)      // 260
+    print(b.h - 1)              // -4
+
+    // Literal-operand arithmetic on a sized var.
+    let n: i32 = 1000
+    print(n + 1)                // 1001
+}

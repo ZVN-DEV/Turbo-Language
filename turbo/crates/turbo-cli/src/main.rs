@@ -2809,6 +2809,10 @@ fn collect_names_in_expr(e: &Expr, out: &mut HashSet<String>) {
         | Expr::Try(e) => {
             collect_names_in_expr(&e.node, out);
         }
+        Expr::Cast { expr, ty } => {
+            collect_names_in_expr(&expr.node, out);
+            collect_names_in_type(&ty.node, out);
+        }
         Expr::NullCoalesce { value, default } => {
             collect_names_in_expr(&value.node, out);
             collect_names_in_expr(&default.node, out);

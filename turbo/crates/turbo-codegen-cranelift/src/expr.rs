@@ -106,6 +106,30 @@ fn compile_expr_inner<M: Module>(
                 }
             }
 
+            // Unify mismatched integer operand tags for arithmetic. Sema only
+            // permits a mix when an untyped int literal coerces into a sized
+            // operand (`n + 1` where `n: i8`), and the result is that sized
+            // type. Coerce both operands to the narrower tag so the value's IR
+            // width matches its TurboTy — otherwise a narrow-tagged i64 result
+            // would later hit `sextend(i64, i64)` in the print/convert path and
+            // panic Cranelift.
+            let (lhs, rhs, arith_tty) = if matches!(
+                op,
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+            ) && lhs_tty != rhs_tty
+            {
+                match unify_int_tty(&lhs_tty, &rhs_tty) {
+                    Some(common) => {
+                        let (l, _) = coerce_value(cx, lhs, &lhs_tty, &common);
+                        let (r, _) = coerce_value(cx, rhs, &rhs_tty, &common);
+                        (l, r, common)
+                    }
+                    None => (lhs, rhs, lhs_tty.clone()),
+                }
+            } else {
+                (lhs, rhs, lhs_tty.clone())
+            };
+
             let result = compile_binop(cx, lhs, *op, rhs)?;
 
             // Comparison/logical ops produce Bool, arithmetic preserves input type
@@ -118,7 +142,7 @@ fn compile_expr_inner<M: Module>(
                 | BinOp::GreaterEq
                 | BinOp::And
                 | BinOp::Or => TurboTy::Bool,
-                _ => lhs_tty,
+                _ => arith_tty,
             };
             Ok(Some((result, result_tty)))
         }
@@ -147,6 +171,24 @@ fn compile_expr_inner<M: Module>(
                 UnaryOp::Neg => tty,
             };
             Ok(Some((result, result_tty)))
+        }
+
+        Expr::Cast { expr: inner, ty } => {
+            let (val, from_tty) = compile_expr(cx, inner)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "cannot cast a unit value".to_string(),
+            })?;
+            let to_tty = turbo_ty_from_type_expr(&ty.node, cx.enum_variants);
+            // Sema guarantees numeric ↔ numeric (or an identity cast). For the
+            // numeric case lower the real conversion; an identity / non-numeric
+            // cast is a defensive no-op retag.
+            if is_numeric_tty(&from_tty) && is_numeric_tty(&to_tty) {
+                let to_unsigned = type_expr_is_unsigned(&ty.node);
+                let cast = numeric_cast(cx, val, &from_tty, &to_tty, to_unsigned);
+                Ok(Some(cast))
+            } else {
+                Ok(Some((val, to_tty)))
+            }
         }
 
         Expr::Call { callee, args } => compile_call(cx, callee, args),
@@ -830,6 +872,20 @@ fn compile_expr_inner<M: Module>(
                     let truncated = cx.builder.ins().ireduce(types::I8, raw);
                     (truncated, elem_tty)
                 }
+                // Narrow integer elements are stored in the array's 8-byte slots
+                // but flow as their own width elsewhere. Truncate the loaded i64
+                // back to the element width so its IR type matches its tag
+                // (e.g. `let b: [u8] = [104, 105]; b[0]` yields an i8, not an
+                // i64 mislabelled `u8`, which the print/convert path would
+                // double-extend and crash on).
+                TurboTy::I8 | TurboTy::U8 => {
+                    let truncated = cx.builder.ins().ireduce(types::I8, raw);
+                    (truncated, elem_tty)
+                }
+                TurboTy::I16 | TurboTy::U16 => {
+                    let truncated = cx.builder.ins().ireduce(types::I16, raw);
+                    (truncated, elem_tty)
+                }
                 TurboTy::Float => {
                     let f = cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw);
                     (f, elem_tty)
@@ -1436,6 +1492,20 @@ fn try_iconst_value<M: Module>(cx: &Ctx<'_, M>, val: Value) -> Option<i64> {
         Some(i64::from(imm))
     } else {
         None
+    }
+}
+
+/// Pick the common tag for two mismatched integer operands in arithmetic. The
+/// only mix sema allows is an untyped int literal (`TurboTy::Int`) against a
+/// sized narrow operand (`i8`/`i16`/`u8`/`u16`); the literal coerces into the
+/// sized type, so the narrow tag wins. Anything else returns `None` (no
+/// unification — sema rejects e.g. `i8` + `i16` before codegen).
+fn unify_int_tty(a: &TurboTy, b: &TurboTy) -> Option<TurboTy> {
+    let is_narrow =
+        |t: &TurboTy| matches!(t, TurboTy::I8 | TurboTy::I16 | TurboTy::U8 | TurboTy::U16);
+    match (a, b) {
+        (TurboTy::Int, n) | (n, TurboTy::Int) if is_narrow(n) => Some(n.clone()),
+        _ => None,
     }
 }
 

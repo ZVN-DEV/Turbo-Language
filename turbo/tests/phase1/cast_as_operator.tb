@@ -1,0 +1,24 @@
+// The `as` cast operator: numeric ↔ numeric conversions, JIT and AOT identical.
+// Narrowing to i8/i16/u8/u16 wraps (two's-complement truncation); int↔float
+// conversions truncate toward zero / round-trip; `as f32` is an internal no-op.
+fn main() {
+    // Narrowing wraps to the target width.
+    print(300 as u8)        // 300 & 0xFF = 44
+    print(257 as u8)        // 1
+    print(-1 as u8)         // 255
+    print(70000 as u16)     // 70000 - 65536 = 4464
+
+    // Widening preserves value (zero-extend for unsigned, sign-extend signed).
+    print(200 as u8 as i64) // 200
+    print(-5 as i16 as i64) // -5
+
+    // Float -> int truncates toward zero (saturating on overflow).
+    print(3.9 as i64)       // 3
+    print(-3.9 as i64)      // -3
+
+    // Int -> float, then float arithmetic to show the fractional result.
+    print(7 as float / 2.0) // 3.5
+
+    // Chained casts associate left.
+    print(513 as u8 as i64) // 513 & 0xFF = 1
+}

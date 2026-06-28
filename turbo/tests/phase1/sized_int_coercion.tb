@@ -1,0 +1,30 @@
+// Untyped numeric literals coerce into annotated sized types across more
+// contexts: array literals, struct field initialisers, and arithmetic where
+// one operand is a sized var and the other an int literal.
+struct Pixel {
+    age: u32
+    level: i8
+}
+
+fn main() {
+    // Array literal with a sized element annotation: each element coerces.
+    let bytes: [u8] = [104, 105, 33]
+    print(bytes[0])         // 104
+    print(bytes[1])         // 105
+    print(bytes[2])         // 33
+    print(len(bytes))       // 3
+
+    // Struct field init: the literal coerces to the field's sized type.
+    let p: Pixel = Pixel { age: 30, level: -2 }
+    print(p.age)            // 30
+    print(p.level)          // -2
+
+    // Arithmetic: an int literal coerces into the sized var's type.
+    let n: i32 = 5
+    print(n + 1)            // 6
+    print(n * 10)           // 50
+
+    let small: i8 = 100
+    print(small + 27)       // 127  (fits)
+    print(small - 1)        // 99
+}
