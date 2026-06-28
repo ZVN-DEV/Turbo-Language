@@ -525,7 +525,7 @@ export default function Home() {
             <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
               fib(40) — recursion microbenchmark
             </h3>
-            <p className="text-gray-500 text-sm mt-1">
+            <p className="text-gray-400 text-sm mt-1">
               Pure function-call overhead. Turbo&apos;s native build lands within
               ~1.3x of C and Rust, in the same range as Go, and far ahead of
               interpreted runtimes.
@@ -550,7 +550,7 @@ export default function Home() {
                       {b.label}
                     </span>
                     <div className="flex items-center gap-3">
-                      <span className="text-xs text-gray-500">{b.size}</span>
+                      <span className="text-xs text-gray-400">{b.size}</span>
                       <span
                         className={`text-sm font-[family-name:var(--font-geist-mono)] font-medium ${
                           b.highlight ? "text-[#00ff88]" : "text-gray-400"
@@ -579,7 +579,7 @@ export default function Home() {
             <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
               word-count — real-world workload
             </h3>
-            <p className="text-gray-500 text-sm mt-1">
+            <p className="text-gray-400 text-sm mt-1">
               Read a ~5 MB file (1.05M words), tokenize, count frequencies in a
               hashmap, print the top 20 — file I/O, strings, hashmaps, sorting.
               On this string/hashmap-heavy work Turbo&apos;s native build is about
@@ -604,7 +604,7 @@ export default function Home() {
                       {b.label}
                     </span>
                     <div className="flex items-center gap-3">
-                      <span className="text-xs text-gray-500">{b.size}</span>
+                      <span className="text-xs text-gray-400">{b.size}</span>
                       <span
                         className={`text-sm font-[family-name:var(--font-geist-mono)] font-medium ${
                           b.highlight ? "text-[#00ff88]" : "text-gray-400"

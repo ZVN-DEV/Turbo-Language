@@ -22,7 +22,7 @@ export default function CodeTabs({ tabs }: { tabs: Tab[] }) {
             className={`px-4 py-2 text-sm rounded-lg transition-colors font-[family-name:var(--font-geist-sans)] ${
               active === i
                 ? "bg-surface text-accent border border-border"
-                : "text-gray-500 hover:text-gray-300"
+                : "text-gray-400 hover:text-gray-300"
             }`}
           >
             {tab.label}

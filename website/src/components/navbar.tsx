@@ -3,7 +3,10 @@ import Link from "next/link";
 export default function Navbar() {
   return (
     <header className="fixed top-0 left-0 right-0 z-50 border-b border-border bg-background/80 backdrop-blur-xl">
-      <nav className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+      <nav
+        aria-label="Primary"
+        className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between"
+      >
         <Link
           href="/"
           className="text-xl font-bold bg-gradient-to-r from-accent to-accent-blue bg-clip-text text-transparent font-[family-name:var(--font-geist-sans)]"

@@ -172,7 +172,7 @@ fn main() {
     print(area(s))    // circle
 }`}</code>
       </pre>
-      <p className="text-sm text-gray-500 mb-6">
+      <p className="text-sm text-gray-400 mb-6">
         The compiler checks that match expressions are exhaustive -- if you miss
         a variant, you get a compile error (E0200).
       </p>

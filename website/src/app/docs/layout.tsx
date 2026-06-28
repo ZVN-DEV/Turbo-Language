@@ -64,7 +64,7 @@ export default function DocsLayout({
     <div className="flex min-h-screen bg-[#0a0a0a]">
       {/* Sidebar */}
       <aside className="hidden md:block w-[250px] shrink-0 border-r border-[#1a1a2e] bg-[#0a0a0a] sticky top-0 h-screen overflow-y-auto">
-        <nav className="p-6 pt-8">
+        <nav aria-label="Docs" className="p-6 pt-8">
           <Link
             href="/docs"
             className="text-[#00ff88] font-bold text-lg font-[family-name:var(--font-geist-sans)] mb-8 block"
@@ -73,7 +73,7 @@ export default function DocsLayout({
           </Link>
           {sections.map((section) => (
             <div key={section.title} className="mb-6">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 font-[family-name:var(--font-geist-sans)]">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2 font-[family-name:var(--font-geist-sans)]">
                 {section.title}
               </h3>
               <ul className="space-y-1">
@@ -107,7 +107,7 @@ export default function DocsLayout({
 
       {/* Mobile sidebar */}
       <div className="md:hidden w-full border-b border-[#1a1a2e] bg-[#0a0a0a] overflow-x-auto">
-        <nav className="flex gap-4 px-4 py-3 min-w-max">
+        <nav aria-label="Docs (mobile)" className="flex gap-4 px-4 py-3 min-w-max">
           {sections.flatMap((section) =>
             section.links
               .filter((link) => !("external" in link))
@@ -125,11 +125,11 @@ export default function DocsLayout({
       </div>
 
       {/* Main content */}
-      <main className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0">
         <div className="max-w-3xl mx-auto px-6 md:px-12 py-12 md:py-16">
           {children}
         </div>
-      </main>
+      </div>
     </div>
   );
 }

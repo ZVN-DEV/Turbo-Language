@@ -13,7 +13,7 @@ function highlightTurbo(code: string): React.ReactNode[] {
       const commentMatch = remaining.match(/^(\/\/.*)/);
       if (commentMatch) {
         tokens.push(
-          <span key={key++} className="text-gray-500">
+          <span key={key++} className="text-gray-400">
             {commentMatch[1]}
           </span>
         );
@@ -111,7 +111,7 @@ export default function CodeBlock({
     <div className="relative rounded-xl border border-border overflow-hidden bg-surface">
       <CopyButton text={code} label="Copy code" />
       {filename && (
-        <div className="px-4 py-2 border-b border-border text-xs text-gray-500 font-[family-name:var(--font-geist-mono)]">
+        <div className="px-4 py-2 border-b border-border text-xs text-gray-400 font-[family-name:var(--font-geist-mono)]">
           {filename}
         </div>
       )}
