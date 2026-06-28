@@ -13,7 +13,7 @@ export default function Footer() {
               <li>
                 <Link
                   href="/docs"
-                  className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
                 >
                   Documentation
                 </Link>
@@ -21,7 +21,7 @@ export default function Footer() {
               <li>
                 <Link
                   href="/docs/installation"
-                  className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
                 >
                   Installation
                 </Link>
@@ -29,7 +29,7 @@ export default function Footer() {
               <li>
                 <Link
                   href="/docs/examples"
-                  className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
                 >
                   Examples
                 </Link>
@@ -44,7 +44,7 @@ export default function Footer() {
               <li>
                 <Link
                   href="/docs/cli"
-                  className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
                 >
                   CLI
                 </Link>
@@ -52,7 +52,7 @@ export default function Footer() {
               <li>
                 <Link
                   href="/docs/testing"
-                  className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
                 >
                   Testing
                 </Link>
@@ -60,7 +60,7 @@ export default function Footer() {
               <li>
                 <Link
                   href="/docs/cli#lsp"
-                  className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
                 >
                   LSP
                 </Link>
@@ -77,7 +77,7 @@ export default function Footer() {
                   href="https://github.com/ZVN-DEV/Turbo-Language"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
                 >
                   GitHub
                 </a>
@@ -87,7 +87,7 @@ export default function Footer() {
                   href="https://github.com/ZVN-DEV/Turbo-Language/issues"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
                 >
                   Issues
                 </a>
@@ -104,7 +104,7 @@ export default function Footer() {
                   href="https://github.com/ZVN-DEV/turbo-vscode"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
                 >
                   VS Code Extension
                 </a>
@@ -114,7 +114,7 @@ export default function Footer() {
                   href="https://github.com/ZVN-DEV/tree-sitter-turbo"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-sm text-gray-500 hover:text-gray-300 transition-colors"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
                 >
                   Tree-sitter Grammar
                 </a>
@@ -123,10 +123,10 @@ export default function Footer() {
           </div>
         </div>
         <div className="border-t border-border pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
-          <p className="text-sm text-gray-600 font-[family-name:var(--font-geist-sans)]">
+          <p className="text-sm text-gray-400 font-[family-name:var(--font-geist-sans)]">
             Built with Cranelift. A small, honest core.
           </p>
-          <p className="text-sm text-gray-600 font-[family-name:var(--font-geist-sans)]">
+          <p className="text-sm text-gray-400 font-[family-name:var(--font-geist-sans)]">
             &copy; {new Date().getFullYear()} Turbo Language
           </p>
         </div>

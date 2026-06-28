@@ -56,7 +56,7 @@ export default function HelloWorldPage() {
         <code>{`$ turbolang run hello.tb
 Hello, world!`}</code>
       </pre>
-      <p className="text-sm text-gray-500 mb-6">
+      <p className="text-sm text-gray-400 mb-6">
         The JIT (Just-In-Time) compiler uses Cranelift to compile your code to
         machine code in memory and runs it immediately. This is the fastest way
         to iterate during development.
@@ -77,7 +77,7 @@ Hello, world!`}</code>
 $ ./hello
 Hello, world!`}</code>
       </pre>
-      <p className="text-sm text-gray-500 mb-6">
+      <p className="text-sm text-gray-400 mb-6">
         AOT (Ahead-Of-Time) compilation produces a self-contained binary with no
         runtime dependencies. The binary is linked with a small C runtime for
         I/O and memory operations.
