@@ -63,10 +63,12 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
   Correct-over-complete: field-access-to-struct-field resolution still falls back (needs type inference).
   LSP tests 50 → 70. **Follow-on (future):** field/method resolution once a span→type map exists.
 
-- [ ] **BL-5 — AST-based formatter.** `turbo-formatter` is a line-based brace/space tidier; it doesn't
-  space arithmetic operators, `:` in params, or `->`, and won't expand inline blocks. Replace with a real
-  AST pretty-printer. **AC:** idempotent (`fmt` then `fmt` is a no-op), produces canonical spacing, and the
-  `init` scaffold + all `tests/phase1/*.tb` round-trip stably.
+- [x] **BL-5 — AST-based formatter.** _Done (commit `677d243`, merged to master)._ Replaced the line-based
+  tidier with a real lex→parse→print pretty-printer (canonical operator/`:`/`->` spacing, block expansion,
+  4-space indent, trailing commas). Safety-gated: re-parses its own output and compares ASTs (behaviour-
+  equality) + a comment multiset check; on any mismatch / unparseable input / block comments it returns the
+  source **byte-for-byte**. Idempotent + semantics-preserving across all 204 phase1 + regression +
+  adversarial programs; `init` scaffold passes `fmt --check`. turbo-formatter tests 8 → 36.
 
 - [ ] **BL-6 — Split the two god-functions.** `turbo-sema/src/type_check/expr.rs::check_expr_inner`
   (~4,540 lines) and the `compile_call` `_` fallback arm in `turbo-codegen-cranelift/src/expr.rs`
@@ -104,15 +106,14 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
 
 ### P1 — correctness, trust, and the wedge
 
-- [ ] **BL-10 — Struct field-assignment aliases storage (no COW) → silent data corruption.** _[backend]
-  CONFIRMED on JIT **and** AOT._ `let mut a = Point{..}; let mut b = a; b.x = 99; print(a.x)` prints `99`
-  (expected `1`). `Expr::FieldAssign` in `turbo-codegen-cranelift/src/expr.rs` emits a direct `store` into
-  the struct's heap alloc with no refcount/COW guard — unlike `rt_array_set` (`turbo_rt.c`) which copies
-  when refcount > 1. Passing a struct to a `mut` param and copying a struct out of an array element alias
-  too. Contradicts the headline CoW value-semantics guarantee in `docs/SAFETY.md`. Exit 0, no diagnostic.
-  **AC:** mirror `rt_array_set`'s `refcount>1 → private copy → decrement old` dance at `FieldAssign` (or
-  copy structs at `let`/param-bind); regression test asserting struct value semantics after `let b=a`, after
-  passing to a `mut` param, and after array-element copy; JIT==AOT.
+- [x] **BL-10 — Struct field-assignment aliases storage (no COW) → silent data corruption.** _[backend]
+  Done (commit `40ad9ef`, merged to master)._ Structs already carried the same `[cap][refcount]` header as
+  arrays but never consulted it on write. New `rt_struct_cow` (in both `runtime.rs` JIT and `turbo_rt.c` AOT)
+  mirrors `rt_array_set`'s `refcount>1 → private copy → drop shared ref` dance; `FieldAssign` calls it before
+  the store and repoints the binding, with retains added at the `mut`-param and array-element binding sites so
+  the refcount is honest. Restores the `docs/SAFETY.md` CoW value-semantics guarantee for structs. +3 phase1
+  tests + 1 JIT/AOT parity test (`struct_value_semantics`); 241 integration / 19 parity green. _Surfaced
+  BL-27._
 
 - [ ] **BL-11 — Printing a compound value yields an opaque placeholder.** _[e2e]_ `print(arr)` / interpolating
   an array → `[array]`; structs → `[struct P]`; results → `[result]` (only scalars + Optionals render). The
@@ -209,6 +210,16 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   the string arena is freed per-run and the README warns AOT servers leak — a credibility landmine the moment a
   skeptic runs it for real (also blocks a persistent embedded VM for BL-16). **AC:** fix the long-lived-process
   memory model, OR demote "server" from flagship to a terminating demo and stop leading with it. (Investigate first.)
+
+- [ ] **BL-27 — COW parity gaps surfaced by BL-10.** _[backend, follow-on]_ While fixing struct COW it was
+  confirmed that **arrays have the same aliasing at two of three sites**: passing an array to a `mut` param and
+  `let s = arr2d[0]; s[0]=…` still alias the source (only `let b = a` array copy was correct). BL-10's struct
+  retains are gated to `TurboTy::Struct(_)`, so this array gap is pre-existing and untouched. Separately, the
+  **WASM backend** (`wasm_codegen.rs` / `turbo_rt_wasm.c`) has the analogous struct-store aliasing (direct store
+  while its `IndexAssign` uses `rt_array_set`). **AC:** extend the COW retain/`rt_*_cow` discipline to arrays at
+  the mut-param + array-element sites, and to WASM struct stores; parity tests for both (native + WASM). Also:
+  BL-10 left a small bounded leak — a named struct passed to a *read-only* callee is retained without a matching
+  release (callee never COWs); tighten if the embedded/long-running memory model (BL-25/BL-16) needs it.
 
 ### P3 — polish (batch; do NOT spawn busywork PRs — fold opportunistically)
 
