@@ -83,8 +83,8 @@ enum Commands {
     },
     /// Initialize a new Turbo project
     Init {
-        /// Project name
-        name: String,
+        /// Project name (omit, or pass `.`, to scaffold into the current directory)
+        name: Option<String>,
     },
     /// Start an interactive REPL
     Repl,
@@ -96,16 +96,16 @@ enum Commands {
     },
     /// Format a Turbo source file
     Fmt {
-        /// Path to the .tb source file to format
-        file: PathBuf,
+        /// Path to the .tb source file to format (optional if turbo.toml exists)
+        file: Option<PathBuf>,
         /// Check only, don't modify (exit 1 if unformatted)
         #[arg(long)]
         check: bool,
     },
     /// Generate documentation from a Turbo source file
     Doc {
-        /// Path to the .tb source file
-        file: PathBuf,
+        /// Path to the .tb source file (optional if turbo.toml exists)
+        file: Option<PathBuf>,
     },
     /// Install dependencies from turbo.toml
     Install,
@@ -178,11 +178,17 @@ fn main() {
             let path = resolve_entry_file(file);
             build_file(&path, output.as_deref(), verbose, target.as_deref(), &link);
         }
-        Commands::Init { name } => init_project(&name),
+        Commands::Init { name } => init_project(name.as_deref().unwrap_or(".")),
         Commands::Repl => repl::run_repl(),
         Commands::Playground { port } => playground::serve(port),
-        Commands::Fmt { file, check } => turbo_formatter::format_file(&file, check),
-        Commands::Doc { file } => doc_file(&file),
+        Commands::Fmt { file, check } => {
+            let path = resolve_entry_file(file);
+            turbo_formatter::format_file(&path, check);
+        }
+        Commands::Doc { file } => {
+            let path = resolve_entry_file(file);
+            doc_file(&path);
+        }
         Commands::Install => install_deps(),
         Commands::Update => update_deps(),
         Commands::Check { file } => {
@@ -261,14 +267,32 @@ fn resolve_entry_file(file: Option<PathBuf>) -> PathBuf {
 }
 
 /// Initialize a new Turbo project with the given name.
+///
+/// Passing `.` (or an empty name) scaffolds into the current directory instead
+/// of creating a new one; the package name is then taken from the current
+/// directory's name.
 fn init_project(name: &str) {
-    let dir = Path::new(name);
-    let pkg_name = dir
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| name.to_string());
+    let into_current = name == "." || name.is_empty();
+    let dir = PathBuf::from(if into_current { "." } else { name });
+    let pkg_name = if into_current {
+        std::env::current_dir()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "app".to_string())
+    } else {
+        dir.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| name.to_string())
+    };
 
-    if dir.exists() {
+    if into_current {
+        if dir.join("turbo.toml").exists() {
+            eprintln!(
+                "\x1b[1;31merror\x1b[0m: `turbo.toml` already exists in the current directory"
+            );
+            std::process::exit(1);
+        }
+    } else if dir.exists() {
         eprintln!("\x1b[1;31merror\x1b[0m: directory `{name}` already exists");
         std::process::exit(1);
     }
@@ -407,8 +431,13 @@ fn area(shape: Shape) -> f64 {
         std::process::exit(1);
     });
 
-    eprintln!("\x1b[32m\u{2713}\x1b[0m Created project `{name}`");
-    eprintln!("  cd {name} && turbolang run");
+    if into_current {
+        eprintln!("\x1b[32m\u{2713}\x1b[0m Created project `{pkg_name}`");
+        eprintln!("  turbolang run");
+    } else {
+        eprintln!("\x1b[32m\u{2713}\x1b[0m Created project `{name}`");
+        eprintln!("  cd {name} && turbolang run");
+    }
 }
 
 /// Read the project name from `turbo.toml` in the current directory, if it exists.
