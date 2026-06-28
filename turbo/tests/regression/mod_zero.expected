@@ -1,1 +1,1 @@
-ERROR:division by zero
+ERROR:runtime error\[E0601\]: division by zero

@@ -310,13 +310,69 @@ void rt_assert_eq_fail(long long kind, const char *actual, const char *expected)
     exit(1);
 }
 
+/* ── Styled runtime-error envelope ───────────────────────────────────
+ *
+ * AOT (built-binary) twin of `runtime_error()` in src/runtime.rs. The two
+ * MUST emit byte-identical output so a program run through the JIT
+ * (`turbolang run`) and the same program built to a native binary produce
+ * the identical diagnostic (JIT ≡ AOT). ANSI color is emitted only when
+ * stderr is a terminal, so piped output (the integration-test harness, the
+ * web playground) stays clean.
+ *
+ *   runtime error[E06NN]: <message>
+ *   Help: <help>
+ *     more info: <doc url>
+ *
+ * RT_ERROR_DOC_URL_BASE must stay in sync with `error_code_url()` in
+ * turbo-cli/src/main.rs and `RT_ERROR_DOC_URL_BASE` in src/runtime.rs. */
+#define RT_ERROR_DOC_URL_BASE \
+    "https://github.com/ZVN-DEV/Turbo-Language/blob/master/docs/errors"
+
+static void rt_runtime_error(const char *code, const char *message, const char *help) {
+    if (isatty(fileno(stderr))) {
+        fprintf(stderr, "\033[1;31mruntime error[%s]\033[0m: %s\n", code, message);
+        fprintf(stderr, "\033[1;36mHelp\033[0m: %s\n", help);
+    } else {
+        fprintf(stderr, "runtime error[%s]: %s\n", code, message);
+        fprintf(stderr, "Help: %s\n", help);
+    }
+    fprintf(stderr, "  more info: " RT_ERROR_DOC_URL_BASE "/%s.md\n", code);
+}
+
+/* Styled array index-out-of-bounds trap (E0602). Shared by rt_array_get,
+ * rt_array_set, and rt_array_oob_exit. Diverges (never returns). */
+static void rt_array_oob(long long index, long long len) {
+    char message[96];
+    char help[128];
+    snprintf(message, sizeof message,
+             "array index %lld out of bounds (length %lld)", index, len);
+    snprintf(help, sizeof help,
+             "valid indices are 0..%lld (exclusive); check with `if i < len(arr)`", len);
+    rt_runtime_error("E0602", message, help);
+    exit(1);
+}
+
+/* Styled string index-out-of-bounds trap (E0602). Diverges (never returns). */
+static void rt_str_index_oob(long long index, size_t len) {
+    char message[96];
+    char help[160];
+    snprintf(message, sizeof message,
+             "string index %lld out of bounds (length %zu)", index, len);
+    snprintf(help, sizeof help,
+             "valid indices are 0..%zu (exclusive); check the index against the string length", len);
+    rt_runtime_error("E0602", message, help);
+    exit(1);
+}
+
 void rt_div_by_zero(void) {
-    fprintf(stderr, "runtime error: division by zero\n");
+    rt_runtime_error("E0601", "division by zero",
+                     "guard the divisor: `if b != 0 { ... }`");
     exit(1);
 }
 
 void rt_int_overflow(void) {
-    fprintf(stderr, "runtime error: integer overflow\n");
+    rt_runtime_error("E0603", "integer overflow",
+                     "the result does not fit in a 64-bit signed integer; check the operands' magnitude");
     exit(1);
 }
 
@@ -431,8 +487,7 @@ void* rt_array_alloc(long long len) {
 }
 
 void rt_array_oob_exit(long long index, long long len) {
-    fprintf(stderr, "runtime error: array index %lld out of bounds (length %lld)\n", index, len);
-    exit(1);
+    rt_array_oob(index, len);
 }
 
 long long rt_array_get(const void *arr, long long index) {
@@ -468,8 +523,7 @@ void* rt_array_set(void *arr, long long index, long long value) {
     }
     long long len = *(const long long*)target;
     if (index < 0 || index >= len) {
-        fprintf(stderr, "runtime error: array index %lld out of bounds (length %lld)\n", index, len);
-        exit(1);
+        rt_array_oob(index, len);
     }
     ((long long*)target)[1 + index] = value;
     return target;
@@ -812,13 +866,11 @@ const char* rt_str_replace(const char *s, const char *from, const char *to) {
 
 const char* rt_str_char_at(const char *s, long long index) {
     if (!s) {
-        fprintf(stderr, "runtime error: string index %lld out of bounds (length 0)\n", index);
-        exit(1);
+        rt_str_index_oob(index, 0);
     }
     size_t len = strlen(s);
     if (index < 0 || (size_t)index >= len) {
-        fprintf(stderr, "runtime error: string index %lld out of bounds (length %zu)\n", index, len);
-        exit(1);
+        rt_str_index_oob(index, len);
     }
     char *result = turbo_alloc(2);
     result[0] = s[(size_t)index];

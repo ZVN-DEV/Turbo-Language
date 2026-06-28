@@ -1,1 +1,1 @@
-ERROR:integer overflow
+ERROR:runtime error\[E0603\]: integer overflow
