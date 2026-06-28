@@ -1,5 +1,6 @@
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use turbo_ast::ErrorCode;
 
 pub fn run_repl() {
     let version = env!("CARGO_PKG_VERSION");
@@ -191,6 +192,16 @@ pub fn run_repl() {
         // Semantic analysis
         let sema_result = turbo_sema::check(&module);
         for w in &sema_result.warnings {
+            // Each REPL entry is compiled as a self-contained `fn main`, but a
+            // binding entered now is very likely *used* by a later entry. The
+            // unused-variable warning (E0515) is computed against this
+            // single-entry snapshot, so it fires spuriously on `let x = ...`
+            // lines that are referenced afterwards. Suppress just that code in
+            // the REPL; every other warning still surfaces. (`run`/`build` are
+            // unaffected — they only ever see a whole program at once.)
+            if w.code == ErrorCode::E0515 {
+                continue;
+            }
             eprintln!("warning: {}", w.message);
         }
         if !sema_result.errors.is_empty() {
