@@ -136,13 +136,13 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   snippets (no change). _Pre-existing quirk noted: a `Color.Red` to an undefined enum routes to E0300, not
   E0303 — left out of scope._
 
-- [ ] **BL-13 — Runtime/operational errors are second-class.** _[designer#2,#3]_ ~~Help:/more-info render
-  collapse~~ — **BL-13a DONE** (commit `57bab40`: the renderer no longer glues `more info:` onto an empty
-  `Help:` label; footer always on its own line; 3 unit tests). **Remaining (BL-13b):** `runtime error:
-  division by zero`, `array index 10 out of bounds`, import/file errors still have no code, no color, no
-  location, no `Help:` — a cliff after the A-tier compile diagnostics. **AC:** give runtime/operational
-  errors the ariadne envelope + an `E06xx` runtime code range + `Help:` lines (e.g. div-by-zero → "guard the
-  divisor"; index OOB → "valid indices are 0..{len}"); drop raw `(os error 2)` jargon.
+- [x] **BL-13 — Runtime/operational errors are second-class.** _[designer#2,#3] DONE._ **BL-13a** (commit
+  `57bab40`): renderer no longer glues `more info:` onto an empty `Help:` label. **BL-13b** (commit `64991cc`,
+  merged to master): added an `E0601-E0611` runtime/operational code range (fully documented; `explain`
+  works). Runtime traps (div-by-zero E0601, index OOB E0602, overflow E0603) print a styled `runtime
+  error[E06xx]:` + `Help:` + `more info:` footer, **byte-identical on JIT and AOT** (twin helpers, TTY-gated
+  color). Operational errors get the full colored `error[E06xx]:` envelope — file-not-found E0611 + import
+  E0610 drop the raw `(os error N)` jargon. _WASM runtime traps left naked (separate backend) — minor follow-up._
 
 - [ ] **BL-14 — No in-browser "Try it"; playground gated behind install.** _[designer#4, strategist theme 2]_
   `turbolang playground` serves a working browser playground — but only after a CLI install. For a *language*,
@@ -182,11 +182,14 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   **AC:** add a critical-section primitive (`mutex_update(m, |v| v+1)` running the closure under the lock, or
   `mutex_lock`/`unlock`, or atomic `mutex_add`); fix the docs; concurrent-counter test reaches the exact total.
 
-- [ ] **BL-19 — Sized integer types are an unusable island.** _[e2e]_ No `as` cast keyword and no conversion
-  builtins exist; `i8..u64`/`f32` can't do arithmetic (`i32 + int` → E0102), can't seed an array literal
-  (`[u8]` ← `[int]` → E0110), can't init a struct field with a literal — only `let x: u32 = <lit>` works. Blocks
-  bytes/binary/hashing/interop. **AC:** add an `as` cast and/or `to_i32`/`to_u8`/… builtins, and let integer
-  literals coerce to the annotated sized type in arithmetic/field-init/array-literal contexts.
+- [x] **BL-19 — Sized integer types are an unusable island.** _[e2e] Done (commit `634a57a`, merged to
+  master)._ Added an `as` cast operator end-to-end (lexer keyword → `Expr::Cast` → sema → Cranelift JIT+AOT;
+  Rust-style precedence between unary and binary; numeric↔numeric only, `str as i32` rejected via E0100;
+  narrowing wraps two's-complement, float→int saturates toward zero). Extended untyped-literal coercion into
+  annotated sized types for array literals (`[u8] = [104,105]`), struct-field init, and literal-operand
+  arithmetic (`n:i32; n+1`). +3 phase1 tests +1 parity (`int_casts`); 248 integration / 23 parity. Deferred:
+  `to_i32`-style builtins (superseded by `as`); literal coercion in comparisons + into float types; narrow
+  array-element assignment.
 
 - [ ] **BL-20 — No CLI args (`args()` is a stub).** _[e2e]_ `rt_args()` returns an empty array ("not yet wired");
   `turbolang run f.tb hello` is rejected by clap; native binaries see `argc=0`. Can't write an arg-driven CLI —
@@ -199,11 +202,13 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   filename not the fn. **AC:** AOT/build path accepts `@bench`; lead with timings; AOT-match is a separate
   non-fatal line; label by function name; add a `@bench` doc + fixture.
 
-- [ ] **BL-22 — Website conversion friction.** _[frontend#2, designer#9]_ No copy button on any code block, and the
-  homepage install block bakes `$ ` prompt markers into copy-paste. Hero has three same-weight CTAs; "Run the
-  flagship demo" links to static docs; "From Source" (heavy cargo build) is shown before 2-line Homebrew. **AC:**
-  a `CopyButton` over each block copying the raw command (no `$`); one primary CTA + "Try in browser" secondary;
-  relabel "Run"→"See" (or wire to playground); lead Installation with Homebrew.
+- [x] **BL-22 — Website conversion friction.** _[frontend#2, designer#9] Done (commit `533501e`, merged to
+  master)._ New `CopyButton` client component copies a raw prompt-free command via a string prop (never
+  DOM-scraped, so `$ ` markers can't leak); homepage install block stores clean commands with the `$` as a
+  `select-none aria-hidden` affordance. Installation leads with Homebrew; hero reduced to one primary CTA +
+  an icon GitHub link; "Run the flagship demo" → "See" (links to static docs — no playground route exists
+  yet; that's BL-14). All 21 routes stay static SSG; lint clean. _Docs-page `<pre>` blocks hand-roll markup
+  (no shared component) so copy buttons there were out of cheap scope._
 
 - [x] **BL-23 — `stdlib.md` is missing ~18 working builtins.** _[e2e] Done (commit `a5d74fc`, merged to
   master)._ Documented all 19 (`str_to_int`/`str_to_float` with their `Result` returns, `sort`, `slice`,
