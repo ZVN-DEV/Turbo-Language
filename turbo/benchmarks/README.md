@@ -68,10 +68,13 @@ WORDCOUNT_MB=20 TURBO_BENCH_ITERS=9 TURBO_BENCH_KEEP_BUILD_DIR=1 \
   as N/A rather than faked.
 
 Measured numbers (best of 5, ~5 MB input, Apple M5 Max / macOS 26.5.1,
-2026-06-27): C `~110 ms`, Rust `~125 ms`, Go `~130 ms`, Turbo AOT `~240 ms`
-(~2.2x C), Turbo JIT `~220 ms`. On this string/hashmap-heavy workload Turbo
-lands further behind C than on fib40; the gap is dominated by runtime
-hashmap/string handling, not codegen.
+2026-06-28): C `~108 ms`, Rust `~110 ms`, Go `~120 ms`, Turbo AOT `~150 ms`
+(~1.4x C), Turbo JIT `~205 ms`. The AOT gap closed from ~2.2x to ~1.4x once
+the str→int hashmap stopped re-stringifying/re-parsing/re-allocating the value
+on every increment: int values are now stored inline in the entry (see BL-9),
+so `hashmap_get_int` / `hashmap_set_int` — and the fused `hashmap_inc` — do a
+single hash + single probe with no per-update allocation. `bench_hashmap_inc.tb`
+microbenchmarks that hot loop directly (~5M increments).
 
 ## Artifact Policy
 

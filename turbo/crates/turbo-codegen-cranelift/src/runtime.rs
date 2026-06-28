@@ -2794,6 +2794,23 @@ pub(crate) extern "C" fn rt_hashmap_get_int(map_ptr: *const u8, key: *const u8) 
     }
 }
 
+/// Fused increment: add `delta` to the int value at `key` (a missing key
+/// counts as 0), store the result, and return the new value. Mirrors the AOT
+/// `rt_hashmap_inc` fast path with a single `entry()` lookup. The JIT keeps the
+/// shared String storage, so the observable behaviour (get_int reads the
+/// value, get returns its decimal string) stays identical to AOT.
+pub(crate) extern "C" fn rt_hashmap_inc(map_ptr: *mut u8, key: *const u8, delta: i64) -> i64 {
+    let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
+    let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("")
+        .to_string();
+    let slot = map.entry(key).or_insert_with(|| "0".to_string());
+    let new_val = slot.parse::<i64>().unwrap_or(0) + delta;
+    *slot = new_val.to_string();
+    new_val
+}
+
 // ── ARC (Automatic Reference Counting) runtime functions ────────────
 
 /// Increment the reference count of a heap-allocated object.

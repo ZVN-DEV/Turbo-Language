@@ -2724,6 +2724,48 @@ impl Checker {
                         }
                         return Ty::I64;
                     }
+                    // hashmap_inc(map: i64, key: str[, delta: int]) -> int
+                    // Fused str→int increment: adds `delta` (default 1) to the
+                    // value at `key` (missing key counts as 0) and returns the
+                    // new value. Single hash + single probe — the fast path for
+                    // word-count style counters.
+                    if name == "hashmap_inc" {
+                        if args.len() != 2 && args.len() != 3 {
+                            self.error(
+                                ErrorCode::E0513,
+                                format!("hashmap_inc() takes 2 or 3 arguments, got {}", args.len()),
+                                callee.span.clone(),
+                            );
+                            return Ty::Error;
+                        }
+                        let map_ty = self.check_expr(&args[0]);
+                        let key_ty = self.check_expr(&args[1]);
+                        if !map_ty.is_error() && !map_ty.is_integer() {
+                            self.error(ErrorCode::E0133, format!("hashmap_inc() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
+                        }
+                        if !key_ty.is_error() && key_ty != Ty::Str {
+                            self.error(
+                                ErrorCode::E0133,
+                                format!(
+                                    "hashmap_inc() second argument must be str, found `{key_ty}`"
+                                ),
+                                args[1].span.clone(),
+                            );
+                        }
+                        if args.len() == 3 {
+                            let delta_ty = self.check_expr(&args[2]);
+                            if !delta_ty.is_error() && !delta_ty.is_integer() {
+                                self.error(
+                                    ErrorCode::E0133,
+                                    format!(
+                                        "hashmap_inc() third argument must be int, found `{delta_ty}`"
+                                    ),
+                                    args[2].span.clone(),
+                                );
+                            }
+                        }
+                        return Ty::I64;
+                    }
 
                     // ── Unsafe builtins ────────────────────────────────
                     // deref(addr: i64) -> i64 — raw memory load (unsafe only)

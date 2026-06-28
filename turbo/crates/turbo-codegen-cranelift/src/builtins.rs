@@ -4203,6 +4203,47 @@ pub(crate) fn compile_builtin_hashmap_get_int<M: Module>(
     Ok(Some((result, TurboTy::Int)))
 }
 
+/// hashmap_inc(map, key) -> int  /  hashmap_inc(map, key, delta) -> int
+///
+/// Fused str→int increment: a single hash + single probe that adds `delta`
+/// (default 1) to the value at `key`, treating a missing key as 0, and returns
+/// the new value. This is the fast path for word-count style counters, lowering
+/// `count = hashmap_get_int(m, k); hashmap_set_int(m, k, count + 1)` (two
+/// lookups) into one — the str→int counterpart of C's idiomatic `table[k]++`.
+pub(crate) fn compile_builtin_hashmap_inc<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (map_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+        code: ErrorCode::E0400,
+        message: "compile_builtin_hashmap_inc: `&args[0]` produced no value during code generation"
+            .to_string(),
+    })?;
+    let (key_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+        code: ErrorCode::E0400,
+        message: "compile_builtin_hashmap_inc: `&args[1]` produced no value during code generation"
+            .to_string(),
+    })?;
+    // delta defaults to 1 when only (map, key) are supplied.
+    let delta_val = if args.len() >= 3 {
+        compile_expr(cx, &args[2])?
+            .ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message:
+                    "compile_builtin_hashmap_inc: `&args[2]` produced no value during code generation"
+                        .to_string(),
+            })?
+            .0
+    } else {
+        cx.builder.ins().iconst(types::I64, 1)
+    };
+    let fid = cx.rt_fns["rt_hashmap_inc"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[map_val, key_val, delta_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
 // ── Map literal compilation ────────────────────────────────────────
 
 /// Compile a map literal: {"key": "value", ...}

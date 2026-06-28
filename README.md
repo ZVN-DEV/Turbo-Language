@@ -430,18 +430,20 @@ unless all four languages produce byte-for-byte identical output**).
 
 | Language | word-count (~5 MB, 1.05M words) | vs C |
 |----------|---------|------|
-| C (clang -O2) | ~110 ms | 1.00x |
-| Rust (rustc -O) | ~125 ms | ~1.13x |
-| Go (go build) | ~130 ms | ~1.18x |
-| **Turbo (AOT, Cranelift)** | **~240 ms** | **~2.2x** |
-| Turbo (JIT, `turbolang run`) | ~220 ms | ~2.0x |
+| C (clang -O2) | ~108 ms | 1.00x |
+| Rust (rustc -O) | ~110 ms | ~1.02x |
+| Go (go build) | ~120 ms | ~1.11x |
+| **Turbo (AOT, Cranelift)** | **~150 ms** | **~1.4x** |
+| Turbo (JIT, `turbolang run`) | ~205 ms | ~1.9x |
 
 Honest framing: on this string/hashmap-heavy workload Turbo's native output runs
-about **2.2x slower than C** and ~1.9x slower than Rust and Go — noticeably
-further behind than on the integer-only fib40. The gap is dominated by Turbo's
-runtime hashmap and string handling (the str→int map currently re-stringifies on
-every increment), not codegen quality. It's a real workload with real,
-reproducible numbers — fast enough to be useful, with clear, named headroom.
+about **1.4x slower than C** (down from ~2.2x). The earlier gap was dominated by
+the str→int map re-stringifying, re-parsing, and re-allocating the value on every
+increment; int values are now stored inline in the hashmap entry, so
+`hashmap_get_int` / `hashmap_set_int` (and the fused `hashmap_inc`) do a single
+hash + single probe with no per-update allocation. The JIT still round-trips
+strings for `get_int`/`set_int`, so it's roughly unchanged at ~1.9x. It's a real
+workload with real, reproducible numbers — run the harness to measure on yours.
 
 These are numbers from one machine; run the harnesses above to measure on yours.
 

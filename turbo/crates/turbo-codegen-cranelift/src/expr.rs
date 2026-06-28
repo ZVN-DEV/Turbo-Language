@@ -1895,6 +1895,7 @@ fn compile_call<M: Module>(
         "hashmap_remove" => compile_builtin_hashmap_remove(cx, args),
         "hashmap_set_int" => compile_builtin_hashmap_set_int(cx, args),
         "hashmap_get_int" => compile_builtin_hashmap_get_int(cx, args),
+        "hashmap_inc" => compile_builtin_hashmap_inc(cx, args),
         // Filesystem builtins
         "file_exists" => compile_file_exists(cx, args),
         "delete_file" => compile_delete_file(cx, args),

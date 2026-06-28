@@ -1,0 +1,43 @@
+// Fused str->int increment: hashmap_inc(map, key[, delta]).
+// Covers the missing-key-as-0 case, repeated increments, custom/negative
+// deltas, interop with set_int/get_int/get, and conversion of a string-typed
+// value into an inline int on the first increment.
+fn main() {
+    let m = hashmap()
+
+    // Missing key counts as 0; first increment returns 1.
+    print(hashmap_inc(m, "a"))   // 1
+    print(hashmap_inc(m, "a"))   // 2
+    print(hashmap_inc(m, "b"))   // 1
+
+    // Custom delta (positive and negative).
+    print(hashmap_inc(m, "a", 5))   // 7
+    print(hashmap_inc(m, "b", 0 - 1)) // 0
+
+    // get_int observes the inline int; missing keys are 0.
+    print(hashmap_get_int(m, "a"))       // 7
+    print(hashmap_get_int(m, "missing")) // 0
+
+    // get() stringifies an inline int on demand (str->str view).
+    print(hashmap_get(m, "a"))   // 7
+
+    // set_int then inc interop.
+    hashmap_set_int(m, "c", 10)
+    print(hashmap_inc(m, "c"))   // 11
+
+    // A string-typed value is parsed, converted to inline int, and updated.
+    hashmap_set(m, "d", "41")
+    print(hashmap_inc(m, "d"))   // 42
+    print(hashmap_get(m, "d"))   // 42
+
+    // Statement-position call (return value discarded) still mutates.
+    hashmap_inc(m, "a")
+    print(hashmap_get_int(m, "a")) // 8
+
+    // len/keys remain correct across mixed string + int entries.
+    print(hashmap_len(m))          // 4
+    let keys = hashmap_keys(m)
+    print(len(keys))               // 4
+    print(keys[0])                 // a
+    print(keys[3])                 // d
+}
