@@ -319,11 +319,21 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   normalizes `100`/`e0100`/`E100` → `E0100`; `rt_format_time` switched to `localtime_r`; `rt_spawn_with_args` now
   checks the `pthread_create` return and fails cleanly instead of joining an uninitialized `pthread_t`.
 
-  **STILL OPEN (deferred — bigger/separate work):** whole-number-float printing (semantic; churns many `.expected`);
-  raw strings `r"…"` (lexer feature); empty-`[]` inference; empty-RHS `let x =` parser-recovery double-error; REPL
-  cross-line spurious `unused variable`; `(os error N)` jargon polish in remaining file errors; `test` summary
-  ordering/color/total-time; the hashmap-handle opaque-typing fix (int↔handle segfault above); the JIT hashmap
-  `&mut *ptr` data race under concurrent `spawn`.
+  **DONE 2026-06-28 (Round 2 — 4 parallel branches, all merged to master, full suite green: 267 integration / 28
+  parity / workspace, clippy + fmt clean):** raw strings `r"…"` (lexer-only; reuses the existing string node so
+  sema/codegen are untouched, brace re-encoding keeps interpolation literal — commit `b526e8a`); whole-number floats
+  now print with a trailing `.0` (`2.0` not `2`, so the type is unambiguous; one shared JIT+AOT float helper +
+  14 `.expected` updated; JIT≡AOT byte-identical — commit `9bcf269`); **hashmap/mutex/http opaque-handle typing** —
+  int↔handle mixing (`m = hashmap_get_int(m,k)` / `m = hashmap_inc(m,k)`) is now a clean compile-time `E0111` instead
+  of a runtime SEGFAULT (exit 139→1), via a distinct `Ty::Handle(HandleKind{HashMap,Mutex,HttpServer})` with one-way
+  `int→Handle` coercion that preserves the legit "pass a handle to an `i64` param" idiom (commit `ed4d266`); CLI polish
+  — remaining `(os error N)` IO leaks translated to plain language, `test` summary gains TTY-gated color + total-time,
+  and the REPL no longer flags a later-used binding as `unused` (commit `87fd7fb`).
+
+  **STILL OPEN (deferred — bigger/separate work):** empty-`[]` inference; empty-RHS `let x =` parser-recovery
+  double-error; the JIT hashmap `&mut *ptr` data race under concurrent `spawn`; and a new WASM whole-float-printing
+  drift introduced by the Round-2 fix (`turbo_rt_wasm.c` still prints whole floats without `.0` — align it with the
+  shared JIT/AOT helper when WASM output parity matters).
 
 ---
 _When all boxes are checked, STOP and ask for the next priorities — do not invent hygiene work._
