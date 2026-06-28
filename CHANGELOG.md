@@ -3,7 +3,7 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.9.2] - unreleased
+## [0.9.2] - 2026-06-28
 
 A correctness, hardening, and honesty pass. Fixes another round of codegen and
 runtime bugs, tightens the WASM and HTTP paths, and aligns the public-facing
