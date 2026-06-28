@@ -1,0 +1,16 @@
+// WASM closure test: capturing an integer from the enclosing scope.
+//
+// The captured value is stored in a heap environment and read back inside
+// the lifted closure function. Covers both arrow and pipe syntax and
+// repeated calls through the same closure.
+
+fn main() {
+    let n = 10
+    let add = (x: i64) => x + n
+    print(add(5))
+
+    let multiplier = 3
+    let triple = |x: i64| -> i64 { x * multiplier }
+    print(triple(5))
+    print(triple(10))
+}

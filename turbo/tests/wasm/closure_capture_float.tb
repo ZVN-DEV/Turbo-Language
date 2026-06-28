@@ -1,0 +1,11 @@
+// WASM closure test: capturing a floating-point value.
+//
+// The f64 capture is stored in the environment by bit pattern (not by value
+// cast) so no precision is lost on the round trip through the i64 slot.
+
+fn main() {
+    let factor = 1.5
+    let scale = |x: f64| -> f64 { x * factor }
+    print(scale(4.0))
+    print(scale(10.0))
+}

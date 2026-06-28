@@ -7,10 +7,23 @@
 //! The generated C code links against turbo_rt_wasm.c which provides
 //! the runtime functions (print, string ops, array ops, etc.).
 
+use crate::closures::find_captures;
 use crate::CodegenError;
 use std::collections::HashMap;
 use std::fmt::Write;
 use turbo_ast::*;
+
+/// The C-level signature of a closure: the C types of its user parameters
+/// (the hidden leading `void *env` parameter is implicit) and its C return
+/// type. Used to emit the correct function-pointer cast at indirect call
+/// sites and when a closure is handed to `map`/`filter`.
+#[derive(Clone)]
+struct ClosureSig {
+    /// C type of each user parameter, in order (e.g. `["long long"]`).
+    params: Vec<&'static str>,
+    /// C return type (e.g. `"long long"`, `"const char*"`, `"char"`).
+    ret: &'static str,
+}
 
 /// Tracks state during C code generation.
 struct CEmitter {
@@ -43,6 +56,12 @@ struct CEmitter {
     /// not panic, but `generate_c` returns the first error instead of the C
     /// so an unsupported program fails to compile rather than miscompiling.
     errors: Vec<CodegenError>,
+    /// Monotonic counter for naming lifted closure functions (`__closure_N`).
+    closure_counter: usize,
+    /// Variable name -> closure signature, for every local bound to a closure
+    /// value. Lets a call site recognize `f(args)` as an indirect closure
+    /// call (rather than a direct user-function call) and emit the right cast.
+    closure_sigs: HashMap<String, ClosureSig>,
 }
 
 impl CEmitter {
@@ -59,6 +78,8 @@ impl CEmitter {
             fn_return_types: HashMap::new(),
             defer_stack: Vec::new(),
             errors: Vec::new(),
+            closure_counter: 0,
+            closure_sigs: HashMap::new(),
         }
     }
 
@@ -195,6 +216,10 @@ impl CEmitter {
             }
             Expr::Call { callee, .. } => {
                 if let Expr::Ident(name) = &callee.node {
+                    // A local bound to a closure: tag follows its return type.
+                    if let Some(sig) = self.closure_sigs.get(name) {
+                        return Self::c_type_to_tag(sig.ret).to_string();
+                    }
                     // Check user-defined function return types first
                     if let Some(tag) = self.fn_return_types.get(name.as_str()) {
                         return tag.clone();
@@ -212,15 +237,15 @@ impl CEmitter {
                         "sqrt" => "float".to_string(),
                         "str_contains" | "str_starts_with" | "str_ends_with" | "hashmap_has"
                         | "str_eq" => "bool".to_string(),
-                        "hashmap_new" | "hashmap_keys" | "str_split" | "array_alloc" => {
-                            "void*".to_string()
-                        }
+                        "hashmap_new" | "hashmap_keys" | "str_split" | "array_alloc" | "map"
+                        | "filter" => "void*".to_string(),
                         _ => "int".to_string(),
                     }
                 } else {
                     "int".to_string()
                 }
             }
+            Expr::Closure { .. } => "closure".to_string(),
             Expr::BinaryOp { left, op, .. } => {
                 match op {
                     BinOp::Eq
@@ -640,6 +665,11 @@ impl CEmitter {
                 let val = self.emit_expr(&value.node);
                 format!("(rt_array_set({obj}, {idx}, {val}), {val})")
             }
+            Expr::Closure {
+                params,
+                return_type,
+                body,
+            } => self.emit_closure(params, return_type, body),
             // Catch-all for unsupported expressions: record a hard compile
             // error (surfaced by generate_c) and emit a syntactically valid
             // placeholder so the rest of emission does not panic.
@@ -648,6 +678,339 @@ impl CEmitter {
                 "0 /* unsupported expr */".to_string()
             }
         }
+    }
+
+    // ── Closures ────────────────────────────────────────────────────────
+    //
+    // A closure value is represented exactly like the native backend: a heap
+    // pair `[fn_ptr, env_ptr]` (two `long long` slots via `rt_struct_alloc(2)`).
+    // The closure body is lifted to a top-level C function whose first
+    // parameter is the captured-environment pointer, followed by the user
+    // parameters. clang/LLVM lowers the resulting C function pointers to WASM
+    // function-table indices and `call_indirect` automatically, so the WASM
+    // side needs no manual function table.
+    //
+    // Captured variables live in a second heap struct (`rt_struct_alloc(n)`);
+    // each capture occupies one `long long` slot. Integer/bool/string/pointer
+    // captures round-trip losslessly through that slot via a plain cast; f64
+    // captures are stored by bit pattern (union pun) so no precision is lost.
+
+    /// Map a C type string back to the simplified type tag used for print /
+    /// interpolation dispatch (inverse of `tag_to_c_type`).
+    fn c_type_to_tag(c: &str) -> &'static str {
+        match c {
+            "const char*" => "str",
+            "double" => "float",
+            "char" => "bool",
+            "void*" => "void*",
+            "void" => "void",
+            _ => "int",
+        }
+    }
+
+    /// C type of a closure parameter. Inferred params (e.g. `.map(|x| ...)`)
+    /// default to `long long`, matching how array elements are stored.
+    fn closure_param_c(p: &Param) -> &'static str {
+        match &p.ty.node {
+            TypeExpr::Inferred => "long long",
+            other => Self::type_to_c(other),
+        }
+    }
+
+    /// C return type of a closure: the declared return type if present,
+    /// otherwise inferred from the body's tail expression (an expression-body
+    /// closure such as `(x) => x * 2` returns its tail value).
+    fn closure_ret_c(&self, return_type: &Option<Spanned<TypeExpr>>, body: &Expr) -> &'static str {
+        if let Some(t) = return_type {
+            return Self::type_to_c(&t.node);
+        }
+        if let Expr::Block {
+            tail_expr: Some(tail),
+            ..
+        } = body
+        {
+            self.infer_c_type(&tail.node)
+        } else {
+            "void"
+        }
+    }
+
+    /// Compute a closure's C signature (parameter + return C types) without
+    /// emitting anything. Parameter types are temporarily registered so the
+    /// return-type inference can see them.
+    fn closure_sig_of(
+        &mut self,
+        params: &[Param],
+        return_type: &Option<Spanned<TypeExpr>>,
+        body: &Expr,
+    ) -> ClosureSig {
+        let param_cs: Vec<&'static str> = params.iter().map(Self::closure_param_c).collect();
+        let saved: Vec<(String, Option<String>)> = params
+            .iter()
+            .map(|p| (p.name.clone(), self.var_types.get(&p.name).cloned()))
+            .collect();
+        for p in params {
+            let tag = match &p.ty.node {
+                TypeExpr::Inferred => "int".to_string(),
+                other => Self::type_expr_to_tag(other),
+            };
+            self.var_types.insert(p.name.clone(), tag);
+        }
+        let ret = self.closure_ret_c(return_type, body);
+        for (name, prev) in saved {
+            match prev {
+                Some(t) => {
+                    self.var_types.insert(name, t);
+                }
+                None => {
+                    self.var_types.remove(&name);
+                }
+            }
+        }
+        ClosureSig {
+            params: param_cs,
+            ret,
+        }
+    }
+
+    /// Resolve the signature of a closure passed as an argument: either a
+    /// closure literal or an identifier bound to a closure.
+    fn closure_sig_of_arg(&mut self, arg: &Expr) -> Option<ClosureSig> {
+        match arg {
+            Expr::Closure {
+                params,
+                return_type,
+                body,
+            } => Some(self.closure_sig_of(params, return_type, &body.node)),
+            Expr::Ident(name) => self.closure_sigs.get(name).cloned(),
+            _ => None,
+        }
+    }
+
+    /// If `value` binds a closure to `name`, record its signature so later
+    /// `name(args)` call sites lower to an indirect closure call. Handles both
+    /// closure literals and aliasing another closure variable (`let g = f`).
+    fn record_closure_binding(&mut self, name: &str, value: &Expr) {
+        match value {
+            Expr::Closure {
+                params,
+                return_type,
+                body,
+            } => {
+                let sig = self.closure_sig_of(params, return_type, &body.node);
+                self.closure_sigs.insert(name.to_string(), sig);
+            }
+            Expr::Ident(src) => {
+                if let Some(sig) = self.closure_sigs.get(src).cloned() {
+                    self.closure_sigs.insert(name.to_string(), sig);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Emit a lifted top-level C function for a closure and return the C
+    /// expression that builds its `[fn_ptr, env_ptr]` pair. Captures are
+    /// resolved against the variables currently in scope.
+    fn emit_closure(
+        &mut self,
+        params: &[Param],
+        return_type: &Option<Spanned<TypeExpr>>,
+        body: &Spanned<Expr>,
+    ) -> String {
+        let id = self.closure_counter;
+        self.closure_counter += 1;
+        let name = format!("__closure_{id}");
+
+        // Captures: free variables of the body that exist in the enclosing
+        // scope. Resolve each one's tag + C type from the current var_types.
+        let outer_vars: Vec<String> = self.var_types.keys().cloned().collect();
+        let cap_names = find_captures(params, &body.node, &outer_vars);
+        let captures: Vec<(String, String, &'static str)> = cap_names
+            .iter()
+            .map(|n| {
+                let tag = self
+                    .var_types
+                    .get(n)
+                    .cloned()
+                    .unwrap_or_else(|| "int".to_string());
+                let c = Self::tag_to_c_type(&tag);
+                (n.clone(), tag, c)
+            })
+            .collect();
+
+        let ret_c = self.closure_ret_c(return_type, &body.node);
+
+        // ---- Lifted function definition ----
+        let mut param_decls = vec!["void *env".to_string()];
+        for p in params {
+            let pc = Self::closure_param_c(p);
+            param_decls.push(format!("{pc} {}", p.name));
+        }
+        let params_str = param_decls.join(", ");
+        self.fn_decls.push(format!("{ret_c} {name}({params_str});"));
+
+        // Emitting the body clobbers shared emitter state; snapshot + restore.
+        let saved_indent = self.indent;
+        let saved_var_types = self.var_types.clone();
+        let saved_defer = std::mem::take(&mut self.defer_stack);
+
+        for (cn, tag, _c) in &captures {
+            self.var_types.insert(cn.clone(), tag.clone());
+        }
+        for p in params {
+            let tag = match &p.ty.node {
+                TypeExpr::Inferred => "int".to_string(),
+                other => Self::type_expr_to_tag(other),
+            };
+            self.var_types.insert(p.name.clone(), tag);
+        }
+
+        let mut fbody = String::new();
+        writeln!(&mut fbody, "{ret_c} {name}({params_str}) {{").unwrap();
+        self.indent = 1;
+        for (i, (cn, _tag, c)) in captures.iter().enumerate() {
+            if *c == "double" {
+                // Read the f64 capture back from its stored bit pattern.
+                writeln!(
+                    &mut fbody,
+                    "{}double {cn} = ({{ union {{ double d; long long l; }} _u; \
+                     _u.l = (((long long*)env)[{i}]); _u.d; }});",
+                    self.indent_str()
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    &mut fbody,
+                    "{}{c} {cn} = ({c})(((long long*)env)[{i}]);",
+                    self.indent_str()
+                )
+                .unwrap();
+            }
+        }
+        let is_void = ret_c == "void";
+        self.emit_block_body(&body.node, &mut fbody, is_void);
+        self.indent = 0;
+        writeln!(&mut fbody, "}}").unwrap();
+        self.fn_defs.push(fbody);
+
+        self.indent = saved_indent;
+        self.var_types = saved_var_types;
+        self.defer_stack = saved_defer;
+
+        // ---- Pair construction expression ----
+        let pair = self.fresh_tmp();
+        let mut inner = String::new();
+        let env_expr = if captures.is_empty() {
+            "(void*)0".to_string()
+        } else {
+            let env = self.fresh_tmp();
+            write!(
+                &mut inner,
+                "long long *{env} = (long long*)rt_struct_alloc({}LL);",
+                captures.len()
+            )
+            .unwrap();
+            for (i, (cn, _tag, c)) in captures.iter().enumerate() {
+                if *c == "double" {
+                    write!(
+                        &mut inner,
+                        " {env}[{i}] = ({{ union {{ double d; long long l; }} _u; \
+                         _u.d = ({cn}); _u.l; }});"
+                    )
+                    .unwrap();
+                } else {
+                    write!(&mut inner, " {env}[{i}] = (long long)({cn});").unwrap();
+                }
+            }
+            format!("(void*){env}")
+        };
+        write!(
+            &mut inner,
+            " long long *{pair} = (long long*)rt_struct_alloc(2LL); \
+             {pair}[0] = (long long)(&{name}); {pair}[1] = (long long)({env_expr}); \
+             (void*){pair};"
+        )
+        .unwrap();
+        format!("({{ {inner} }})")
+    }
+
+    /// Emit an indirect call through a closure pair: load `fn_ptr`/`env_ptr`
+    /// from the pair, cast `fn_ptr` to the right function-pointer type, and
+    /// call it with `env_ptr` as the hidden leading argument.
+    fn emit_closure_call(
+        &mut self,
+        callee_c: &str,
+        sig: &ClosureSig,
+        arg_strs: &[String],
+    ) -> String {
+        let tc = self.fresh_tmp();
+        let param_sig = if sig.params.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", sig.params.join(", "))
+        };
+        let cast = format!("{}(*)(void*{})", sig.ret, param_sig);
+        let mut call_args = vec![format!("(void*){tc}[1]")];
+        call_args.extend(arg_strs.iter().cloned());
+        let call = format!("(({cast})({tc}[0]))({})", call_args.join(", "));
+        format!("({{ long long *{tc} = (long long*)({callee_c}); {call}; }})")
+    }
+
+    /// Emit `map(arr, closure)`: build a new array of the same length, call the
+    /// closure on each element via an indirect call, and store the results.
+    fn emit_map(&mut self, arr_c: &str, closure_c: &str, sig: &ClosureSig) -> String {
+        let arr = self.fresh_tmp();
+        let len = self.fresh_tmp();
+        let res = self.fresh_tmp();
+        let clp = self.fresh_tmp();
+        let env = self.fresh_tmp();
+        let fnv = self.fresh_tmp();
+        let i = self.fresh_tmp();
+        let elem = self.fresh_tmp();
+        let mapped = self.fresh_tmp();
+        let param_c = sig.params.first().copied().unwrap_or("long long");
+        let ret_c = sig.ret;
+        format!(
+            "({{ void *{arr} = ({arr_c}); long long {len} = rt_array_len({arr}); \
+             void *{res} = rt_array_alloc({len}); \
+             long long *{clp} = (long long*)({closure_c}); \
+             void *{env} = (void*){clp}[1]; \
+             {ret_c} (*{fnv})(void*, {param_c}) = ({ret_c}(*)(void*, {param_c}))({clp}[0]); \
+             for (long long {i} = 0; {i} < {len}; {i}++) {{ \
+             {param_c} {elem} = ({param_c})rt_array_get({arr}, {i}); \
+             {ret_c} {mapped} = {fnv}({env}, {elem}); \
+             rt_array_set({res}, {i}, (long long)({mapped})); }} {res}; }})"
+        )
+    }
+
+    /// Emit `filter(arr, predicate)`: keep elements for which the predicate is
+    /// truthy, packing them into a fresh array and patching its length.
+    fn emit_filter(&mut self, arr_c: &str, closure_c: &str, sig: &ClosureSig) -> String {
+        let arr = self.fresh_tmp();
+        let len = self.fresh_tmp();
+        let res = self.fresh_tmp();
+        let clp = self.fresh_tmp();
+        let env = self.fresh_tmp();
+        let fnv = self.fresh_tmp();
+        let cnt = self.fresh_tmp();
+        let i = self.fresh_tmp();
+        let elem = self.fresh_tmp();
+        let param_c = sig.params.first().copied().unwrap_or("long long");
+        let ret_c = sig.ret;
+        format!(
+            "({{ void *{arr} = ({arr_c}); long long {len} = rt_array_len({arr}); \
+             void *{res} = rt_array_alloc({len}); \
+             long long *{clp} = (long long*)({closure_c}); \
+             void *{env} = (void*){clp}[1]; \
+             {ret_c} (*{fnv})(void*, {param_c}) = ({ret_c}(*)(void*, {param_c}))({clp}[0]); \
+             long long {cnt} = 0; \
+             for (long long {i} = 0; {i} < {len}; {i}++) {{ \
+             long long {elem} = rt_array_get({arr}, {i}); \
+             if ((long long)({fnv}({env}, ({param_c}){elem}))) {{ \
+             rt_array_set({res}, {cnt}, {elem}); {cnt}++; }} }} \
+             ((long long*){res})[0] = {cnt}; {res}; }})"
+        )
     }
 
     fn emit_call(&mut self, callee: &Spanned<Expr>, args: &[Spanned<Expr>]) -> String {
@@ -668,8 +1031,47 @@ impl CEmitter {
         let arg_strs: Vec<String> = args.iter().map(|a| self.emit_expr(&a.node)).collect();
         let args_joined = arg_strs.join(", ");
 
+        // A call to a local bound to a closure value lowers to an indirect
+        // call through its [fn_ptr, env_ptr] pair rather than a direct
+        // C function call by name.
+        if let Some(sig) = self.closure_sigs.get(&fn_name).cloned() {
+            return self.emit_closure_call(&fn_name, &sig, &arg_strs);
+        }
+
         // Map built-in functions to runtime calls
         match fn_name.as_str() {
+            "map" if args.len() == 2 => match self.closure_sig_of_arg(&args[1].node) {
+                Some(sig) if sig.ret != "double" && sig.params.first() != Some(&"double") => {
+                    self.emit_map(&arg_strs[0], &arg_strs[1], &sig)
+                }
+                Some(_) => {
+                    self.record_unsupported(
+                        "map over float-typed closures (f64 array slots are lossy)",
+                        None,
+                    );
+                    "0 /* unsupported map */".to_string()
+                }
+                None => {
+                    self.record_unsupported("map with a non-closure callback", None);
+                    "0 /* unsupported map */".to_string()
+                }
+            },
+            "filter" if args.len() == 2 => match self.closure_sig_of_arg(&args[1].node) {
+                Some(sig) if sig.params.first() != Some(&"double") => {
+                    self.emit_filter(&arg_strs[0], &arg_strs[1], &sig)
+                }
+                Some(_) => {
+                    self.record_unsupported(
+                        "filter over float-typed closures (f64 array slots are lossy)",
+                        None,
+                    );
+                    "0 /* unsupported filter */".to_string()
+                }
+                None => {
+                    self.record_unsupported("filter with a non-closure predicate", None);
+                    "0 /* unsupported filter */".to_string()
+                }
+            },
             "print" => {
                 if args.len() == 1 {
                     // Determine which print variant to call based on the
@@ -846,6 +1248,7 @@ impl CEmitter {
                     self.infer_type_tag(&value.node)
                 };
                 self.var_types.insert(name.clone(), type_tag);
+                self.record_closure_binding(name, &value.node);
 
                 let v = self.emit_expr(&value.node);
                 let c_type = if let Some(t) = ty {
@@ -900,7 +1303,7 @@ impl CEmitter {
             "str" => "const char*",
             "float" | "f64" | "f32" => "double",
             "bool" => "char",
-            "array" | "struct" | "void*" => "void*",
+            "array" | "struct" | "void*" | "closure" => "void*",
             _ => "long long",
         }
     }
@@ -925,6 +1328,10 @@ impl CEmitter {
             }
             Expr::Call { callee, .. } => {
                 if let Expr::Ident(name) = &callee.node {
+                    // A local bound to a closure: C type follows its return type.
+                    if let Some(sig) = self.closure_sigs.get(name) {
+                        return sig.ret;
+                    }
                     // Check user-defined function return types first
                     if let Some(tag) = self.fn_return_types.get(name.as_str()) {
                         return Self::tag_to_c_type(tag);
@@ -940,13 +1347,15 @@ impl CEmitter {
                         "sqrt" => "double",
                         "str_contains" | "str_starts_with" | "str_ends_with" | "hashmap_has"
                         | "str_eq" => "char",
-                        "hashmap_new" | "hashmap_keys" | "str_split" | "array_alloc" => "void*",
+                        "hashmap_new" | "hashmap_keys" | "str_split" | "array_alloc" | "map"
+                        | "filter" => "void*",
                         _ => "long long",
                     }
                 } else {
                     "long long"
                 }
             }
+            Expr::Closure { .. } => "void*",
             Expr::BinaryOp { left, op, .. } => match op {
                 BinOp::Eq
                 | BinOp::NotEq
@@ -1038,6 +1447,7 @@ impl CEmitter {
                     self.infer_type_tag(&value.node)
                 };
                 self.var_types.insert(name.clone(), type_tag);
+                self.record_closure_binding(name, &value.node);
 
                 let v = self.emit_expr(&value.node);
                 let c_type = if let Some(t) = ty {
@@ -1336,6 +1746,19 @@ impl CEmitter {
             if p.name != "self" {
                 let tag = Self::type_expr_to_tag(&p.ty.node);
                 self.var_types.insert(p.name.clone(), tag);
+            }
+            // Closures as parameters of user-defined functions (higher-order
+            // user functions) are out of scope for the WASM backend: the call
+            // site can't recover the closure's signature from a `fn(...)` param
+            // type. Fail loud here rather than emit a body that calls a
+            // non-callable `long long` parameter. Closures handed to the
+            // map/filter builtins are fully supported.
+            if matches!(p.ty.node, TypeExpr::FnType { .. }) {
+                self.record_unsupported(
+                    "closures as parameters of user-defined functions \
+                     (use map/filter, or call the closure directly)",
+                    Some(&p.span),
+                );
             }
         }
 
@@ -1685,6 +2108,16 @@ mod tests {
         generate_c(&module).expect("wasm codegen produced an unsupported-construct error")
     }
 
+    /// Like `compile_to_c` but returns the `Result`, so a test can assert that
+    /// an unsupported construct fails loud instead of miscompiling.
+    fn try_compile_to_c(source: &str) -> Result<String, CodegenError> {
+        let (tokens, lex_errors) = turbo_lexer::tokenize(source);
+        assert!(lex_errors.is_empty(), "lex errors: {:?}", lex_errors);
+        let (module, parse_errors) = turbo_parser::parse(tokens);
+        assert!(parse_errors.is_empty(), "parse errors: {:?}", parse_errors);
+        generate_c(&module)
+    }
+
     /// Extract the body of `turbo_main` (the renamed `main`) from the
     /// emitted C — keeps assertions focused on the relevant fragment.
     fn turbo_main_body(c: &str) -> String {
@@ -1844,6 +2277,176 @@ fn main() {
             !body.contains("rt_i64_to_str(area)"),
             "float values must not be formatted through integer conversion:\n{}",
             body
+        );
+    }
+
+    #[test]
+    fn closure_direct_lifts_function_and_builds_pair() {
+        let c = compile_to_c(
+            r#"
+fn main() {
+    let twice = (x: i64) => x * 2
+    print(twice(5))
+}
+"#,
+        );
+        // The closure body is lifted to a top-level function taking the env
+        // pointer first, then the user parameter.
+        assert!(
+            c.contains("long long __closure_0(void *env, long long x)"),
+            "closure must be lifted to a top-level function:\n{}",
+            c
+        );
+        let body = turbo_main_body(&c);
+        // A [fn_ptr, env_ptr] pair is allocated and populated.
+        assert!(
+            body.contains("rt_struct_alloc(2LL)") && body.contains("(long long)(&__closure_0)"),
+            "closure value must be a {{fn_ptr, env_ptr}} pair:\n{}",
+            body
+        );
+        // The call site loads the pair and calls through a function pointer.
+        assert!(
+            body.contains("(long long(*)(void*, long long))"),
+            "call site must cast and call the closure indirectly:\n{}",
+            body
+        );
+    }
+
+    #[test]
+    fn closure_capture_builds_env_and_reads_it_back() {
+        let c = compile_to_c(
+            r#"
+fn main() {
+    let n = 10
+    let add = (x: i64) => x + n
+    print(add(5))
+}
+"#,
+        );
+        // The lifted function reads the captured variable from the env slot.
+        assert!(
+            c.contains("long long n = (long long)(((long long*)env)[0]);"),
+            "captured variable must be loaded from the environment:\n{}",
+            c
+        );
+        let body = turbo_main_body(&c);
+        // The capture site allocates a one-slot env and stores `n` into it.
+        assert!(
+            body.contains("rt_struct_alloc(1LL)"),
+            "env struct for one capture must be allocated:\n{}",
+            body
+        );
+        assert!(
+            body.contains("[0] = (long long)(n);"),
+            "captured `n` must be stored into the env:\n{}",
+            body
+        );
+    }
+
+    #[test]
+    fn closure_str_capture_uses_str_runtime() {
+        let c = compile_to_c(
+            r#"
+fn main() {
+    let prefix = "Hello"
+    let greet = |name: str| -> str { "{prefix}, {name}!" }
+    print(greet("world"))
+}
+"#,
+        );
+        // String capture is read back as a const char*.
+        assert!(
+            c.contains("const char* prefix = (const char*)(((long long*)env)[0]);"),
+            "string capture must round-trip as const char*:\n{}",
+            c
+        );
+        // print(greet(...)) must dispatch to the string print runtime, proving
+        // the closure's return type is tracked.
+        let body = turbo_main_body(&c);
+        assert!(
+            body.contains("rt_print_str("),
+            "a str-returning closure call must print via rt_print_str:\n{}",
+            body
+        );
+    }
+
+    #[test]
+    fn map_lowers_to_indirect_call_loop() {
+        let c = compile_to_c(
+            r#"
+fn main() {
+    let nums = [1, 2, 3]
+    let doubled = map(nums, (x) => x * 2)
+    print(doubled[0])
+}
+"#,
+        );
+        let body = turbo_main_body(&c);
+        assert!(
+            body.contains("rt_array_alloc(") && body.contains("rt_array_set("),
+            "map must allocate a result array and store into it:\n{}",
+            body
+        );
+        assert!(
+            body.contains("(long long(*)(void*, long long))"),
+            "map must call the closure indirectly per element:\n{}",
+            body
+        );
+        assert!(
+            c.contains("long long __closure_0(void *env, long long x)"),
+            "the map callback must be lifted to a function:\n{}",
+            c
+        );
+    }
+
+    #[test]
+    fn filter_lowers_to_predicate_loop() {
+        let c = compile_to_c(
+            r#"
+fn main() {
+    let nums = [1, 2, 3, 4]
+    let evens = filter(nums, (x) => x % 2 == 0)
+    print(len(evens))
+}
+"#,
+        );
+        let body = turbo_main_body(&c);
+        // filter keeps a running count and patches the result array length.
+        assert!(
+            body.contains("rt_array_set(") && body.contains("[0] = "),
+            "filter must pack survivors and patch the length slot:\n{}",
+            body
+        );
+        // The predicate returns bool -> char.
+        assert!(
+            c.contains("char __closure_0(void *env, long long x)"),
+            "the filter predicate must be lifted with a char (bool) return:\n{}",
+            c
+        );
+    }
+
+    #[test]
+    fn higher_order_user_fn_param_fails_loud() {
+        // Closures handed to *user-defined* higher-order functions are out of
+        // scope (the call site can't recover the closure signature from a
+        // `fn(...)` parameter type) and must fail loud rather than miscompile.
+        let err = try_compile_to_c(
+            r#"
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
+    f(x)
+}
+
+fn main() {
+    print(apply((x: i64) => x + 1, 5))
+}
+"#,
+        )
+        .expect_err("higher-order user-function parameters must be unsupported");
+        assert_eq!(err.code, ErrorCode::E0403);
+        assert!(
+            err.message.contains("closures as parameters"),
+            "diagnostic should name the unsupported construct: {}",
+            err.message
         );
     }
 }
