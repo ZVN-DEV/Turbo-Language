@@ -95,4 +95,133 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
   increment throughput. Honest numbers only.
 
 ---
+
+## Product-Team Cycle 2 (2026-06-28) — new findings
+
+Seeded from a full `/product-team` cycle (strategist + e2e + frontend + backend + product-designer),
+scoped to NEW/forward-looking issues (excludes the already-fixed 0.9.2 items and BL-1..BL-9). Each item
+notes its source lane. Same rules apply (real tests, full green suite, no hygiene busywork, honest claims).
+
+### P1 — correctness, trust, and the wedge
+
+- [ ] **BL-10 — Struct field-assignment aliases storage (no COW) → silent data corruption.** _[backend]
+  CONFIRMED on JIT **and** AOT._ `let mut a = Point{..}; let mut b = a; b.x = 99; print(a.x)` prints `99`
+  (expected `1`). `Expr::FieldAssign` in `turbo-codegen-cranelift/src/expr.rs` emits a direct `store` into
+  the struct's heap alloc with no refcount/COW guard — unlike `rt_array_set` (`turbo_rt.c`) which copies
+  when refcount > 1. Passing a struct to a `mut` param and copying a struct out of an array element alias
+  too. Contradicts the headline CoW value-semantics guarantee in `docs/SAFETY.md`. Exit 0, no diagnostic.
+  **AC:** mirror `rt_array_set`'s `refcount>1 → private copy → decrement old` dance at `FieldAssign` (or
+  copy structs at `let`/param-bind); regression test asserting struct value semantics after `let b=a`, after
+  passing to a `mut` param, and after array-element copy; JIT==AOT.
+
+- [ ] **BL-11 — Printing a compound value yields an opaque placeholder.** _[e2e]_ `print(arr)` / interpolating
+  an array → `[array]`; structs → `[struct P]`; results → `[result]` (only scalars + Optionals render). The
+  official Collections tutorial visibly emits `[array]`. Biggest day-1 debugging wall. **AC:** arrays/structs/
+  results get a real recursive `Display`/`Debug` rendering (`[20, 40, 60]`, `{x: 9}`, `ok(7)`) via `to_str`/
+  interpolation; tests assert rendered contents on both JIT and AOT.
+
+- [ ] **BL-12 — Docs lie about syntax (`explain` examples + SYNTAX.md `[Implemented]`).** _[designer#1, e2e]_
+  `turbolang explain E0200/E0303/E0307/E0316` (and `docs/errors.md`) use `enum`/`::` which DO NOT compile
+  (real syntax is `type X { .. }` + `X.Variant`). Separately, `design/SYNTAX.md` marks ~10 unimplemented
+  features as `### ... [Implemented]` (array/slice patterns, default params, named args, inferred-arrow,
+  `guard let`, array destructuring, tuples, type aliases, turbofish, `@derive(Debug)`) — all fail on the
+  0.9.2 binary. **AC:** fix the `explain`/`errors.md` examples to compiling syntax; relabel each SYNTAX.md
+  section `[Planned]`/`[Partial]` vs `[Implemented]` to match the binary (or implement). Cheap, high trust ROI.
+
+- [ ] **BL-13 — Runtime/operational errors are second-class.** _[designer#2,#3]_ `runtime error: division by
+  zero`, `array index 10 out of bounds`, import/file errors have no code, no color, no location, no `Help:`,
+  no footer — a cliff after the A-tier compile diagnostics. Also: when a code has no help text the renderer
+  prints `Help: more info: https://…` (footer glued to an empty `Help:` label — looks broken). **AC:** give
+  runtime/operational errors the ariadne envelope + an `E06xx` runtime code range + `Help:` lines; decouple
+  the `Help:` label from the `more info:` footer in `turbo-cli/src/main.rs` (footer always its own line).
+
+- [ ] **BL-14 — No in-browser "Try it"; playground gated behind install.** _[designer#4, strategist theme 2]_
+  `turbolang playground` serves a working browser playground — but only after a CLI install. For a *language*,
+  "run code in 5s" is the highest-converting action. **AC:** host the existing playground at `turbolang.dev/play`
+  and add it as the hero's primary secondary-CTA ("Try in browser →") + a persistent nav item.
+
+- [ ] **BL-15 — Website SEO: duplicate metadata, no sitemap/robots/OG card.** _[frontend#1,#3]_ All ~16 routes
+  ship one `<title>`/description (docs pages compete/get filtered); no `sitemap.ts`, `robots.ts`, `metadataBase`,
+  `og:image`, or Twitter card (links shared in Slack/X/Discord show a bare snippet). **AC:** root `title.template`
+  + `metadataBase`; unique per-route `metadata` on the 15 docs pages; `sitemap.ts` + `robots.ts` + an
+  `opengraph-image`.
+
+- [ ] **BL-16 — Commit the embeddable-typed-scripting wedge: `libturbo` C API spike.** _[strategist] STRATEGIC._
+  The biggest gap is positioning, not code: as a "general-purpose compiled language" Turbo loses to Go/Rust on
+  every axis. The one differentiated asset is a real Cranelift JIT. There is **zero `cdylib`/`staticlib`** in the
+  repo. **AC (spike):** ship the codegen crate as a `cdylib`/`staticlib`; minimal `libturbo` C API
+  (`turbo_vm_new`, `turbo_eval(src)`, register one host fn callable from Turbo, call one Turbo fn from C, marshal
+  int + string both ways); a runnable "C host calls Turbo, exchanges typed values, calls a host fn back" demo +
+  docs; one line in `design/VISION.md` committing the north star. Target **trusted/first-party scripts first** (no
+  sandbox). Separately time-box a **sandbox-feasibility** investigation (can the JIT be stripped of file/net/
+  syscall in a quarter?) → go/no-go, NOT a finished sandbox. Do this BEFORE any LLVM/perf or domain-sidecar work.
+
+### P2 — robustness, language depth, conversion
+
+- [ ] **BL-17 — AOT HTTP correctness (JIT divergences).** _[backend F2,F3]_ (a) `rt_parse_response` colon-fallback
+  uses `atoi` → a plain-string handler return like `"time is 12:30"` emits `HTTP/1.1 0 OK` + body truncated at the
+  first colon (JIT uses strict `parse::<u16>()` → correct 200). (b) The AOT server reads requests through a single
+  `char buf[16384]` and returns a misleading `431` for bodies >~16KB (JIT `read_exact`s up to 32MB). **AC:** C
+  colon-fallback requires a fully-numeric valid status prefix else treats the whole string as a 200 body; AOT reads
+  bodies >buffer into a heap alloc sized to `content_length`; AOT==JIT parity tests for raw-return + 50KB POST.
+
+- [ ] **BL-18 — Mutex can't express atomic read-modify-write.** _[backend F4]_ Only `mutex`/`mutex_get`/`mutex_set`
+  exist; `mutex_set(m, mutex_get(m)+1)` across 4 threads loses ~57% of updates. `docs/stdlib.md` + `CONCURRENCY.md`
+  claim get/set are "safe across concurrent tasks" — a careful programmer cannot write a correct shared counter.
+  **AC:** add a critical-section primitive (`mutex_update(m, |v| v+1)` running the closure under the lock, or
+  `mutex_lock`/`unlock`, or atomic `mutex_add`); fix the docs; concurrent-counter test reaches the exact total.
+
+- [ ] **BL-19 — Sized integer types are an unusable island.** _[e2e]_ No `as` cast keyword and no conversion
+  builtins exist; `i8..u64`/`f32` can't do arithmetic (`i32 + int` → E0102), can't seed an array literal
+  (`[u8]` ← `[int]` → E0110), can't init a struct field with a literal — only `let x: u32 = <lit>` works. Blocks
+  bytes/binary/hashing/interop. **AC:** add an `as` cast and/or `to_i32`/`to_u8`/… builtins, and let integer
+  literals coerce to the annotated sized type in arithmetic/field-init/array-literal contexts.
+
+- [ ] **BL-20 — No CLI args (`args()` is a stub).** _[e2e]_ `rt_args()` returns an empty array ("not yet wired");
+  `turbolang run f.tb hello` is rejected by clap; native binaries see `argc=0`. Can't write an arg-driven CLI —
+  a stated target use case. **AC:** wire argc/argv into `rt_args` for AOT; `turbolang run <file> -- <args>` forwards
+  trailing args; test asserts a native binary sees its argv.
+
+- [ ] **BL-21 — `bench` reports "0/N passed" on every valid benchmark.** _[designer#8, e2e]_ Pass criterion is
+  "JIT and AOT output match," but the build path rejects `@bench` (`unknown attribute '@bench'`) so AOT always
+  fails → headline reads as total failure on correct input. `@bench` is also undocumented; the label prints the
+  filename not the fn. **AC:** AOT/build path accepts `@bench`; lead with timings; AOT-match is a separate
+  non-fatal line; label by function name; add a `@bench` doc + fixture.
+
+- [ ] **BL-22 — Website conversion friction.** _[frontend#2, designer#9]_ No copy button on any code block, and the
+  homepage install block bakes `$ ` prompt markers into copy-paste. Hero has three same-weight CTAs; "Run the
+  flagship demo" links to static docs; "From Source" (heavy cargo build) is shown before 2-line Homebrew. **AC:**
+  a `CopyButton` over each block copying the raw command (no `$`); one primary CTA + "Try in browser" secondary;
+  relabel "Run"→"See" (or wire to playground); lead Installation with Homebrew.
+
+- [ ] **BL-23 — `stdlib.md` is missing ~18 working builtins.** _[e2e]_ Absent from the "all 104 builtins" doc:
+  `str_to_int`, `str_to_float` (the ONLY way to parse input text → numbers; return `Result`), `sort`, `slice`,
+  `random`, `random_range`, `pad_left/right`, `list_dir`, `mkdir`, `delete_file`, `file_exists`, `path_join`,
+  `time_now`, `time_ms`, `format_time`, `exit`, `str_from_char`, `type_of`. **AC:** document them (note the
+  `Result` returns); reconcile the "104" count with the real set.
+
+- [ ] **BL-24 — Website a11y defects.** _[frontend#4-#7]_ Nested `<main>` on every `/docs/*` route (invalid
+  landmark); sub-AA contrast on `text-gray-500/600` small text; no `:focus-visible` styles, unlabeled navs, no
+  skip link; no `prefers-reduced-motion` guard. **AC:** single `<main>`; promote small secondary text to
+  `gray-400`/a ≥4.5:1 token; global focus-visible ring; `aria-label` per nav + skip link; reduced-motion media query.
+
+- [ ] **BL-25 — Long-running-server memory model.** _[strategist theme 3]_ The flagship demo is an HTTP server, but
+  the string arena is freed per-run and the README warns AOT servers leak — a credibility landmine the moment a
+  skeptic runs it for real (also blocks a persistent embedded VM for BL-16). **AC:** fix the long-lived-process
+  memory model, OR demote "server" from flagship to a terminating demo and stop leading with it. (Investigate first.)
+
+### P3 — polish (batch; do NOT spawn busywork PRs — fold opportunistically)
+
+- [ ] **BL-26 — Error/CLI/runtime polish cluster.** Weak/missing `Help:` that should echo the actual signature/field
+  list/missing variant (E0100/E0200/E0315); messages rename the user's type via aliases (`i64`→`int`) instead of
+  echoing source spelling (E0110); import error doesn't teach `import { x } from "./m.tb"`; `explain` rejects `100`/
+  `e0100` (normalize input); whole-number floats print as ints (ambiguous type); raw `(os error 2)` jargon in file
+  errors; `test` summary ordering/color/total-time; empty-RHS `let x =` emits a misleading double-error; REPL
+  spurious `unused variable` across lines; consider raw strings (`r"…"`) so JSON/`{`-strings paste verbatim; empty
+  `[]` can't infer. Backend P3s: `rt_spawn_with_args` ignores `pthread_create` return (joins uninit `pthread_t` on
+  thread exhaustion); `rt_format_time` uses non-reentrant `localtime()` (use `localtime_r`); JIT hashmap `&mut *ptr`
+  is a data race under concurrent `spawn` writes. _(The `fmt` `:`/`->`/operator-spacing gap here is already covered
+  by BL-5.)_
+
+---
 _When all boxes are checked, STOP and ask for the next priorities — do not invent hygiene work._
