@@ -77,10 +77,15 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
 
 ## P3 — coverage & ops
 
-- [ ] **BL-7 — WASM backend feature gaps.** The WASM C-transpiler (`src/wasm_codegen.rs`) now fails loud on
-  closures/async/some match patterns instead of emitting `0`. Implement real support (start with closures),
-  and expand `turbo/tests/wasm/` execution coverage + add WASM↔native parity. **AC:** a closure program
-  compiles and runs correctly under `wasmtime`, parity-tested.
+- [x] **BL-7 — WASM backend feature gaps (closures).** _Done (commit `bedac76`, merged to master)._ AC met:
+  closures now compile to WASM and run under `wasmtime`, parity-matched to native. A closure is a heap
+  `{fn_ptr, env_ptr}` pair; the body is lifted to a top-level C `fn(env, params)` with captures in an env
+  struct; clang lowers the fn pointers to `call_indirect`. **Works:** direct closures, captures
+  (int/bool/str/f64 via bit-pun), and `map`/`filter` closures. **Fails loud (clean E0403, no miscompile):**
+  closures as user higher-order-fn params, and float-array `map`/`filter`. +5 WASM exec tests (the runner now
+  does a 3-way `wasm == native == .expected` check) +6 codegen unit tests; no native regression. **Remaining
+  WASM gaps (future):** async, some match patterns, higher-order closure params, returning/storing closures,
+  and the BL-27 Part B struct/array COW.
 
 - [ ] **BL-8 — Homebrew formula sha sync.** The in-repo `distribution/homebrew/turbo-lang.rb` ships
   placeholder `000…` sha256 (real ones go to the `ZVN-DEV/homebrew-turbo` tap via `release.yml`). Either
