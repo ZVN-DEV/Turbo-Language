@@ -309,11 +309,17 @@ fn init_project(name: &str) {
     }
 
     std::fs::create_dir_all(dir.join("src")).unwrap_or_else(|e| {
-        eprintln!("\x1b[1;31merror\x1b[0m: could not create directory: {e}");
+        eprintln!(
+            "\x1b[1;31merror\x1b[0m: could not create directory: {}",
+            io_reason(&e)
+        );
         std::process::exit(1);
     });
     std::fs::create_dir_all(dir.join("tests")).unwrap_or_else(|e| {
-        eprintln!("\x1b[1;31merror\x1b[0m: could not create directory: {e}");
+        eprintln!(
+            "\x1b[1;31merror\x1b[0m: could not create directory: {}",
+            io_reason(&e)
+        );
         std::process::exit(1);
     });
 
@@ -325,7 +331,10 @@ fn init_project(name: &str) {
         ),
     )
     .unwrap_or_else(|e| {
-        eprintln!("\x1b[1;31merror\x1b[0m: failed to write turbo.toml: {e}");
+        eprintln!(
+            "\x1b[1;31merror\x1b[0m: failed to write turbo.toml: {}",
+            io_reason(&e)
+        );
         std::process::exit(1);
     });
 
@@ -381,7 +390,10 @@ fn main() {{
         ),
     )
     .unwrap_or_else(|e| {
-        eprintln!("\x1b[1;31merror\x1b[0m: failed to write src/main.tb: {e}");
+        eprintln!(
+            "\x1b[1;31merror\x1b[0m: failed to write src/main.tb: {}",
+            io_reason(&e)
+        );
         std::process::exit(1);
     });
 
@@ -432,13 +444,19 @@ fn area(shape: Shape) -> f64 {
 "#,
     )
     .unwrap_or_else(|e| {
-        eprintln!("\x1b[1;31merror\x1b[0m: failed to write tests/main_test.tb: {e}");
+        eprintln!(
+            "\x1b[1;31merror\x1b[0m: failed to write tests/main_test.tb: {}",
+            io_reason(&e)
+        );
         std::process::exit(1);
     });
 
     // .gitignore
     std::fs::write(dir.join(".gitignore"), "turbo_modules/\ntarget/\n*.o\n").unwrap_or_else(|e| {
-        eprintln!("\x1b[1;31merror\x1b[0m: failed to write .gitignore: {e}");
+        eprintln!(
+            "\x1b[1;31merror\x1b[0m: failed to write .gitignore: {}",
+            io_reason(&e)
+        );
         std::process::exit(1);
     });
 
@@ -819,7 +837,10 @@ fn write_lockfile(locks: &HashMap<String, LockedGitDependency>) {
     }
 
     if let Err(e) = std::fs::write("turbo.lock", out) {
-        eprintln!("\x1b[1;31merror\x1b[0m: could not write turbo.lock: {e}");
+        eprintln!(
+            "\x1b[1;31merror\x1b[0m: could not write turbo.lock: {}",
+            io_reason(&e)
+        );
         std::process::exit(1);
     }
 }
@@ -1105,8 +1126,9 @@ fn install_deps() {
                     Ok(p) => p,
                     Err(e) => {
                         eprintln!(
-                            "\x1b[1;31merror\x1b[0m: could not resolve dependency path `{}`: {e}",
-                            path
+                            "\x1b[1;31merror\x1b[0m: could not resolve dependency path `{}`: {}",
+                            path,
+                            io_reason(&e)
                         );
                         std::process::exit(1);
                     }
@@ -1130,8 +1152,9 @@ fn install_deps() {
                 {
                     std::os::unix::fs::symlink(&canonical, &target).unwrap_or_else(|e| {
                         eprintln!(
-                            "\x1b[1;31merror\x1b[0m: could not create symlink for `{}`: {e}",
-                            dep.name
+                            "\x1b[1;31merror\x1b[0m: could not create symlink for `{}`: {}",
+                            dep.name,
+                            io_reason(&e)
                         );
                         std::process::exit(1);
                     });
@@ -1159,8 +1182,9 @@ fn install_deps() {
                     }
                     copy_dir_recursive(&canonical, &target).unwrap_or_else(|e| {
                         eprintln!(
-                            "\x1b[1;31merror\x1b[0m: could not copy dependency `{}`: {e}",
-                            dep.name
+                            "\x1b[1;31merror\x1b[0m: could not copy dependency `{}`: {}",
+                            dep.name,
+                            io_reason(&e)
                         );
                         std::process::exit(1);
                     });
@@ -1680,6 +1704,24 @@ fn report_codeful_error(message: &str, help: Option<&str>, code: ErrorCode) {
     }
 }
 
+/// Translate a [`std::io::Error`] into a jargon-free reason phrase, dropping
+/// the `(os error N)` suffix that the error's `Display` appends for OS errors.
+///
+/// `io::ErrorKind`'s own `Display` ("is a directory", "read-only filesystem",
+/// …) is already human-readable and never includes the raw errno; the two most
+/// common kinds get an even friendlier phrasing. This mirrors the catch-all in
+/// [`report_file_error`], which surfaces `err.kind()` rather than `err`, and is
+/// used by the operational error paths (`init`, `bench`, lockfile writes) that
+/// render an io error inline instead of through the E0611 envelope.
+fn io_reason(err: &std::io::Error) -> String {
+    use std::io::ErrorKind;
+    match err.kind() {
+        ErrorKind::NotFound => "no such file or directory".to_string(),
+        ErrorKind::PermissionDenied => "permission denied".to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// Render a file-not-found / unreadable-source error (E0611) and exit.
 ///
 /// Drops the raw `(os error N)` jargon that `std::io::Error`'s `Display`
@@ -2020,9 +2062,29 @@ fn test_file(file: Option<PathBuf>) {
 
     let turbo_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("turbolang"));
 
+    // Color the PASS/FAIL tags only when stderr is a terminal, so captured
+    // output (CI, the integration harness) stays deterministic and free of
+    // ANSI escapes. Mirrors the runtime's `is_terminal()` gating.
+    use std::io::IsTerminal;
+    let use_color = std::io::stderr().is_terminal();
+    let pass_tag = if use_color {
+        "\x1b[32mPASS\x1b[0m"
+    } else {
+        "PASS"
+    };
+    let fail_tag = if use_color {
+        "\x1b[31mFAIL\x1b[0m"
+    } else {
+        "FAIL"
+    };
+
+    let suite_start = std::time::Instant::now();
     let mut total_passed = 0u32;
     let mut total_failed = 0u32;
 
+    // Test files are collected in sorted order (see `collect_test_files`) and
+    // each file's tests run in declaration order, so the result listing below
+    // is stable across runs.
     for path in &files {
         let source = match std::fs::read_to_string(path) {
             Ok(s) => s,
@@ -2124,7 +2186,7 @@ fn test_file(file: Option<PathBuf>) {
             match output {
                 Ok(result) => {
                     if result.status.success() {
-                        eprintln!("  \x1b[32mPASS\x1b[0m  {name}");
+                        eprintln!("  {pass_tag}  {name}");
                         total_passed += 1;
                     } else {
                         // Print captured stderr (assertion failure messages)
@@ -2134,20 +2196,23 @@ fn test_file(file: Option<PathBuf>) {
                                 eprintln!("        {line}");
                             }
                         }
-                        eprintln!("  \x1b[31mFAIL\x1b[0m  {name}");
+                        eprintln!("  {fail_tag}  {name}");
                         total_failed += 1;
                     }
                 }
                 Err(e) => {
-                    eprintln!("  \x1b[31mFAIL\x1b[0m  {name} (failed to spawn: {e})");
+                    eprintln!("  {fail_tag}  {name} (failed to spawn: {})", io_reason(&e));
                     total_failed += 1;
                 }
             }
         }
     }
 
-    // Print summary
-    eprintln!("{total_passed} passed, {total_failed} failed");
+    // Summary: counts plus the total wall-clock time the suite took. The time
+    // is formatted with Rust's `{:.2}` (not the language's float printer), so
+    // it is unaffected by `.tb` float-formatting changes.
+    let elapsed = suite_start.elapsed().as_secs_f64();
+    eprintln!("{total_passed} passed, {total_failed} failed in {elapsed:.2}s");
 
     if total_failed > 0 {
         std::process::exit(1);
@@ -2199,8 +2264,9 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!(
-                    "  \x1b[31merror\x1b[0m: could not read `{}`: {e}",
-                    path.display()
+                    "  \x1b[31merror\x1b[0m: could not read `{}`: {}",
+                    path.display(),
+                    io_reason(&e)
                 );
                 continue;
             }
