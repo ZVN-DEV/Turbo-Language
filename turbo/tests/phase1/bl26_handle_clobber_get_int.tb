@@ -1,0 +1,9 @@
+// BL-26: clobbering a hashmap handle with a plain int must be a clean
+// compile-time type error, NOT a runtime segfault. `hashmap_get_int` returns
+// an `int`; assigning it back over the handle variable used to type-check
+// (handle was a plain i64) and then dereferenced the int as a pointer.
+fn main() {
+    let mut m = hashmap()
+    m = hashmap_get_int(m, "a")
+    print(hashmap_get_int(m, "a"))
+}

@@ -1,0 +1,8 @@
+// BL-26: the mutex handle shares the same i64-handle footgun. `mutex_get`
+// returns the protected value (an int); writing it back over the mutex handle
+// must be a clean type error, not a segfault.
+fn main() {
+    let mut mx = mutex(0)
+    mx = mutex_get(mx)
+    print(mutex_get(mx))
+}

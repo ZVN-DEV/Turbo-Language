@@ -57,6 +57,33 @@ pub struct SemaResult {
     pub warnings: Vec<SemaWarning>,
 }
 
+/// The kind of opaque runtime handle a [`Ty::Handle`] refers to.
+///
+/// Each is an `i64` pointer/id at runtime, but tracking the kind in the type
+/// system lets sema reject accidentally clobbering a handle variable with a
+/// plain integer — which at runtime would dereference an `int` as a pointer
+/// and segfault (BL-26).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandleKind {
+    /// A `hashmap()` handle.
+    HashMap,
+    /// A `mutex()` handle.
+    Mutex,
+    /// An `http_server()` / `http_server_public()` handle.
+    HttpServer,
+}
+
+impl HandleKind {
+    /// User-facing spelling used in diagnostics.
+    fn label(self) -> &'static str {
+        match self {
+            HandleKind::HashMap => "hashmap",
+            HandleKind::Mutex => "mutex",
+            HandleKind::HttpServer => "http server",
+        }
+    }
+}
+
 /// Internal type representation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
@@ -89,6 +116,9 @@ pub enum Ty {
     Future(Box<Ty>),
     /// A generic type parameter (e.g., `T`)
     TypeParam(String),
+    /// An opaque runtime handle (hashmap / mutex / http server). Backed by an
+    /// `i64` at runtime but kept distinct so int↔handle mixing is a type error.
+    Handle(HandleKind),
     /// Type could not be determined (error recovery)
     Error,
 }
@@ -126,6 +156,7 @@ impl std::fmt::Display for Ty {
             Ty::Optional(inner) => write!(f, "{}?", inner),
             Ty::Future(inner) => write!(f, "Future<{inner}>"),
             Ty::TypeParam(name) => write!(f, "{name}"),
+            Ty::Handle(kind) => write!(f, "{}", kind.label()),
             Ty::Error => write!(f, "<error>"),
         }
     }
@@ -149,6 +180,15 @@ impl Ty {
 
     pub(crate) fn is_error(&self) -> bool {
         matches!(self, Ty::Error)
+    }
+
+    /// Whether this type may stand in for an opaque handle of `kind` in a
+    /// builtin argument position — either a real handle of that kind, or a
+    /// plain integer. Handles cross function boundaries as `i64` parameters
+    /// (there is no surface syntax for a handle type), so inside a callee they
+    /// are typed `i64`; both must be accepted where a handle is expected.
+    pub(crate) fn is_handle_or_int(&self, kind: HandleKind) -> bool {
+        self.is_integer() || *self == Ty::Handle(kind)
     }
 
     /// Check if this type contains `Ty::Error` anywhere in its structure
@@ -294,6 +334,13 @@ pub(crate) fn types_compatible(expected: &Ty, actual: &Ty) -> bool {
         (Ty::Optional(inner1), Ty::Optional(inner2)) => {
             inner1.is_error() || inner2.is_error() || inner1 == inner2
         }
+        // An opaque handle (hashmap / mutex / http server) is an `i64` at
+        // runtime, so it may flow *into* an integer slot — passed to an `i64`
+        // parameter or returned from an `i64` function. The reverse direction
+        // (a plain int where a handle is expected) is intentionally left
+        // incompatible, so clobbering a handle variable with an int is a clean
+        // type error rather than a runtime segfault (BL-26).
+        (expected, Ty::Handle(_)) if expected.is_integer() => true,
         _ => false,
     }
 }
