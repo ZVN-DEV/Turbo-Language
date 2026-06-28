@@ -1,3 +1,16 @@
+# NON-AUTHORITATIVE TEMPLATE — DO NOT TRUST THE sha256 VALUES BELOW.
+#
+# The AUTHORITATIVE FORMULA LIVES IN THE ZVN-DEV/homebrew-turbo TAP; these shas
+# are placeholders. Real, verified checksums are only known after the release
+# artifacts are built, so .github/workflows/release.yml regenerates the formula
+# with the true sha256 values and pushes it to that tap at release time. Users
+# install via `brew install zvn-dev/turbo/turbo-lang`, which pulls the real
+# formula from the tap — never this file.
+#
+# The sha256 fields below are the all-zero sentinel on purpose: an unmistakable
+# placeholder that cannot be confused for a verified checksum. This is enforced
+# by scripts/check_release_consistency.py (Homebrew template policy) so this
+# mirror can never silently drift into looking like a real, trustworthy formula.
 class TurboLang < Formula
   desc "Compiled, type-safe language with TypeScript DX and Rust performance"
   homepage "https://turbolang.dev"
