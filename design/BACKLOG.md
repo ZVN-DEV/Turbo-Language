@@ -44,13 +44,17 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
 
 ## P2 — language & tooling depth
 
-- [ ] **BL-3 — f32 across the spawn/generic/closure ABI boundary.** 0.9.2 made f32 params *fail loud*
-  (sema E0100) because they previously panicked Cranelift / miscompiled. Do it properly: thread real
-  `F32` ABI handling (bitcast/register-class) through `compile.rs` spawn thunks, `expr.rs` generic +
-  inferred-closure calls, and `type_conv.rs` so `f32` works across those boundaries — then remove the
-  sema reject and add JIT↔AOT parity tests. (If a full fix is out of reach, formally document f32 as a
-  restricted type instead.) **AC:** an f32 spawn arg / generic type-arg / closure param round-trips
-  correctly on JIT and AOT, parity-tested.
+- [x] **BL-3 — f32 across the spawn/generic/closure ABI boundary.** _Done (commit `7e4a6d5`, merged to
+  master)._ Root cause was a single ABI disagreement: `resolve_cl_type` mapped `f32 → F32` for internal
+  function signatures while every float value flows as F64 (f32 locals/arithmetic/returns already
+  round-trip as f64), so the param var was declared F32 but fed an F64 value → Cranelift panic / closure +
+  spawn miscompiles. Fix: promote f32 → F64 uniformly across the **internal** Turbo ABI (`type_conv.rs`),
+  and preserve a real 32-bit `F32` only at the **C FFI** (`extern`) boundary via a new `resolve_cl_type_ffi`
+  threaded through `compile.rs`. Removed the 0.9.2 sema rejects (`reject_f32_params` + closure-param
+  reject). New tests: 4 JIT↔AOT parity programs (`f32_abi_{param,closure,spawn,generic}`) + 5 phase1
+  value-assertion tests; removed the obsolete `f32_{spawn,closure}_reject` ERROR tests. Verified: 503 unit
+  / 238 integration / 18 parity, clippy + fmt clean. No new semantic loss (the language never promised
+  32-bit rounding for f32).
 
 - [x] **BL-4 — LSP scope/binding resolution.** _Done (commit 4ff0476, merged to master)._ New
   `turbo-lsp/src/resolve.rs` walks the AST with a lexical scope stack mapping each ident occurrence (by
