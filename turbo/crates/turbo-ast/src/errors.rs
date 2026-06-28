@@ -7,6 +7,7 @@
 /// - E0300-E0399: Name resolution (undefined var/fn/type, duplicates, scope)
 /// - E0400-E0499: Codegen errors
 /// - E0500-E0599: Misc (immutability, unused, constraints, etc.)
+/// - E0600-E0699: Runtime & operational errors (traps, imports, file I/O)
 ///
 /// # Examples
 ///
@@ -206,6 +207,18 @@ pub enum ErrorCode {
     E0515,
     /// Compiler recursion limit exceeded (parser/codegen)
     E0516,
+
+    // ── Runtime & operational errors (E0600-E0699) ──────────────────
+    /// Division (or modulo) by zero at runtime
+    E0601,
+    /// Index out of bounds at runtime (array or string)
+    E0602,
+    /// Integer arithmetic overflowed at runtime
+    E0603,
+    /// Import could not be resolved
+    E0610,
+    /// Source file not found or could not be read
+    E0611,
 }
 
 impl ErrorCode {
@@ -306,6 +319,12 @@ impl ErrorCode {
             ErrorCode::E0514 => "E0514",
             ErrorCode::E0515 => "E0515",
             ErrorCode::E0516 => "E0516",
+            // Runtime & operational
+            ErrorCode::E0601 => "E0601",
+            ErrorCode::E0602 => "E0602",
+            ErrorCode::E0603 => "E0603",
+            ErrorCode::E0610 => "E0610",
+            ErrorCode::E0611 => "E0611",
         }
     }
 
@@ -406,6 +425,12 @@ impl ErrorCode {
             ErrorCode::E0514 => "unused return value of pure function",
             ErrorCode::E0515 => "unused variable",
             ErrorCode::E0516 => "compiler recursion limit exceeded",
+            // Runtime & operational
+            ErrorCode::E0601 => "division by zero",
+            ErrorCode::E0602 => "index out of bounds",
+            ErrorCode::E0603 => "integer overflow at runtime",
+            ErrorCode::E0610 => "import could not be resolved",
+            ErrorCode::E0611 => "source file not found or could not be read",
         }
     }
 
@@ -506,6 +531,11 @@ impl ErrorCode {
             ErrorCode::E0514,
             ErrorCode::E0515,
             ErrorCode::E0516,
+            ErrorCode::E0601,
+            ErrorCode::E0602,
+            ErrorCode::E0603,
+            ErrorCode::E0610,
+            ErrorCode::E0611,
         ]
     }
 }

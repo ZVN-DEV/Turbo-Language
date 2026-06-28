@@ -1645,6 +1645,68 @@ fn error_code_url(code: ErrorCode) -> String {
     )
 }
 
+/// Render an operational/CLI error with the same envelope as the compile-time
+/// diagnostics, but without an ariadne source frame (these errors — a missing
+/// file, an unresolvable import — have no `.tb` span to point a caret at).
+///
+/// Reuses [`compose_diagnostic_footer`] / [`error_code_url`] so the `Help:`
+/// block and the `more info:` footer are formatted identically to every other
+/// diagnostic:
+///
+/// ```text
+/// error[E06NN]: <message>
+/// Help: <help>
+///   more info: <url>
+/// ```
+fn report_codeful_error(message: &str, help: Option<&str>, code: ErrorCode) {
+    eprintln!("\x1b[1;31merror[{}]\x1b[0m: {}", code.as_str(), message);
+    let (help_block, standalone_footer) = compose_diagnostic_footer(help, Some(code));
+    if let Some(block) = help_block {
+        eprintln!("Help: {block}");
+    }
+    if let Some(footer) = standalone_footer {
+        eprintln!("{footer}");
+    }
+}
+
+/// Render a file-not-found / unreadable-source error (E0611) and exit.
+///
+/// Drops the raw `(os error N)` jargon that `std::io::Error`'s `Display`
+/// leaks: callers see a plain-language reason plus a `Help:` line and the
+/// `more info:` footer, matching the quality of the compile diagnostics.
+fn report_file_error(path: &std::path::Path, err: &std::io::Error) -> ! {
+    use std::io::ErrorKind;
+    let (message, help) = match err.kind() {
+        ErrorKind::NotFound => (
+            format!("could not find `{}` — check the path", path.display()),
+            "make sure the file exists and the path is spelled correctly",
+        ),
+        ErrorKind::PermissionDenied => (
+            format!("permission denied reading `{}`", path.display()),
+            "check the file's permissions, or run as a user that can read it",
+        ),
+        // `err.kind()`'s Display ("is a directory", "invalid input", …) is
+        // jargon-free — unlike `{err}`, it never appends "(os error N)".
+        other => (
+            format!("could not read `{}`: {other}", path.display()),
+            "check that the path points to a readable file",
+        ),
+    };
+    report_codeful_error(&message, Some(help), ErrorCode::E0611);
+    std::process::exit(1);
+}
+
+/// Render an import-resolution failure (E0610) and exit. `message` is the
+/// human-readable reason produced by [`resolve_imports`].
+fn report_import_error(message: &str) -> ! {
+    report_codeful_error(
+        message,
+        Some("check the import path, and that the file exists and parses cleanly"),
+        ErrorCode::E0610,
+    );
+    std::process::exit(1);
+}
+
 fn report_warning(
     source: &str,
     filename: &str,
@@ -1695,13 +1757,7 @@ fn check_file_size(path: &std::path::Path) {
                 std::process::exit(1);
             }
         }
-        Err(e) => {
-            eprintln!(
-                "\x1b[1;31merror\x1b[0m: could not stat file `{}`: {e}",
-                path.display()
-            );
-            std::process::exit(1);
-        }
+        Err(e) => report_file_error(path, &e),
     }
 }
 
@@ -1710,13 +1766,7 @@ fn run_file(path: &std::path::Path, verbose: bool) {
 
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!(
-                "\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}",
-                path.display()
-            );
-            std::process::exit(1);
-        }
+        Err(e) => report_file_error(path, &e),
     };
 
     let filename = path
@@ -1771,8 +1821,7 @@ fn run_file(path: &std::path::Path, verbose: bool) {
     let mut loading = HashSet::new();
     loading.insert(canonical_self);
     if let Err(e) = resolve_imports(&mut module, base_dir, &mut loading) {
-        eprintln!("error: {e}");
-        std::process::exit(1);
+        report_import_error(&e);
     }
 
     if module.items.is_empty() {
@@ -1862,13 +1911,7 @@ fn check_file(path: &std::path::Path) {
 
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!(
-                "\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}",
-                path.display()
-            );
-            std::process::exit(1);
-        }
+        Err(e) => report_file_error(path, &e),
     };
 
     let filename = path
@@ -1911,8 +1954,7 @@ fn check_file(path: &std::path::Path) {
     let mut loading = HashSet::new();
     loading.insert(canonical_self);
     if let Err(e) = resolve_imports(&mut module, base_dir, &mut loading) {
-        eprintln!("error: {e}");
-        std::process::exit(1);
+        report_import_error(&e);
     }
 
     // Semantic analysis
@@ -1973,13 +2015,7 @@ fn test_file(file: Option<PathBuf>) {
     for path in &files {
         let source = match std::fs::read_to_string(path) {
             Ok(s) => s,
-            Err(e) => {
-                eprintln!(
-                    "\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}",
-                    path.display()
-                );
-                std::process::exit(1);
-            }
+            Err(e) => report_file_error(path, &e),
         };
 
         let filename = path
@@ -2020,8 +2056,7 @@ fn test_file(file: Option<PathBuf>) {
         let mut loading = HashSet::new();
         loading.insert(canonical_self);
         if let Err(e) = resolve_imports(&mut module, base_dir, &mut loading) {
-            eprintln!("error: {e}");
-            std::process::exit(1);
+            report_import_error(&e);
         }
 
         // Collect @test function names
@@ -2328,13 +2363,7 @@ fn test_run_fn(path: &std::path::Path, fn_name: &str) {
 
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!(
-                "\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}",
-                path.display()
-            );
-            std::process::exit(1);
-        }
+        Err(e) => report_file_error(path, &e),
     };
 
     let filename = path
@@ -2375,8 +2404,7 @@ fn test_run_fn(path: &std::path::Path, fn_name: &str) {
     let mut loading = HashSet::new();
     loading.insert(canonical_self);
     if let Err(e) = resolve_imports(&mut module, base_dir, &mut loading) {
-        eprintln!("error: {e}");
-        std::process::exit(1);
+        report_import_error(&e);
     }
 
     // Semantic analysis in test mode
@@ -2448,13 +2476,7 @@ fn build_file(
 
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!(
-                "\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}",
-                path.display()
-            );
-            std::process::exit(1);
-        }
+        Err(e) => report_file_error(path, &e),
     };
 
     let filename = path
@@ -2526,8 +2548,7 @@ fn build_file(
     let mut loading = HashSet::new();
     loading.insert(canonical_self);
     if let Err(e) = resolve_imports(&mut module, base_dir, &mut loading) {
-        eprintln!("error: {e}");
-        std::process::exit(1);
+        report_import_error(&e);
     }
 
     if module.items.is_empty() {
@@ -3022,9 +3043,12 @@ fn resolve_imports(
             }
 
             let resolved_path = resolve_import_path(base_dir, path);
-            let canonical = resolved_path.canonicalize().map_err(|e| {
+            // Drop the raw `(os error N)` that `io::Error`'s Display leaks —
+            // the E0610 envelope and `Help:` line carry the actionable detail.
+            let canonical = resolved_path.canonicalize().map_err(|_| {
                 format!(
-                    "could not resolve import path `{}`: {e}",
+                    "could not resolve import `{}` (looked for `{}`)",
+                    path,
                     resolved_path.display()
                 )
             })?;
@@ -3041,8 +3065,9 @@ fn resolve_imports(
 
             let source = std::fs::read_to_string(&resolved_path).map_err(|e| {
                 format!(
-                    "could not read imported file `{}`: {e}",
-                    resolved_path.display()
+                    "could not read imported file `{}`: {}",
+                    resolved_path.display(),
+                    e.kind()
                 )
             })?;
 
@@ -3390,6 +3415,12 @@ fn detailed_explanation(code: ErrorCode) -> Option<&'static str> {
         ErrorCode::E0514 => Some(include_str!("errors/E0514.md")),
         ErrorCode::E0515 => Some(include_str!("errors/E0515.md")),
         ErrorCode::E0516 => Some(include_str!("errors/E0516.md")),
+        // Runtime & operational errors (E0600-E0699)
+        ErrorCode::E0601 => Some(include_str!("errors/E0601.md")),
+        ErrorCode::E0602 => Some(include_str!("errors/E0602.md")),
+        ErrorCode::E0603 => Some(include_str!("errors/E0603.md")),
+        ErrorCode::E0610 => Some(include_str!("errors/E0610.md")),
+        ErrorCode::E0611 => Some(include_str!("errors/E0611.md")),
     }
 }
 
@@ -3408,7 +3439,7 @@ fn explain_error(code_str: &str) {
         }
     } else {
         eprintln!("\x1b[1;31merror\x1b[0m: unknown error code `{code_str}`");
-        eprintln!("  Error codes range from E0001 to E0515.");
+        eprintln!("  Error codes range from E0001 to E0611.");
         eprintln!("  Example: turbolang explain E0100");
         std::process::exit(1);
     }
@@ -3746,13 +3777,7 @@ fn scan_functions(lines: &[&str], doc_comments: &HashMap<usize, Vec<String>>) ->
 fn doc_file(path: &std::path::Path) {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!(
-                "\x1b[1;31merror\x1b[0m: could not read file `{}`: {e}",
-                path.display()
-            );
-            std::process::exit(1);
-        }
+        Err(e) => report_file_error(path, &e),
     };
 
     let filename = path

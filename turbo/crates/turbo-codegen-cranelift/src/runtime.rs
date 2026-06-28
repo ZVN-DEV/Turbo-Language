@@ -15,6 +15,59 @@ fn cstring_or_empty(s: impl Into<Vec<u8>>) -> std::ffi::CString {
     std::ffi::CString::new(s).unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
 }
 
+/// Base URL for the public per-error-code documentation. Must stay in sync
+/// with `error_code_url()` in `turbo-cli/src/main.rs` and the matching
+/// `RT_ERROR_DOC_URL_BASE` in `turbo_rt.c`, so the `more info:` footer points
+/// at the same place from compile errors, JIT traps, and AOT traps alike.
+const RT_ERROR_DOC_URL_BASE: &str =
+    "https://github.com/ZVN-DEV/Turbo-Language/blob/master/docs/errors";
+
+/// Print a styled runtime-error envelope to stderr and terminate the process.
+///
+/// This is the JIT (`turbolang run`) twin of `rt_runtime_error` in
+/// `turbo_rt.c`; the two MUST emit byte-identical output so a program run
+/// through the JIT and the same program built to a native binary produce the
+/// identical diagnostic (JIT ≡ AOT). The envelope mirrors the compile-time
+/// diagnostics:
+///
+/// ```text
+/// runtime error[E06NN]: <message>
+/// Help: <help>
+///   more info: <doc url>
+/// ```
+///
+/// ANSI color is emitted only when stderr is a terminal, so piped output
+/// (the integration-test harness, the web playground) stays clean.
+fn runtime_error(code: &str, message: &str, help: &str) -> ! {
+    use std::io::IsTerminal;
+    if std::io::stderr().is_terminal() {
+        eprintln!("\x1b[1;31mruntime error[{code}]\x1b[0m: {message}");
+        eprintln!("\x1b[1;36mHelp\x1b[0m: {help}");
+    } else {
+        eprintln!("runtime error[{code}]: {message}");
+        eprintln!("Help: {help}");
+    }
+    eprintln!("  more info: {RT_ERROR_DOC_URL_BASE}/{code}.md");
+    std::process::exit(1);
+}
+
+/// Styled index-out-of-bounds trap for array access (E0602). Shared by
+/// `rt_array_get`, `rt_array_set`, and `rt_array_oob_exit`.
+fn array_oob(index: i64, len: i64) -> ! {
+    let message = format!("array index {index} out of bounds (length {len})");
+    let help = format!("valid indices are 0..{len} (exclusive); check with `if i < len(arr)`");
+    runtime_error("E0602", &message, &help);
+}
+
+/// Styled index-out-of-bounds trap for string indexing (E0602).
+fn str_index_oob(index: i64, len: usize) -> ! {
+    let message = format!("string index {index} out of bounds (length {len})");
+    let help = format!(
+        "valid indices are 0..{len} (exclusive); check the index against the string length"
+    );
+    runtime_error("E0602", &message, &help);
+}
+
 fn format_f64(n: f64) -> String {
     let n = if n == 0.0 { 0.0 } else { n };
     let mut buf = [0 as libc::c_char; 64];
@@ -196,13 +249,19 @@ pub(crate) extern "C" fn rt_assert_eq_fail(kind: i64, actual: *const u8, expecte
 }
 
 pub(crate) extern "C" fn rt_div_by_zero() {
-    eprintln!("runtime error: division by zero");
-    std::process::exit(1);
+    runtime_error(
+        "E0601",
+        "division by zero",
+        "guard the divisor: `if b != 0 { ... }`",
+    );
 }
 
 pub(crate) extern "C" fn rt_int_overflow() {
-    eprintln!("runtime error: integer overflow");
-    std::process::exit(1);
+    runtime_error(
+        "E0603",
+        "integer overflow",
+        "the result does not fit in a 64-bit signed integer; check the operands' magnitude",
+    );
 }
 
 pub(crate) extern "C" fn rt_array_alloc(len: i64) -> *mut u8 {
@@ -239,11 +298,7 @@ pub(crate) extern "C" fn rt_array_alloc(len: i64) -> *mut u8 {
 pub(crate) extern "C" fn rt_array_get(arr: *const u8, index: i64) -> i64 {
     let len = unsafe { *(arr as *const i64) };
     if index < 0 || index >= len {
-        eprintln!(
-            "runtime error: array index {} out of bounds (length {})",
-            index, len
-        );
-        std::process::exit(1);
+        array_oob(index, len);
     }
     unsafe { *((arr as *const i64).add(1 + index as usize)) }
 }
@@ -289,11 +344,7 @@ pub(crate) extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) -> *
     // Bounds check + set on the target (possibly new) array
     let len = unsafe { *(target as *const i64) };
     if index < 0 || index >= len {
-        eprintln!(
-            "runtime error: array index {} out of bounds (length {})",
-            index, len
-        );
-        std::process::exit(1);
+        array_oob(index, len);
     }
     unsafe {
         *((target as *mut i64).add(1 + index as usize)) = value;
@@ -519,11 +570,7 @@ pub(crate) extern "C" fn rt_struct_cow(s: *mut u8, num_fields: i64) -> *mut u8 {
 }
 
 pub(crate) extern "C" fn rt_array_oob_exit(index: i64, len: i64) {
-    eprintln!(
-        "runtime error: array index {} out of bounds (length {})",
-        index, len
-    );
-    std::process::exit(1);
+    array_oob(index, len);
 }
 
 fn fast_i64_to_string(n: i64) -> String {
@@ -787,18 +834,12 @@ pub(crate) extern "C" fn rt_str_char_at(s: *const u8, index: i64) -> *const u8 {
         .to_str()
         .unwrap_or("");
     if index < 0 {
-        eprintln!("runtime error: char_at index {} is negative", index);
-        std::process::exit(1);
+        str_index_oob(index, s.chars().count());
     }
     if let Some(c) = s.chars().nth(index as usize) {
         arena_str(cstring_or_empty(c.to_string()))
     } else {
-        eprintln!(
-            "runtime error: string index {} out of bounds (length {})",
-            index,
-            s.chars().count()
-        );
-        std::process::exit(1);
+        str_index_oob(index, s.chars().count());
     }
 }
 

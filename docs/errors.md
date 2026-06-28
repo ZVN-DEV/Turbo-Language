@@ -119,3 +119,16 @@ Every compiler diagnostic includes a unique error code (e.g. `E0100`). Use `turb
 | E0514 | Unused return value of pure function |
 | E0515 | Unused variable |
 | E0516 | Compiler recursion limit exceeded (parser/codegen) |
+
+## Runtime & Operational Errors (E0600-E0699)
+
+These are emitted while a program runs (`runtime error[E06NN]: …`) or by the
+CLI itself (`error[E06NN]: …`), not during type-checking.
+
+| Code | Description |
+|------|-------------|
+| E0601 | Division by zero |
+| E0602 | Index out of bounds (array or string) |
+| E0603 | Integer overflow at runtime |
+| E0610 | Import could not be resolved |
+| E0611 | Source file not found or could not be read |

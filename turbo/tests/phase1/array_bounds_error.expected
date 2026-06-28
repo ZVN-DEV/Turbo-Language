@@ -1,1 +1,1 @@
-ERROR:array index 5 out of bounds
+ERROR:runtime error\[E0602\]: array index 5 out of bounds
