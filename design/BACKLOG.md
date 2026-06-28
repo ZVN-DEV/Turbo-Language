@@ -193,10 +193,12 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   `to_i32`-style builtins (superseded by `as`); literal coercion in comparisons + into float types; narrow
   array-element assignment.
 
-- [ ] **BL-20 — No CLI args (`args()` is a stub).** _[e2e]_ `rt_args()` returns an empty array ("not yet wired");
-  `turbolang run f.tb hello` is rejected by clap; native binaries see `argc=0`. Can't write an arg-driven CLI —
-  a stated target use case. **AC:** wire argc/argv into `rt_args` for AOT; `turbolang run <file> -- <args>` forwards
-  trailing args; test asserts a native binary sees its argv.
+- [x] **BL-20 — No CLI args (`args()` is a stub).** _[e2e] Done (commit `6b08cad`, merged to master)._ AOT
+  `main(argc, argv)` → `rt_set_args` → `rt_args()` builds `[str]` from `argv[1..]`; JIT uses a `PROGRAM_ARGS`
+  global set by the CLI before `jit_run`; clap `Run` gained a `trailing_var_arg` so `turbolang run f.tb -- a b c`
+  (and trailing args) forward to the program. Convention: `args()[0]` is the first user arg (binary/source path
+  excluded); JIT≡AOT (`run f.tb -- a b` and `./bin a b` produce identical output). +dedicated args shell test
+  (`tests/args/`, JIT==AOT, hyphen-leading + empty cases) +parity. Docs updated. _WASM `args()` untouched._
 
 - [ ] **BL-21 — `bench` reports "0/N passed" on every valid benchmark.** _[designer#8, e2e]_ Pass criterion is
   "JIT and AOT output match," but the build path rejects `@bench` (`unknown attribute '@bench'`) so AOT always
