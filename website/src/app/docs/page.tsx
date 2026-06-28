@@ -141,6 +141,57 @@ fn main() {
         <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">./turbo/benchmarks/run_comparison.sh</code>.
       </p>
 
+      <h3 className="text-xl font-bold text-white mt-8 mb-4">
+        Real-world workload: word-count
+      </h3>
+      <p className="mb-4">
+        fib40 only exercises the integer call stack. The{" "}
+        <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">word-count</code>{" "}
+        benchmark is end-to-end: read a ~5 MB text file (1.05M words), tokenize
+        on whitespace, count word frequencies in a hashmap, and print the top-20
+        words plus a total &mdash; exercising file I/O, strings, hashmaps, and
+        sorting. The C/Rust/Go baselines implement the identical algorithm over
+        the identical, deterministically generated input, and the runner fails
+        unless all four languages produce byte-for-byte identical output.
+      </p>
+      <div className="overflow-x-auto mb-8">
+        <table className="w-full text-sm text-left border border-[#1a1a2e] rounded-lg overflow-hidden">
+          <thead className="bg-[#111118] text-gray-400">
+            <tr>
+              <th className="px-4 py-2 border-b border-[#1a1a2e]">Language</th>
+              <th className="px-4 py-2 border-b border-[#1a1a2e]">Time</th>
+              <th className="px-4 py-2 border-b border-[#1a1a2e]">vs C</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[
+              ["C (clang -O2)", "~110 ms", "1.00x"],
+              ["Rust (rustc -O)", "~125 ms", "~1.13x"],
+              ["Go (go build)", "~130 ms", "~1.18x"],
+              ["Turbo (AOT, Cranelift)", "~240 ms", "~2.2x"],
+              ["Turbo (JIT)", "~220 ms", "~2.0x"],
+            ].map(([lang, time, ratio]) => (
+              <tr key={lang} className="border-b border-[#1a1a2e]">
+                <td className={`px-4 py-2 ${lang?.startsWith("Turbo") ? "text-[#00ff88] font-medium" : "text-gray-300"}`}>
+                  {lang}
+                </td>
+                <td className="px-4 py-2 text-gray-300">{time}</td>
+                <td className="px-4 py-2 text-gray-300">{ratio}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mb-4 text-sm text-gray-400">
+        Honest framing: on this string/hashmap-heavy workload Turbo&apos;s native
+        output runs about 2.2x slower than C and ~1.9x slower than Rust and Go
+        &mdash; further behind than the integer-only fib40. The gap is dominated
+        by Turbo&apos;s runtime hashmap and string handling, not codegen quality.
+        It&apos;s a real workload with reproducible numbers: fast enough to be
+        useful, with clear headroom. Reproduce with{" "}
+        <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">./turbo/benchmarks/run_wordcount.sh</code>.
+      </p>
+
       <div className="flex gap-4 mt-8">
         <Link
           href="/docs/installation"

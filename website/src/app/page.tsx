@@ -88,6 +88,19 @@ const benchmarks = [
   { label: "Python 3.10", ms: 13300, size: "--", highlight: false },
 ];
 
+// word-count: read a ~5 MB text file, tokenize on whitespace, count word
+// frequencies in a hashmap, print the top-20 + a total. An end-to-end workload
+// (file I/O + strings + hashmaps + sorting), best of 5 on the same machine.
+// The C/Rust/Go baselines run the identical algorithm over the identical input;
+// run_wordcount.sh enforces byte-for-byte identical output across all four.
+const wordcountBenchmarks = [
+  { label: "C (clang -O2)", ms: 110, size: "1.00x", highlight: false },
+  { label: "Rust (rustc -O)", ms: 125, size: "1.13x", highlight: false },
+  { label: "Go (go build)", ms: 130, size: "1.18x", highlight: false },
+  { label: "Turbo (AOT)", ms: 240, size: "2.2x", highlight: true },
+  { label: "Turbo (JIT)", ms: 220, size: "2.0x", highlight: false },
+];
+
 const features = [
   {
     title: "Native Speed",
@@ -213,6 +226,7 @@ const features = [
 
 // Max ms for the bar chart scale (Python excluded from visual scale)
 const BAR_MAX = 700;
+const WORDCOUNT_BAR_MAX = 280;
 
 export default function Home() {
   return (
@@ -427,10 +441,26 @@ export default function Home() {
               Performance
             </h2>
             <p className="text-gray-400 text-lg max-w-2xl mx-auto">
-              Recursive fib(40) — a CPU microbenchmark, best of 5 on an Apple
-              M5 Max (2026-06-27). Turbo&apos;s native build lands within ~1.3x of
-              C and Rust and far ahead of interpreted runtimes. Run the
-              benchmark harness to measure on your own machine.
+              Best of 5 wall-clock runs on an Apple M5 Max (macOS 26.5.1,
+              2026-06-27). Every baseline runs the same algorithm over the same
+              input and the harnesses enforce byte-for-byte identical output —
+              honest numbers, not best-case marketing. Run them yourself with
+              the benchmark scripts in{" "}
+              <code className="font-[family-name:var(--font-geist-mono)] text-gray-300">
+                turbo/benchmarks
+              </code>
+              .
+            </p>
+          </div>
+
+          <div className="max-w-2xl mx-auto mb-6">
+            <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
+              fib(40) — recursion microbenchmark
+            </h3>
+            <p className="text-gray-500 text-sm mt-1">
+              Pure function-call overhead. Turbo&apos;s native build lands within
+              ~1.3x of C and Rust, in the same range as Go, and far ahead of
+              interpreted runtimes.
             </p>
           </div>
 
@@ -441,6 +471,60 @@ export default function Home() {
                 b.ms >= 1000
                   ? `${(b.ms / 1000).toFixed(1)}s`
                   : `${b.ms}ms`;
+              return (
+                <div key={b.label} className="group">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span
+                      className={`text-sm font-medium ${
+                        b.highlight ? "text-[#00ff88]" : "text-gray-300"
+                      }`}
+                    >
+                      {b.label}
+                    </span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-gray-500">{b.size}</span>
+                      <span
+                        className={`text-sm font-[family-name:var(--font-geist-mono)] font-medium ${
+                          b.highlight ? "text-[#00ff88]" : "text-gray-400"
+                        }`}
+                      >
+                        {displayMs}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="h-2.5 bg-[#111118] rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-700 ${
+                        b.highlight
+                          ? "bg-gradient-to-r from-[#00ff88] to-[#00d4ff]"
+                          : "bg-gray-700"
+                      }`}
+                      style={{ width: `${barWidth}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="max-w-2xl mx-auto mt-16 mb-6">
+            <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
+              word-count — real-world workload
+            </h3>
+            <p className="text-gray-500 text-sm mt-1">
+              Read a ~5 MB file (1.05M words), tokenize, count frequencies in a
+              hashmap, print the top 20 — file I/O, strings, hashmaps, sorting.
+              On this string/hashmap-heavy work Turbo&apos;s native build is about
+              2.2x slower than C and ~1.9x slower than Rust and Go: further behind
+              than fib40, with the gap coming from runtime hashmap/string
+              handling rather than codegen. Real numbers, named headroom.
+            </p>
+          </div>
+
+          <div className="max-w-2xl mx-auto space-y-4">
+            {wordcountBenchmarks.map((b) => {
+              const barWidth = Math.min((b.ms / WORDCOUNT_BAR_MAX) * 100, 100);
+              const displayMs = `${b.ms}ms`;
               return (
                 <div key={b.label} className="group">
                   <div className="flex items-center justify-between mb-1.5">
