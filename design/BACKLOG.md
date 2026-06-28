@@ -121,20 +121,23 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   results get a real recursive `Display`/`Debug` rendering (`[20, 40, 60]`, `{x: 9}`, `ok(7)`) via `to_str`/
   interpolation; tests assert rendered contents on both JIT and AOT.
 
-- [ ] **BL-12 — Docs lie about syntax (`explain` examples + SYNTAX.md `[Implemented]`).** _[designer#1, e2e]_
-  `turbolang explain E0200/E0303/E0307/E0316` (and `docs/errors.md`) use `enum`/`::` which DO NOT compile
-  (real syntax is `type X { .. }` + `X.Variant`). Separately, `design/SYNTAX.md` marks ~10 unimplemented
-  features as `### ... [Implemented]` (array/slice patterns, default params, named args, inferred-arrow,
-  `guard let`, array destructuring, tuples, type aliases, turbofish, `@derive(Debug)`) — all fail on the
-  0.9.2 binary. **AC:** fix the `explain`/`errors.md` examples to compiling syntax; relabel each SYNTAX.md
-  section `[Planned]`/`[Partial]` vs `[Implemented]` to match the binary (or implement). Cheap, high trust ROI.
+- [x] **BL-12 — Docs lie about syntax (`explain` examples + SYNTAX.md `[Implemented]`).** _[designer#1, e2e]
+  Done (commit `57bab40`, merged to master)._ Corrected the `enum`/`::` snippets in `explain` docs
+  E0200/E0303/E0307/E0316 to `type`/`.` syntax (each compile-verified via `turbolang run`); relabeled five
+  `design/SYNTAX.md` `[Implemented]` section headers to `[Partial]` with per-construct `[Planned]` tags
+  (array/slice patterns, default params, named args, inferred-arrow, array/nested destructuring, tuples,
+  type aliases, turbofish, `@derive(Debug/Serialize)` — each status verified against the release binary),
+  plus a legend pinning tags to "works on the current release binary." `docs/errors.md` had no code
+  snippets (no change). _Pre-existing quirk noted: a `Color.Red` to an undefined enum routes to E0300, not
+  E0303 — left out of scope._
 
-- [ ] **BL-13 — Runtime/operational errors are second-class.** _[designer#2,#3]_ `runtime error: division by
-  zero`, `array index 10 out of bounds`, import/file errors have no code, no color, no location, no `Help:`,
-  no footer — a cliff after the A-tier compile diagnostics. Also: when a code has no help text the renderer
-  prints `Help: more info: https://…` (footer glued to an empty `Help:` label — looks broken). **AC:** give
-  runtime/operational errors the ariadne envelope + an `E06xx` runtime code range + `Help:` lines; decouple
-  the `Help:` label from the `more info:` footer in `turbo-cli/src/main.rs` (footer always its own line).
+- [ ] **BL-13 — Runtime/operational errors are second-class.** _[designer#2,#3]_ ~~Help:/more-info render
+  collapse~~ — **BL-13a DONE** (commit `57bab40`: the renderer no longer glues `more info:` onto an empty
+  `Help:` label; footer always on its own line; 3 unit tests). **Remaining (BL-13b):** `runtime error:
+  division by zero`, `array index 10 out of bounds`, import/file errors still have no code, no color, no
+  location, no `Help:` — a cliff after the A-tier compile diagnostics. **AC:** give runtime/operational
+  errors the ariadne envelope + an `E06xx` runtime code range + `Help:` lines (e.g. div-by-zero → "guard the
+  divisor"; index OOB → "valid indices are 0..{len}"); drop raw `(os error 2)` jargon.
 
 - [ ] **BL-14 — No in-browser "Try it"; playground gated behind install.** _[designer#4, strategist theme 2]_
   `turbolang playground` serves a working browser playground — but only after a CLI install. For a *language*,
