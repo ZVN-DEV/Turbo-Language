@@ -661,6 +661,56 @@ fn bench_parse_json(b: Bencher) {
 - `turbolang bench --output json` — machine-readable output for CI pipelines
 - Inspired by: criterion.rs, Go benchmark, Cargo bench
 
+#### The `@bench` attribute (shipped today)
+
+> The `Bencher`/`b.iter(...)` API above is the design target. What ships today is
+> a simpler, working subset: the `@bench` attribute plus the `turbolang bench`
+> runner described here.
+
+`@bench` marks a function as a benchmark. Like `@test`, it is a *marker*: the
+function compiles as an ordinary function (so `turbolang run` and
+`turbolang build` accept it), and `turbolang bench` recognizes the marker to
+label the benchmark by its function name. A benchmark file pairs a `@bench`
+function with a `main` that drives it:
+
+```turbo
+@bench
+fn bench_fib() {
+    print(fib(30))
+}
+
+fn fib(n: i64) -> i64 {
+    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() {
+    bench_fib()
+}
+```
+
+Run it with:
+
+```bash
+turbolang bench bench_fib.tb        # one file
+turbolang bench benchmarks/         # every bench_*.tb in a directory
+turbolang bench bench_fib.tb -n 10  # 10 iterations (default 3)
+turbolang bench bench_fib.tb -q     # quiet: timings only, suppress program output
+```
+
+How results are reported:
+
+- **The timing leads.** For each benchmark, `bench` runs it `-n` times via the
+  JIT and reports the median — that is the headline result.
+- **AOT parity is a separate, non-fatal annotation.** `bench` also AOT-builds and
+  runs the program, then prints `AOT parity: ok` when the AOT and JIT outputs
+  match, or `AOT parity: skipped (build unavailable)` when the AOT toolchain
+  isn't present. Parity never gates the headline.
+- **"Completed" means "produced a valid timing."** The final
+  `Results: N/M benchmarks completed` line counts benchmarks that ran to a clean
+  exit. A benchmark that produced a timing is never reported as a failure.
+- **Benchmarks are labeled by function name** (`--- bench_fib ---`), falling back
+  to the file name only when a file has no `@bench` function.
+
 ## Project Structure (Convention)
 
 ```

@@ -379,6 +379,15 @@ impl Parser {
                         let end = f.body.span.end;
                         Ok(Spanned::new(Item::Function(f), start..end))
                     }
+                    "bench" => {
+                        // `@bench` marks a benchmark function. It compiles like
+                        // any other function (so `run`/`build` accept it); the
+                        // `bench` harness recognizes the marker for labeling.
+                        let mut f = self.parse_fn_def(false)?;
+                        f.is_bench = true;
+                        let end = f.body.span.end;
+                        Ok(Spanned::new(Item::Function(f), start..end))
+                    }
                     "unsafe" => {
                         if matches!(self.peek(), Some(Token::Extern)) {
                             let extern_block = self.parse_extern_block()?;
@@ -419,7 +428,7 @@ impl Parser {
                     .unwrap_or("end of file".to_string());
                 Err(ParseError {
                     code: ErrorCode::E0001,
-                    message: format!("expected `fn`, `async fn`, `struct`, `type`, `impl`, `trait`, `import`, `const`, `@derive`, `@test`, or `@unsafe`, found {found}"),
+                    message: format!("expected `fn`, `async fn`, `struct`, `type`, `impl`, `trait`, `import`, `const`, `@derive`, `@test`, `@bench`, or `@unsafe`, found {found}"),
                     span,
                 })
             }
@@ -738,6 +747,7 @@ impl Parser {
             name,
             is_async: false,
             is_test: false,
+            is_bench: false,
             is_unsafe: false,
             type_params,
             params,

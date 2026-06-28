@@ -2193,15 +2193,8 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
     let mut passed = 0u32;
 
     for path in &files {
-        let name = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "<unknown>".to_string());
-
-        total += 1;
-        eprintln!("\x1b[1;36m--- {name} ---\x1b[0m");
-
-        // Show expected output from comment if present
+        // Read the source once: used to find the benchmark's label (the
+        // `@bench` function name) and to surface an expected-output hint.
         let source = match std::fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) => {
@@ -2212,6 +2205,18 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
                 continue;
             }
         };
+
+        // Label by the `@bench` function name when present, else the file stem.
+        let file_stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let label = bench_label(&source).unwrap_or_else(|| file_stem.clone());
+
+        total += 1;
+        eprintln!("\x1b[1;36m--- {label} ---\x1b[0m");
+
+        // Show expected output from comment if present
         let expected: Option<String> = source
             .lines()
             .find(|l| l.starts_with("// Expected output:"))
@@ -2224,9 +2229,12 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
             eprintln!("  \x1b[90mexpected: {exp}\x1b[0m");
         }
 
-        // JIT mode: run N iterations, report median
+        // JIT mode: run N iterations, report median. A benchmark "completes"
+        // when it produces a valid timing — i.e. the program actually ran to a
+        // clean exit. AOT parity is reported separately and never gates this.
         let mut jit_times = Vec::new();
         let mut jit_output = String::new();
+        let mut jit_ok = false;
         for _ in 0..iterations {
             let start = std::time::Instant::now();
             let output = std::process::Command::new(&turbo_exe)
@@ -2235,11 +2243,24 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
                 .output();
             let elapsed = start.elapsed();
             match output {
-                Ok(result) => {
+                Ok(result) if result.status.success() => {
                     jit_times.push(elapsed);
+                    jit_ok = true;
                     if jit_output.is_empty() {
                         jit_output = String::from_utf8_lossy(&result.stdout).trim().to_string();
                     }
+                }
+                Ok(result) => {
+                    // The program failed to compile or run: a real failure, so
+                    // there is no valid timing. Report once and stop retrying.
+                    eprintln!("  \x1b[31mFAIL\x1b[0m  benchmark did not run");
+                    for line in String::from_utf8_lossy(&result.stderr)
+                        .lines()
+                        .filter(|l| !l.is_empty())
+                    {
+                        eprintln!("        {line}");
+                    }
+                    break;
                 }
                 Err(e) => {
                     eprintln!("  \x1b[31merror\x1b[0m: failed to run JIT: {e}");
@@ -2248,27 +2269,35 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
             }
         }
 
-        if !jit_times.is_empty() {
-            jit_times.sort();
-            let median = jit_times[jit_times.len() / 2];
-            if quiet {
-                eprintln!(
-                    "  \x1b[33mJIT:\x1b[0m  \x1b[90m{:.3}s median ({} runs)\x1b[0m",
-                    median.as_secs_f64(),
-                    jit_times.len()
-                );
-            } else {
-                eprintln!(
-                    "  \x1b[33mJIT:\x1b[0m  {} \x1b[90m({:.3}s median, {} runs)\x1b[0m",
-                    jit_output,
-                    median.as_secs_f64(),
-                    jit_times.len()
-                );
-            }
+        if !jit_ok {
+            // No valid timing — not counted as completed.
+            eprintln!();
+            continue;
         }
 
-        // AOT mode: build then run N iterations, report median
-        let tmp_bin = std::env::temp_dir().join(format!("turbo_bench_{name}"));
+        // Lead with the timing: it's the thing the user came for.
+        jit_times.sort();
+        let median = jit_times[jit_times.len() / 2];
+        if quiet {
+            eprintln!(
+                "  \x1b[33mJIT:\x1b[0m  \x1b[90m{:.3}s median ({} runs)\x1b[0m",
+                median.as_secs_f64(),
+                jit_times.len()
+            );
+        } else {
+            eprintln!(
+                "  \x1b[33mJIT:\x1b[0m  {} \x1b[90m({:.3}s median, {} runs)\x1b[0m",
+                jit_output,
+                median.as_secs_f64(),
+                jit_times.len()
+            );
+        }
+        passed += 1;
+
+        // AOT mode: build then run N iterations, report median. The AOT-vs-JIT
+        // output comparison is a SEPARATE, non-fatal annotation ("AOT parity"),
+        // never the headline pass/fail.
+        let tmp_bin = std::env::temp_dir().join(format!("turbo_bench_{file_stem}"));
         let build_result = std::process::Command::new(&turbo_exe)
             .arg("build")
             .arg(path)
@@ -2280,18 +2309,21 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
             Ok(result) if result.status.success() => {
                 let mut aot_times = Vec::new();
                 let mut aot_output = String::new();
+                let mut aot_ok = false;
                 for _ in 0..iterations {
                     let start = std::time::Instant::now();
                     let output = std::process::Command::new(&tmp_bin).output();
                     let elapsed = start.elapsed();
                     match output {
-                        Ok(result) => {
+                        Ok(result) if result.status.success() => {
                             aot_times.push(elapsed);
+                            aot_ok = true;
                             if aot_output.is_empty() {
                                 aot_output =
                                     String::from_utf8_lossy(&result.stdout).trim().to_string();
                             }
                         }
+                        Ok(_) => break,
                         Err(e) => {
                             eprintln!("  \x1b[31merror\x1b[0m: failed to run AOT binary: {e}");
                             break;
@@ -2299,7 +2331,7 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
                     }
                 }
 
-                if !aot_times.is_empty() {
+                if aot_ok {
                     aot_times.sort();
                     let median = aot_times[aot_times.len() / 2];
                     if quiet {
@@ -2316,37 +2348,44 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
                             aot_times.len()
                         );
                     }
-                }
 
-                // Check if outputs match
-                if !jit_output.is_empty() && !aot_output.is_empty() {
                     if jit_output == aot_output {
-                        eprintln!("  \x1b[32moutputs match\x1b[0m");
-                        passed += 1;
+                        eprintln!("  \x1b[90mAOT parity:\x1b[0m \x1b[32mok\x1b[0m");
                     } else {
-                        eprintln!("  \x1b[31moutputs differ!\x1b[0m");
+                        eprintln!("  \x1b[90mAOT parity:\x1b[0m \x1b[31moutputs differ\x1b[0m");
                         eprintln!("    JIT: {jit_output}");
                         eprintln!("    AOT: {aot_output}");
                     }
-                } else if !jit_output.is_empty() {
-                    passed += 1;
+                } else {
+                    eprintln!("  \x1b[90mAOT parity: skipped (AOT run failed)\x1b[0m");
                 }
 
                 // Cleanup temp binary
                 std::fs::remove_file(&tmp_bin).ok();
             }
             _ => {
-                eprintln!("  \x1b[90m(AOT build failed, skipping)\x1b[0m");
-                if !jit_output.is_empty() {
-                    passed += 1;
-                }
+                eprintln!("  \x1b[90mAOT parity: skipped (build unavailable)\x1b[0m");
             }
         }
 
         eprintln!();
     }
 
-    eprintln!("\x1b[1mResults: {passed}/{total} benchmarks passed (JIT/AOT output match)\x1b[0m");
+    eprintln!("\x1b[1mResults: {passed}/{total} benchmarks completed\x1b[0m");
+    eprintln!(
+        "\x1b[90m(\"completed\" = produced a valid JIT timing; AOT parity is annotated per benchmark)\x1b[0m"
+    );
+}
+
+/// Find the name of the first `@bench` function in a source file, if any.
+/// Used to label benchmark output by function name instead of file name.
+fn bench_label(source: &str) -> Option<String> {
+    let (tokens, _lex_errors) = turbo_lexer::tokenize(source);
+    let (module, _parse_errors) = turbo_parser::parse(tokens);
+    module.items.iter().find_map(|item| match &item.node {
+        Item::Function(f) if f.is_bench => Some(f.name.clone()),
+        _ => None,
+    })
 }
 
 /// Collect benchmark files from a directory: files matching bench_*.tb

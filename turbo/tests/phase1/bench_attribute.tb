@@ -1,0 +1,18 @@
+// Regression fixture for BL-21: the `@bench` attribute must be accepted by the
+// JIT (`run`), the AOT (`build`), and the `bench` harness alike.
+// A `@bench`-marked function plus a `main` that drives it, so JIT and AOT
+// produce identical output.
+// Expected output: 832040
+
+@bench
+fn bench_fib() {
+    print(fib(30))
+}
+
+fn fib(n: i64) -> i64 {
+    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() {
+    bench_fib()
+}
