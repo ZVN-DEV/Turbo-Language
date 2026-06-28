@@ -1585,23 +1585,48 @@ fn report_error(
             .with_color(Color::Red),
     );
 
-    // Compose the help footer. If we have a code, always append a
-    // `more info: <github URL>` line so the user has a stable URL to
-    // share or open. The user-supplied `help_text` (if any) goes first.
-    let help_with_url = match (help, code) {
-        (Some(h), Some(c)) => Some(format!("{h}\n  more info: {}", error_code_url(c))),
-        (Some(h), None) => Some(h.to_string()),
-        (None, Some(c)) => Some(format!("more info: {}", error_code_url(c))),
-        (None, None) => None,
-    };
-    if let Some(help_text) = help_with_url {
-        builder = builder.with_help(help_text);
+    // Compose the footer. Real help text (if any) is rendered by ariadne as a
+    // `Help:` block. The `more info: <url>` line is decoupled from it: when
+    // there is help text the URL is appended under the Help block, but when
+    // there is none it is emitted on its own line *after* the frame rather
+    // than collapsing onto an empty `Help:` label (which read like a bug).
+    let (help_block, standalone_footer) = compose_diagnostic_footer(help, code);
+    if let Some(block) = help_block {
+        builder = builder.with_help(block);
     }
 
     builder
         .finish()
         .eprint((filename, Source::from(source)))
         .unwrap();
+
+    if let Some(footer) = standalone_footer {
+        eprintln!("{footer}");
+    }
+}
+
+/// Build the two footer pieces for a diagnostic, keeping the `Help:` label and
+/// the `more info:` URL decoupled.
+///
+/// Returns `(help_block, standalone_footer)`:
+/// - `help_block` is handed to ariadne's `with_help` and rendered as a
+///   `Help:` block. It is only present when there is real help text; the
+///   `more info:` line is appended under it as a continuation when a code is
+///   also present.
+/// - `standalone_footer` is printed on its own line after the frame. It
+///   carries the `more info:` line when there is no help text, so the URL is
+///   never glued onto an empty `Help:` label.
+fn compose_diagnostic_footer(
+    help: Option<&str>,
+    code: Option<ErrorCode>,
+) -> (Option<String>, Option<String>) {
+    let more_info = code.map(|c| format!("more info: {}", error_code_url(c)));
+    match (help, more_info) {
+        (Some(h), Some(mi)) => (Some(format!("{h}\n  {mi}")), None),
+        (Some(h), None) => (Some(h.to_string()), None),
+        (None, Some(mi)) => (None, Some(format!("  {mi}"))),
+        (None, None) => (None, None),
+    }
 }
 
 /// Returns the canonical public URL for a given error code.
@@ -4041,6 +4066,51 @@ fn main() {{
             url.contains("docs/errors/"),
             "URL should point to docs/errors/"
         );
+    }
+
+    // ── Diagnostic footer composition ─────────────────────────────────
+
+    #[test]
+    fn footer_no_help_does_not_emit_bare_help_label() {
+        // When a diagnostic has a code but no help text, the `more info:`
+        // line must stand on its own (as a post-frame footer) and must never
+        // collapse onto an empty `Help:` label.
+        let (help_block, footer) = compose_diagnostic_footer(None, Some(ErrorCode::E0200));
+        assert!(
+            help_block.is_none(),
+            "no help text should produce no Help block"
+        );
+        let footer = footer.expect("more info footer should be present when a code exists");
+        assert!(footer.contains("more info:"), "footer should carry the URL");
+        assert!(
+            !footer.contains("Help"),
+            "footer must not contain a `Help` label"
+        );
+    }
+
+    #[test]
+    fn footer_with_help_keeps_more_info_on_its_own_line() {
+        // With real help text the URL is appended under the Help block on its
+        // own line, and there is no separate post-frame footer.
+        let (help_block, footer) =
+            compose_diagnostic_footer(Some("declare it with `let`"), Some(ErrorCode::E0300));
+        let block = help_block.expect("help block expected when help text is present");
+        assert!(block.starts_with("declare it with `let`"));
+        assert!(
+            block.contains("\n  more info:"),
+            "more info should be on its own line under Help"
+        );
+        assert!(
+            footer.is_none(),
+            "with-help case should not add a standalone footer"
+        );
+    }
+
+    #[test]
+    fn footer_no_code_no_help_is_empty() {
+        let (help_block, footer) = compose_diagnostic_footer(None, None);
+        assert!(help_block.is_none());
+        assert!(footer.is_none());
     }
 
     // ── File extension validation ─────────────────────────────────────
