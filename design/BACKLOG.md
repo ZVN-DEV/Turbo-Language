@@ -35,13 +35,12 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
   ~3351/3422) were intentionally left — they are infallible by construction (the variant tag was just
   resolved), not unwraps of a compiled subexpression.
 
-- [ ] **BL-2 — Add a real-world benchmark (CEO's top "next").** The suite is fib40-only; the positioning
-  is "fast enough on real work" with zero real-work evidence. Add ONE end-to-end workload to
-  `turbo/benchmarks/` — e.g. the built-in HTTP server doing JSON request/response throughput, or a
-  text-processing pass over a real input file — with honest C/Rust/Go baselines, warmup, and
-  output-equality enforcement (mirror `run_comparison.sh`). Publish the real-workload row next to fib40
-  in README/website with methodology. **AC:** reproducible via a committed script; numbers are measured,
-  not hardcoded; README/website updated truthfully.
+- [x] **BL-2 — Add a real-world benchmark (CEO's top "next").** _Done (commit 79129ef, merged to master)._
+  Added a word-count workload (`turbo/benchmarks/wordcount.tb` + C/Rust/Go baselines + deterministic input
+  generator + `run_wordcount.sh` runner with warmup, best-of-5, and byte-for-byte output-equality
+  enforcement). Measured on M5 Max: Turbo AOT ~240 ms vs C ~110 / Rust ~125 / Go ~130 — **~2.2x slower than
+  C** (further behind than fib40's ~1.3x). Published honestly in README + website with a reproduce command.
+  Root-caused the gap to runtime hashmap/string handling → see BL-9.
 
 ## P2 — language & tooling depth
 
@@ -80,6 +79,14 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
   teach the release pipeline to write the real checksums back into the in-repo mirror, or add a post-release
   check that the mirror matches the published artifacts. **AC:** the in-repo formula is never stale/fake
   after a release, enforced by a check.
+
+- [ ] **BL-9 — Runtime hashmap/string-key performance.** _Surfaced by BL-2._ The word-count benchmark is
+  ~2.2x slower than C, root-caused to the str→int hashmap path re-stringifying the key on every increment
+  (and broader runtime string/hashmap handling). Profile the hashmap increment path (`turbo_rt.c`
+  `rt_hashmap_*` + the codegen lowering in `builtins.rs`) and cut the redundant allocation/hashing per
+  update (e.g. single lookup-or-insert, avoid re-stringify). **AC:** word-count Turbo-AOT/C ratio improves
+  measurably (target ≤1.5x) with the BL-2 runner still output-equal; add a microbenchmark for hashmap
+  increment throughput. Honest numbers only.
 
 ---
 _When all boxes are checked, STOP and ask for the next priorities — do not invent hygiene work._
