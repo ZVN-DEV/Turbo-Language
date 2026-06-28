@@ -49,6 +49,7 @@ fn is_keyword(name: &str) -> bool {
             | "extern"
             | "type"
             | "unsafe"
+            | "as"
     )
 }
 
