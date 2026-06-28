@@ -1,0 +1,28 @@
+// Parity (JIT <-> AOT): a route handler that returns a *plain* string
+// containing a colon (no rt_respond typing). This drives the
+// rt_parse_response colon-fallback. The AOT runtime used to atoi() the
+// pre-colon prefix, yielding a bogus "HTTP/1.1 0 OK" status line and a
+// body truncated at the first colon ("30 now"). The JIT, using
+// parse::<u16>(), rejects the non-numeric prefix and sends the WHOLE
+// string as a 200 body. After the fix both backends agree.
+//
+// We capture the full response with `curl -i`; the rendered status
+// line, Content-Length, and body are byte-identical across JIT and AOT
+// once the fix lands. (`%{...}` write-out formats can't be used here:
+// `{` opens a TurboLang string-interpolation block.)
+fn serve(app: i64) {
+    http_listen(app)
+}
+
+@unsafe fn main() {
+    let app = http_server(18096)
+    route(app, "GET", "/colon", |req: str| -> str {
+        "the time is 12:30 now"
+    })
+
+    spawn serve(app)
+    let _ = shell_exec("sleep 0.4")
+
+    let out = shell_exec("curl -s -i --retry 5 --retry-connrefused --retry-delay 1 http://127.0.0.1:18096/colon")
+    print(out)
+}
