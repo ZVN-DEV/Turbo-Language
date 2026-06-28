@@ -326,8 +326,8 @@ fn strip_ansi(input: &str) -> String {
         match chars.peek() {
             Some('[') => {
                 chars.next(); // consume '['
-                // Consume parameter/intermediate bytes up to and including the
-                // final byte in the range 0x40..=0x7E.
+                              // Consume parameter/intermediate bytes up to and including the
+                              // final byte in the range 0x40..=0x7E.
                 while let Some(&nc) = chars.peek() {
                     chars.next();
                     if ('\u{40}'..='\u{7e}').contains(&nc) {
@@ -337,7 +337,7 @@ fn strip_ansi(input: &str) -> String {
             }
             Some(']') => {
                 chars.next(); // consume ']'
-                // Consume until BEL or the two-byte ST (`ESC \`).
+                              // Consume until BEL or the two-byte ST (`ESC \`).
                 while let Some(&nc) = chars.peek() {
                     chars.next();
                     if nc == '\x07' {
@@ -402,8 +402,7 @@ mod tests {
     fn sanitized_stderr_has_no_ansi_or_temp_name() {
         // Mirror exactly what the compiler subprocess emits: colorized ariadne
         // output referencing the temp file by full path and by basename.
-        let tmp_path =
-            std::path::PathBuf::from("/var/folders/xy/turbo-playground-95SRiR.tb");
+        let tmp_path = std::path::PathBuf::from("/var/folders/xy/turbo-playground-95SRiR.tb");
         let raw = "\x1b[31mError:\x1b[0m error[E0109] at \
                    /var/folders/xy/turbo-playground-95SRiR.tb:1:13\n   \
                    turbo-playground-95SRiR.tb:1:13 expected expression\x1b[0m";

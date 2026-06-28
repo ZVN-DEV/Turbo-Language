@@ -1480,9 +1480,15 @@ fn rt_host_is_blocked(host: &str) -> bool {
 /// (blocked) so an attacker cannot pad an over-length numeric IP past the
 /// limit to skip the check. Mirrors `rt_url_extract_host` in `turbo_rt.c`.
 fn rt_url_extract_host(url: &str) -> Option<String> {
-    let after_scheme = if url.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("http://")) {
+    let after_scheme = if url
+        .get(..7)
+        .is_some_and(|s| s.eq_ignore_ascii_case("http://"))
+    {
         &url[7..]
-    } else if url.get(..8).is_some_and(|s| s.eq_ignore_ascii_case("https://")) {
+    } else if url
+        .get(..8)
+        .is_some_and(|s| s.eq_ignore_ascii_case("https://"))
+    {
         &url[8..]
     } else {
         return None;
@@ -1542,7 +1548,9 @@ fn rt_http_url_blocked_reason(url: &str) -> Option<&'static str> {
         // Fail closed: could not isolate a host (empty, or longer than a valid
         // DNS name). Block rather than allow so an over-length numeric IP can't
         // be smuggled past the guard.
-        None => Some("unparseable or over-length host blocked (set TURBO_ALLOW_PRIVATE_HOSTS=1 to allow)"),
+        None => Some(
+            "unparseable or over-length host blocked (set TURBO_ALLOW_PRIVATE_HOSTS=1 to allow)",
+        ),
     }
 }
 
@@ -3132,13 +3140,22 @@ mod ssrf_tests {
 
     #[test]
     fn host_extraction() {
-        assert_eq!(rt_url_extract_host("http://127.0.0.1/").as_deref(), Some("127.0.0.1"));
+        assert_eq!(
+            rt_url_extract_host("http://127.0.0.1/").as_deref(),
+            Some("127.0.0.1")
+        );
         assert_eq!(
             rt_url_extract_host("https://user:pass@example.com:8443/path?q=1").as_deref(),
             Some("example.com")
         );
-        assert_eq!(rt_url_extract_host("http://[::1]:8080/").as_deref(), Some("::1"));
-        assert_eq!(rt_url_extract_host("http://169.254.169.254/latest").as_deref(), Some("169.254.169.254"));
+        assert_eq!(
+            rt_url_extract_host("http://[::1]:8080/").as_deref(),
+            Some("::1")
+        );
+        assert_eq!(
+            rt_url_extract_host("http://169.254.169.254/latest").as_deref(),
+            Some("169.254.169.254")
+        );
         // non-http scheme → None
         assert_eq!(rt_url_extract_host("file:///etc/passwd"), None);
         // over-length host (>= 256 bytes) → None (fail closed at the caller)
@@ -3149,7 +3166,10 @@ mod ssrf_tests {
     #[test]
     fn blocked_reason_default_on() {
         // Non-http scheme is always rejected regardless of the opt-out.
-        assert_eq!(rt_http_url_blocked_reason("file:///etc/passwd"), Some("non-http(s) scheme"));
+        assert_eq!(
+            rt_http_url_blocked_reason("file:///etc/passwd"),
+            Some("non-http(s) scheme")
+        );
         // The host-blocking assertions below assume the opt-out is NOT active;
         // skip them if a developer has it exported in their shell.
         if std::env::var("TURBO_ALLOW_PRIVATE_HOSTS").as_deref() == Ok("1") {

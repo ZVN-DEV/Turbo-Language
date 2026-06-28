@@ -2096,11 +2096,7 @@ pub(crate) fn compile_module<M: Module>(
                 let has_return = ret_turbo.map(|t| *t != TurboTy::Unit).unwrap_or(false);
                 let ret_is_float = matches!(ret_turbo, Some(TurboTy::Float));
                 if has_return {
-                    let ret_cl = if ret_is_float {
-                        types::F64
-                    } else {
-                        types::I64
-                    };
+                    let ret_cl = if ret_is_float { types::F64 } else { types::I64 };
                     callee_sig.returns.push(AbiParam::new(ret_cl));
                 }
                 let sig_ref = builder.import_signature(callee_sig);
