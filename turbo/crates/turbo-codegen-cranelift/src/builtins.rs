@@ -2444,7 +2444,11 @@ pub(crate) fn compile_interpolation<M: Module>(
         let part_str = match part {
             turbo_ast::InterpolPart::Lit(s) => cx.create_string(s)?,
             turbo_ast::InterpolPart::Expr(expr) => {
-                let (val, tty) = compile_expr(cx, expr)?.unwrap();
+                let (val, tty) = compile_expr(cx, expr)?.ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
+                    message: "cannot interpolate a unit value: expression produces no value"
+                        .to_string(),
+                })?;
                 convert_to_str(cx, val, &tty)?
             }
         };

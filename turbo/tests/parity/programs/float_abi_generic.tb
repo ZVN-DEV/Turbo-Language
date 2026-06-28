@@ -1,0 +1,17 @@
+// Parity: a generic function must round-trip an f64 through its uniform
+// i64 type-parameter ABI slot. The float argument is bitcast F64->I64 on
+// the way in, travels through the integer register, and the result is
+// reinterpreted as F64 on the way out. JIT and AOT must agree.
+fn id<T>(x: T) -> T {
+    x
+}
+
+fn pick<T>(a: T, b: T) -> T {
+    b
+}
+
+fn main() {
+    print(id(3.75))
+    print(id(2.5) + id(0.25))
+    print(pick(1.5, 9.5))
+}

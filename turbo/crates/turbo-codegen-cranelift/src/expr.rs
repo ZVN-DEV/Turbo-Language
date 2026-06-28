@@ -124,7 +124,10 @@ fn compile_expr_inner<M: Module>(
         }
 
         Expr::UnaryOp { op, expr: inner } => {
-            let (val, tty) = compile_expr(cx, inner)?.unwrap();
+            let (val, tty) = compile_expr(cx, inner)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
             let result = match op {
                 UnaryOp::Neg => {
                     let ty = cx.builder.func.dfg.value_type(val);
@@ -235,7 +238,12 @@ fn compile_expr_inner<M: Module>(
                         if let Some((var, _, TurboTy::Str)) = cx.vars.get(target) {
                             let var = *var;
                             let current = cx.builder.use_var(var);
-                            let (rhs, _) = compile_expr(cx, right)?.unwrap();
+                            let (rhs, _) =
+                                compile_expr(cx, right)?.ok_or_else(|| CodegenError {
+                                    code: ErrorCode::E0400,
+                                    message: "expected a value, but sub-expression has unit type"
+                                        .to_string(),
+                                })?;
                             let fid = cx.rt_fns["rt_str_concat_inplace"];
                             let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
                             let call = cx.builder.ins().call(fref, &[current, rhs]);
@@ -250,7 +258,10 @@ fn compile_expr_inner<M: Module>(
                 Expr::Ident(name) => Some(name.as_str()),
                 _ => None,
             };
-            let (val, tty) = compile_expr(cx, value)?.unwrap();
+            let (val, tty) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
             let (var, _, prev_tty) = cx.vars.get(target).ok_or_else(|| CodegenError {
                 code: ErrorCode::E0401,
                 message: format!("undefined variable: {target}"),
@@ -306,7 +317,10 @@ fn compile_expr_inner<M: Module>(
         }
 
         Expr::CompoundAssign { target, op, value } => {
-            let (rhs, _) = compile_expr(cx, value)?.unwrap();
+            let (rhs, _) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
             let (var, _, _) = cx.vars.get(target).ok_or_else(|| CodegenError {
                 code: ErrorCode::E0401,
                 message: format!("undefined variable: {target}"),
@@ -323,8 +337,14 @@ fn compile_expr_inner<M: Module>(
             field,
             value,
         } => {
-            let (obj_ptr, obj_tty) = compile_expr(cx, object)?.unwrap();
-            let (val, _) = compile_expr(cx, value)?.unwrap();
+            let (obj_ptr, obj_tty) = compile_expr(cx, object)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
+            let (val, _) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
 
             let struct_name = match &obj_tty {
                 TurboTy::Struct(name) => name.clone(),
@@ -391,8 +411,14 @@ fn compile_expr_inner<M: Module>(
             index,
             value,
         } => {
-            let (arr, _arr_tty) = compile_expr(cx, object)?.unwrap();
-            let (idx, _) = compile_expr(cx, index)?.unwrap();
+            let (arr, _arr_tty) = compile_expr(cx, object)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
+            let (idx, _) = compile_expr(cx, index)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
             let idx = {
                 let idx_ty = cx.builder.func.dfg.value_type(idx);
                 if idx_ty.is_int() && idx_ty.bits() < 64 {
@@ -401,7 +427,10 @@ fn compile_expr_inner<M: Module>(
                     idx
                 }
             };
-            let (val, _) = compile_expr(cx, value)?.unwrap();
+            let (val, _) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
 
             let val_ty = cx.builder.func.dfg.value_type(val);
             let val = if val_ty.bits() < 64 && val_ty.is_int() {
@@ -507,7 +536,16 @@ fn compile_expr_inner<M: Module>(
                         let fid = cx.rt_fns["rt_await_handle"];
                         let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
                         let call = cx.builder.ins().call(fref, &[val]);
-                        let result_val = cx.builder.inst_results(call)[0];
+                        let mut result_val = cx.builder.inst_results(call)[0];
+                        // rt_await_handle returns the result as raw i64 bits; if the
+                        // future's value is a float, reinterpret those bits as F64 so
+                        // the Cranelift value type matches its TurboTy.
+                        if matches!(*inner_tty, TurboTy::Float) {
+                            result_val =
+                                cx.builder
+                                    .ins()
+                                    .bitcast(types::F64, MemFlags::new(), result_val);
+                        }
                         Ok(Some((result_val, *inner_tty)))
                     }
                     _ => {
@@ -609,7 +647,11 @@ fn compile_expr_inner<M: Module>(
         // Try operator: expr? — unwrap Ok, propagate Err
         Expr::Try(inner) => {
             // Compile the inner expression (must produce a Result pointer)
-            let (result_ptr, _result_tty) = compile_expr(cx, inner)?.unwrap();
+            let (result_ptr, _result_tty) =
+                compile_expr(cx, inner)?.ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
+                    message: "expected a value, but sub-expression has unit type".to_string(),
+                })?;
 
             // Get the tag: 0 = ok, 1 = err
             let tag_fid = cx.rt_fns["rt_result_tag"];
@@ -690,7 +732,10 @@ fn compile_expr_inner<M: Module>(
 
             let mut elem_tty = TurboTy::Int; // default; overridden by first element
             for (i, elem) in elements.iter().enumerate() {
-                let (val, tty) = compile_expr(cx, elem)?.unwrap();
+                let (val, tty) = compile_expr(cx, elem)?.ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
+                    message: "expected a value, but sub-expression has unit type".to_string(),
+                })?;
                 if i == 0 {
                     elem_tty = tty;
                 }
@@ -703,8 +748,14 @@ fn compile_expr_inner<M: Module>(
         }
 
         Expr::Index { object, index } => {
-            let (arr, arr_tty) = compile_expr(cx, object)?.unwrap();
-            let (idx, _) = compile_expr(cx, index)?.unwrap();
+            let (arr, arr_tty) = compile_expr(cx, object)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
+            let (idx, _) = compile_expr(cx, index)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
             let idx = {
                 let idx_ty = cx.builder.func.dfg.value_type(idx);
                 if idx_ty.is_int() && idx_ty.bits() < 64 {
@@ -796,7 +847,10 @@ fn compile_expr_inner<M: Module>(
                         message: format!("struct `{name}` has no field `{field_name}`"),
                     })?;
 
-                let (val, tty) = compile_expr(cx, field_value)?.unwrap();
+                let (val, tty) = compile_expr(cx, field_value)?.ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
+                    message: "expected a value, but sub-expression has unit type".to_string(),
+                })?;
                 retain_if_needed(cx, val, &tty);
                 concrete_fields.push((field_name.clone(), tty));
                 let offset = (field_index * 8) as i32;
@@ -859,7 +913,10 @@ fn compile_expr_inner<M: Module>(
                 }
             }
 
-            let (obj_ptr, obj_tty) = compile_expr(cx, object)?.unwrap();
+            let (obj_ptr, obj_tty) = compile_expr(cx, object)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
 
             let struct_name = match &obj_tty {
                 TurboTy::Struct(name) => name.clone(),
@@ -1080,7 +1137,10 @@ fn compile_expr_inner<M: Module>(
         }
 
         Expr::OkExpr(value) => {
-            let (val, tty) = compile_expr(cx, value)?.unwrap();
+            let (val, tty) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
             retain_if_needed(cx, val, &tty);
             // Widen to i64 if needed (bools, etc.)
             let val_ty = cx.builder.func.dfg.value_type(val);
@@ -1102,7 +1162,10 @@ fn compile_expr_inner<M: Module>(
         }
 
         Expr::ErrExpr(value) => {
-            let (val, tty) = compile_expr(cx, value)?.unwrap();
+            let (val, tty) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
             retain_if_needed(cx, val, &tty);
             // Widen to i64 if needed
             let val_ty = cx.builder.func.dfg.value_type(val);
@@ -1124,7 +1187,10 @@ fn compile_expr_inner<M: Module>(
         }
 
         Expr::SomeExpr(value) => {
-            let (val, tty) = compile_expr(cx, value)?.unwrap();
+            let (val, tty) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
             retain_if_needed(cx, val, &tty);
             // Widen to i64 if needed (bools, etc.)
             let val_ty = cx.builder.func.dfg.value_type(val);
@@ -1152,7 +1218,10 @@ fn compile_expr_inner<M: Module>(
 
         Expr::NullCoalesce { value, default } => {
             // Compile the optional value
-            let (opt_val, _opt_tty) = compile_expr(cx, value)?.unwrap();
+            let (opt_val, _opt_tty) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
 
             // Extract tag
             let tag_fid = cx.rt_fns["rt_option_tag"];
@@ -1184,7 +1253,10 @@ fn compile_expr_inner<M: Module>(
             // None path: compile default
             cx.builder.switch_to_block(none_block);
             cx.builder.seal_block(none_block);
-            let (def_val, def_tty) = compile_expr(cx, default)?.unwrap();
+            let (def_val, def_tty) = compile_expr(cx, default)?.ok_or_else(|| CodegenError {
+                code: ErrorCode::E0400,
+                message: "expected a value, but sub-expression has unit type".to_string(),
+            })?;
             // Widen default to i64 if needed for consistency
             let def_ty = cx.builder.func.dfg.value_type(def_val);
             let def_val = if def_ty.is_int() && def_ty.bits() < 64 {
@@ -1861,9 +1933,11 @@ fn compile_call<M: Module>(
                 let mut sig = cx.module.make_signature();
                 sig.call_conv = CallConv::Fast;
                 sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
+                let mut param_cl_tys = Vec::with_capacity(param_tys.len());
                 for param_tty in param_tys {
                     let cl_ty = turbo_ty_to_cl_type(param_tty, cx.ptr_type);
                     sig.params.push(AbiParam::new(cl_ty));
+                    param_cl_tys.push(cl_ty);
                 }
                 let ret_tty = *ret_ty.clone();
                 if ret_tty != TurboTy::Unit {
@@ -1874,18 +1948,48 @@ fn compile_call<M: Module>(
                 let sig_ref = cx.builder.import_signature(sig);
 
                 let mut arg_values = vec![env_ptr]; // env_ptr is first hidden arg
-                for arg in args {
+                for (i, arg) in args.iter().enumerate() {
                     if let Some((val, _)) = compile_expr(cx, arg)? {
+                        // If the closure's param slot is a uniform i64 but the
+                        // value is a float (inferred-param closure called with a
+                        // float), move the bits through the integer register so
+                        // both sides agree on the register class.
+                        let val = if let Some(&expected) = param_cl_tys.get(i) {
+                            let actual = cx.builder.func.dfg.value_type(val);
+                            if actual != expected
+                                && actual.bits() == expected.bits()
+                                && (actual.is_float() && expected.is_int()
+                                    || actual.is_int() && expected.is_float())
+                            {
+                                cx.builder.ins().bitcast(expected, MemFlags::new(), val)
+                            } else {
+                                val
+                            }
+                        } else {
+                            val
+                        };
                         arg_values.push(val);
                     }
                 }
 
                 let call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
-                let results = cx.builder.inst_results(call);
+                let results = cx.builder.inst_results(call).to_vec();
                 if results.is_empty() {
                     return Ok(None);
                 } else {
-                    return Ok(Some((results[0], ret_tty)));
+                    let mut result = results[0];
+                    // If the closure's declared return is float but it came back
+                    // through a uniform i64 slot, reinterpret the bits as F64.
+                    if matches!(ret_tty, TurboTy::Float) {
+                        let rty = cx.builder.func.dfg.value_type(result);
+                        if rty.is_int() && rty.bits() == 64 {
+                            result =
+                                cx.builder
+                                    .ins()
+                                    .bitcast(types::F64, MemFlags::new(), result);
+                        }
+                    }
+                    return Ok(Some((result, ret_tty)));
                 }
             }
 
@@ -1920,12 +2024,23 @@ fn compile_call<M: Module>(
                     let val = if i < param_types.len() {
                         let expected = param_types[i];
                         let actual = cx.builder.func.dfg.value_type(val);
-                        if actual != expected && actual.is_int() && expected.is_int() {
+                        if actual == expected {
+                            val
+                        } else if actual.is_int() && expected.is_int() {
                             if actual.bits() > expected.bits() {
                                 cx.builder.ins().ireduce(expected, val)
                             } else {
                                 cx.builder.ins().sextend(expected, val)
                             }
+                        } else if actual.bits() == expected.bits()
+                            && (actual.is_float() && expected.is_int()
+                                || actual.is_int() && expected.is_float())
+                        {
+                            // Float type-argument flowing through a generic's
+                            // uniform i64 ABI slot (e.g. `fn id<T>(x: T)` called
+                            // with a float): move the bits through the integer
+                            // register so both sides agree on the register class.
+                            cx.builder.ins().bitcast(expected, MemFlags::new(), val)
                         } else {
                             val
                         }
@@ -2045,11 +2160,25 @@ fn compile_call<M: Module>(
 
             // Fall back to a normal call instruction.
             let call = cx.builder.ins().call(func_ref, &arg_values);
-            let results = cx.builder.inst_results(call);
+            let results = cx.builder.inst_results(call).to_vec();
             if results.is_empty() {
                 Ok(None)
             } else {
-                Ok(Some((results[0], actual_ret_tty)))
+                let mut result = results[0];
+                // Generic functions return their type-parameter result through a
+                // uniform i64 slot. If the inferred return type is float, the
+                // value arrives as raw i64 bits — reinterpret them as F64 so the
+                // Cranelift value type matches its TurboTy.
+                if matches!(actual_ret_tty, TurboTy::Float) {
+                    let rty = cx.builder.func.dfg.value_type(result);
+                    if rty.is_int() && rty.bits() == 64 {
+                        result = cx
+                            .builder
+                            .ins()
+                            .bitcast(types::F64, MemFlags::new(), result);
+                    }
+                }
+                Ok(Some((result, actual_ret_tty)))
             }
         }
     }
