@@ -1,0 +1,14 @@
+// Regression: f32 used as a function parameter must fail loud across the
+// spawn ABI boundary instead of silently miscompiling to 0. f64/float is the
+// supported floating-point type for parameters.
+async fn scale(x: f32, factor: f32) -> f32 {
+    x * factor
+}
+
+async fn main() {
+    let xv: f32 = 2.5
+    let fv: f32 = 4.0
+    let a = spawn scale(xv, fv)
+    let ra = await a
+    print(ra)
+}

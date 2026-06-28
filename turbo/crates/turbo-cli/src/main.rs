@@ -323,6 +323,7 @@ fn init_project(name: &str) {
         dir.join("src/main.tb"),
         format!(
             r#"/// A counter that tracks a value
+
 struct Counter {{
     count: i64,
 }}
@@ -338,6 +339,7 @@ impl Counter {{
 }}
 
 /// Shapes with area calculation
+
 type Shape {{
     Circle(f64),
     Rectangle(f64, f64),
@@ -3937,6 +3939,7 @@ mod cli_tests {
         let pkg_name = "test-proj";
         let main_tb = format!(
             r#"/// A counter that tracks a value
+
 struct Counter {{
     count: i64,
 }}
@@ -3952,6 +3955,7 @@ impl Counter {{
 }}
 
 /// Shapes with area calculation
+
 type Shape {{
     Circle(f64),
     Rectangle(f64, f64),

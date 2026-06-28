@@ -1,0 +1,21 @@
+// f32 is supported as a local, in arithmetic, as a (non-async and async)
+// return type, and as a generic type argument. Only scalar f32 *parameters*
+// are rejected (they miscompile across the call ABI). Guards against
+// over-rejection of the working f32 paths.
+fn make() -> f32 {
+    let v: f32 = 2.5
+    v
+}
+
+fn id<T>(x: T) -> T {
+    x
+}
+
+fn main() {
+    let a: f32 = 1.5
+    let b: f32 = 2.0
+    print(a * b)
+    print(make())
+    let g: f32 = 3.25
+    print(id(g))
+}
