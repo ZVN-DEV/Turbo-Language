@@ -51,7 +51,7 @@ turbolang build hello.tb      # AOT — produce a native binary
 ./hello
 ```
 
-### Known Limitations (v0.9.x)
+### Known Limitations (v0.10.x)
 
 > **Note — runtime string allocation:** The runtime uses a thread-local string arena that is freed after each JIT execution. Long-running AOT servers should be monitored for memory usage. Proper ARC-based string deallocation is planned for a future release.
 >

@@ -1,6 +1,6 @@
 [package]
 name = "turbo-codegen-cranelift"
-version = "0.9.2"
+version = "0.10.0"
 edition = "2021"
 rust-version.workspace = true
 description.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-turbo-ast = { version = "0.9.2", path = "../turbo-ast" }
+turbo-ast = { version = "0.10.0", path = "../turbo-ast" }
 cranelift = { workspace = true }
 cranelift-jit = { workspace = true }
 cranelift-module = { workspace = true }
@@ -23,6 +23,6 @@ serde_json = "1"
 libc = "0.2"
 
 [dev-dependencies]
-turbo-lexer = { version = "0.9.2", path = "../turbo-lexer" }
-turbo-parser = { version = "0.9.2", path = "../turbo-parser" }
-turbo-sema = { version = "0.9.2", path = "../turbo-sema" }
+turbo-lexer = { version = "0.10.0", path = "../turbo-lexer" }
+turbo-parser = { version = "0.10.0", path = "../turbo-parser" }
+turbo-sema = { version = "0.10.0", path = "../turbo-sema" }

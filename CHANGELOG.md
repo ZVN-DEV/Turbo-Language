@@ -3,6 +3,67 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.0] - 2026-06-28
+
+A large correctness, language-features, and DX release driven by a full product
+review. Closes two silent data-corruption classes, lands several real language
+features, measurably improves runtime performance (honestly re-benchmarked), and
+sweeps the diagnostics, docs, and website. All changes are JIT/AOT parity-tested.
+
+### Fixed
+- **Copy-on-write value semantics (critical).** Structs and arrays no longer
+  alias their source's heap storage when copied — `let b = a; b.x = 99` (and the
+  same for passing a value to a `mut` parameter or extracting an element from a
+  parent collection) now correctly leaves the original unchanged, on both JIT and
+  AOT. Previously this silently corrupted data, contradicting the documented CoW
+  guarantee.
+- **AOT HTTP runtime (production path).** Plain-string handler responses
+  containing a colon no longer emit a malformed `HTTP/1.1 0 OK` with a truncated
+  body, and request bodies larger than ~16 KB are no longer rejected with a
+  spurious `431` — the AOT server now matches the JIT server (bodies up to 32 MB).
+- **Concurrency.** Added `mutex_update(m, closure)` (an atomic read-modify-write
+  critical section); a shared counter under contention is now exact instead of
+  losing ~57% of updates. The docs no longer imply bare `mutex_get`/`mutex_set`
+  are sufficient for concurrent mutation.
+- **f32 ABI.** `f32` values now round-trip correctly across spawn / generic /
+  closure boundaries (previously a Cranelift panic or miscompile); the 0.9.2 sema
+  reject is removed.
+- **`bench` command.** No longer reports `0/N passed` for a valid benchmark —
+  `@bench` is now a recognized attribute on every backend; results lead with the
+  timing and report AOT/JIT parity separately.
+- **Diagnostics.** Runtime and operational errors now carry error codes
+  (`E0601`–`E0611`), color, and `Help:` lines; arity / missing-variant / unknown-
+  field / type-mismatch errors echo the real signature, variant, field list, and
+  the user's source type spelling; raw `(os error N)` jargon dropped.
+
+### Added
+- **`as` cast operator + sized-integer usability.** Numeric `as` casts
+  (width/sign/float conversions) plus integer-literal coercion into annotated
+  sized types in array literals, struct-field init, and arithmetic — `i8`..`u64`
+  are no longer an unusable island.
+- **Compound-value printing.** `print`/`to_str`/interpolation of arrays, structs,
+  and results now render their contents recursively (`[1, 2, 3]`, `P { x: 9 }`,
+  `ok(7)`) instead of opaque `[array]`/`[struct]`/`[result]` placeholders.
+- **CLI arguments.** `args()` returns the program's real command-line arguments
+  (`turbolang run f.tb -- a b c` and built binaries alike); previously a stub.
+- **WASM closures.** Closures (direct, capturing, and in `map`/`filter`) now
+  compile and run under `wasmtime`, parity-matched to native; unsupported closure
+  shapes fail loud instead of miscompiling.
+- **`hashmap_inc`** fused increment builtin.
+
+### Changed
+- **Performance — word-count ~2.2x → ~1.4x slower than C.** The str→int hashmap
+  path stored integers as strings and re-hashed/re-allocated on every increment;
+  it now uses inline-int entry storage (single hash, zero alloc). Re-measured with
+  `run_wordcount.sh` and published consistently across README/website/benchmarks.
+- **Formatter.** Replaced the line-based tidier with a real AST pretty-printer
+  (canonical spacing, idempotent, semantics-preserving with a byte-for-byte
+  fallback).
+- **Docs & website.** Corrected `explain`/SYNTAX.md examples that didn't compile,
+  documented 19 missing stdlib builtins, softened the inaccurate "104 built-in
+  functions" claim to "100+", and added per-route SEO metadata, a sitemap/robots/
+  OG card, copy buttons, and accessibility fixes to the site.
+
 ## [0.9.2] - 2026-06-28
 
 A correctness, hardening, and honesty pass. Fixes another round of codegen and

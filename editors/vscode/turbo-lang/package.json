@@ -2,7 +2,7 @@
     "name": "turbo-lang",
     "displayName": "Turbo Language",
     "description": "Syntax highlighting, snippets, formatting, and full language support (diagnostics, hover, go-to-definition, completions) for the Turbo programming language",
-    "version": "0.9.2",
+    "version": "0.10.0",
     "publisher": "zvn-dev",
     "repository": {
         "type": "git",
