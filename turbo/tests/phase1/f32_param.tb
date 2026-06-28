@@ -1,0 +1,20 @@
+// BL-3: f32 as a direct scalar function parameter. Previously this panicked
+// Cranelift ("declared type of variable doesn't match type of value"); f32
+// now rides the uniform 64-bit float slot end to end (JIT + AOT).
+fn scale(x: f32, factor: f32) -> f32 {
+    x * factor
+}
+
+fn add3(a: f32, b: f32, c: f32) -> f32 {
+    a + b + c
+}
+
+fn main() {
+    let x: f32 = 2.5
+    let f: f32 = 4.0
+    print(scale(x, f))
+    let p: f32 = 1.5
+    let q: f32 = 2.25
+    let r: f32 = 0.25
+    print(add3(p, q, r))
+}

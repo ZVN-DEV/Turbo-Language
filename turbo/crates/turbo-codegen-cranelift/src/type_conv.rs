@@ -75,13 +75,52 @@ pub(crate) fn coerce_value<M: Module>(
 
 // ── TypeExpr → Cranelift type resolution ──────────────────────────
 
+/// Resolve a Turbo `TypeExpr` to the Cranelift IR type used for *internal*
+/// Turbo function signatures (regular fns, methods, closures, spawn thunks).
+///
+/// Note on `f32`: internally TurboLang represents every float — `f32` and
+/// `f64`/`float` alike — as a single 64-bit `Float` slot (`turbo_ty_to_cl_type`
+/// maps the `Float` tag to `types::F64`). Resolving `f32` to `types::F64` here
+/// keeps the variable-declaration type, the block-param type, and the value
+/// that flows through it in agreement. Mapping `f32 -> types::F32` (a real
+/// 32-bit register class) while the rest of codegen moves the value as F64 is
+/// exactly what made scalar `f32` params panic Cranelift ("declared type of
+/// variable doesn't match type of value") and miscompile across the
+/// spawn/closure ABI. For the C FFI boundary, where `f32` genuinely means a
+/// 32-bit C `float`, use [`resolve_cl_type_ffi`] instead.
 pub(crate) fn resolve_cl_type(
     ty: &TypeExpr,
     ptr_type: types::Type,
     enum_variants: &HashMap<String, Vec<String>>,
     type_params: &[String],
 ) -> Result<types::Type, CodegenError> {
-    resolve_cl_type_inner(ty, ptr_type, enum_variants, type_params, &HashMap::new())
+    resolve_cl_type_inner(
+        ty,
+        ptr_type,
+        enum_variants,
+        type_params,
+        &HashMap::new(),
+        false,
+    )
+}
+
+/// Like [`resolve_cl_type`], but for the C FFI boundary (`extern` declarations),
+/// where `f32` must map to a real 32-bit `types::F32` to match the platform C
+/// ABI for `float`.
+pub(crate) fn resolve_cl_type_ffi(
+    ty: &TypeExpr,
+    ptr_type: types::Type,
+    enum_variants: &HashMap<String, Vec<String>>,
+    type_params: &[String],
+) -> Result<types::Type, CodegenError> {
+    resolve_cl_type_inner(
+        ty,
+        ptr_type,
+        enum_variants,
+        type_params,
+        &HashMap::new(),
+        true,
+    )
 }
 
 fn resolve_cl_type_inner(
@@ -90,6 +129,7 @@ fn resolve_cl_type_inner(
     enum_variants: &HashMap<String, Vec<String>>,
     type_params: &[String],
     enum_max_slots: &HashMap<String, usize>,
+    ffi: bool,
 ) -> Result<types::Type, CodegenError> {
     match ty {
         TypeExpr::Named(name) => {
@@ -106,7 +146,9 @@ fn resolve_cl_type_inner(
                 "u16" => Ok(types::I16),
                 "u32" => Ok(types::I32),
                 "u64" | "usize" => Ok(types::I64),
-                "f32" => Ok(types::F32),
+                // Internally `f32` rides the uniform 64-bit float slot; only the
+                // C FFI boundary needs a real 32-bit register class.
+                "f32" => Ok(if ffi { types::F32 } else { types::F64 }),
                 "float" | "f64" => Ok(types::F64),
                 "bool" => Ok(types::I8),
                 "str" => Ok(ptr_type),
@@ -139,6 +181,7 @@ fn resolve_cl_type_inner(
             enum_variants,
             type_params,
             enum_max_slots,
+            ffi,
         ),
         #[allow(unreachable_patterns)]
         _ => Ok(types::I64),

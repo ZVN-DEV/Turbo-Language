@@ -1,0 +1,13 @@
+// Parity (BL-3): f32 closure parameter, called directly and through an
+// `fn(f32) -> f32` function-pointer parameter. Must match JIT vs AOT.
+fn apply(f: fn(f32) -> f32, x: f32) -> f32 {
+    f(x)
+}
+
+fn main() {
+    let square = |x: f32| -> f32 { x * x }
+    let y: f32 = 3.5
+    print(square(y))
+    let two: f32 = 2.0
+    print(apply(square, two))
+}

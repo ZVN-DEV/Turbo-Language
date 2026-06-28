@@ -1,0 +1,16 @@
+// BL-3: f32 arguments and return value across the spawn / await ABI boundary.
+// Previously the 32-bit float bits were dropped and the result came back 0.
+async fn scale(x: f32, factor: f32) -> f32 {
+    x * factor
+}
+
+async fn main() {
+    let x: f32 = 2.5
+    let f: f32 = 4.0
+    let a = spawn scale(x, f)
+    let p: f32 = 3.0
+    let h: f32 = 0.5
+    let b = spawn scale(p, h)
+    print(await a)
+    print(await b)
+}

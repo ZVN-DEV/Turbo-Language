@@ -16,7 +16,7 @@ use turbo_ast::*;
 use crate::closures::{extract_all_closures, extract_all_spawn_sites, CaptureInfo};
 use crate::expr::compile_expr;
 use crate::turbo_types::*;
-use crate::type_conv::{coerce_value, resolve_cl_type, turbo_ty_to_cl_type};
+use crate::type_conv::{coerce_value, resolve_cl_type, resolve_cl_type_ffi, turbo_ty_to_cl_type};
 use crate::Ctx;
 
 // ── Runtime function declaration helper ─────────────────────────────
@@ -1060,8 +1060,11 @@ pub(crate) fn compile_module<M: Module>(
             let mut sig = module.make_signature();
             // Use default calling convention (system C ABI) — do NOT use CallConv::Fast
 
+            // Extern functions follow the platform C ABI, so `f32` must stay a
+            // real 32-bit `float` (resolve_cl_type_ffi) rather than the
+            // internal uniform-F64 float slot.
             for param in &f.params {
-                sig.params.push(AbiParam::new(resolve_cl_type(
+                sig.params.push(AbiParam::new(resolve_cl_type_ffi(
                     &param.ty.node,
                     ptr_type,
                     &enum_variants,
@@ -1070,7 +1073,7 @@ pub(crate) fn compile_module<M: Module>(
             }
 
             let ret_turbo = if let Some(ret_ty) = &f.return_type {
-                let cl = resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &[])?;
+                let cl = resolve_cl_type_ffi(&ret_ty.node, ptr_type, &enum_variants, &[])?;
                 sig.returns.push(AbiParam::new(cl));
                 turbo_ty_from_type_expr_with_params(&ret_ty.node, &enum_variants, &[])
             } else {

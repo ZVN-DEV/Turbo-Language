@@ -4435,20 +4435,6 @@ impl Checker {
                             }
                         }
                     };
-                    // f32 closure parameters panic Cranelift when the closure is
-                    // compiled (the param variable is declared with the F32
-                    // register class but the value arrives via the i64/f64 ABI
-                    // slot). Reject cleanly until the ABI handles 32-bit floats.
-                    if matches!(ty, Ty::F32) {
-                        self.error(
-                            ErrorCode::E0100,
-                            format!(
-                                "floating-point `f32` is not yet supported as the type of closure parameter `{}`: it miscompiles across the spawn/generic/closure ABI boundary — use `f64`/`float` instead",
-                                param.name
-                            ),
-                            param.ty.span.clone(),
-                        );
-                    }
                     self.define_var(
                         &param.name,
                         VarInfo {

@@ -1,0 +1,13 @@
+// BL-3: f32 return type round-trips through the call ABI, including a nested
+// call where an f32 return immediately becomes an f32 argument.
+fn dbl(x: f32) -> f32 {
+    x + x
+}
+
+fn main() {
+    let s: f32 = 3.5
+    let r: f32 = dbl(s)
+    print(r)
+    let t: f32 = 1.25
+    print(dbl(dbl(t)))
+}

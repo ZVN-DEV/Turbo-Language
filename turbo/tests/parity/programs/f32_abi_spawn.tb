@@ -1,0 +1,20 @@
+// Parity (BL-3): f32 arguments and f32 return value across the spawn/await
+// thread-handle ABI. The float bits are packed into the uniform i64 arg slot,
+// reinterpreted as F64 by the thunk, and moved back through i64 on await.
+async fn scale(x: f32, factor: f32) -> f32 {
+    x * factor
+}
+
+async fn main() {
+    let x: f32 = 2.5
+    let f: f32 = 4.0
+    let a = spawn scale(x, f)
+    let p: f32 = 3.0
+    let h: f32 = 0.5
+    let b = spawn scale(p, h)
+    let ra = await a
+    let rb = await b
+    print(ra)
+    print(rb)
+    print(ra + rb)
+}

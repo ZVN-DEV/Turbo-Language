@@ -908,32 +908,6 @@ impl Checker {
         }
     }
 
-    /// Reject `f32` used as the type of a function or closure parameter.
-    ///
-    /// 32-bit floats currently miscompile or panic Cranelift when they cross a
-    /// call ABI boundary as a scalar parameter: a regular call declares the
-    /// parameter variable with the `F32` register class while the value arrives
-    /// in an `i64`/`f64` slot (a Cranelift verifier panic), and the
-    /// async/spawn trampoline drops the 32-bit float bits entirely (a silent
-    /// `0`). f32 locals, arithmetic, return values, generics, and FFI/extern
-    /// parameters all round-trip fine, so the rejection is scoped to scalar
-    /// parameter positions. Remove this once the ABI handles 32-bit floats end
-    /// to end.
-    pub(crate) fn reject_f32_params(&mut self, sig_params: &[(String, Ty)], ast_params: &[Param]) {
-        for (i, (name, ty)) in sig_params.iter().enumerate() {
-            if matches!(ty, Ty::F32) {
-                let span = ast_params.get(i).map(|p| p.ty.span.clone()).unwrap_or(0..0);
-                self.error(
-                    ErrorCode::E0100,
-                    format!(
-                        "floating-point `f32` is not yet supported as the type of parameter `{name}`: it miscompiles across the spawn/generic/closure ABI boundary — use `f64`/`float` instead"
-                    ),
-                    span,
-                );
-            }
-        }
-    }
-
     pub(crate) fn check_function(&mut self, f: &FnDef) {
         let sig = match self.functions.get(&f.name).cloned() {
             Some(s) => s,
@@ -943,8 +917,6 @@ impl Checker {
                 return;
             }
         };
-
-        self.reject_f32_params(&sig.params, &f.params);
 
         // Generic functions are still body-checked, but each type parameter is
         // erased to `Ty::Error` first. `Error` is the checker's poison type: any
@@ -1057,7 +1029,6 @@ impl Checker {
                 return;
             }
         };
-        self.reject_f32_params(&sig.params, &f.params);
         self.current_return_type = sig.ret.clone();
 
         self.push_scope();

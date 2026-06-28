@@ -1,0 +1,20 @@
+// Parity (BL-3): an f32 value routed through a generic function's uniform
+// i64 type-parameter slot must round-trip identically on JIT and AOT.
+fn id<T>(x: T) -> T {
+    x
+}
+
+fn pick<T>(a: T, b: T) -> T {
+    b
+}
+
+fn main() {
+    let g: f32 = 3.25
+    print(id(g))
+    let lo: f32 = 1.5
+    let hi: f32 = 9.5
+    print(pick(lo, hi))
+    let h: f32 = id(g)
+    let q: f32 = 0.75
+    print(h + q)
+}

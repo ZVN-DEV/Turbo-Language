@@ -1,0 +1,23 @@
+// Parity (BL-3): f32 scalar parameters on a free function and a method must
+// produce identical output under JIT and AOT. f32 rides the uniform 64-bit
+// float slot, so the param variable, block param, and value all agree on F64.
+struct Vec2 { x: f64, y: f64 }
+
+impl Vec2 {
+    fn scaled_x(self, k: f32) -> f64 {
+        self.x * 2.0
+    }
+}
+
+fn scale(x: f32, factor: f32) -> f32 {
+    x * factor
+}
+
+fn main() {
+    let a: f32 = 2.5
+    let b: f32 = 4.0
+    print(scale(a, b))
+    let k: f32 = 3.0
+    let v = Vec2 { x: 5.0, y: 1.0 }
+    print(v.scaled_x(k))
+}

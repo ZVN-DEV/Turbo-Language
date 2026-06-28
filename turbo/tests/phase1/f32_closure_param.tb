@@ -1,0 +1,13 @@
+// BL-3: f32 as a closure parameter, both called directly and passed through
+// an `fn(f32) -> f32` parameter. Previously silently miscompiled to 0.
+fn apply(f: fn(f32) -> f32, x: f32) -> f32 {
+    f(x)
+}
+
+fn main() {
+    let square = |x: f32| -> f32 { x * x }
+    let y: f32 = 3.5
+    print(square(y))
+    let two: f32 = 2.0
+    print(apply(square, two))
+}
