@@ -1,0 +1,29 @@
+// BL-26 positive: every LEGITIMATE opaque-handle pattern must still compile
+// and run after the stricter typing.
+//   - a hashmap handle passed to a function with an `i64` parameter
+//   - `m = hashmap_set_int(m, k, v)` (the builtin returns the handle, so the
+//     reassignment stays handle-to-handle)
+//   - a map literal flowing into hashmap builtins
+//   - a mutex handle passed to a function and mutated via mutex_update
+fn bump(m: i64, k: str) -> i64 {
+    hashmap_set_int(m, k, hashmap_get_int(m, k) + 1)
+    hashmap_get_int(m, k)
+}
+
+fn add_one(mx: i64) -> i64 {
+    mutex_update(mx, |x| x + 1)
+}
+
+fn main() {
+    let mut m = hashmap()
+    m = hashmap_set_int(m, "a", 5)
+    print(bump(m, "a"))          // 6
+    print(hashmap_get(m, "a"))   // 6 (stringified)
+
+    let lit = {"city": "NYC"}
+    print(hashmap_get(lit, "city"))  // NYC
+
+    let mx = mutex(10)
+    print(add_one(mx))           // 11
+    print(mutex_get(mx))         // 11
+}

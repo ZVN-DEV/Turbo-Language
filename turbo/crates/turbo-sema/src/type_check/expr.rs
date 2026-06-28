@@ -12,7 +12,7 @@ use crate::scope::VarInfo;
 use crate::suggest;
 use crate::{
     extract_int_literal, int_literal_fits_in_type, literal_coerces_to, resolve_type_expr,
-    types_compatible, Checker, Ty,
+    types_compatible, Checker, HandleKind, Ty,
 };
 
 impl Checker {
@@ -1970,7 +1970,7 @@ impl Checker {
                                 args[0].span.clone(),
                             );
                         }
-                        return Ty::I64;
+                        return Ty::Handle(HandleKind::HttpServer);
                     }
                     // route(server: i64, method: str, path: str, handler: fn(str) -> str)
                     if name == "route" {
@@ -1988,7 +1988,9 @@ impl Checker {
                         // Set hint so closure param types can be inferred
                         self.closure_param_hint = Some(vec![Ty::Str]);
                         let handler_ty = self.check_expr(&args[3]);
-                        if !server_ty.is_error() && !server_ty.is_integer() {
+                        if !server_ty.is_error()
+                            && !server_ty.is_handle_or_int(HandleKind::HttpServer)
+                        {
                             self.error(ErrorCode::E0133, format!("route() first argument must be server id (i64), found `{server_ty}`"), args[0].span.clone());
                         }
                         if !method_ty.is_error() && method_ty != Ty::Str {
@@ -2049,7 +2051,9 @@ impl Checker {
                             return Ty::Error;
                         }
                         let server_ty = self.check_expr(&args[0]);
-                        if !server_ty.is_error() && !server_ty.is_integer() {
+                        if !server_ty.is_error()
+                            && !server_ty.is_handle_or_int(HandleKind::HttpServer)
+                        {
                             self.error(
                                 ErrorCode::E0100,
                                 format!(
@@ -2339,7 +2343,7 @@ impl Checker {
                                 args[0].span.clone(),
                             );
                         }
-                        return Ty::I64;
+                        return Ty::Handle(HandleKind::Mutex);
                     }
                     // mutex_get(m: i64) -> i64
                     if name == "mutex_get" {
@@ -2352,7 +2356,7 @@ impl Checker {
                             return Ty::Error;
                         }
                         let m_ty = self.check_expr(&args[0]);
-                        if !m_ty.is_error() && !m_ty.is_integer() {
+                        if !m_ty.is_error() && !m_ty.is_handle_or_int(HandleKind::Mutex) {
                             self.error(ErrorCode::E0133, format!("mutex_get() argument must be a mutex (integer), found `{m_ty}`"), args[0].span.clone());
                         }
                         return Ty::I64;
@@ -2372,7 +2376,7 @@ impl Checker {
                         }
                         let m_ty = self.check_expr(&args[0]);
                         let val_ty = self.check_expr(&args[1]);
-                        if !m_ty.is_error() && !m_ty.is_integer() {
+                        if !m_ty.is_error() && !m_ty.is_handle_or_int(HandleKind::Mutex) {
                             self.error(ErrorCode::E0133, format!("mutex_set() first argument must be a mutex (integer), found `{m_ty}`"), args[0].span.clone());
                         }
                         if !val_ty.is_error() && !val_ty.is_integer() {
@@ -2403,7 +2407,7 @@ impl Checker {
                             return Ty::Error;
                         }
                         let m_ty = self.check_expr(&args[0]);
-                        if !m_ty.is_error() && !m_ty.is_integer() {
+                        if !m_ty.is_error() && !m_ty.is_handle_or_int(HandleKind::Mutex) {
                             self.error(ErrorCode::E0133, format!("mutex_update() first argument must be a mutex (integer), found `{m_ty}`"), args[0].span.clone());
                         }
                         // Hint the closure's parameter type so `|x| ...` infers `x: i64`.
@@ -2492,7 +2496,7 @@ impl Checker {
                             );
                             return Ty::Error;
                         }
-                        return Ty::I64;
+                        return Ty::Handle(HandleKind::HashMap);
                     }
                     // hashmap_set(map: i64, key: str, value: str) -> ()
                     if name == "hashmap_set" {
@@ -2510,7 +2514,7 @@ impl Checker {
                         let map_ty = self.check_expr(&args[0]);
                         let key_ty = self.check_expr(&args[1]);
                         let val_ty = self.check_expr(&args[2]);
-                        if !map_ty.is_error() && !map_ty.is_integer() {
+                        if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
                             self.error(ErrorCode::E0133, format!("hashmap_set() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
@@ -2548,7 +2552,7 @@ impl Checker {
                         }
                         let map_ty = self.check_expr(&args[0]);
                         let key_ty = self.check_expr(&args[1]);
-                        if !map_ty.is_error() && !map_ty.is_integer() {
+                        if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
                             self.error(ErrorCode::E0133, format!("hashmap_get() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
@@ -2577,7 +2581,7 @@ impl Checker {
                         }
                         let map_ty = self.check_expr(&args[0]);
                         let key_ty = self.check_expr(&args[1]);
-                        if !map_ty.is_error() && !map_ty.is_integer() {
+                        if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
                             self.error(ErrorCode::E0133, format!("hashmap_has() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
@@ -2605,7 +2609,7 @@ impl Checker {
                             return Ty::Error;
                         }
                         let map_ty = self.check_expr(&args[0]);
-                        if !map_ty.is_error() && !map_ty.is_integer() {
+                        if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
                             self.error(ErrorCode::E0133, format!("hashmap_len() argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         return Ty::I64;
@@ -2624,7 +2628,7 @@ impl Checker {
                             return Ty::Error;
                         }
                         let map_ty = self.check_expr(&args[0]);
-                        if !map_ty.is_error() && !map_ty.is_integer() {
+                        if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
                             self.error(ErrorCode::E0133, format!("hashmap_keys() argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         return Ty::Array(Box::new(Ty::Str));
@@ -2644,7 +2648,7 @@ impl Checker {
                         }
                         let map_ty = self.check_expr(&args[0]);
                         let key_ty = self.check_expr(&args[1]);
-                        if !map_ty.is_error() && !map_ty.is_integer() {
+                        if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
                             self.error(ErrorCode::E0133, format!("hashmap_remove() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
@@ -2670,7 +2674,7 @@ impl Checker {
                         let map_ty = self.check_expr(&args[0]);
                         let key_ty = self.check_expr(&args[1]);
                         let val_ty = self.check_expr(&args[2]);
-                        if !map_ty.is_error() && !map_ty.is_integer() {
+                        if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
                             self.error(ErrorCode::E0133, format!("hashmap_set_int() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
@@ -2691,7 +2695,9 @@ impl Checker {
                                 args[2].span.clone(),
                             );
                         }
-                        return Ty::I64;
+                        // Returns the map handle so `m = hashmap_set_int(m, k, v)` keeps `m`
+                        // typed as a hashmap handle (not a plain int).
+                        return Ty::Handle(HandleKind::HashMap);
                     }
                     // hashmap_get_int(map: i64, key: str) -> int
                     // Returns 0 on miss — guard with hashmap_has() if you need to
@@ -2710,7 +2716,7 @@ impl Checker {
                         }
                         let map_ty = self.check_expr(&args[0]);
                         let key_ty = self.check_expr(&args[1]);
-                        if !map_ty.is_error() && !map_ty.is_integer() {
+                        if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
                             self.error(ErrorCode::E0133, format!("hashmap_get_int() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
@@ -2740,7 +2746,7 @@ impl Checker {
                         }
                         let map_ty = self.check_expr(&args[0]);
                         let key_ty = self.check_expr(&args[1]);
-                        if !map_ty.is_error() && !map_ty.is_integer() {
+                        if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
                             self.error(ErrorCode::E0133, format!("hashmap_inc() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
                         }
                         if !key_ty.is_error() && key_ty != Ty::Str {
@@ -4720,7 +4726,7 @@ impl Checker {
                         );
                     }
                 }
-                Ty::I64 // hashmap is opaque i64 pointer
+                Ty::Handle(HandleKind::HashMap) // a map literal is a hashmap handle
             }
 
             Expr::NullCoalesce { value, default } => {

@@ -1,0 +1,1 @@
+ERROR:cannot assign `int` to variable `m` of type `hashmap`

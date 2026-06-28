@@ -1,0 +1,8 @@
+// BL-26: same opaque-handle footgun via `hashmap_inc`, which returns the new
+// counter value (an int). Reassigning it over the hashmap handle must be a
+// clean type error rather than a segfault.
+fn main() {
+    let mut m = hashmap()
+    m = hashmap_inc(m, "a")
+    print(hashmap_get_int(m, "a"))
+}
