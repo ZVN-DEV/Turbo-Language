@@ -87,11 +87,13 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
   WASM gaps (future):** async, some match patterns, higher-order closure params, returning/storing closures,
   and the BL-27 Part B struct/array COW.
 
-- [ ] **BL-8 — Homebrew formula sha sync.** The in-repo `distribution/homebrew/turbo-lang.rb` ships
-  placeholder `000…` sha256 (real ones go to the `ZVN-DEV/homebrew-turbo` tap via `release.yml`). Either
-  teach the release pipeline to write the real checksums back into the in-repo mirror, or add a post-release
-  check that the mirror matches the published artifacts. **AC:** the in-repo formula is never stale/fake
-  after a release, enforced by a check.
+- [x] **BL-8 — Homebrew formula sha sync.** _Done (commit `f5f0bf5`, merged to master)._ The real checksums
+  are only known post-build and `release.yml` already writes the authoritative formula to the
+  `ZVN-DEV/homebrew-turbo` tap, so the in-repo copy can't carry trustworthy shas. Marked it a
+  non-authoritative template and extended `scripts/check_release_consistency.py` (already run in CI via
+  ci.yml + nightly.yml) to FAIL if placeholder all-zero shas appear WITHOUT the template marker (or if a
+  marked template carries real-looking shas) — so the repo can never silently present fake-but-real-looking
+  checksums. Network-free; `--self-test` covers all three states + a mutation check.
 
 - [x] **BL-9 — Runtime hashmap/string-key performance.** _Surfaced by BL-2. Done 2026-06-28._ The str→int
   hashmap path was re-stringifying (`snprintf`), re-parsing (`strtoll`), and re-allocating (`strdup`/`free`)
@@ -214,11 +216,14 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   excluded); JIT≡AOT (`run f.tb -- a b` and `./bin a b` produce identical output). +dedicated args shell test
   (`tests/args/`, JIT==AOT, hyphen-leading + empty cases) +parity. Docs updated. _WASM `args()` untouched._
 
-- [ ] **BL-21 — `bench` reports "0/N passed" on every valid benchmark.** _[designer#8, e2e]_ Pass criterion is
-  "JIT and AOT output match," but the build path rejects `@bench` (`unknown attribute '@bench'`) so AOT always
-  fails → headline reads as total failure on correct input. `@bench` is also undocumented; the label prints the
-  filename not the fn. **AC:** AOT/build path accepts `@bench`; lead with timings; AOT-match is a separate
-  non-fatal line; label by function name; add a `@bench` doc + fixture.
+- [x] **BL-21 — `bench` reports "0/N passed" on every valid benchmark.** _[designer#8, e2e] Done (commit
+  `13b3850`, merged to master)._ Root cause was the **parser** rejecting `@bench` (`unknown attribute`), so
+  BOTH the JIT and AOT bench paths failed. Made `@bench` a first-class marker attribute (`FnDef.is_bench`)
+  accepted on every backend and round-tripped by `fmt`. `bench` reporting now leads with the timing, makes
+  AOT-vs-JIT parity a separate non-fatal line (`AOT parity: ok/…`), labels by function name, and never prints
+  `0/N` for a run that produced a valid timing (headline is `N/M benchmarks completed`). +`@bench` fixture +CLI
+  integration test +`TOOLCHAIN.md` docs. _`@bench` is a marker only (no `Bencher`/`b.iter()` API yet) — noted
+  aspirational in the doc._
 
 - [x] **BL-22 — Website conversion friction.** _[frontend#2, designer#9] Done (commit `533501e`, merged to
   master)._ New `CopyButton` client component copies a raw prompt-free command via a string prop (never
@@ -299,8 +304,12 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   spurious `unused variable` across lines; consider raw strings (`r"…"`) so JSON/`{`-strings paste verbatim; empty
   `[]` can't infer. Backend P3s: `rt_spawn_with_args` ignores `pthread_create` return (joins uninit `pthread_t` on
   thread exhaustion); `rt_format_time` uses non-reentrant `localtime()` (use `localtime_r`); JIT hashmap `&mut *ptr`
-  is a data race under concurrent `spawn` writes. _(The `fmt` `:`/`->`/operator-spacing gap here is already covered
-  by BL-5.)_
+  is a data race under concurrent `spawn` writes. **Hashmap-handle type confusion (pre-existing, found during
+  BL-9):** a `hashmap` is an opaque i64 handle, so sema does NOT reject assigning an int to a hashmap-typed var
+  (e.g. `m = hashmap_get_int(m, k)` or `m = hashmap_inc(m, k)`) — the next `hashmap_*(m, …)` then dereferences an
+  integer and **segfaults** instead of producing a type error. Reproduces with pre-existing builtins too; the fix
+  is a distinct opaque-handle type for hashmaps (and likely mutex/http handles) so int↔handle assignment is a
+  clean sema error. _(The `fmt` `:`/`->`/operator-spacing gap here is already covered by BL-5.)_
 
 ---
 _When all boxes are checked, STOP and ask for the next priorities — do not invent hygiene work._
