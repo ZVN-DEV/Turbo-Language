@@ -176,11 +176,13 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   POSTs; all existing guards preserved. +2 JIT/AOT parity programs (`http_colon_response`, `http_body_limits`);
   fail-before-fix proven by stashing the C change.
 
-- [ ] **BL-18 — Mutex can't express atomic read-modify-write.** _[backend F4]_ Only `mutex`/`mutex_get`/`mutex_set`
-  exist; `mutex_set(m, mutex_get(m)+1)` across 4 threads loses ~57% of updates. `docs/stdlib.md` + `CONCURRENCY.md`
-  claim get/set are "safe across concurrent tasks" — a careful programmer cannot write a correct shared counter.
-  **AC:** add a critical-section primitive (`mutex_update(m, |v| v+1)` running the closure under the lock, or
-  `mutex_lock`/`unlock`, or atomic `mutex_add`); fix the docs; concurrent-counter test reaches the exact total.
+- [x] **BL-18 — Mutex can't express atomic read-modify-write.** _[backend F4] Done (commit `5a6b36b`, merged to
+  master)._ Added `mutex_update(m, closure)` — the closure (`fn(int)->int`) runs UNDER the lock (lock → new =
+  closure(old) → store → unlock), reusing the existing runtime-calls-closure pattern from the HTTP route handler
+  (JIT `MutexGuard` RAII; AOT `pthread_mutex_lock`/`unlock`). A shared counter is now correct under contention
+  (4×25k → exactly 100000, 6/6 runs on JIT and AOT; get-then-set lost ~57%). Fixed `docs/stdlib.md` +
+  `CONCURRENCY.md` to stop implying bare get/set suffice for concurrent read-modify-write. +phase1 +parity +2
+  codegen unit tests. _Mutex values remain int-only (existing design); generic-T mutex out of scope._
 
 - [x] **BL-19 — Sized integer types are an unusable island.** _[e2e] Done (commit `634a57a`, merged to
   master)._ Added an `as` cast operator end-to-end (lexer keyword → `Expr::Cast` → sema → Cranelift JIT+AOT;
@@ -220,10 +222,12 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   still omits some builtins (substring, args, reverse, array_contains, any, all, int/float casts, math family)
   — a future doc pass, not blocking._
 
-- [ ] **BL-24 — Website a11y defects.** _[frontend#4-#7]_ Nested `<main>` on every `/docs/*` route (invalid
-  landmark); sub-AA contrast on `text-gray-500/600` small text; no `:focus-visible` styles, unlabeled navs, no
-  skip link; no `prefers-reduced-motion` guard. **AC:** single `<main>`; promote small secondary text to
-  `gray-400`/a ≥4.5:1 token; global focus-visible ring; `aria-label` per nav + skip link; reduced-motion media query.
+- [x] **BL-24 — Website a11y defects.** _[frontend#4-#7] Done (commit `6f105e1`, merged to master)._ Single
+  `<main>` per docs route (inner → `<div>`); sub-AA `text-gray-500/600` small text → AA-passing `gray-400`
+  (footer, benchmark labels, sidebar headers, captions; the only `gray-500` left is the decorative aria-hidden
+  `$` prompt); global `:focus-visible` ring using the real accent token; `aria-label` on all 3 navs + a
+  sr-only skip-to-content link; `prefers-reduced-motion` guard in globals.css. All 21 routes stay static SSG;
+  lint clean.
 
 - [ ] **BL-25 — Long-running-server memory model.** _[strategist theme 3]_ The flagship demo is an HTTP server, but
   the string arena is freed per-run and the README warns AOT servers leak — a credibility landmine the moment a
