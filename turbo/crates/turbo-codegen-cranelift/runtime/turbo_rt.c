@@ -1371,9 +1371,13 @@ static const char *rt_http_url_blocked_reason(const char *url) {
 
     char host[256];
     if (!rt_url_extract_host(url, host, sizeof(host))) {
-        /* Could not isolate a host — fail open (curl will reject malformed
-         * URLs itself); preserves behaviour for unusual but valid inputs. */
-        return NULL;
+        /* Could not isolate a host: either empty, or longer than the buffer.
+         * A valid DNS name is <= 253 chars, so an over-length host is never
+         * legitimate — fail CLOSED (block) rather than open. Otherwise an
+         * attacker could pad an octal/decimal numeric IP past the 256-byte
+         * buffer to make extraction fail and skip the SSRF check entirely. */
+        return "unparseable or over-length host blocked "
+               "(set TURBO_ALLOW_PRIVATE_HOSTS=1 to allow)";
     }
     if (rt_host_is_blocked(host)) {
         return "private/loopback host blocked "

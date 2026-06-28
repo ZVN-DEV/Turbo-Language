@@ -84,7 +84,8 @@ impl CEmitter {
             Expr::Spawn(_) => "spawn expressions",
             Expr::Await(_) => "await expressions",
             Expr::Closure { .. } => "closure expressions",
-            Expr::Match { .. } => "this match expression form",
+            // NB: `Expr::Match` is fully handled in `emit_expr` (compiled to a
+            // nested ternary), so it never reaches this fallback path.
             _ => "this expression",
         }
     }

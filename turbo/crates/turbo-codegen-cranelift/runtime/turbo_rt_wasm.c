@@ -203,11 +203,12 @@ long long rt_array_len(const void *arr) {
 void* rt_array_push(void *arr, long long value) {
     long long old_len = *(const long long*)arr;
     long long new_len = old_len + 1;
-    /* Checked-multiply guard: ensure
-     *   total = 8 + data_size, data_size = 8 + new_len * 8
-     * does not overflow size_t. Turns adversarial or miscomputed
-     * lengths into a clean abort instead of a heap overflow. */
-    if (new_len < 0 || (size_t)new_len > (SIZE_MAX - 16) / 8) {
+    /* Route through the shared overflow guard (turbo_rt_guards.h) so the
+     * single-source-of-truth invariant holds across both runtimes. The WASM
+     * layout is total = 8 (refcount) + 8 (len field) + new_len * 8 (elements),
+     * which rt_array_len_fits() checks via the 8-byte header — equivalent to
+     * the previous inline `(size_t)new_len > (SIZE_MAX - 16) / 8` bound. */
+    if (!rt_array_len_fits(new_len)) {
         fprintf(stderr, "runtime error: array push size overflow\n");
         exit(1);
     }
