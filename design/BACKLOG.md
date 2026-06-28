@@ -15,7 +15,7 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
 
 ## P1 — correctness & credibility
 
-- [ ] **BL-1 — Finish retiring the `?.unwrap()` panic class in codegen.** _Status: IN PROGRESS (Claude, 2026-06-28)._
+- [x] **BL-1 — Finish retiring the `?.unwrap()` panic class in codegen.** _Status: DONE (Claude, 2026-06-28, commit `47bef1ce68adbc2be4640fc5ad8f012c06e81a6e`)._
   The 0.9.2 sprint fixed the 2 reachable panics but ~152 `compile_expr(...)?.unwrap()` remain in
   `turbo/crates/turbo-codegen-cranelift/src/builtins.rs` (+5 in `src/expr.rs`: ~1595/1620/1646/1851/1890).
   All are sema-guarded today, but a future sema gap panics the compiler (exit 101) instead of diagnosing.
@@ -23,6 +23,17 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
   **AC:** no `?.unwrap()` on a `compile_expr` result remains in those two files; add a fuzz/regression
   pass (extend `turbo/fuzz/` or add adversarial `.tb`s) that throws malformed-but-parseable input at
   codegen and asserts a clean diagnostic, never a panic.
+  **Done:** converted all 152 sites in `builtins.rs` and all 5 in `expr.rs` to
+  `?.ok_or_else(|| CodegenError { code: ErrorCode::E0400, message: "<fn>: `<arg>` produced no value during
+  code generation" })?` (context-specific messages). `grep -c '?.unwrap()'` is now `0` in both files.
+  Coverage: 15 in-crate regression tests (`builtins.rs` `mod panic_class_regression`, run under
+  `cargo test`) that drive the backend with sema bypassed and assert a graceful `E0400` for every
+  expr.rs site + representative builtins.rs sites; a 55-program deterministic sema-bypass corpus in
+  `turbo/fuzz/src/codegen_fuzz.rs` (`run_robustness_corpus`, runs in CI); and 3 adversarial `.tb`s
+  (`tests/adversarial/bl1_unit_in_*`) asserting a clean non-101 diagnostic end-to-end. Residual: 2
+  non-`compile_expr` `.unwrap()`s in `builtins.rs` (`lookup_variant_tag_static(...).unwrap()`, lines
+  ~3351/3422) were intentionally left — they are infallible by construction (the variant tag was just
+  resolved), not unwraps of a compiled subexpression.
 
 - [ ] **BL-2 — Add a real-world benchmark (CEO's top "next").** The suite is fib40-only; the positioning
   is "fast enough on real work" with zero real-work evidence. Add ONE end-to-end workload to

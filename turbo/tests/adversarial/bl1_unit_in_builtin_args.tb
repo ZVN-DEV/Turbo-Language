@@ -1,0 +1,13 @@
+// BL-1 adversarial: unit/void values shoved into builtin argument positions.
+// All of these parse cleanly, so they reach sema (and, absent a sema guard,
+// codegen). Sema rejects them with a clean diagnostic and the compiler exits
+// non-zero — it must NEVER panic (exit 101). If a future sema gap let one
+// through, codegen now returns error[E0400] instead of `?.unwrap()`-panicking.
+fn main() {
+    let a = len(print(0))
+    let b = upper(print(0))
+    let c = min(1, print(0))
+    let d = push([1, 2], print(0))
+    let e = hashmap_get(print(0), "k")
+    print(a)
+}
