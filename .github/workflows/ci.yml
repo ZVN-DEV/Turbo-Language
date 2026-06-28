@@ -454,6 +454,18 @@ jobs:
         env:
           TURBO_FUZZ_ITERS: "200"
 
+      # Frontend fuzz smoke (lex → parse → sema). This is a separate
+      # binary from codegen-fuzz with no codegen step, so it is much
+      # cheaper per iteration; a small per-push count catches parser/sema
+      # panics at PR time. The frontend harness takes its iteration count
+      # as a positional CLI arg (not the TURBO_FUZZ_ITERS env var). The
+      # deeper run lives in nightly.yml.
+      - name: Build frontend fuzz binary
+        run: cargo build --release --bin turbo-fuzz --manifest-path turbo/fuzz/Cargo.toml
+
+      - name: Run frontend fuzz smoke (500 iters, fast)
+        run: cargo run --release --bin turbo-fuzz --manifest-path turbo/fuzz/Cargo.toml -- 500
+
   c-runtime-sanitizers:
     name: C runtime sanitizers (ASAN+UBSAN)
     # Rebuild the C runtime test harness with clang's AddressSanitizer

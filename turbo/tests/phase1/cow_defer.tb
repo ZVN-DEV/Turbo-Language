@@ -1,0 +1,24 @@
+// Regression test for the COW-rewrite fix: a direct COW builtin call
+// inside a `defer` (e.g. `defer arr.push(99)`) must self-assign so the new
+// value isn't dropped at block exit. Before the fix the deferred COW call's
+// result was discarded and the mutation was lost.
+//
+// `defer` runs LIFO at block exit, so a defer registered LATER runs FIRST.
+// We register a deferred reader BEFORE the deferred mutation, so the reader
+// runs LAST and observes the deferred mutation's effect.
+
+fn main() {
+    // Deferred array push.
+    let mut arr = [1, 2, 3]
+    defer print(len(arr)) // registered first → runs LAST → sees pushed elem
+    defer arr.push(99) //     registered second → runs FIRST → mutates arr
+    print(len(arr)) //        before any defer fires: still 3
+
+    // Deferred string upper, in a nested block so its defers fire first.
+    {
+        let mut s = "hello"
+        defer print(s) //     runs LAST → observes the uppercased value
+        defer s.upper() //    runs FIRST → s = upper(s)
+        print(s) //           before any defer fires: still "hello"
+    }
+}

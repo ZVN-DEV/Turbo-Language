@@ -96,6 +96,16 @@ jobs:
         env:
           TURBO_FUZZ_ITERS: "2000"
 
+      # Frontend fuzz (lex → parse → sema). Mirrors the per-push smoke in
+      # ci.yml but with a much larger iteration count since nightly is not
+      # PR-latency-bound. The frontend harness takes its iteration count as
+      # a positional CLI arg (not the TURBO_FUZZ_ITERS env var).
+      - name: Build frontend fuzz binary
+        run: cargo build --release --bin turbo-fuzz --manifest-path turbo/fuzz/Cargo.toml
+
+      - name: Run frontend fuzz (5000 iters — nightly is not PR-latency-bound)
+        run: cargo run --release --bin turbo-fuzz --manifest-path turbo/fuzz/Cargo.toml -- 5000
+
   release-build:
     name: Release build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
