@@ -125,14 +125,29 @@ for tb in "${tb_files[@]}"; do
         continue
     fi
 
-    if [ "$actual" = "$expected_content" ]; then
-        echo "  [PASS] $name"
+    # WASM <-> native parity: run the same program through the native JIT
+    # and require byte-identical stdout. This upgrades each test from "wasm
+    # matches a pinned file" to a three-way check (native == wasm ==
+    # .expected), so a divergence between the two backends fails the test even
+    # if someone updates .expected to match only one of them.
+    native="$("$TURBO" run "$tb" 2>/dev/null)"
+    native_status=$?
+    if [ $native_status -ne 0 ]; then
+        echo "  [FAIL] $name (native run exited $native_status)"
+        FAIL=$((FAIL + 1))
+        FAILED_TESTS="$FAILED_TESTS $name"
+        continue
+    fi
+
+    if [ "$actual" = "$expected_content" ] && [ "$native" = "$expected_content" ]; then
+        echo "  [PASS] $name (wasm == native == expected)"
         PASS=$((PASS + 1))
     else
         echo "  [FAIL] $name (stdout mismatch)"
         if [ "$VERBOSE" = "1" ]; then
             printf "        === expected ===\n%s\n" "$expected_content" | sed 's/^/          /'
-            printf "        === actual ===\n%s\n" "$actual" | sed 's/^/          /'
+            printf "        === wasm (wasmtime) ===\n%s\n" "$actual" | sed 's/^/          /'
+            printf "        === native (turbolang run) ===\n%s\n" "$native" | sed 's/^/          /'
         fi
         FAIL=$((FAIL + 1))
         FAILED_TESTS="$FAILED_TESTS $name"

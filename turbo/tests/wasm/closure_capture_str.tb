@@ -1,0 +1,11 @@
+// WASM closure test: capturing a string and using interpolation.
+//
+// Exercises a pointer-sized capture round-tripping through the i64
+// environment slot, plus string interpolation inside a closure body.
+
+fn main() {
+    let prefix = "Hello"
+    let greet = |name: str| -> str { "{prefix}, {name}!" }
+    print(greet("world"))
+    print(greet("Turbo"))
+}

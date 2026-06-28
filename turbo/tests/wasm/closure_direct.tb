@@ -1,0 +1,19 @@
+// WASM closure test: direct calls, no captured variables.
+//
+// Exercises the {fn_ptr, env_ptr} closure pair and the indirect call path
+// with a null environment: an arrow closure, a two-parameter closure, and a
+// zero-argument closure.
+//
+// (Variable names avoid C keywords like `double`/`int`; mapping Turbo
+// identifiers onto C identifiers is a separate concern from closures.)
+
+fn main() {
+    let twice = (x: i64) => x * 2
+    print(twice(5))
+
+    let add = (x: i64, y: i64) => x + y
+    print(add(3, 4))
+
+    let constant = () => 42
+    print(constant())
+}

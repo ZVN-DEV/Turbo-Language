@@ -1,0 +1,18 @@
+// WASM closure test: closures passed to the map and filter builtins.
+//
+// Each element is fed through the closure via an indirect call. map builds a
+// new array from the results; filter keeps elements whose predicate is true.
+
+fn main() {
+    let nums = [1, 2, 3, 4, 5]
+
+    let doubled = map(nums, (x) => x * 2)
+    print(doubled[0])
+    print(doubled[4])
+
+    let evens = filter(nums, (x) => x % 2 == 0)
+    print(len(evens))
+    for v in evens {
+        print(v)
+    }
+}
