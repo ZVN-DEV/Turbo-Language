@@ -98,7 +98,11 @@ fn main() {
         Performance
       </h2>
       <p className="mb-4">
-        Benchmarked on Apple Silicon (fib(40), recursive):
+        Recursive <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">fib(40)</code>{" "}
+        is a CPU microbenchmark (function-call and recursion overhead), not a
+        real-world workload. Best of 5 wall-clock runs on an Apple M5 Max
+        (macOS 26.5.1, 2026-06-27), Turbo&apos;s AOT build vs native and
+        interpreted baselines:
       </p>
       <div className="overflow-x-auto mb-8">
         <table className="w-full text-sm text-left border border-[#1a1a2e] rounded-lg overflow-hidden">
@@ -111,11 +115,12 @@ fn main() {
           </thead>
           <tbody>
             {[
-              ["Rust (rustc -O)", "180ms", "441 KB"],
-              ["Turbo (Cranelift)", "250ms", "93 KB"],
-              ["C (cc -O2)", "290ms", "33 KB"],
-              ["Node.js", "580ms", "N/A"],
-              ["Python", "13.1s", "N/A"],
+              ["C (clang -O2)", "~265 ms", "33 KB"],
+              ["Rust (rustc -O)", "~265 ms", "455 KB"],
+              ["Turbo (AOT, Cranelift)", "~330 ms", "93 KB"],
+              ["Go (go build)", "~340 ms", "--"],
+              ["Node.js 22", "~680 ms", "--"],
+              ["Python 3.10", "~13.3 s", "--"],
             ].map(([lang, time, size]) => (
               <tr key={lang} className="border-b border-[#1a1a2e]">
                 <td className={`px-4 py-2 ${lang?.startsWith("Turbo") ? "text-[#00ff88] font-medium" : "text-gray-300"}`}>
@@ -128,6 +133,13 @@ fn main() {
           </tbody>
         </table>
       </div>
+      <p className="mb-4 text-sm text-gray-400">
+        On this microbenchmark Turbo&apos;s native output runs about 1.25&ndash;1.3x
+        slower than C and Rust, sits in the same range as Go, and is far ahead of
+        the interpreted runtimes &mdash; while emitting a self-contained ~93 KB
+        binary. Reproduce with{" "}
+        <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">./turbo/benchmarks/run_comparison.sh</code>.
+      </p>
 
       <div className="flex gap-4 mt-8">
         <Link

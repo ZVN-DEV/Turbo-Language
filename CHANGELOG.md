@@ -3,7 +3,38 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.9.2] - unreleased
+
+A correctness, hardening, and honesty pass. Fixes another round of codegen and
+runtime bugs, tightens the WASM and HTTP paths, and aligns the public-facing
+docs, website, and benchmarks with what actually ships.
+
+### Fixed
+- **Codegen — unit values.** Fixed compiler panics when unit (`()`) values flow
+  through expression positions.
+- **Codegen — float ABI.** Corrected a float-ABI miscompile in the calling
+  convention.
+- **WASM runtime.** Added overflow guards to the WASM runtime to stop integer
+  overflow from corrupting execution.
+- **Playground.** Fixed error rendering so compile/runtime diagnostics display
+  correctly instead of being swallowed.
+
+### Changed
+- **Honest benchmarks.** Replaced the fabricated published performance numbers
+  with real `fib(40)` measurements (Turbo runs ~1.25–1.3x slower than C/Rust on
+  this microbenchmark, not faster), clearly labeled with machine, date, and
+  methodology, across the README and website. Repaired the corrupted benchmark
+  results dataset and added a Turbo row.
+- **Corrected marketing claims.** Removed unsupported "AI age" / "competitive on
+  real workloads" / "edges out cc -O2" framing; reconciled the async/concurrency
+  story to honest OS-thread `spawn`/`await` (no event loop); fixed broken website
+  links, the documented install pipe (`| bash`), and the unshipped
+  `--target linux-arm64` claim.
+
+### Added
+- **WASM execution test** validating compiled WASM output actually runs.
+- **SSRF host blocking** for the HTTP client to reject requests to disallowed
+  hosts.
 
 ## [0.9.1] - 2026-06-08 — Hardening, Security & Correctness
 

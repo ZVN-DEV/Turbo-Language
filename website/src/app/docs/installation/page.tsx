@@ -40,7 +40,7 @@ brew install turbo-lang`}</code>
         Option 2: Curl Installer
       </h2>
       <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
-        <code>{`curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh | sh`}</code>
+        <code>{`curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh | bash`}</code>
       </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">

@@ -36,22 +36,24 @@ fn main() {
 }`,
   },
   {
-    label: "Async / Spawn",
+    label: "Concurrency",
     filename: "concurrent.tb",
-    code: `async fn fetch_data(url: str) -> str {
-    let resp = await http_get(url)
-    resp.body
+    code: `// spawn runs a function on a real OS thread; await joins it.
+// No event loop and no non-blocking I/O — each spawn is a thread,
+// so keep the count reasonable.
+async fn fetch_bytes(url: str) -> i64 {
+    // http_get blocks this thread until the response arrives
+    let body = http_get(url)
+    len(body)
 }
 
 fn main() {
-    // Spawn concurrent tasks
-    let a = spawn fetch_data("https://api.example.com/users")
-    let b = spawn fetch_data("https://api.example.com/posts")
+    // Two blocking fetches run on separate threads, concurrently
+    let a = spawn fetch_bytes("https://api.example.com/users")
+    let b = spawn fetch_bytes("https://api.example.com/posts")
 
-    // Await both results
-    let users = await a
-    let posts = await b
-    print("Got {len(users)} bytes")
+    // await blocks main until each thread finishes
+    print("total bytes: {await a + await b}")
 }`,
   },
   {
@@ -74,19 +76,23 @@ fn main() {
   },
 ];
 
+// fib(40), best of 5 wall-clock runs on an Apple M5 Max (macOS 26.5.1,
+// 2026-06-27). Turbo (AOT) vs native and interpreted baselines. This is a
+// CPU microbenchmark, not a real-world workload.
 const benchmarks = [
-  { label: "Rust (rustc -O)", ms: 180, size: "441 KB", highlight: false },
-  { label: "Turbo (Cranelift)", ms: 250, size: "93 KB", highlight: true },
-  { label: "C (cc -O2)", ms: 290, size: "33 KB", highlight: false },
-  { label: "Node.js", ms: 580, size: "--", highlight: false },
-  { label: "Python", ms: 13100, size: "--", highlight: false },
+  { label: "C (clang -O2)", ms: 265, size: "33 KB", highlight: false },
+  { label: "Rust (rustc -O)", ms: 265, size: "455 KB", highlight: false },
+  { label: "Turbo (AOT)", ms: 330, size: "93 KB", highlight: true },
+  { label: "Go (go build)", ms: 340, size: "--", highlight: false },
+  { label: "Node.js 22", ms: 680, size: "--", highlight: false },
+  { label: "Python 3.10", ms: 13300, size: "--", highlight: false },
 ];
 
 const features = [
   {
     title: "Native Speed",
     description:
-      "Compiles to machine code via Cranelift. No interpreter, no VM. Competitive with C and Rust on real workloads.",
+      "Compiles to machine code via Cranelift. No interpreter, no VM. Within ~1.3x of C and Rust on simple CPU microbenchmarks.",
     icon: (
       <svg
         className="w-6 h-6"
@@ -144,9 +150,9 @@ const features = [
     ),
   },
   {
-    title: "Async Runtime",
+    title: "Thread Concurrency",
     description:
-      "async/await, spawn, channels, and mutex built into the language. Concurrent code that reads like synchronous code.",
+      "spawn runs work on real OS threads; await joins them. Plus channels and mutex — straightforward concurrency with no event loop and no hidden runtime.",
     icon: (
       <svg
         className="w-6 h-6"
@@ -334,7 +340,7 @@ export default function Home() {
                   Open demo docs
                 </Link>
                 <a
-                  href="https://github.com/ZVN-DEV/Turbo-Language/tree/main/examples/web-dashboard"
+                  href="https://github.com/ZVN-DEV/Turbo-Language/tree/master/examples/web-dashboard"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 border border-[#1a1a2e] text-gray-300 px-5 py-3 rounded-lg hover:border-[#00ff88] hover:text-[#00ff88] transition-colors text-sm"
@@ -421,8 +427,10 @@ export default function Home() {
               Performance
             </h2>
             <p className="text-gray-400 text-lg max-w-2xl mx-auto">
-              Recursive Fibonacci (fib(40)) on Apple Silicon. Turbo competes
-              head-to-head with C and Rust.
+              Recursive fib(40) — a CPU microbenchmark, best of 5 on an Apple
+              M5 Max (2026-06-27). Turbo&apos;s native build lands within ~1.3x of
+              C and Rust and far ahead of interpreted runtimes. Run the
+              benchmark harness to measure on your own machine.
             </p>
           </div>
 
