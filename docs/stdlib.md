@@ -810,7 +810,7 @@ Receives a value from a channel. Blocks the current task until a value is availa
 let m = mutex(0)
 ```
 
-Creates a mutex wrapping an initial integer value. Use `mutex_get` and `mutex_set` to read and write the value safely across concurrent tasks.
+Creates a mutex wrapping an initial integer value. Read it with `mutex_get`, overwrite it with `mutex_set`, and perform an atomic read-modify-write with `mutex_update`.
 
 ### mutex_get
 
@@ -819,7 +819,7 @@ let m = mutex(0)
 let value = mutex_get(m)    // 0
 ```
 
-Acquires the mutex lock and returns the current value.
+Acquires the mutex lock and returns the current value. This single read is atomic.
 
 ### mutex_set
 
@@ -828,7 +828,45 @@ mutex_set(m, 42)
 let value = mutex_get(m)    // 42
 ```
 
-Acquires the mutex lock and sets the value.
+Acquires the mutex lock and sets the value. This single write is atomic.
+
+> **`mutex_get` and `mutex_set` are each individually atomic, but combining them is not.** `mutex_set(m, mutex_get(m) + 1)` performs two *separate* locked operations: another task can change the value in between, so concurrent increments lose updates. To update a value based on its current contents — a counter, an accumulator, any read-modify-write — use `mutex_update`, which runs your closure while the lock is held.
+
+### mutex_update
+
+```turbo
+let m = mutex(0)
+let new_value = mutex_update(m, |x| x + 1)   // returns 1, stores 1
+```
+
+Atomically reads the current value, calls `closure(old)` **while the lock is held**, stores the returned value, and returns it. The closure has type `fn(int) -> int`. Because the read, the closure, and the write all happen inside one critical section, this is the correct way to mutate shared state under contention.
+
+```turbo
+// Correct shared counter: 4 tasks x 25000 increments = exactly 100000.
+fn worker(m: i64, iters: i64) -> i64 {
+    let mut i = 0
+    while i < iters {
+        mutex_update(m, |x| x + 1)
+        i = i + 1
+    }
+    0
+}
+
+fn main() {
+    let m = mutex(0)
+    let a = spawn worker(m, 25000)
+    let b = spawn worker(m, 25000)
+    let c = spawn worker(m, 25000)
+    let d = spawn worker(m, 25000)
+    await a
+    await b
+    await c
+    await d
+    print(mutex_get(m))   // 100000 — no lost updates
+}
+```
+
+> The closure must not touch the **same** mutex (call `mutex_get`/`mutex_set`/`mutex_update` on it) — the lock is not reentrant and would deadlock.
 
 ### sleep
 
@@ -935,6 +973,6 @@ Writes a 64-bit integer value to the given memory address.
 | **System** | `exec`, `env_get`, `exit`, `type_of` |
 | **Filesystem** | `file_exists`, `mkdir`, `delete_file`, `list_dir`, `path_join` |
 | **Date / Time** | `time_now`, `time_ms`, `format_time` |
-| **Concurrency** | `channel`, `send`, `recv`, `mutex`, `mutex_get`, `mutex_set`, `sleep`, `clone` |
+| **Concurrency** | `channel`, `send`, `recv`, `mutex`, `mutex_get`, `mutex_set`, `mutex_update`, `sleep`, `clone` |
 | **Testing** | `assert`, `assert_eq`, `assert_ne`, `panic` |
 | **Unsafe** | `deref`, `store` |

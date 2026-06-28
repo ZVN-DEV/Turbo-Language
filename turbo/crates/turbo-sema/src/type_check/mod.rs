@@ -108,6 +108,7 @@ pub(crate) const BUILTIN_FNS: &[&str] = &[
     "mutex",
     "mutex_get",
     "mutex_set",
+    "mutex_update",
     "clone",
     "hashmap",
     "hashmap_set",

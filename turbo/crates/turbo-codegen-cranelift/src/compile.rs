@@ -711,6 +711,14 @@ pub(crate) fn compile_module<M: Module>(
         &[ptr_type, types::I64],
         None,
     )?;
+    // rt_mutex_update(mutex, closure_fn_ptr, closure_env_ptr) -> new_value
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_mutex_update",
+        &[ptr_type, ptr_type, ptr_type],
+        Some(types::I64),
+    )?;
     declare_rt_fn(
         module,
         &mut rt_fns,

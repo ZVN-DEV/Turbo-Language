@@ -1,0 +1,27 @@
+// Regression test for BL-18: a shared counter under a mutex.
+//
+// `mutex_set(m, mutex_get(m) + 1)` is two separate locked operations, so
+// concurrent increments race and lose updates. `mutex_update` runs the
+// read-modify-write atomically under a single held lock, so the final total
+// is exact: 4 workers x 25000 increments = 100000, with no lost updates.
+fn worker(m: i64, iters: i64) -> i64 {
+    let mut i = 0
+    while i < iters {
+        mutex_update(m, |x| x + 1)
+        i = i + 1
+    }
+    0
+}
+
+fn main() {
+    let m = mutex(0)
+    let a = spawn worker(m, 25000)
+    let b = spawn worker(m, 25000)
+    let c = spawn worker(m, 25000)
+    let d = spawn worker(m, 25000)
+    await a
+    await b
+    await c
+    await d
+    print(mutex_get(m))
+}
