@@ -442,7 +442,13 @@ fn test_rt_f64_to_str_canonical_edges() {
     let cases = [
         (fixture_pi * 5.0 * 5.0, "78.53975"),
         (0.1_f64 + 0.2_f64, "0.3"),
-        (-0.0_f64, "0"),
+        // BL-26: whole-valued floats carry an explicit trailing `.0` so they
+        // stay distinguishable from ints (incl. normalized negative zero).
+        (-0.0_f64, "0.0"),
+        (2.0_f64, "2.0"),
+        (-3.0_f64, "-3.0"),
+        (1_000_000.0_f64, "1000000.0"),
+        // Non-whole / special values are unchanged.
         (1.0_f64 / 3.0_f64, "0.333333333333333"),
         (f64::INFINITY, "inf"),
         (f64::NEG_INFINITY, "-inf"),
