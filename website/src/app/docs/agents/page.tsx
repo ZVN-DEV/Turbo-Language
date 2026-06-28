@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+
+export const metadata: Metadata = {
+  title: "Agents",
+  description:
+    "Turbo retired agent and tool keywords from the core. These workflows will ship as a separate turbo-agent library on the stable 1.0 core, not as compiler features.",
+};
 
 export default function AgentsPage() {
   return (

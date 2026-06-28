@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
 import Link from "next/link";
+
+export const metadata: Metadata = {
+  title: "Installation",
+  description:
+    "Install Turbo via Homebrew, the curl installer, or build from source with Rust and a C compiler, then verify the turbolang and turbo-lsp binaries.",
+};
 
 export default function InstallationPage() {
   return (

@@ -1,3 +1,11 @@
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Error Codes",
+  description:
+    "Reference for Turbo compiler diagnostics. Every error carries a unique code (E0001+); look any up with turbolang explain. Parse, type, and codegen errors.",
+};
+
 export default function ErrorCodesPage() {
   return (
     <article className="text-gray-300 leading-relaxed font-[family-name:var(--font-geist-sans)]">
