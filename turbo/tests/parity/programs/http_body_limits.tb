@@ -1,0 +1,52 @@
+// Parity (JIT <-> AOT): HTTP request-body size handling.
+//
+//   10k  POST -> body fits the 16 KB stack buffer (regression for the
+//                original fast path). Both backends echo len=10240.
+//   50k  POST -> body exceeds the stack buffer. The AOT runtime used to
+//                reject it with 431 because it forced everything through
+//                a fixed 16 KB stack buffer; the JIT reads the body into
+//                a content_length-sized heap buffer (read_exact) and
+//                accepts up to 32 MB. After the fix AOT matches: both
+//                echo len=51200.
+//   hdr  GET with a ~20 KB header value -> genuinely oversized HEADERS
+//                must still get the protective 431 on BOTH backends.
+//
+// The handler echoes len(body) so the response proves the FULL body
+// reached the handler, not just that the request was accepted. We
+// capture the full response with `curl -i`; the rendered status line +
+// body are byte-identical across JIT and AOT once the fix lands.
+// (`%{...}` write-out formats can't be used: `{` opens a TurboLang
+// string-interpolation block.) The big body / header are plain runs of
+// 'a' with no whitespace or shell metacharacters, so shell_exec — which
+// tokenizes on whitespace and execvp's directly, no shell — passes each
+// as a single argv entry.
+fn serve(app: i64) {
+    http_listen(app)
+}
+
+@unsafe fn main() {
+    let app = http_server(18097)
+    route(app, "POST", "/echo", |req: str| -> str {
+        let body = request_body(req)
+        respond_text(200, "len=" + to_str(len(body)))
+    })
+
+    spawn serve(app)
+    let _ = shell_exec("sleep 0.4")
+
+    let small = repeat("a", 10240)
+    let big = repeat("a", 51200)
+    let huge_hdr = repeat("a", 20000)
+
+    // 10 KB POST — stack-buffer fast path (regression).
+    print("== 10k ==")
+    print(shell_exec("curl -s -i --retry 5 --retry-connrefused --retry-delay 1 --data-binary " + small + " http://127.0.0.1:18097/echo"))
+
+    // 50 KB POST — heap-body path (the F3 fix).
+    print("== 50k ==")
+    print(shell_exec("curl -s -i --data-binary " + big + " http://127.0.0.1:18097/echo"))
+
+    // Oversized headers must still be rejected with 431.
+    print("== hdr ==")
+    print(shell_exec("curl -s -i -H X-Big:" + huge_hdr + " http://127.0.0.1:18097/echo"))
+}

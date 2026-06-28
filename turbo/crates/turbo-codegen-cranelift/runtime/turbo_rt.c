@@ -2638,12 +2638,69 @@ static void *handle_http_conn(void *arg) {
         /* Body starts after \r\n\r\n */
         char *body_start = hdr_end + 4;
         int body_available = buf_len - (int)(body_start - buf);
+
+        /* Where the body bytes ultimately live, and how to clean up.
+         * For the common case the body sits inside the 16 KB stack
+         * buffer (`body_ptr == body_start`). For large bodies that do
+         * not fit, we read them into a heap allocation, mirroring the
+         * JIT's `read_exact(vec![0u8; content_length])` (src/runtime.rs)
+         * so AOT accepts the same up-to-32MB bodies the JIT does instead
+         * of spuriously rejecting them with 431. */
+        const char *body_ptr = body_start;
+        char *heap_body = NULL;
+
         if ((long long)body_available < content_length) {
-            /* Need more data — release the arena before looping back to
-             * read more bytes, otherwise it would accumulate across the
-             * read calls until the request is complete. */
-            rt_arena_end();
-            continue;
+            /* The full body is not yet buffered. If the headers plus the
+             * full body still fit inside the stack buffer, keep reading
+             * into it (the original fast path). Otherwise the body is too
+             * large for the 16 KB buffer — read the remainder onto the
+             * heap so we do NOT spuriously hit the `space <= 0` / 431
+             * path. content_length was already bounded above by
+             * RT_HTTP_MAX_BODY, so the allocation size is capped. */
+            long long header_bytes = (long long)(body_start - buf);
+            if (header_bytes + content_length <= (long long)sizeof(buf) - 1) {
+                /* Need more data — release the arena before looping back
+                 * to read more bytes, otherwise it would accumulate
+                 * across the read calls until the request is complete. */
+                rt_arena_end();
+                continue;
+            }
+
+            heap_body = (char *)malloc((size_t)content_length + 1);
+            if (!heap_body) {
+                const char *oom =
+                    "HTTP/1.1 500 Internal Server Error\r\n"
+                    "Content-Length: 0\r\n"
+                    "Connection: close\r\n\r\n";
+                write(fd, oom, strlen(oom));
+                rt_arena_end();
+                break;
+            }
+            /* Copy the body bytes already buffered, then read the rest
+             * straight off the socket until we have exactly
+             * content_length bytes — never over-reading into a following
+             * pipelined request. */
+            size_t have = body_available > 0 ? (size_t)body_available : 0;
+            if (have > 0) {
+                memcpy(heap_body, body_start, have);
+            }
+            int read_failed = 0;
+            while (have < (size_t)content_length) {
+                ssize_t got = read(fd, heap_body + have, (size_t)content_length - have);
+                if (got <= 0) { read_failed = 1; break; }
+                have += (size_t)got;
+            }
+            if (read_failed) {
+                /* Client closed or timed out (SO_RCVTIMEO) before sending
+                 * the full body. Mirror the JIT's
+                 * `read_exact(..).is_err() => break` and drop the
+                 * connection. */
+                free(heap_body);
+                rt_arena_end();
+                break;
+            }
+            heap_body[content_length] = '\0';
+            body_ptr = heap_body;
         }
 
         /* Build structured request: METHOD\x01PATH\x01QUERY\x01HEADERS\x01BODY */
@@ -2658,7 +2715,7 @@ static void *handle_http_conn(void *arg) {
         memcpy(p, path_buf, plen); p += plen; *p++ = '\x01';
         memcpy(p, query_buf, qlen); p += qlen; *p++ = '\x01';
         memcpy(p, headers_raw, headers_len); p += headers_len; *p++ = '\x01';
-        memcpy(p, body_start, blen); p += blen; *p = '\0';
+        memcpy(p, body_ptr, blen); p += blen; *p = '\0';
 
         const char *conn_hdr = keep_alive ? "keep-alive" : "close";
 
@@ -2710,13 +2767,24 @@ static void *handle_http_conn(void *arg) {
             write(fd, hdr, strlen(hdr));
         }
 
-        /* Consume processed bytes from buffer */
-        int consumed = (int)(body_start - buf) + (int)content_length;
-        int remaining = buf_len - consumed;
-        if (remaining > 0) {
-            memmove(buf, buf + consumed, remaining);
+        if (heap_body != NULL) {
+            /* Heap-body path: the entire stack buffer (headers + the
+             * partially-buffered body) was consumed, and the remainder of
+             * the body was read straight off the socket without
+             * over-reading into any following request. Nothing is left to
+             * carry over, so reset the buffer and release the heap body. */
+            free(heap_body);
+            heap_body = NULL;
+            buf_len = 0;
+        } else {
+            /* Consume processed bytes from buffer */
+            int consumed = (int)(body_start - buf) + (int)content_length;
+            int remaining = buf_len - consumed;
+            if (remaining > 0) {
+                memmove(buf, buf + consumed, remaining);
+            }
+            buf_len = remaining;
         }
-        buf_len = remaining;
 
         /* End the per-request arena: all temporaries allocated during
          * this request — request struct, parsed fields, response body,
@@ -2842,6 +2910,24 @@ const char* rt_respond(long long status, const char *body) {
     return rt_respond_typed(status, "text/plain", body);
 }
 
+/* Parse the half-open range [start, end) as an unsigned decimal status
+ * code in the u16 range [0, 65535], mirroring Rust's
+ * `str::parse::<u16>()` (used by the JIT in `parse_rt_response`,
+ * src/runtime.rs). The slice must be non-empty and contain ONLY ASCII
+ * digits; leading/trailing whitespace, signs, or any non-digit byte are
+ * a parse failure. Returns the value on success, or -1 on any failure
+ * (empty, non-digit char, or value out of u16 range). */
+static long rt_parse_status_u16(const char *start, const char *end) {
+    if (start >= end) return -1;
+    unsigned long value = 0;
+    for (const char *p = start; p < end; p++) {
+        if (*p < '0' || *p > '9') return -1;
+        value = value * 10UL + (unsigned long)(*p - '0');
+        if (value > 65535UL) return -1;
+    }
+    return (long)value;
+}
+
 static int rt_parse_response(
     const char *resp,
     int *status_out,
@@ -2849,36 +2935,54 @@ static int rt_parse_response(
     size_t content_type_out_len,
     const char **body_out
 ) {
+    /* Typed form: STATUS\x1fCONTENT_TYPE\x1fBODY (produced by
+     * rt_respond_typed). Mirrors the JIT's `splitn(3, SEP)` followed by
+     * `status.parse::<u16>()`: if the status segment is not a valid u16
+     * we fall through to the colon path exactly as the JIT does, rather
+     * than blindly trusting atoi(). */
     const char *sep1 = strchr(resp, RT_RESPONSE_SEP);
     if (sep1) {
         const char *sep2 = strchr(sep1 + 1, RT_RESPONSE_SEP);
         if (sep2) {
-            char status_buf[32];
-            size_t slen = (size_t)(sep1 - resp);
-            if (slen >= sizeof(status_buf)) slen = sizeof(status_buf) - 1;
-            memcpy(status_buf, resp, slen);
-            status_buf[slen] = '\0';
-            *status_out = atoi(status_buf);
-            size_t clen = (size_t)(sep2 - (sep1 + 1));
-            if (clen >= content_type_out_len) clen = content_type_out_len - 1;
-            memcpy(content_type_out, sep1 + 1, clen);
-            content_type_out[clen] = '\0';
-            /* Sanitize: reject \r or \n to prevent header injection. */
-            for (size_t i = 0; i < clen; i++) {
-                if (content_type_out[i] == '\r' || content_type_out[i] == '\n') {
-                    strncpy(content_type_out, "text/plain", content_type_out_len);
-                    content_type_out[content_type_out_len - 1] = '\0';
-                    break;
+            long status = rt_parse_status_u16(resp, sep1);
+            if (status >= 0) {
+                *status_out = (int)status;
+                size_t clen = (size_t)(sep2 - (sep1 + 1));
+                if (clen >= content_type_out_len) clen = content_type_out_len - 1;
+                memcpy(content_type_out, sep1 + 1, clen);
+                content_type_out[clen] = '\0';
+                /* Sanitize: reject \r or \n to prevent header injection. */
+                for (size_t i = 0; i < clen; i++) {
+                    if (content_type_out[i] == '\r' || content_type_out[i] == '\n') {
+                        strncpy(content_type_out, "text/plain", content_type_out_len);
+                        content_type_out[content_type_out_len - 1] = '\0';
+                        break;
+                    }
                 }
+                *body_out = sep2 + 1;
+                return 1;
             }
-            *body_out = sep2 + 1;
-            return 1;
         }
     }
 
+    /* Colon fallback: STATUS:BODY. Mirrors the JIT's `split_once(':')`
+     * followed by `status.parse::<u16>()`. The pre-colon prefix is only
+     * treated as a status code when it is a FULLY numeric, valid u16;
+     * otherwise the whole response is returned to the caller as a plain
+     * 200 body (return 0).
+     *
+     * The previous implementation used atoi(resp), which returns 0 on a
+     * non-numeric prefix and never fails — so a handler returning a
+     * plain computed string containing a colon (e.g. "the time is 12:30
+     * now") produced a bogus "HTTP/1.1 0 OK" status line and a body
+     * truncated at the first colon. The JIT, using parse::<u16>(),
+     * rejected the non-numeric prefix and treated the whole string as a
+     * 200 body — this now matches. */
     const char *colon = strchr(resp, ':');
     if (!colon) return 0;
-    *status_out = atoi(resp);
+    long status = rt_parse_status_u16(resp, colon);
+    if (status < 0) return 0;
+    *status_out = (int)status;
     strncpy(content_type_out, "text/plain", content_type_out_len);
     content_type_out[content_type_out_len - 1] = '\0';
     *body_out = colon + 1;
