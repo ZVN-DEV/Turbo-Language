@@ -124,6 +124,7 @@ pub enum Token {
 
     #[token(r#"""""#, lex_triple_quote_string, priority = 10)]
     #[token("\"", lex_string, priority = 5)]
+    #[token("r\"", lex_raw_string, priority = 6)]
     String(std::string::String),
 
     // --- Identifiers ---
@@ -319,6 +320,41 @@ fn lex_triple_quote_string(lex: &mut logos::Lexer<Token>) -> Option<std::string:
         lex.bump(remainder.len());
         Some(remainder.to_string())
     }
+}
+
+/// Lex a raw string `r"..."`. The opening `r"` has already been consumed by
+/// logos, so [`lex.remainder`](logos::Lexer::remainder) starts at the content.
+///
+/// Raw strings are taken **verbatim**: there is no escape processing at all, so
+/// a backslash is just a backslash (`r"C:\new\path"` is the literal 11
+/// characters `C:\new\path`, not a newline + tab). Because nothing is escaped,
+/// a raw string ends at the very first `"` and therefore cannot itself contain
+/// a `"` — that is the standard simple-form trade-off.
+///
+/// To flow through the shared [`Token::String`] pipeline without any sema or
+/// codegen changes, literal `{`/`}` are re-encoded as `\{`/`\}` here so the
+/// parser treats them as literal braces rather than `{expr}` interpolation
+/// markers (the parser's `unescape_braces` pass collapses them back). No other
+/// character is touched, which is the whole point of a raw string.
+fn lex_raw_string(lex: &mut logos::Lexer<Token>) -> Option<std::string::String> {
+    let remainder = lex.remainder();
+    let content = if let Some(end_idx) = remainder.find('"') {
+        lex.bump(end_idx + 1); // skip content + closing "
+        &remainder[..end_idx]
+    } else {
+        // Unterminated raw string — consume to end of input.
+        lex.bump(remainder.len());
+        remainder
+    };
+
+    let mut result = std::string::String::with_capacity(content.len());
+    for c in content.chars() {
+        if c == '{' || c == '}' {
+            result.push('\\');
+        }
+        result.push(c);
+    }
+    Some(result)
 }
 
 /// Lex a double-quoted string, handling `{...}` interpolation blocks that may
@@ -762,5 +798,68 @@ mod tests {
         assert_eq!(tokens.len(), 2, "Expected 2 tokens, got {:?}", tokens);
         assert!(matches!(&tokens[0].value, Token::String(s) if s == r#"{get("k")}"#));
         assert!(matches!(&tokens[1].value, Token::String(s) if s == "normal"));
+    }
+
+    #[test]
+    fn test_raw_string_backslashes_are_literal() {
+        // BL-26: `r"..."` takes its contents verbatim — backslashes do NOT
+        // start escape sequences, so this is the literal 11 chars `C:\new\path`.
+        let source = r#"r"C:\new\path""#;
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
+        assert_eq!(tokens.len(), 1, "Expected 1 token, got {:?}", tokens);
+        assert!(matches!(&tokens[0].value, Token::String(s) if s == r"C:\new\path"));
+    }
+
+    #[test]
+    fn test_raw_string_span_covers_prefix_and_quotes() {
+        // The token span must cover the whole `r"..."` lexeme so the formatter
+        // can slice it back verbatim from source.
+        let source = r#"r"ab""#;
+        let (tokens, _errors) = tokenize(source);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].span, 0..source.len());
+    }
+
+    #[test]
+    fn test_raw_string_braces_are_literal_not_interpolation() {
+        // Braces are re-encoded as escaped braces (`\{`/`\}`) so the parser
+        // treats them as literal rather than `{expr}` interpolation.
+        let source = r#"r"{a}""#;
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
+        assert_eq!(tokens.len(), 1, "Expected 1 token, got {:?}", tokens);
+        assert!(matches!(&tokens[0].value, Token::String(s) if s == r"\{a\}"));
+    }
+
+    #[test]
+    fn test_raw_string_empty() {
+        let source = r#"r"""#;
+        let (tokens, errors) = tokenize(source);
+        assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
+        assert_eq!(tokens.len(), 1, "Expected 1 token, got {:?}", tokens);
+        assert!(matches!(&tokens[0].value, Token::String(s) if s.is_empty()));
+    }
+
+    #[test]
+    fn test_identifier_starting_with_r_is_not_raw_string() {
+        // `result`, `r`, and `r` used as a variable must lex as identifiers —
+        // only `r` immediately followed by `"` starts a raw string.
+        let (tokens, errors) = tokenize("let result = r");
+        assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
+        assert!(matches!(&tokens[0].value, Token::Let));
+        assert!(matches!(&tokens[1].value, Token::Ident(s) if s == "result"));
+        assert!(matches!(&tokens[2].value, Token::Eq));
+        assert!(matches!(&tokens[3].value, Token::Ident(s) if s == "r"));
+    }
+
+    #[test]
+    fn test_normal_string_still_unescapes_alongside_raw() {
+        // A normal string keeps its escape processing — raw-ness is opt-in.
+        let (tokens, errors) = tokenize(r#""a\nb" r"a\nb""#);
+        assert!(errors.is_empty(), "Unexpected lex errors: {:?}", errors);
+        assert_eq!(tokens.len(), 2, "Expected 2 tokens, got {:?}", tokens);
+        assert!(matches!(&tokens[0].value, Token::String(s) if s == "a\nb"));
+        assert!(matches!(&tokens[1].value, Token::String(s) if s == r"a\nb"));
     }
 }

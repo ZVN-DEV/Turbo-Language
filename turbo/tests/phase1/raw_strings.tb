@@ -1,0 +1,27 @@
+// BL-26 — raw string literals. `r"..."` takes its contents verbatim: there is
+// no escape processing, so backslashes and braces are literal characters.
+fn main() {
+    // Windows path: backslashes are literal, not escape sequences.
+    print(r"C:\new\path")
+
+    // Regex-ish content: every backslash is preserved.
+    print(r"\d+\.\d+")
+
+    // Braces are literal, not `{expr}` interpolation.
+    print(r"{not_interpolated}")
+
+    // Backslashes and braces together, verbatim.
+    print(r"\{raw\}")
+
+    // The empty raw string prints an empty line.
+    print(r"")
+
+    // Contrast: a normal string still unescapes `\\` to one backslash...
+    print("a\\b")
+    // ...while the raw string keeps both backslashes.
+    print(r"a\\b")
+
+    // An identifier beginning with `r` is not a raw string.
+    let result = "ok"
+    print(result)
+}
