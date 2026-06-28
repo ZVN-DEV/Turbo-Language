@@ -1,4 +1,5 @@
 import React from "react";
+import CopyButton from "./copy-button";
 
 function highlightTurbo(code: string): React.ReactNode[] {
   const lines = code.split("\n");
@@ -107,7 +108,8 @@ export default function CodeBlock({
   filename?: string;
 }) {
   return (
-    <div className="rounded-xl border border-border overflow-hidden bg-surface">
+    <div className="relative rounded-xl border border-border overflow-hidden bg-surface">
+      <CopyButton text={code} label="Copy code" />
       {filename && (
         <div className="px-4 py-2 border-b border-border text-xs text-gray-500 font-[family-name:var(--font-geist-mono)]">
           {filename}

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import CodeBlock from "@/components/code-block";
 import CodeTabs from "@/components/code-tabs";
+import CopyButton from "@/components/copy-button";
 
 const heroCode = `fn fib(n: i64) -> i64 {
     if n <= 1 { n }
@@ -228,6 +229,62 @@ const features = [
 const BAR_MAX = 700;
 const WORDCOUNT_BAR_MAX = 280;
 
+// Flagship demo quickstart — single source of truth for both the rendered
+// block and the copy button, so the two can never drift.
+const quickstartCommand = `turbolang run examples/web-dashboard/main.tb
+# then open http://localhost:3000`;
+
+// Install commands are stored as clean, prompt-free strings. The "$ " prompt
+// is rendered separately as a non-selectable, aria-hidden affordance, and the
+// copy button copies these raw strings — so a paste never carries a "$ ".
+type InstallLine = { cmd: string; accent: string; gapBefore?: boolean };
+
+const homebrewInstall: InstallLine[] = [
+  { cmd: "brew tap ZVN-DEV/turbo", accent: "brew tap" },
+  { cmd: "brew install turbo-lang", accent: "brew install" },
+  { cmd: "turbolang run hello.tb", accent: "turbolang", gapBefore: true },
+];
+
+const fromSourceInstall: InstallLine[] = [
+  {
+    cmd: "git clone https://github.com/ZVN-DEV/Turbo-Language.git",
+    accent: "git clone",
+  },
+  { cmd: "cd Turbo-Language", accent: "cd" },
+  {
+    cmd: "cargo build --release -p turbo-cli --manifest-path turbo/Cargo.toml",
+    accent: "cargo build",
+  },
+  {
+    cmd: "./target/release/turbolang run hello.tb",
+    accent: "./target/release/turbolang",
+  },
+];
+
+const homebrewCopyText = homebrewInstall.map((line) => line.cmd).join("\n");
+const fromSourceCopyText = fromSourceInstall.map((line) => line.cmd).join("\n");
+
+function InstallLines({ lines }: { lines: InstallLine[] }) {
+  return (
+    <>
+      {lines.map((line, i) => {
+        const rest = line.cmd.slice(line.accent.length);
+        const lead = i === 0 ? "" : line.gapBefore ? "\n\n" : "\n";
+        return (
+          <span key={line.cmd}>
+            {lead}
+            <span aria-hidden="true" className="select-none text-gray-500">
+              {"$ "}
+            </span>
+            <span className="text-[#00ff88]">{line.accent}</span>
+            {rest}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 export default function Home() {
   return (
     <div className="font-[family-name:var(--font-geist-sans)]">
@@ -258,7 +315,7 @@ export default function Home() {
                 compromise.
               </p>
 
-              <div className="flex flex-wrap gap-4">
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-4">
                 <Link
                   href="/docs/installation"
                   className="inline-flex items-center gap-2 bg-[#00ff88] text-[#0a0a0a] font-semibold px-6 py-3 rounded-lg hover:bg-[#00cc6a] transition-colors text-sm"
@@ -277,25 +334,36 @@ export default function Home() {
                 </Link>
                 <Link
                   href="/docs/examples"
-                  className="inline-flex items-center gap-2 border border-[#1a1a2e] text-gray-300 px-6 py-3 rounded-lg hover:border-[#00ff88] hover:text-[#00ff88] transition-colors text-sm"
+                  className="inline-flex items-center gap-1.5 text-sm text-gray-300 hover:text-[#00ff88] transition-colors"
                 >
-                  Run the flagship demo
+                  See the flagship demo
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path d="M5 12h14M12 5l7 7-7 7" />
+                  </svg>
                 </Link>
                 <a
                   href="https://github.com/ZVN-DEV/Turbo-Language"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 border border-[#1a1a2e] text-gray-300 px-6 py-3 rounded-lg hover:border-[#00ff88] hover:text-[#00ff88] transition-colors text-sm"
+                  aria-label="Turbo on GitHub"
+                  className="inline-flex items-center justify-center w-10 h-10 rounded-lg border border-[#1a1a2e] text-gray-400 hover:text-[#00ff88] hover:border-[#00ff88] transition-colors"
                 >
                   <svg
                     width="18"
                     height="18"
                     viewBox="0 0 24 24"
                     fill="currentColor"
+                    aria-hidden="true"
                   >
                     <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
                   </svg>
-                  GitHub
                 </a>
               </div>
             </div>
@@ -364,13 +432,13 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-[#1a1a2e] bg-[#111118] p-6">
+            <div className="relative rounded-2xl border border-[#1a1a2e] bg-[#111118] p-6">
+              <CopyButton text={quickstartCommand} label="Copy command" />
               <p className="text-sm font-semibold text-white mb-4">
                 Quickstart
               </p>
               <pre className="text-sm font-[family-name:var(--font-geist-mono)] text-gray-300 leading-relaxed overflow-x-auto mb-4">
-                <code>{`turbolang run examples/web-dashboard/main.tb
-# then open http://localhost:3000`}</code>
+                <code>{quickstartCommand}</code>
               </pre>
               <ul className="space-y-2 text-sm text-gray-400">
                 <li>• Browser UI plus JSON endpoints in one process</li>
@@ -576,41 +644,32 @@ export default function Home() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto w-full">
-            <div className="rounded-xl border border-[#1a1a2e] bg-[#111118] p-6 min-w-0">
-              <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
-                From Source
-              </h3>
-              <pre className="text-sm font-[family-name:var(--font-geist-mono)] text-gray-300 leading-relaxed overflow-x-auto">
-                <code>
-                  <span className="text-gray-500">$</span>{" "}
-                  <span className="text-[#00ff88]">git clone</span>{" "}
-                  https://github.com/ZVN-DEV/Turbo-Language.git{"\n"}
-                  <span className="text-gray-500">$</span>{" "}
-                  <span className="text-[#00ff88]">cd</span> Turbo-Language{"\n"}
-                  <span className="text-gray-500">$</span>{" "}
-                  <span className="text-[#00ff88]">cargo build</span> --release
-                  -p turbo-cli --manifest-path turbo/Cargo.toml{"\n"}
-                  <span className="text-gray-500">$</span>{" "}
-                  <span className="text-[#00ff88]">./target/release/turbolang</span>{" "}
-                  run hello.tb
-                </code>
-              </pre>
-            </div>
-
-            <div className="rounded-xl border border-[#1a1a2e] bg-[#111118] p-6 min-w-0">
+            <div className="relative rounded-xl border border-[#1a1a2e] bg-[#111118] p-6 min-w-0">
+              <CopyButton
+                text={homebrewCopyText}
+                label="Copy install commands"
+              />
               <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
                 Homebrew
               </h3>
               <pre className="text-sm font-[family-name:var(--font-geist-mono)] text-gray-300 leading-relaxed overflow-x-auto">
                 <code>
-                  <span className="text-gray-500">$</span>{" "}
-                  <span className="text-[#00ff88]">brew tap</span>{" "}
-                  ZVN-DEV/turbo{"\n"}
-                  <span className="text-gray-500">$</span>{" "}
-                  <span className="text-[#00ff88]">brew install</span> turbo-lang
-                  {"\n\n"}
-                  <span className="text-gray-500">$</span>{" "}
-                  <span className="text-[#00ff88]">turbolang</span> run hello.tb
+                  <InstallLines lines={homebrewInstall} />
+                </code>
+              </pre>
+            </div>
+
+            <div className="relative rounded-xl border border-[#1a1a2e] bg-[#111118] p-6 min-w-0">
+              <CopyButton
+                text={fromSourceCopyText}
+                label="Copy install commands"
+              />
+              <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
+                From Source
+              </h3>
+              <pre className="text-sm font-[family-name:var(--font-geist-mono)] text-gray-300 leading-relaxed overflow-x-auto">
+                <code>
+                  <InstallLines lines={fromSourceInstall} />
                 </code>
               </pre>
             </div>
