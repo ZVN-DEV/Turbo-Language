@@ -50,6 +50,10 @@
 #include <unistd.h>
 #include <dirent.h>
 
+/* Shared size-overflow / allocation-cap guards (single source of truth,
+ * also included by turbo_rt_wasm.c so the two runtimes never drift). */
+#include "turbo_rt_guards.h"
+
 #define TURBO_F64_FORMAT "%.15g"
 
 static void rt_format_f64(char *buf, size_t cap, double n) {
@@ -407,11 +411,12 @@ static void *rt_rc_alloc(size_t data_size, long long cap) {
  * Shared by rt_array_alloc and rt_array_push.
  *
  * `new_len` is the requested element count. The bound leaves room for
- * the 16-byte header and the 8-byte length field inside user data. */
+ * the 16-byte header and the 8-byte length field inside user data.
+ *
+ * Delegates to the shared rt_array_len_fits_hdr() in turbo_rt_guards.h so
+ * the overflow arithmetic stays identical to the WASM runtime. */
 static inline int rt_array_len_fits(long long new_len) {
-    if (new_len < 0) return 0;
-    /* total = RT_RC_HEADER_BYTES + 8 + new_len * 8 must fit in size_t. */
-    return (size_t)new_len <= (SIZE_MAX - (RT_RC_HEADER_BYTES + 8)) / 8;
+    return rt_array_len_fits_hdr(new_len, RT_RC_HEADER_BYTES);
 }
 
 void* rt_array_alloc(long long len) {
@@ -807,7 +812,9 @@ const char* rt_str_repeat(const char *s, long long count) {
         empty[0] = '\0';
         return empty;
     }
-    if ((size_t)count > (SIZE_MAX - 1) / len) {
+    /* total = len * count (+1 for the trailing NUL) must fit in size_t.
+     * Shared guard with the WASM runtime (turbo_rt_guards.h). */
+    if (!rt_mul_add_size_fits((size_t)count, len, 1)) {
         fprintf(stderr,
                 "[rt_str_repeat] overflow: len=%zu * count=%lld exceeds SIZE_MAX\n",
                 len, count);
@@ -818,11 +825,10 @@ const char* rt_str_repeat(const char *s, long long count) {
     size_t total = len * (size_t)count;
     /* Practical cap: 256 MB. Larger totals usually indicate a bug or attack
      * and would exhaust memory; mirror the Rust JIT runtime cap. */
-    const size_t RT_STR_REPEAT_MAX_BYTES = 256ULL * 1024ULL * 1024ULL;
-    if (total > RT_STR_REPEAT_MAX_BYTES) {
+    if (total > TURBO_RT_MAX_ALLOC_BYTES) {
         fprintf(stderr,
-                "[rt_str_repeat] refusing allocation: total=%zu > cap %zu\n",
-                total, RT_STR_REPEAT_MAX_BYTES);
+                "[rt_str_repeat] refusing allocation: total=%zu > cap %llu\n",
+                total, (unsigned long long)TURBO_RT_MAX_ALLOC_BYTES);
         char *empty = (char *)turbo_alloc(1);
         empty[0] = '\0';
         return empty;
@@ -1206,6 +1212,176 @@ static int rt_url_is_http(const char *url) {
     return 0;
 }
 
+/* ── SSRF guard: block loopback / private / link-local destinations ────
+ *
+ * rt_url_is_http() only validates the *scheme*. By itself that still lets a
+ * program reach internal services (databases, admin panels) and — most
+ * dangerously — cloud instance-metadata endpoints (169.254.169.254), which
+ * is a classic SSRF pivot. The helpers below additionally inspect the host.
+ *
+ * Default: ON (block private hosts). Opt out with TURBO_ALLOW_PRIVATE_HOSTS=1
+ * for trusted environments that legitimately call localhost / internal IPs.
+ * We chose default-on because it is the safer default for a language whose
+ * http_get/http_post take attacker-influenceable URLs; the escape hatch keeps
+ * local development workflows (hitting 127.0.0.1) one env var away.
+ *
+ * Scope / known gap: we parse numeric IP literals (dotted-quad plus the
+ * inet_aton shorthand/octal/hex forms attackers use to smuggle private IPs)
+ * and the `localhost` name. We deliberately do NOT resolve arbitrary DNS
+ * names here (no getaddrinfo): doing so would add a TOCTOU window versus
+ * curl's own resolution and is out of scope for this surgical guard. A
+ * hostname that resolves to a private address via DNS rebinding is therefore
+ * not caught — documented so operators can layer network egress controls. */
+
+/* Minimal inet_aton-style parser. Accepts the numeric host forms the C
+ * resolver (and thus curl) accepts: 1–4 dotted parts, each decimal/octal
+ * (leading 0) or hex (leading 0x). Returns 1 and writes the address in host
+ * byte order on success, 0 if `host` is not a numeric IPv4 literal. */
+static int rt_host_ipv4(const char *host, uint32_t *out) {
+    uint32_t parts[4];
+    int n = 0;
+    const char *p = host;
+    if (*p == '\0') return 0;
+    while (n < 4) {
+        char *end = NULL;
+        unsigned long v = strtoul(p, &end, 0); /* base 0: 0x hex, 0 octal */
+        if (end == p) return 0;                /* no digits consumed */
+        if (v > 0xffffffffUL) return 0;        /* part too large */
+        parts[n++] = (uint32_t)v;
+        p = end;
+        if (*p == '.') {
+            p++;
+            if (*p == '\0') return 0;          /* trailing dot */
+        } else {
+            break;
+        }
+    }
+    if (*p != '\0') return 0;                  /* trailing junk */
+
+    uint32_t addr;
+    switch (n) {
+        case 1:
+            addr = parts[0];
+            break;
+        case 2: /* a.b  -> a.bbbbbb */
+            if (parts[0] > 0xff || parts[1] > 0xffffff) return 0;
+            addr = (parts[0] << 24) | parts[1];
+            break;
+        case 3: /* a.b.c -> a.b.cccc */
+            if (parts[0] > 0xff || parts[1] > 0xff || parts[2] > 0xffff) return 0;
+            addr = (parts[0] << 24) | (parts[1] << 16) | parts[2];
+            break;
+        case 4: /* a.b.c.d */
+            if (parts[0] > 0xff || parts[1] > 0xff ||
+                parts[2] > 0xff || parts[3] > 0xff) return 0;
+            addr = (parts[0] << 24) | (parts[1] << 16) |
+                   (parts[2] << 8) | parts[3];
+            break;
+        default:
+            return 0;
+    }
+    *out = addr;
+    return 1;
+}
+
+/* 1 if the host-byte-order IPv4 address is loopback / private / link-local. */
+static int rt_ipv4_is_blocked(uint32_t a) {
+    unsigned int o1 = (a >> 24) & 0xff;
+    unsigned int o2 = (a >> 16) & 0xff;
+    if (o1 == 0)   return 1;                          /* 0.0.0.0/8 "this host" */
+    if (o1 == 127) return 1;                          /* 127.0.0.0/8 loopback */
+    if (o1 == 10)  return 1;                          /* 10.0.0.0/8 private */
+    if (o1 == 172 && o2 >= 16 && o2 <= 31) return 1;  /* 172.16.0.0/12 private */
+    if (o1 == 192 && o2 == 168) return 1;             /* 192.168.0.0/16 private */
+    if (o1 == 169 && o2 == 254) return 1;             /* 169.254.0.0/16 link-local
+                                                       * incl. 169.254.169.254 metadata */
+    return 0;
+}
+
+/* 1 if the (scheme-stripped, port-stripped) host should be blocked. */
+static int rt_host_is_blocked(const char *host) {
+    if (host[0] == '\0') return 0;
+    if (strcasecmp(host, "localhost") == 0) return 1;
+
+    if (strchr(host, ':') != NULL) {
+        /* IPv6 textual literal (brackets already stripped by the caller). */
+        if (strcmp(host, "::1") == 0) return 1;            /* loopback */
+        if (strcmp(host, "::") == 0) return 1;             /* unspecified */
+        if (strncasecmp(host, "fe80:", 5) == 0) return 1;  /* link-local */
+        if (strncasecmp(host, "fc", 2) == 0 ||
+            strncasecmp(host, "fd", 2) == 0) return 1;     /* fc00::/7 unique-local */
+        /* IPv4-mapped form e.g. ::ffff:127.0.0.1 — classify the trailing
+         * dotted-quad if present. */
+        const char *last = strrchr(host, ':');
+        uint32_t v4;
+        if (last && rt_host_ipv4(last + 1, &v4) && rt_ipv4_is_blocked(v4)) return 1;
+        return 0;
+    }
+
+    uint32_t v4;
+    if (rt_host_ipv4(host, &v4)) return rt_ipv4_is_blocked(v4);
+    return 0; /* a regular domain name — not resolved here (documented gap) */
+}
+
+/* Copy the host portion of an http(s) URL into `out` (size `out_cap`).
+ * Strips scheme, userinfo (user:pass@), port, and IPv6 brackets.
+ * Returns 1 on success, 0 if no host could be extracted. */
+static int rt_url_extract_host(const char *url, char *out, size_t out_cap) {
+    const char *p = url;
+    if (strncasecmp(p, "http://", 7) == 0) p += 7;
+    else if (strncasecmp(p, "https://", 8) == 0) p += 8;
+    else return 0;
+
+    /* authority ends at the first '/', '?', '#', or NUL */
+    const char *auth_end = p;
+    while (*auth_end && *auth_end != '/' && *auth_end != '?' && *auth_end != '#')
+        auth_end++;
+
+    /* userinfo: host starts after the last '@' inside the authority */
+    const char *host = p;
+    for (const char *q = p; q < auth_end; q++) {
+        if (*q == '@') host = q + 1;
+    }
+
+    const char *host_end;
+    if (*host == '[') {
+        host++; /* skip '[' */
+        host_end = host;
+        while (host_end < auth_end && *host_end != ']') host_end++;
+    } else {
+        host_end = host;
+        while (host_end < auth_end && *host_end != ':') host_end++;
+    }
+
+    size_t len = (size_t)(host_end - host);
+    if (len == 0 || len >= out_cap) return 0;
+    memcpy(out, host, len);
+    out[len] = '\0';
+    return 1;
+}
+
+/* Returns NULL if the URL is allowed, or a static human-readable reason if it
+ * should be blocked. Combines the scheme check with the SSRF host check. */
+static const char *rt_http_url_blocked_reason(const char *url) {
+    if (!rt_url_is_http(url)) return "non-http(s) scheme";
+
+    /* Opt-out for trusted environments. */
+    const char *allow = getenv("TURBO_ALLOW_PRIVATE_HOSTS");
+    if (allow && allow[0] == '1' && allow[1] == '\0') return NULL;
+
+    char host[256];
+    if (!rt_url_extract_host(url, host, sizeof(host))) {
+        /* Could not isolate a host — fail open (curl will reject malformed
+         * URLs itself); preserves behaviour for unusual but valid inputs. */
+        return NULL;
+    }
+    if (rt_host_is_blocked(host)) {
+        return "private/loopback host blocked "
+               "(set TURBO_ALLOW_PRIVATE_HOSTS=1 to allow)";
+    }
+    return NULL;
+}
+
 static const char *rt_http_empty_response(void) {
     char *empty = (char *)turbo_alloc(1);
     empty[0] = '\0';
@@ -1214,9 +1390,10 @@ static const char *rt_http_empty_response(void) {
 
 /* http_get(url) -> str — HTTP GET via fork+exec (no shell interpolation) */
 const char *rt_http_get(const char *url) {
-    if (!rt_url_is_http(url)) {
-        fprintf(stderr, "[rt_http] blocked non-http(s) URL: %s\n",
-                url ? url : "(null)");
+    const char *blocked = rt_http_url_blocked_reason(url);
+    if (blocked) {
+        fprintf(stderr, "[rt_http] blocked URL (%s): %s\n",
+                blocked, url ? url : "(null)");
         return rt_http_empty_response();
     }
     int pipefd[2];
@@ -1258,9 +1435,10 @@ const char *rt_http_get(const char *url) {
 
 /* http_post(url, body) -> str — HTTP POST via fork+exec (no shell interpolation) */
 const char *rt_http_post(const char *url, const char *body) {
-    if (!rt_url_is_http(url)) {
-        fprintf(stderr, "[rt_http] blocked non-http(s) URL: %s\n",
-                url ? url : "(null)");
+    const char *blocked = rt_http_url_blocked_reason(url);
+    if (blocked) {
+        fprintf(stderr, "[rt_http] blocked URL (%s): %s\n",
+                blocked, url ? url : "(null)");
         return rt_http_empty_response();
     }
     int pipefd[2];
@@ -1303,9 +1481,10 @@ const char *rt_http_post(const char *url, const char *body) {
  * Each header becomes a separate -H argument to curl. */
 const char *rt_http_post_with_headers(const char *url, const char *body,
                                       const char *headers) {
-    if (!rt_url_is_http(url)) {
-        fprintf(stderr, "[rt_http] blocked non-http(s) URL: %s\n",
-                url ? url : "(null)");
+    const char *blocked = rt_http_url_blocked_reason(url);
+    if (blocked) {
+        fprintf(stderr, "[rt_http] blocked URL (%s): %s\n",
+                blocked, url ? url : "(null)");
         return rt_http_empty_response();
     }
     int pipefd[2];

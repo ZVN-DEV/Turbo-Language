@@ -13,6 +13,22 @@
 #include <string.h>
 #include <math.h>
 
+/* Shared size-overflow / allocation-cap guards (single source of truth,
+ * also included by turbo_rt.c so the two runtimes never drift). */
+#include "turbo_rt_guards.h"
+
+/* The WASM runtime uses an 8-byte refcount header in front of array/struct
+ * data (the native runtime uses 16). The array-length bound below feeds this
+ * size to the shared helper so the overflow math matches the native side. */
+#define RT_WASM_RC_HEADER_BYTES 8
+
+/* Thin wrapper so call sites read the same as the native runtime. Ensures
+ *   total = 8 (refcount) + 8 (len field) + len * 8 (elements)
+ * does not overflow size_t (wasm32 size_t is 32-bit). */
+static inline int rt_array_len_fits(long long len) {
+    return rt_array_len_fits_hdr(len, RT_WASM_RC_HEADER_BYTES);
+}
+
 #define TURBO_F64_FORMAT "%.15g"
 
 static void rt_format_f64(char *buf, size_t cap, double n) {
@@ -123,7 +139,14 @@ long long rt_str_len(const char *s) {
 /* ── Array operations ─────────────────────────────────────────────── */
 
 void* rt_array_alloc(long long len) {
-    size_t data_size = 8 + len * 8;
+    /* Reject lengths whose 8 + (8 + len*8) byte allocation would overflow
+     * size_t (32-bit on wasm32) — turns a miscomputed/adversarial length
+     * into a clean abort instead of an undersized buffer + heap overflow. */
+    if (!rt_array_len_fits(len)) {
+        fprintf(stderr, "runtime error: array alloc size overflow (length %lld)\n", len);
+        exit(1);
+    }
+    size_t data_size = 8 + (size_t)len * 8;
     size_t total = 8 + data_size; /* +8 for refcount header */
     void *ptr = turbo_calloc(1, total);
     *(long long*)ptr = 1; /* refcount = 1 */
@@ -149,6 +172,10 @@ void* rt_array_set(void *arr, long long index, long long value) {
     if (rc > 1) {
         /* Copy-on-write: make a private copy */
         long long len = *(const long long*)arr;
+        if (!rt_array_len_fits(len)) {
+            fprintf(stderr, "runtime error: array COW size overflow (length %lld)\n", len);
+            exit(1);
+        }
         size_t data_size = (1 + (size_t)len) * 8;
         size_t total = 8 + data_size;
         void *new_alloc = turbo_calloc(1, total);
@@ -297,6 +324,12 @@ void* rt_str_split(const char *s, const char *sep) {
         if (count == 0) count = 1;
     }
 
+    /* Guard the result-array allocation (8 + 8 + count*8) against size_t
+     * overflow before allocating — same bound as rt_array_alloc. */
+    if (!rt_array_len_fits((long long)count)) {
+        fprintf(stderr, "runtime error: split result size overflow\n");
+        exit(1);
+    }
     size_t data_size = 8 + count * 8;
     size_t total = 8 + data_size;
     long long *raw = (long long*)turbo_calloc(1, total);
@@ -451,7 +484,35 @@ const char* rt_str_repeat(const char *s, long long count) {
         return empty;
     }
     size_t len = strlen(s);
+    if (len == 0) {
+        char *empty = (char *)turbo_alloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
+    /* total = len * count (+1 for the trailing NUL) must fit in size_t.
+     * On wasm32 size_t is 32-bit, so `len * (size_t)count` could wrap
+     * silently, producing an undersized turbo_alloc(total+1) and a heap
+     * overflow in the memcpy loop below. Shared guard with the native
+     * runtime (turbo_rt_guards.h). */
+    if (!rt_mul_add_size_fits((size_t)count, len, 1)) {
+        fprintf(stderr,
+                "[rt_str_repeat] overflow: len=%zu * count=%lld exceeds SIZE_MAX\n",
+                len, count);
+        char *empty = (char *)turbo_alloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
     size_t total = len * (size_t)count;
+    /* Practical cap: 256 MB. Larger totals usually indicate a bug or attack
+     * and would exhaust memory; mirror the native runtime cap. */
+    if (total > TURBO_RT_MAX_ALLOC_BYTES) {
+        fprintf(stderr,
+                "[rt_str_repeat] refusing allocation: total=%zu > cap %llu\n",
+                total, (unsigned long long)TURBO_RT_MAX_ALLOC_BYTES);
+        char *empty = (char *)turbo_alloc(1);
+        empty[0] = '\0';
+        return empty;
+    }
     char *result = (char *)turbo_alloc(total + 1);
     /* Length-tracked memcpy instead of strcat (O(n^2) scan + footgun). */
     size_t offset = 0;

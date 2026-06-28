@@ -1,0 +1,18 @@
+// Minimal WASM execution smoke test.
+//
+// Exercises the WASM C-transpiler backend end to end: string printing,
+// integer arithmetic, and a while loop. Built to wasm32-wasi and run under
+// wasmtime by run_wasm_tests.sh; stdout is diffed against
+// hello_wasm.expected.
+
+fn main() {
+    print("hello wasm")
+
+    let mut total = 0
+    let mut i = 1
+    while i <= 5 {
+        total = total + i
+        i = i + 1
+    }
+    print(total)
+}

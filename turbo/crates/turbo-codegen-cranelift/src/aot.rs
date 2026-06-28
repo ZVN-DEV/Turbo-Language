@@ -130,10 +130,17 @@ pub fn aot_compile(
 
     let obj_path = tmp_dir.path().join("turbo.o");
     let rt_path = tmp_dir.path().join("turbo_rt.c");
+    let guards_h_path = tmp_dir.path().join("turbo_rt_guards.h");
 
     std::fs::write(&obj_path, &obj_bytes).map_err(|e| CodegenError {
         code: ErrorCode::E0400,
         message: format!("failed to write object file: {e}"),
+    })?;
+    // Write the shared guard header next to the runtime so its
+    // `#include "turbo_rt_guards.h"` resolves inside the temp dir.
+    std::fs::write(&guards_h_path, RUNTIME_GUARDS_H).map_err(|e| CodegenError {
+        code: ErrorCode::E0400,
+        message: format!("failed to write runtime guards header: {e}"),
     })?;
     std::fs::write(&rt_path, RUNTIME_C).map_err(|e| CodegenError {
         code: ErrorCode::E0400,
@@ -367,8 +374,10 @@ pub fn wasm_compile(
     let wasm_clang = find_wasm_clang()?;
     let wasi_sysroot = find_wasi_sysroot()?;
 
-    // Generate C source from the AST
-    let c_source = wasm_codegen::generate_c(ast_module);
+    // Generate C source from the AST. Returns Err if the program uses a
+    // construct the WASM backend does not support (fail loud instead of
+    // silently emitting a literal 0).
+    let c_source = wasm_codegen::generate_c(ast_module)?;
 
     // Write C source, runtime, and stub to temp dir
     let preserve_tmp = std::env::var("TURBO_DEBUG").is_ok();
@@ -376,6 +385,7 @@ pub fn wasm_compile(
 
     let program_c_path = tmp_dir.path().join("turbo_program.c");
     let rt_src_path = tmp_dir.path().join("turbo_rt_wasm.c");
+    let guards_h_path = tmp_dir.path().join("turbo_rt_guards.h");
     let stub_c_path = tmp_dir.path().join("wasm_stub.c");
     let program_o_path = tmp_dir.path().join("turbo_program.o");
     let rt_o_path = tmp_dir.path().join("turbo_rt_wasm.o");
@@ -384,6 +394,11 @@ pub fn wasm_compile(
     std::fs::write(&program_c_path, &c_source).map_err(|e| CodegenError {
         code: ErrorCode::E0400,
         message: format!("failed to write generated C source: {e}"),
+    })?;
+    // Shared guard header next to the wasm runtime for its #include.
+    std::fs::write(&guards_h_path, RUNTIME_GUARDS_H).map_err(|e| CodegenError {
+        code: ErrorCode::E0400,
+        message: format!("failed to write runtime guards header: {e}"),
     })?;
     std::fs::write(&rt_src_path, RUNTIME_WASM_C).map_err(|e| CodegenError {
         code: ErrorCode::E0400,
