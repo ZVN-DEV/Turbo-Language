@@ -1,0 +1,21 @@
+// BL-11: structs render `Name { field: value, ... }` (not "[struct Name]"),
+// including nested structs and struct-with-array fields. This rendering is
+// intentionally distinct from to_json's `{"field":value}`.
+struct Point { x: int, y: int }
+struct Line { start: Point, size: int }
+struct Bag { items: [int], label: str }
+
+fn main() {
+    let p = Point { x: 9, y: 2 }
+    print(to_str(p))
+    print("p = {p}")
+
+    let l = Line { start: Point { x: 5, y: 6 }, size: 10 }
+    print(to_str(l))
+
+    let b = Bag { items: [10, 20, 30], label: "nums" }
+    print(to_str(b))
+
+    let pts = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]
+    print(to_str(pts))
+}

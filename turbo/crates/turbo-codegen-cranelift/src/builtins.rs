@@ -75,87 +75,21 @@ pub(crate) fn compile_print<M: Module>(
                 };
                 cx.rt_call("rt_print_i64", &[tag_val]);
             }
-            TurboTy::Array(_) => {
-                let ptr = cx.create_string("[array]")?;
-                cx.rt_call("rt_print_str", &[ptr]);
-            }
-            TurboTy::Struct(ref name) => {
-                // Check if struct implements Display trait
-                let has_display = cx
-                    .trait_impls
-                    .get(name)
-                    .is_some_and(|traits| traits.contains(&"Display".to_string()));
-                if has_display {
-                    let mangled = format!("{name}__to_string");
-                    if let Some(&fid) = cx.user_fns.get(&mangled) {
-                        let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-                        let call = cx.builder.ins().call(fref, &[v]);
-                        let str_val = cx.builder.inst_results(call)[0];
-                        cx.rt_call("rt_print_str", &[str_val]);
-                    } else {
-                        let ptr = cx.create_string(&format!("[struct {}]", name))?;
-                        cx.rt_call("rt_print_str", &[ptr]);
-                    }
-                } else {
-                    let ptr = cx.create_string(&format!("[struct {}]", name))?;
-                    cx.rt_call("rt_print_str", &[ptr]);
-                }
+            // Compound values (arrays, structs, results, optionals) all share
+            // the recursive renderer in `convert_to_str`, which knows the
+            // element/field/payload static types. Delegating here keeps
+            // `print(x)` and `to_str(x)` / `"{x}"` byte-identical and is what
+            // makes nested rendering (e.g. an array of structs) work.
+            TurboTy::Array(_)
+            | TurboTy::Struct(_)
+            | TurboTy::Result(_, _)
+            | TurboTy::Optional(_) => {
+                let s = convert_to_str(cx, v, &tty)?;
+                cx.rt_call("rt_print_str", &[s]);
             }
             TurboTy::Fn(_, _) => {
                 let ptr = cx.create_string("[function]")?;
                 cx.rt_call("rt_print_str", &[ptr]);
-            }
-            TurboTy::Result(_, _) => {
-                let ptr = cx.create_string("[result]")?;
-                cx.rt_call("rt_print_str", &[ptr]);
-            }
-            TurboTy::Optional(ref inner) => {
-                // Print "some(<value>)" or "none" based on the tag
-                let tag_fid = cx.rt_fns["rt_option_tag"];
-                let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
-                let tag_call = cx.builder.ins().call(tag_fref, &[v]);
-                let tag = cx.builder.inst_results(tag_call)[0];
-
-                let one = cx.builder.ins().iconst(types::I64, 1);
-                let is_some = cx.builder.ins().icmp(IntCC::Equal, tag, one);
-
-                let some_block = cx.builder.create_block();
-                let none_block = cx.builder.create_block();
-                let merge_block = cx.builder.create_block();
-
-                cx.builder
-                    .ins()
-                    .brif(is_some, some_block, &[], none_block, &[]);
-
-                // Some path: print "some(<value>)"
-                cx.builder.switch_to_block(some_block);
-                cx.builder.seal_block(some_block);
-                let val_fid = cx.rt_fns["rt_option_value"];
-                let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
-                let val_call = cx.builder.ins().call(val_fref, &[v]);
-                let inner_val = cx.builder.inst_results(val_call)[0];
-                let inner_str = convert_to_str(cx, inner_val, inner)?;
-                let prefix = cx.create_string("some(")?;
-                let suffix = cx.create_string(")")?;
-                let concat_fid = cx.rt_fns["rt_str_concat"];
-                let concat_fref = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
-                let call1 = cx.builder.ins().call(concat_fref, &[prefix, inner_str]);
-                let partial = cx.builder.inst_results(call1)[0];
-                let call2 = cx.builder.ins().call(concat_fref, &[partial, suffix]);
-                let some_str = cx.builder.inst_results(call2)[0];
-                cx.rt_call("rt_print_str", &[some_str]);
-                cx.builder.ins().jump(merge_block, &[]);
-
-                // None path: print "none"
-                cx.builder.switch_to_block(none_block);
-                cx.builder.seal_block(none_block);
-                let none_str = cx.create_string("none")?;
-                cx.rt_call("rt_print_str", &[none_str]);
-                cx.builder.ins().jump(merge_block, &[]);
-
-                // Merge
-                cx.builder.switch_to_block(merge_block);
-                cx.builder.seal_block(merge_block);
             }
             TurboTy::Future(_) => {
                 let ptr = cx.create_string("[future]")?;
@@ -2921,28 +2855,10 @@ pub(crate) fn convert_to_str<M: Module>(
             let call = cx.builder.ins().call(fref, &[tag_val]);
             Ok(cx.builder.inst_results(call)[0])
         }
-        TurboTy::Array(_) => cx.create_string("[array]"),
-        TurboTy::Struct(ref name) => {
-            // Check if struct implements Display trait
-            let has_display = cx
-                .trait_impls
-                .get(name)
-                .is_some_and(|traits| traits.contains(&"Display".to_string()));
-            if has_display {
-                let mangled = format!("{name}__to_string");
-                if let Some(&fid) = cx.user_fns.get(&mangled) {
-                    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-                    let call = cx.builder.ins().call(fref, &[val]);
-                    Ok(cx.builder.inst_results(call)[0])
-                } else {
-                    cx.create_string(&format!("[struct {}]", name))
-                }
-            } else {
-                cx.create_string(&format!("[struct {}]", name))
-            }
-        }
+        TurboTy::Array(ref elem) => render_array(cx, val, elem),
+        TurboTy::Struct(ref name) => render_struct(cx, val, name),
         TurboTy::Fn(_, _) => cx.create_string("[function]"),
-        TurboTy::Result(_, _) => cx.create_string("[result]"),
+        TurboTy::Result(ref ok_ty, ref err_ty) => render_result(cx, val, ok_ty, err_ty),
         TurboTy::Optional(ref inner) => {
             // Return "some(<value>)" or "none" string based on the tag
             let tag_fid = cx.rt_fns["rt_option_tag"];
@@ -2968,7 +2884,9 @@ pub(crate) fn convert_to_str<M: Module>(
             let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
             let val_call = cx.builder.ins().call(val_fref, &[val]);
             let inner_val = cx.builder.inst_results(val_call)[0];
-            let inner_str = convert_to_str(cx, inner_val, inner)?;
+            // The payload arrives as a uniform i64 slot; `render_slot`
+            // reinterprets it (float bits / bool byte / etc.) before rendering.
+            let inner_str = render_slot(cx, inner_val, inner)?;
             let prefix = cx.create_string("some(")?;
             let suffix = cx.create_string(")")?;
             let concat_fid = cx.rt_fns["rt_str_concat"];
@@ -2993,6 +2911,261 @@ pub(crate) fn convert_to_str<M: Module>(
         }
         TurboTy::Future(_) => cx.create_string("[future]"),
     }
+}
+
+/// Emit a `rt_str_concat(a, b)` call and return the resulting string value.
+fn str_concat<M: Module>(cx: &mut Ctx<'_, M>, a: Value, b: Value) -> Value {
+    let fid = cx.rt_fns["rt_str_concat"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[a, b]);
+    cx.builder.inst_results(call)[0]
+}
+
+/// Render one value held in a uniform 8-byte slot (array element, struct
+/// field, or result/optional payload) to a string.
+///
+/// Compound containers store every element as a raw i64 (pointers and ints
+/// directly, floats and bools as bit patterns). This mirrors the exact
+/// reinterpretation `Expr::Index` / `Expr::FieldAccess` perform on read so the
+/// rendered value matches what the program would observe, then defers to the
+/// recursive `convert_to_str`.
+fn render_slot<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    raw: Value,
+    tty: &TurboTy,
+) -> Result<Value, CodegenError> {
+    let (val, render_tty) = match tty {
+        TurboTy::Bool => (cx.builder.ins().ireduce(types::I8, raw), TurboTy::Bool),
+        TurboTy::Float => (
+            cx.builder.ins().bitcast(types::F64, MemFlags::new(), raw),
+            TurboTy::Float,
+        ),
+        // Narrow ints are sign/zero-extended into the full i64 slot on store,
+        // so render them as a plain integer (avoids `convert_to_str`'s
+        // sextend, which would reject the already-64-bit value).
+        TurboTy::I8 | TurboTy::I16 | TurboTy::U8 | TurboTy::U16 => (raw, TurboTy::Int),
+        other => (raw, other.clone()),
+    };
+    convert_to_str(cx, val, &render_tty)
+}
+
+/// Render an array value as `[e0, e1, …]` (empty arrays render as `[]`).
+///
+/// Walks the array at runtime — the length is dynamic — building the string
+/// with a Cranelift loop over `[len][elem0]…`. Each element is rendered via
+/// `render_slot`, so element types (including nested arrays/structs) recurse
+/// through `convert_to_str`. Strings are rendered unquoted, matching how
+/// optionals render `some("hi")` as `some(hi)`.
+fn render_array<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    arr: Value,
+    elem_tty: &TurboTy,
+) -> Result<Value, CodegenError> {
+    // Length lives in the first i64 slot of the array data.
+    let len = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlags::trusted(), arr, 0i32);
+
+    // Accumulator string variable, seeded with the opening bracket.
+    let acc_var = Variable::new(cx.next_var);
+    cx.next_var += 1;
+    cx.builder.declare_var(acc_var, cx.ptr_type);
+    let open = cx.create_string("[")?;
+    cx.builder.def_var(acc_var, open);
+
+    // Index counter.
+    let idx_var = Variable::new(cx.next_var);
+    cx.next_var += 1;
+    cx.builder.declare_var(idx_var, types::I64);
+    let zero = cx.builder.ins().iconst(types::I64, 0);
+    cx.builder.def_var(idx_var, zero);
+
+    let header = cx.builder.create_block();
+    let body = cx.builder.create_block();
+    let sep_block = cx.builder.create_block();
+    let elem_block = cx.builder.create_block();
+    let cont = cx.builder.create_block();
+    let exit = cx.builder.create_block();
+
+    cx.builder.ins().jump(header, &[]);
+
+    // Header: while idx < len. Not sealed yet (back-edge from `cont`).
+    cx.builder.switch_to_block(header);
+    let i = cx.builder.use_var(idx_var);
+    let cond = cx.builder.ins().icmp(IntCC::SignedLessThan, i, len);
+    cx.builder.ins().brif(cond, body, &[], exit, &[]);
+
+    // Body: prepend ", " for every element after the first.
+    cx.builder.switch_to_block(body);
+    cx.builder.seal_block(body);
+    let i = cx.builder.use_var(idx_var);
+    let is_first = cx.builder.ins().icmp(IntCC::Equal, i, zero);
+    cx.builder
+        .ins()
+        .brif(is_first, elem_block, &[], sep_block, &[]);
+
+    // Separator path.
+    cx.builder.switch_to_block(sep_block);
+    cx.builder.seal_block(sep_block);
+    let acc = cx.builder.use_var(acc_var);
+    let sep = cx.create_string(", ")?;
+    let acc = str_concat(cx, acc, sep);
+    cx.builder.def_var(acc_var, acc);
+    cx.builder.ins().jump(elem_block, &[]);
+
+    // Element path: load slot, render, append.
+    cx.builder.switch_to_block(elem_block);
+    cx.builder.seal_block(elem_block);
+    let i = cx.builder.use_var(idx_var);
+    let data_base = cx.builder.ins().iadd_imm(arr, 8);
+    let byte_off = cx.builder.ins().ishl_imm(i, 3);
+    let elem_ptr = cx.builder.ins().iadd(data_base, byte_off);
+    let raw = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlags::trusted(), elem_ptr, 0i32);
+    let elem_str = render_slot(cx, raw, elem_tty)?;
+    // `render_slot` may have created and switched blocks (nested compounds);
+    // re-read the accumulator through its variable and continue here.
+    let acc = cx.builder.use_var(acc_var);
+    let acc = str_concat(cx, acc, elem_str);
+    cx.builder.def_var(acc_var, acc);
+    cx.builder.ins().jump(cont, &[]);
+
+    // Continue: idx += 1, back to header.
+    cx.builder.switch_to_block(cont);
+    cx.builder.seal_block(cont);
+    let i = cx.builder.use_var(idx_var);
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let next = cx.builder.ins().iadd(i, one);
+    cx.builder.def_var(idx_var, next);
+    cx.builder.ins().jump(header, &[]);
+
+    // All predecessors of `header` are now known.
+    cx.builder.seal_block(header);
+
+    // Exit: append the closing bracket.
+    cx.builder.switch_to_block(exit);
+    cx.builder.seal_block(exit);
+    let acc = cx.builder.use_var(acc_var);
+    let close = cx.create_string("]")?;
+    Ok(str_concat(cx, acc, close))
+}
+
+/// Render a struct value as `Name { field0: v0, field1: v1 }`
+/// (`Name {}` when it has no fields).
+///
+/// The field count and layout are static, so the field walk is unrolled at
+/// codegen time. A `@derive(Display)` / Display-impl struct still renders via
+/// its `to_string`. The braces-with-spaces form is intentionally distinct from
+/// `to_json`'s `{"field":v}`. String fields are rendered unquoted, matching the
+/// optional `some(hi)` convention.
+fn render_struct<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    ptr: Value,
+    name: &str,
+) -> Result<Value, CodegenError> {
+    // Honor a Display impl (user-defined or @derive(Display)) first.
+    let has_display = cx
+        .trait_impls
+        .get(name)
+        .is_some_and(|traits| traits.contains(&"Display".to_string()));
+    if has_display {
+        let mangled = format!("{name}__to_string");
+        if let Some(&fid) = cx.user_fns.get(&mangled) {
+            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+            let call = cx.builder.ins().call(fref, &[ptr]);
+            return Ok(cx.builder.inst_results(call)[0]);
+        }
+    }
+
+    let fields = match cx.struct_fields.get(name) {
+        Some(f) => f.clone(),
+        // Unknown struct layout: fall back to the legacy placeholder rather
+        // than emitting a wrong value.
+        None => return cx.create_string(&format!("[struct {name}]")),
+    };
+
+    if fields.is_empty() {
+        return cx.create_string(&format!("{name} {{}}"));
+    }
+
+    let mut acc = cx.create_string(&format!("{name} {{ "))?;
+    for (i, (field_name, field_tty)) in fields.iter().enumerate() {
+        if i > 0 {
+            let sep = cx.create_string(", ")?;
+            acc = str_concat(cx, acc, sep);
+        }
+        let label = cx.create_string(&format!("{field_name}: "))?;
+        acc = str_concat(cx, acc, label);
+        let offset = (i * 8) as i32;
+        let raw = cx
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::new(), ptr, offset);
+        let field_str = render_slot(cx, raw, field_tty)?;
+        acc = str_concat(cx, acc, field_str);
+    }
+    let close = cx.create_string(" }")?;
+    Ok(str_concat(cx, acc, close))
+}
+
+/// Render a result value as `ok(<value>)` or `err(<value>)`, mirroring the
+/// optional `some(<value>)` / `none` rendering. The runtime tag (0 = ok,
+/// 1 = err) selects which payload static type to render.
+fn render_result<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    val: Value,
+    ok_ty: &TurboTy,
+    err_ty: &TurboTy,
+) -> Result<Value, CodegenError> {
+    let tag_fid = cx.rt_fns["rt_result_tag"];
+    let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
+    let tag_call = cx.builder.ins().call(tag_fref, &[val]);
+    let tag = cx.builder.inst_results(tag_call)[0];
+
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let is_err = cx.builder.ins().icmp(IntCC::Equal, tag, one);
+
+    let ok_block = cx.builder.create_block();
+    let err_block = cx.builder.create_block();
+    let merge_block = cx.builder.create_block();
+
+    cx.builder.ins().brif(is_err, err_block, &[], ok_block, &[]);
+
+    // ok path: ok(<payload>)
+    cx.builder.switch_to_block(ok_block);
+    cx.builder.seal_block(ok_block);
+    let value_fid = cx.rt_fns["rt_result_value"];
+    let value_fref = cx.module.declare_func_in_func(value_fid, cx.builder.func);
+    let value_call = cx.builder.ins().call(value_fref, &[val]);
+    let ok_val = cx.builder.inst_results(value_call)[0];
+    let ok_inner = render_slot(cx, ok_val, ok_ty)?;
+    let prefix = cx.create_string("ok(")?;
+    let suffix = cx.create_string(")")?;
+    let ok_str = str_concat(cx, prefix, ok_inner);
+    let ok_str = str_concat(cx, ok_str, suffix);
+    cx.builder.ins().jump(merge_block, &[ok_str]);
+
+    // err path: err(<payload>)
+    cx.builder.switch_to_block(err_block);
+    cx.builder.seal_block(err_block);
+    let value_fref = cx.module.declare_func_in_func(value_fid, cx.builder.func);
+    let value_call = cx.builder.ins().call(value_fref, &[val]);
+    let err_val = cx.builder.inst_results(value_call)[0];
+    let err_inner = render_slot(cx, err_val, err_ty)?;
+    let prefix = cx.create_string("err(")?;
+    let suffix = cx.create_string(")")?;
+    let err_str = str_concat(cx, prefix, err_inner);
+    let err_str = str_concat(cx, err_str, suffix);
+    cx.builder.ins().jump(merge_block, &[err_str]);
+
+    // merge
+    cx.builder.append_block_param(merge_block, cx.ptr_type);
+    cx.builder.switch_to_block(merge_block);
+    cx.builder.seal_block(merge_block);
+    Ok(cx.builder.block_params(merge_block)[0])
 }
 
 // ── While loop ──────────────────────────────────────────────────────

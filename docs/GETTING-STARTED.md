@@ -357,6 +357,29 @@ fn main() {
 turbolang run collections.tb
 ```
 
+Output:
+
+```
+Length: 5
+First: 10
+Last: 50
+  10
+  20
+  30
+  40
+  50
+Doubled: [20, 40, 60, 80, 100]
+Big: [30, 40, 50]
+Sum: 150
+After push: [1, 2, 3, 4]
+Language: Turbo
+Has version: true
+Keys: [lang, version]
+Apples: 3
+```
+
+Printing or interpolating a compound value renders its contents: arrays show as `[1, 2, 3]`, structs as `Point { x: 1, y: 2 }`, results as `ok(7)` / `err(reason)`, and optionals as `some(42)` / `none`. (Strings nested inside a compound are shown unquoted, matching `some("hi")` → `some(hi)`.) This differs from `to_json`, which emits JSON (e.g. `{"x":1,"y":2}`).
+
 Note: `push`, `map`, `filter`, `trim`, `upper`, `lower`, `replace`, `repeat`, and `split` are copy-on-write -- they return new values. When used as a statement (`arr.push(4)`), the parser automatically rewrites this to `arr = push(arr, 4)`.
 
 ---

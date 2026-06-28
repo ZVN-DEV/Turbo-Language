@@ -1,0 +1,22 @@
+// BL-11: arrays render their contents (not the "[array]" placeholder),
+// both via to_str() and string interpolation.
+fn main() {
+    let ints = [1, 2, 3]
+    print(to_str(ints))
+    print("interp: {ints}")
+
+    let empty: [int] = []
+    print(to_str(empty))
+
+    let strs = ["a", "b", "c"]
+    print(to_str(strs))
+
+    let floats = [1.5, 2.5]
+    print(to_str(floats))
+
+    let bools = [true, false]
+    print(to_str(bools))
+
+    let nested = [[1, 2], [3]]
+    print(to_str(nested))
+}
