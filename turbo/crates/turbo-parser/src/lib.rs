@@ -642,6 +642,16 @@ impl Parser {
 
     fn parse_import(&mut self) -> Result<(Vec<String>, String), ParseError> {
         self.expect(&Token::Import)?;
+        // Import-specific messages (rather than the generic `expect` wording)
+        // so the CLI can recognise an import-syntax slip and teach the form
+        // `import { sqrt, pi } from "./math.tb"`.
+        if !matches!(self.peek(), Some(Token::LBrace)) {
+            return Err(ParseError {
+                code: ErrorCode::E0001,
+                message: "expected `{` to begin the import list".to_string(),
+                span: self.peek_span(),
+            });
+        }
         self.expect(&Token::LBrace)?;
         let mut names = Vec::new();
         loop {
@@ -654,6 +664,13 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
+        if !matches!(self.peek(), Some(Token::From)) {
+            return Err(ParseError {
+                code: ErrorCode::E0001,
+                message: "expected `from` after the import list".to_string(),
+                span: self.peek_span(),
+            });
+        }
         self.expect(&Token::From)?;
         let path = match self.peek() {
             Some(Token::String(_)) => {
@@ -667,7 +684,7 @@ impl Parser {
             _ => {
                 return Err(ParseError {
                     code: ErrorCode::E0001,
-                    message: "expected path string after `from`".to_string(),
+                    message: "expected a path string after `from` in import".to_string(),
                     span: self.peek_span(),
                 });
             }

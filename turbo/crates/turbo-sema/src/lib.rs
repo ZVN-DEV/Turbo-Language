@@ -167,6 +167,46 @@ impl Ty {
     }
 }
 
+/// Build the "no such field" diagnostic message (E0315), enriched with a
+/// did-you-mean suggestion and the struct's available field list. The CLI
+/// surfaces both in the rendered headline and its `Help:` line, mirroring the
+/// undefined-variable diagnostic (E0300).
+pub(crate) fn no_such_field_message(
+    struct_name: &str,
+    field: &str,
+    fields: &[(String, Ty)],
+) -> String {
+    let names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+    let mut msg = format!("struct `{struct_name}` has no field `{field}`");
+    if let Some(hit) = crate::suggest::suggest_for(field, names.iter().copied()) {
+        msg.push_str(&format!(". did you mean `{hit}`?"));
+    }
+    if !names.is_empty() {
+        msg.push_str(&format!(" (available fields: {})", names.join(", ")));
+    }
+    msg
+}
+
+/// Render the user-facing source spelling of a type annotation.
+///
+/// The internal [`Ty`] canonicalises aliases (e.g. `i64` -> `int`,
+/// `f64` -> `float`), which is jarring in a "you wrote X" diagnostic. When the
+/// annotation is a plain named type we echo the exact token the user typed;
+/// otherwise we fall back to the canonical [`Ty`] display.
+pub(crate) fn type_annotation_label(ty_expr: &TypeExpr, resolved: &Ty) -> String {
+    match ty_expr {
+        TypeExpr::Named(name) => name.clone(),
+        TypeExpr::Array(inner) => {
+            if let Ty::Array(inner_ty) = resolved {
+                format!("[{}]", type_annotation_label(&inner.node, inner_ty))
+            } else {
+                resolved.to_string()
+            }
+        }
+        _ => resolved.to_string(),
+    }
+}
+
 /// Extract the integer literal value from an expression, handling both
 /// `IntLit(n)` and `UnaryOp { Neg, IntLit(n) }` (which is how `-128` is parsed).
 pub(crate) fn extract_int_literal(expr: &Expr) -> Option<i64> {
@@ -643,6 +683,40 @@ mod tests {
         assert_has_error(
             "fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { add(1) }",
             "expects 2 argument(s) but 1 were given",
+        );
+    }
+
+    #[test]
+    fn test_function_wrong_args_echoes_signature() {
+        // The arity diagnostic should carry the full parameter signature so the
+        // CLI can name each parameter the function actually expects (A1).
+        assert_has_error(
+            "fn add(a: i64, b: i64) -> i64 { a + b }\nfn main() { add(1) }",
+            "signature `add(a: int, b: int)`",
+        );
+    }
+
+    #[test]
+    fn test_no_such_field_lists_fields_and_suggestion() {
+        // A nonexistent field access should name the available fields and, when
+        // a close match exists, offer a did-you-mean (A3).
+        assert_has_error(
+            "struct Rect { width: i64, height: i64 }\nfn main() {\n    let r = Rect { width: 1, height: 2 }\n    print(r.widht)\n}",
+            "did you mean `width`?",
+        );
+        assert_has_error(
+            "struct Rect { width: i64, height: i64 }\nfn main() {\n    let r = Rect { width: 1, height: 2 }\n    print(r.widht)\n}",
+            "available fields: width, height",
+        );
+    }
+
+    #[test]
+    fn test_type_annotation_echoes_source_spelling() {
+        // The annotation mismatch should echo the token the user wrote (`i64`),
+        // not the canonical alias (`int`) (A4).
+        assert_has_error(
+            r#"fn main() { let x: i64 = "s" }"#,
+            "type annotation `i64` doesn't match value type `str`",
         );
     }
 

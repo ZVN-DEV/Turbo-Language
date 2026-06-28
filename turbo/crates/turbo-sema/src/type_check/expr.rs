@@ -3093,10 +3093,19 @@ impl Checker {
                             );
                         }
                         if args.len() != sig.params.len() {
+                            // Echo the full signature so the diagnostic (and the
+                            // CLI's `Help:` line) can name each parameter the
+                            // function actually expects, not just a count.
+                            let sig_params = sig
+                                .params
+                                .iter()
+                                .map(|(pname, pty)| format!("{pname}: {pty}"))
+                                .collect::<Vec<_>>()
+                                .join(", ");
                             self.error(
                                 ErrorCode::E0100,
                                 format!(
-                                    "function `{name}` expects {} argument(s) but {} were given",
+                                    "function `{name}` expects {} argument(s) but {} were given; signature `{name}({sig_params})`",
                                     sig.params.len(),
                                     args.len()
                                 ),
@@ -3688,7 +3697,11 @@ impl Checker {
                         } else {
                             self.error(
                                 ErrorCode::E0315,
-                                format!("struct `{struct_name}` has no field `{field}`"),
+                                crate::no_such_field_message(
+                                    struct_name,
+                                    field,
+                                    &struct_info.fields,
+                                ),
                                 expr.span.clone(),
                             );
                         }
@@ -4004,7 +4017,7 @@ impl Checker {
                     } else {
                         self.error(
                             ErrorCode::E0315,
-                            format!("struct `{name}` has no field `{field_name}`"),
+                            crate::no_such_field_message(name, field_name, &struct_info.fields),
                             value.span.clone(),
                         );
                     }
@@ -4057,7 +4070,11 @@ impl Checker {
                             } else {
                                 self.error(
                                     ErrorCode::E0315,
-                                    format!("struct `{struct_name}` has no field `{field}`"),
+                                    crate::no_such_field_message(
+                                        struct_name,
+                                        field,
+                                        &struct_info.fields,
+                                    ),
                                     expr.span.clone(),
                                 );
                                 Ty::Error
@@ -4096,7 +4113,11 @@ impl Checker {
                                 } else {
                                     self.error(
                                         ErrorCode::E0315,
-                                        format!("struct `{struct_name}` has no field `{field}`"),
+                                        crate::no_such_field_message(
+                                            struct_name,
+                                            field,
+                                            &struct_info.fields,
+                                        ),
                                         expr.span.clone(),
                                     );
                                     Ty::Error

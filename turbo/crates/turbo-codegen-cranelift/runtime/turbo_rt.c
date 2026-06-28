@@ -1266,7 +1266,16 @@ void *rt_spawn_with_args(long long (*thunk)(void *), void *args_ptr) {
     if (!handle) { fprintf(stderr, "runtime error: out of memory (spawn)\n"); exit(1); }
     /* Store ctx pointer right after the pthread_t */
     *((spawn_ctx **)(handle + 1)) = ctx;
-    pthread_create(handle, NULL, spawn_thread_fn, ctx);
+    /* Check the return: on failure (e.g. EAGAIN under thread exhaustion) the
+     * pthread_t is left uninitialized, and rt_await_handle would then join a
+     * garbage handle — undefined behaviour. Fail cleanly instead. */
+    int rc = pthread_create(handle, NULL, spawn_thread_fn, ctx);
+    if (rc != 0) {
+        fprintf(stderr, "runtime error: failed to spawn thread (%s)\n", strerror(rc));
+        free(ctx);
+        free(handle);
+        exit(1);
+    }
     return handle;
 }
 
@@ -3639,7 +3648,11 @@ long long rt_time_ms(void) {
 const char *rt_format_time(double timestamp, const char *fmt) {
     if (!fmt) fmt = "%Y-%m-%d %H:%M:%S";
     time_t t = (time_t)timestamp;
-    struct tm *tm = localtime(&t);
+    /* localtime_r: reentrant. HTTP handler threads call rt_format_time
+     * concurrently, and the non-reentrant localtime() shares one static
+     * `struct tm`, so two threads formatting at once would race. */
+    struct tm tm_buf;
+    struct tm *tm = localtime_r(&t, &tm_buf);
     if (!tm) return turbo_strdup("");
     char buf[256];
     size_t n = strftime(buf, sizeof(buf), fmt, tm);

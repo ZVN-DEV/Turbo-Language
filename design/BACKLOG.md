@@ -311,5 +311,19 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   is a distinct opaque-handle type for hashmaps (and likely mutex/http handles) so int↔handle assignment is a
   clean sema error. _(The `fmt` `:`/`->`/operator-spacing gap here is already covered by BL-5.)_
 
+  **DONE 2026-06-28 (contained high-value subset):** E0100 arity `Help:` now echoes the full signature + what was
+  passed (`'add' takes 2 args (a: int, b: int); you passed 1`); E0200 `Help:` names the missing variant(s)
+  (`add an arm 'Blue => ...' or a catch-all '_ => ...'`); E0315 `Help:` lists the struct's fields with a did-you-mean
+  (`'Point' has fields 'x', 'y' — did you mean 'width'?`); E0110 now echoes the source spelling (`i64`, not `int`);
+  malformed imports now teach the syntax (`imports look like \`import { sqrt, pi } from "./math.tb"\``); `explain`
+  normalizes `100`/`e0100`/`E100` → `E0100`; `rt_format_time` switched to `localtime_r`; `rt_spawn_with_args` now
+  checks the `pthread_create` return and fails cleanly instead of joining an uninitialized `pthread_t`.
+
+  **STILL OPEN (deferred — bigger/separate work):** whole-number-float printing (semantic; churns many `.expected`);
+  raw strings `r"…"` (lexer feature); empty-`[]` inference; empty-RHS `let x =` parser-recovery double-error; REPL
+  cross-line spurious `unused variable`; `(os error N)` jargon polish in remaining file errors; `test` summary
+  ordering/color/total-time; the hashmap-handle opaque-typing fix (int↔handle segfault above); the JIT hashmap
+  `&mut *ptr` data race under concurrent `spawn`.
+
 ---
 _When all boxes are checked, STOP and ask for the next priorities — do not invent hygiene work._

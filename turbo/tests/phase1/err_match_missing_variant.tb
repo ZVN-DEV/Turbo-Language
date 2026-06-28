@@ -1,0 +1,9 @@
+type Color { Red, Green, Blue }
+
+fn main() {
+    let c = Color.Red
+    match c {
+        Red => print(1)
+        Green => print(2)
+    }
+}

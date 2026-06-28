@@ -55,9 +55,14 @@ impl Checker {
                                 let is_literal_coercion = literal_coerces_to(&value.node, &t)
                                     || array_literal_coerces(&value.node, &t);
                                 if !is_literal_coercion {
+                                    // Echo the source spelling the user wrote
+                                    // (`i64`) rather than the canonical alias
+                                    // (`int`) so the message names their token.
+                                    let annotation =
+                                        crate::type_annotation_label(&ty_expr.node, &t);
                                     self.error(ErrorCode::E0110,
                                         format!(
-                                            "type annotation `{t}` doesn't match value type `{val_ty}`"
+                                            "type annotation `{annotation}` doesn't match value type `{val_ty}`"
                                         ),
                                         ty_expr.span.clone(),
                                     );

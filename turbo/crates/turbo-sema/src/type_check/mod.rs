@@ -806,10 +806,11 @@ impl Checker {
                                 && extract_int_literal(&c.value.node)
                                     .is_some_and(|n| int_literal_fits_in_type(n, &t));
                             if !is_int_literal_coercion {
+                                let annotation = crate::type_annotation_label(&ty_expr.node, &t);
                                 self.error(
                                     ErrorCode::E0110,
                                     format!(
-                                        "type annotation `{t}` doesn't match value type `{inferred_ty}`"
+                                        "type annotation `{annotation}` doesn't match value type `{inferred_ty}`"
                                     ),
                                     ty_expr.span.clone(),
                                 );

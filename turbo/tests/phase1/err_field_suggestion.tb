@@ -1,0 +1,6 @@
+struct Rect { width: i64, height: i64 }
+
+fn main() {
+    let r = Rect { width: 10, height: 20 }
+    print(r.widht)
+}
