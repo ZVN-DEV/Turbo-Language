@@ -1259,20 +1259,309 @@ fn rt_url_is_http(url: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://")
 }
 
+// ── SSRF guard: block loopback / private / link-local destinations ──────
+//
+// `rt_url_is_http` only validates the *scheme*. By itself that still lets a
+// program reach internal services and — most dangerously — cloud
+// instance-metadata endpoints (169.254.169.254), a classic SSRF pivot. The
+// helpers below additionally inspect the host. This is a direct port of the
+// matching block in `turbo_rt.c` (`rt_url_extract_host`, `rt_host_ipv4`,
+// `rt_ipv4_is_blocked`, `rt_host_is_blocked`, `rt_http_url_blocked_reason`)
+// so `turbolang run` (JIT) and `turbolang build && ./prog` (AOT) behave
+// identically: both block, and both honor `TURBO_ALLOW_PRIVATE_HOSTS=1`.
+//
+// Default: ON (block private hosts). Opt out with TURBO_ALLOW_PRIVATE_HOSTS=1.
+//
+// Scope / known gap (kept in sync with the C note): we parse numeric IP
+// literals (dotted-quad plus the inet_aton shorthand/octal/hex forms attackers
+// use to smuggle private IPs) and the `localhost` name. We deliberately do NOT
+// resolve arbitrary DNS names here (no DNS lookup): doing so would add a TOCTOU
+// window versus curl's own resolution. A hostname that resolves to a private
+// address via DNS rebinding is therefore not caught — layer network egress
+// controls for that.
+
+/// Parse a leading C-style unsigned integer the way `strtoul(p, &end, 0)`
+/// does: base auto-detected from the prefix (`0x`/`0X` → hex, leading `0` →
+/// octal, otherwise decimal). Skips leading ASCII whitespace and an optional
+/// sign (a `-` wraps, matching `strtoul`). Returns `(value, bytes_consumed)`,
+/// or `None` if no digits were consumed (`end == p` in the C sense). Used to
+/// reproduce the inet_aton numeric-IP forms exactly.
+fn parse_c_ulong(s: &str) -> Option<(u64, usize)> {
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let mut neg = false;
+    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+        neg = bytes[i] == b'-';
+        i += 1;
+    }
+    let mut base: u64 = 10;
+    if i < bytes.len() && bytes[i] == b'0' {
+        if i + 2 < bytes.len()
+            && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X')
+            && bytes[i + 2].is_ascii_hexdigit()
+        {
+            base = 16;
+            i += 2; // skip "0x"; digits follow
+        } else {
+            base = 8; // leave the '0' — it is a valid octal digit (value 0)
+        }
+    }
+    let digits_start = i;
+    let mut value: u64 = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        let digit = match base {
+            16 => (c as char).to_digit(16),
+            8 => {
+                if (b'0'..=b'7').contains(&c) {
+                    Some((c - b'0') as u32)
+                } else {
+                    None
+                }
+            }
+            _ => {
+                if c.is_ascii_digit() {
+                    Some((c - b'0') as u32)
+                } else {
+                    None
+                }
+            }
+        };
+        match digit {
+            Some(d) => {
+                value = value.wrapping_mul(base).wrapping_add(d as u64);
+                i += 1;
+            }
+            None => break,
+        }
+    }
+    if i == digits_start {
+        return None; // no digits consumed
+    }
+    if neg {
+        value = value.wrapping_neg();
+    }
+    Some((value, i))
+}
+
+/// inet_aton-style numeric IPv4 parser. Accepts 1–4 dotted parts, each
+/// decimal/octal/hex, exactly like the C resolver (and thus curl). Returns the
+/// address in host byte order, or `None` if `host` is not a numeric IPv4
+/// literal. Mirrors `rt_host_ipv4` in `turbo_rt.c`.
+fn rt_host_ipv4(host: &str) -> Option<u32> {
+    if host.is_empty() {
+        return None;
+    }
+    let mut parts: [u64; 4] = [0; 4];
+    let mut n = 0usize;
+    let mut rest = host;
+    while n < 4 {
+        let (v, consumed) = parse_c_ulong(rest)?;
+        if v > 0xffff_ffff {
+            return None; // part too large
+        }
+        parts[n] = v;
+        n += 1;
+        rest = &rest[consumed..];
+        if let Some(r) = rest.strip_prefix('.') {
+            if r.is_empty() {
+                return None; // trailing dot
+            }
+            rest = r;
+        } else {
+            break;
+        }
+    }
+    if !rest.is_empty() {
+        return None; // trailing junk
+    }
+    let addr: u64 = match n {
+        1 => parts[0],
+        2 => {
+            // a.b -> a.bbbbbb
+            if parts[0] > 0xff || parts[1] > 0xff_ffff {
+                return None;
+            }
+            (parts[0] << 24) | parts[1]
+        }
+        3 => {
+            // a.b.c -> a.b.cccc
+            if parts[0] > 0xff || parts[1] > 0xff || parts[2] > 0xffff {
+                return None;
+            }
+            (parts[0] << 24) | (parts[1] << 16) | parts[2]
+        }
+        4 => {
+            // a.b.c.d
+            if parts[0] > 0xff || parts[1] > 0xff || parts[2] > 0xff || parts[3] > 0xff {
+                return None;
+            }
+            (parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]
+        }
+        _ => return None,
+    };
+    Some(addr as u32)
+}
+
+/// True if the host-byte-order IPv4 address is loopback / private / link-local
+/// (incl. the 169.254.169.254 metadata endpoint). Mirrors `rt_ipv4_is_blocked`.
+fn rt_ipv4_is_blocked(a: u32) -> bool {
+    let o1 = (a >> 24) & 0xff;
+    let o2 = (a >> 16) & 0xff;
+    if o1 == 0 {
+        return true; // 0.0.0.0/8 "this host"
+    }
+    if o1 == 127 {
+        return true; // 127.0.0.0/8 loopback
+    }
+    if o1 == 10 {
+        return true; // 10.0.0.0/8 private
+    }
+    if o1 == 172 && (16..=31).contains(&o2) {
+        return true; // 172.16.0.0/12 private
+    }
+    if o1 == 192 && o2 == 168 {
+        return true; // 192.168.0.0/16 private
+    }
+    if o1 == 169 && o2 == 254 {
+        return true; // 169.254.0.0/16 link-local incl. metadata
+    }
+    false
+}
+
+/// True if the (scheme-stripped, port-stripped, bracket-stripped) host should
+/// be blocked. Handles `localhost`, IPv6 textual literals, and the numeric
+/// IPv4 forms. Mirrors `rt_host_is_blocked` in `turbo_rt.c`.
+fn rt_host_is_blocked(host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    if host.contains(':') {
+        // IPv6 textual literal (brackets already stripped by the caller).
+        if host == "::1" {
+            return true; // loopback
+        }
+        if host == "::" {
+            return true; // unspecified
+        }
+        let lower = host.to_ascii_lowercase();
+        if lower.starts_with("fe80:") {
+            return true; // link-local
+        }
+        if lower.starts_with("fc") || lower.starts_with("fd") {
+            return true; // fc00::/7 unique-local
+        }
+        // IPv4-mapped form e.g. ::ffff:127.0.0.1 — classify the trailing quad.
+        if let Some(idx) = host.rfind(':') {
+            if let Some(v4) = rt_host_ipv4(&host[idx + 1..]) {
+                if rt_ipv4_is_blocked(v4) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    if let Some(v4) = rt_host_ipv4(host) {
+        return rt_ipv4_is_blocked(v4);
+    }
+    false // a regular domain name — not resolved here (documented gap)
+}
+
+/// Extract the host portion of an http(s) URL: strips scheme, userinfo
+/// (`user:pass@`), port, and IPv6 brackets. Returns `None` if no host can be
+/// isolated, or if the host is `>= 256` bytes — longer than any valid DNS name
+/// (<= 253) or numeric literal. The caller treats `None` as fail-closed
+/// (blocked) so an attacker cannot pad an over-length numeric IP past the
+/// limit to skip the check. Mirrors `rt_url_extract_host` in `turbo_rt.c`.
+fn rt_url_extract_host(url: &str) -> Option<String> {
+    let after_scheme = if url.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("http://")) {
+        &url[7..]
+    } else if url.get(..8).is_some_and(|s| s.eq_ignore_ascii_case("https://")) {
+        &url[8..]
+    } else {
+        return None;
+    };
+    // authority ends at the first '/', '?', or '#'
+    let auth_end = after_scheme
+        .find(['/', '?', '#'])
+        .unwrap_or(after_scheme.len());
+    let authority = &after_scheme[..auth_end];
+    // userinfo: host starts after the last '@' inside the authority
+    let host_part = match authority.rfind('@') {
+        Some(idx) => &authority[idx + 1..],
+        None => authority,
+    };
+    let host = if let Some(stripped) = host_part.strip_prefix('[') {
+        // IPv6 literal: up to the closing ']'
+        match stripped.find(']') {
+            Some(end) => &stripped[..end],
+            None => stripped,
+        }
+    } else {
+        // strip ":port"
+        match host_part.find(':') {
+            Some(idx) => &host_part[..idx],
+            None => host_part,
+        }
+    };
+    let len = host.len();
+    if len == 0 || len >= 256 {
+        return None;
+    }
+    Some(host.to_string())
+}
+
+/// Returns `None` if the URL is allowed, or `Some(reason)` if it should be
+/// blocked. Combines the scheme check with the SSRF host check. Fail-closed:
+/// a host that cannot be isolated (empty or over-length) is blocked unless
+/// `TURBO_ALLOW_PRIVATE_HOSTS=1`. Mirrors `rt_http_url_blocked_reason` in
+/// `turbo_rt.c` — keep the two in lockstep.
+fn rt_http_url_blocked_reason(url: &str) -> Option<&'static str> {
+    if !rt_url_is_http(url) {
+        return Some("non-http(s) scheme");
+    }
+    // Opt-out for trusted environments. Match the C runtime's strictness:
+    // exactly the string "1".
+    if std::env::var("TURBO_ALLOW_PRIVATE_HOSTS").as_deref() == Ok("1") {
+        return None;
+    }
+    match rt_url_extract_host(url) {
+        Some(host) => {
+            if rt_host_is_blocked(&host) {
+                Some("private/loopback host blocked (set TURBO_ALLOW_PRIVATE_HOSTS=1 to allow)")
+            } else {
+                None
+            }
+        }
+        // Fail closed: could not isolate a host (empty, or longer than a valid
+        // DNS name). Block rather than allow so an over-length numeric IP can't
+        // be smuggled past the guard.
+        None => Some("unparseable or over-length host blocked (set TURBO_ALLOW_PRIVATE_HOSTS=1 to allow)"),
+    }
+}
+
 /// HTTP GET via system curl. Returns response body as a C string.
-/// Hardened: rejects non-http(s) schemes and flag-shaped inputs, pins the
-/// protocol allowlist, bounds total time, and uses `--` to prevent flag
-/// injection. Keep in sync with `rt_http_get` in `turbo_rt.c`.
+/// Hardened: rejects non-http(s) schemes and flag-shaped inputs, blocks
+/// loopback/private/link-local hosts (SSRF guard, opt out with
+/// `TURBO_ALLOW_PRIVATE_HOSTS=1`), pins the protocol allowlist, bounds total
+/// time, and uses `--` to prevent flag injection. The host guard now exists in
+/// both runtimes — keep in sync with `rt_http_get` in `turbo_rt.c`.
 pub(crate) extern "C" fn rt_http_get(url: *const u8) -> *const u8 {
     if url.is_null() {
-        eprintln!("[rt_http] blocked non-http(s) URL: (null)");
+        eprintln!("[rt_http] blocked URL (non-http(s) scheme): (null)");
         return rt_empty_cstr();
     }
     let url = unsafe { std::ffi::CStr::from_ptr(url as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    if !rt_url_is_http(url) {
-        eprintln!("[rt_http] blocked non-http(s) URL: {}", url);
+    if let Some(reason) = rt_http_url_blocked_reason(url) {
+        eprintln!("[rt_http] blocked URL ({}): {}", reason, url);
         return rt_empty_cstr();
     }
     let output = std::process::Command::new("curl")
@@ -1301,18 +1590,19 @@ pub(crate) extern "C" fn rt_http_get(url: *const u8) -> *const u8 {
 }
 
 /// HTTP POST via system curl. Takes URL and body, returns response body as a C string.
-/// Hardened with the same scheme validation, protocol pinning, and flag-injection
-/// guards as `rt_http_get`. Keep in sync with `rt_http_post` in `turbo_rt.c`.
+/// Hardened with the same scheme validation, SSRF host guard, protocol pinning,
+/// and flag-injection guards as `rt_http_get`. The host guard now exists in both
+/// runtimes — keep in sync with `rt_http_post` in `turbo_rt.c`.
 pub(crate) extern "C" fn rt_http_post(url: *const u8, body: *const u8) -> *const u8 {
     if url.is_null() {
-        eprintln!("[rt_http] blocked non-http(s) URL: (null)");
+        eprintln!("[rt_http] blocked URL (non-http(s) scheme): (null)");
         return rt_empty_cstr();
     }
     let url = unsafe { std::ffi::CStr::from_ptr(url as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    if !rt_url_is_http(url) {
-        eprintln!("[rt_http] blocked non-http(s) URL: {}", url);
+    if let Some(reason) = rt_http_url_blocked_reason(url) {
+        eprintln!("[rt_http] blocked URL ({}): {}", reason, url);
         return rt_empty_cstr();
     }
     let body_str = if body.is_null() {
@@ -1353,21 +1643,25 @@ pub(crate) extern "C" fn rt_http_post(url: *const u8, body: *const u8) -> *const
     }
 }
 
-/// HTTP POST with custom headers. `headers` is a newline-separated string of headers.
+/// HTTP POST with custom headers. `headers` is a newline-separated string of
+/// headers. Hardened with the same scheme validation and SSRF host guard as
+/// `rt_http_get` (opt out with `TURBO_ALLOW_PRIVATE_HOSTS=1`). The host guard
+/// now exists in both runtimes — keep in sync with `rt_http_post_with_headers`
+/// in `turbo_rt.c`.
 pub(crate) extern "C" fn rt_http_post_with_headers(
     url: *const u8,
     body: *const u8,
     headers: *const u8,
 ) -> *const u8 {
     if url.is_null() {
-        eprintln!("[rt_http] blocked non-http(s) URL: (null)");
+        eprintln!("[rt_http] blocked URL (non-http(s) scheme): (null)");
         return rt_empty_cstr();
     }
     let url = unsafe { std::ffi::CStr::from_ptr(url as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    if !rt_url_is_http(url) {
-        eprintln!("[rt_http] blocked non-http(s) URL: {}", url);
+    if let Some(reason) = rt_http_url_blocked_reason(url) {
+        eprintln!("[rt_http] blocked URL ({}): {}", reason, url);
         return rt_empty_cstr();
     }
     let body_str = if body.is_null() {
@@ -2762,5 +3056,114 @@ fn chrono_like_format(epoch_secs: i64, fmt: &str) -> String {
             return String::new();
         }
         String::from_utf8_lossy(&buf[..n]).to_string()
+    }
+}
+
+#[cfg(test)]
+mod ssrf_tests {
+    use super::{
+        rt_host_ipv4, rt_host_is_blocked, rt_http_url_blocked_reason, rt_ipv4_is_blocked,
+        rt_url_extract_host,
+    };
+
+    #[test]
+    fn numeric_ipv4_forms_parse_like_inet_aton() {
+        // dotted-quad
+        assert_eq!(rt_host_ipv4("127.0.0.1"), Some(0x7f00_0001));
+        // decimal integer form
+        assert_eq!(rt_host_ipv4("2130706433"), Some(0x7f00_0001));
+        // hex form
+        assert_eq!(rt_host_ipv4("0x7f000001"), Some(0x7f00_0001));
+        // octal form (0177 == 127)
+        assert_eq!(rt_host_ipv4("0177.0.0.1"), Some(0x7f00_0001));
+        // two-part shorthand a.b -> 127.0.0.1
+        assert_eq!(rt_host_ipv4("127.1"), Some(0x7f00_0001));
+        // metadata endpoint
+        assert_eq!(rt_host_ipv4("169.254.169.254"), Some(0xa9fe_a9fe));
+        // not numeric
+        assert_eq!(rt_host_ipv4("example.com"), None);
+        // trailing junk / too many parts
+        assert_eq!(rt_host_ipv4("1.2.3.4.5"), None);
+    }
+
+    #[test]
+    fn blocked_ranges() {
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.1.1",
+            "169.254.169.254",
+            "0.0.0.0",
+        ] {
+            let v4 = rt_host_ipv4(ip).expect("numeric");
+            assert!(rt_ipv4_is_blocked(v4), "{ip} should be blocked");
+        }
+        // public addresses are allowed
+        let v4 = rt_host_ipv4("8.8.8.8").unwrap();
+        assert!(!rt_ipv4_is_blocked(v4));
+        // 172.15/172.32 are outside the private /12
+        assert!(!rt_ipv4_is_blocked(rt_host_ipv4("172.15.0.1").unwrap()));
+        assert!(!rt_ipv4_is_blocked(rt_host_ipv4("172.32.0.1").unwrap()));
+    }
+
+    #[test]
+    fn hostname_and_ipv6_classification() {
+        assert!(rt_host_is_blocked("localhost"));
+        assert!(rt_host_is_blocked("LOCALHOST"));
+        assert!(rt_host_is_blocked("::1"));
+        assert!(rt_host_is_blocked("::"));
+        assert!(rt_host_is_blocked("fe80::1"));
+        assert!(rt_host_is_blocked("fc00::1"));
+        assert!(rt_host_is_blocked("fd12:3456::1"));
+        assert!(rt_host_is_blocked("::ffff:127.0.0.1"));
+        assert!(!rt_host_is_blocked("example.com"));
+        // A public IPv6 whose tail after the last ':' is not a numeric literal
+        // is allowed.
+        assert!(!rt_host_is_blocked("2001:db8::cafe"));
+        // Parity note: like the C runtime, the IPv4-mapped fallback classifies
+        // the tail after the last ':' via the numeric-IPv4 parser. A tail that
+        // happens to be a small decimal (e.g. "8888" -> 0.0.34.184, in
+        // 0.0.0.0/8) is therefore conservatively blocked in BOTH runtimes. We
+        // assert that here to lock the JIT/AOT behaviour together.
+        assert!(rt_host_is_blocked("2001:4860:4860::8888"));
+    }
+
+    #[test]
+    fn host_extraction() {
+        assert_eq!(rt_url_extract_host("http://127.0.0.1/").as_deref(), Some("127.0.0.1"));
+        assert_eq!(
+            rt_url_extract_host("https://user:pass@example.com:8443/path?q=1").as_deref(),
+            Some("example.com")
+        );
+        assert_eq!(rt_url_extract_host("http://[::1]:8080/").as_deref(), Some("::1"));
+        assert_eq!(rt_url_extract_host("http://169.254.169.254/latest").as_deref(), Some("169.254.169.254"));
+        // non-http scheme → None
+        assert_eq!(rt_url_extract_host("file:///etc/passwd"), None);
+        // over-length host (>= 256 bytes) → None (fail closed at the caller)
+        let long = format!("http://{}/", "a".repeat(300));
+        assert_eq!(rt_url_extract_host(&long), None);
+    }
+
+    #[test]
+    fn blocked_reason_default_on() {
+        // Non-http scheme is always rejected regardless of the opt-out.
+        assert_eq!(rt_http_url_blocked_reason("file:///etc/passwd"), Some("non-http(s) scheme"));
+        // The host-blocking assertions below assume the opt-out is NOT active;
+        // skip them if a developer has it exported in their shell.
+        if std::env::var("TURBO_ALLOW_PRIVATE_HOSTS").as_deref() == Ok("1") {
+            return;
+        }
+        assert!(rt_http_url_blocked_reason("http://169.254.169.254/").is_some());
+        assert!(rt_http_url_blocked_reason("http://127.0.0.1:9/").is_some());
+        assert!(rt_http_url_blocked_reason("http://2130706433/").is_some());
+        assert!(rt_http_url_blocked_reason("http://0x7f000001/").is_some());
+        assert!(rt_http_url_blocked_reason("http://localhost/").is_some());
+        // over-length host fails closed
+        let long = format!("http://{}/", "9".repeat(300));
+        assert!(rt_http_url_blocked_reason(&long).is_some());
+        // a public host is allowed
+        assert_eq!(rt_http_url_blocked_reason("https://example.com/"), None);
     }
 }

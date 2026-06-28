@@ -188,9 +188,14 @@ fn run_code(source: &str) -> (String, String, bool) {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            // Replace temp filename in error messages with a friendlier name
-            let stderr = stderr.replace(&tmp_path.display().to_string(), "playground");
-            let stderr = stderr.replace("playground.tb", "playground");
+            // The compiler renders diagnostics with ariadne, which colorizes
+            // output unconditionally (even when stderr is a pipe, as it is
+            // here) and prints against the temp file's *basename*. Strip the
+            // ANSI escapes and scrub the random temp filename before the text
+            // reaches the JSON response — the page renders it through
+            // escapeHtml(), which would otherwise show literal escape
+            // sequences and leak `turbo-playground-XXXXXX.tb`.
+            let stderr = sanitize_stderr(&stderr, &tmp_path);
             let stderr = if timed_out {
                 if stderr.is_empty() {
                     "error: execution timed out after 5s".to_string()
@@ -281,6 +286,78 @@ fn json_string(s: &str) -> String {
     out
 }
 
+/// Sanitize captured compiler stderr for display in the playground.
+///
+/// Two transformations, in order:
+///   1. Strip ANSI escape sequences (ariadne colorizes unconditionally, even
+///      when stderr is piped, so the captured bytes contain SGR color codes).
+///   2. Replace the internal temp filename with a stable, friendly name. The
+///      full path is replaced *before* the basename: the basename is a
+///      substring of the full path, so doing it the other way around would
+///      leave the temp directory prefix behind.
+fn sanitize_stderr(stderr: &str, tmp_path: &std::path::Path) -> String {
+    const FRIENDLY: &str = "playground.tb";
+    let stderr = strip_ansi(stderr);
+    let stderr = stderr.replace(&tmp_path.display().to_string(), FRIENDLY);
+    match tmp_path.file_name().and_then(|n| n.to_str()) {
+        Some(base) => stderr.replace(base, FRIENDLY),
+        None => stderr,
+    }
+}
+
+/// Strip ANSI escape sequences from a string.
+///
+/// The page renders compiler output as plain escaped HTML, so any leftover
+/// terminal escape sequences would surface as literal gibberish (e.g.
+/// `\x1b[31m`). Handles the two forms ariadne can emit:
+///
+/// * CSI / SGR: `ESC [ ... <final byte 0x40-0x7E>` (e.g. `ESC[31m`, `ESC[0m`)
+/// * OSC: `ESC ] ... (BEL | ST)` where ST is the two-byte `ESC \`
+///
+/// Any other lone `ESC` is simply dropped.
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some('[') => {
+                chars.next(); // consume '['
+                // Consume parameter/intermediate bytes up to and including the
+                // final byte in the range 0x40..=0x7E.
+                while let Some(&nc) = chars.peek() {
+                    chars.next();
+                    if ('\u{40}'..='\u{7e}').contains(&nc) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                chars.next(); // consume ']'
+                // Consume until BEL or the two-byte ST (`ESC \`).
+                while let Some(&nc) = chars.peek() {
+                    chars.next();
+                    if nc == '\x07' {
+                        break;
+                    }
+                    if nc == '\x1b' {
+                        if chars.peek().copied() == Some('\\') {
+                            chars.next();
+                        }
+                        break;
+                    }
+                }
+            }
+            // Lone ESC or an unrecognized escape: drop just the ESC byte.
+            _ => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,6 +381,45 @@ mod tests {
             );
             assert!(seen.insert(tok), "duplicate token generated");
         }
+    }
+
+    #[test]
+    fn strip_ansi_removes_color_codes() {
+        // A representative ariadne-style colored error fragment.
+        let colored = "\x1b[31mError:\x1b[0m something \x1b[1;33mwrong\x1b[0m";
+        let plain = strip_ansi(colored);
+        assert_eq!(plain, "Error: something wrong");
+        assert!(!plain.contains('\x1b'), "escape leaked: {plain:?}");
+    }
+
+    #[test]
+    fn strip_ansi_preserves_plain_text() {
+        let s = "no escapes here\nline two\tindented";
+        assert_eq!(strip_ansi(s), s);
+    }
+
+    #[test]
+    fn sanitized_stderr_has_no_ansi_or_temp_name() {
+        // Mirror exactly what the compiler subprocess emits: colorized ariadne
+        // output referencing the temp file by full path and by basename.
+        let tmp_path =
+            std::path::PathBuf::from("/var/folders/xy/turbo-playground-95SRiR.tb");
+        let raw = "\x1b[31mError:\x1b[0m error[E0109] at \
+                   /var/folders/xy/turbo-playground-95SRiR.tb:1:13\n   \
+                   turbo-playground-95SRiR.tb:1:13 expected expression\x1b[0m";
+        let sanitized = sanitize_stderr(raw, &tmp_path);
+        assert!(
+            !sanitized.contains('\x1b'),
+            "ANSI escape leaked: {sanitized:?}"
+        );
+        assert!(
+            !sanitized.contains("turbo-playground-"),
+            "temp basename leaked: {sanitized:?}"
+        );
+        assert!(
+            sanitized.contains("playground.tb:1:13"),
+            "friendly name missing: {sanitized:?}"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "turbo-formatter"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2021"
 rust-version.workspace = true
 description.workspace = true
@@ -10,5 +10,5 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-turbo-lexer = { version = "0.9.1", path = "../turbo-lexer" }
-turbo-parser = { version = "0.9.1", path = "../turbo-parser" }
+turbo-lexer = { version = "0.9.2", path = "../turbo-lexer" }
+turbo-parser = { version = "0.9.2", path = "../turbo-parser" }

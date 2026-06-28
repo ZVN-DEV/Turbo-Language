@@ -124,7 +124,7 @@ export default function Footer() {
         </div>
         <div className="border-t border-border pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
           <p className="text-sm text-gray-600 font-[family-name:var(--font-geist-sans)]">
-            Built with Cranelift. Designed for the AI age.
+            Built with Cranelift. A small, honest core.
           </p>
           <p className="text-sm text-gray-600 font-[family-name:var(--font-geist-sans)]">
             &copy; {new Date().getFullYear()} Turbo Language

@@ -337,9 +337,13 @@ fn rewrite_stmt(stmt: &mut Stmt, fn_value_ctx: bool) {
         }
         Stmt::Return(None) => {}
         Stmt::Defer(e) => {
-            // `defer` runs its expression at block exit for side effects.
-            // The value is discarded.
+            // `defer` runs its expression at block exit for side effects;
+            // its value is discarded. A direct COW call here (e.g.
+            // `defer arr.push(4)`) must still self-assign, otherwise the
+            // new value is silently dropped — exactly like a bare
+            // statement-position call.
             rewrite_expr(&mut e.node, false, fn_value_ctx);
+            rewrite_cow_call_in_place(e);
         }
         Stmt::Expr(e) => {
             // First descend into the expression with value_ctx=false so
@@ -349,21 +353,11 @@ fn rewrite_stmt(stmt: &mut Stmt, fn_value_ctx: bool) {
 
             // If the statement expression is itself a top-level COW call
             // (e.g. `push(items, 4)` written as a free-standing statement
-            // or via UFCS), rewrite it in place to a self-assign. This
+            // or via UFCS, or a chained `s.trim().upper()`), rewrite it in
+            // place to a self-assign of the chain's root receiver. This
             // handles the `arr.push(x)` case where the parser produced
             // a bare `Stmt::Expr(call)` node.
-            if is_cow_builtin_call(&e.node) {
-                let span = e.span.clone();
-                let replaced = std::mem::replace(e, Spanned::new(Expr::Unit, span.clone()));
-                let new_stmt_inner = rewrite_call_to_assign(replaced);
-                // `rewrite_call_to_assign` always returns a `Stmt::Expr`
-                // wrapping the rewritten call; pull it back out.
-                if let Stmt::Expr(new_expr) = new_stmt_inner {
-                    *e = new_expr;
-                } else {
-                    unreachable!("rewrite_call_to_assign returned non-Expr");
-                }
-            }
+            rewrite_cow_call_in_place(e);
         }
     }
 }
@@ -378,53 +372,320 @@ pub(crate) fn is_cow_builtin_call(expr: &Expr) -> bool {
     false
 }
 
-/// Rewrite a COW call expression into an assignment statement targeting
-/// the call's first argument.
+/// If `e` is a top-level COW builtin call in statement position, rewrite
+/// it in place into the corresponding self-assignment (e.g. `push(arr, 4)`
+/// becomes `arr = push(arr, 4)`). Leaves `e` untouched when it is not a
+/// rewritable COW call, or when the chain doesn't root in a simple,
+/// side-effect-free lvalue (see `rewrite_call_to_assign`).
 ///
-/// * `push(items, 4)`       → `items = push(items, 4)`
-/// * `push(b.items, 4)`     → `b.items = push(b.items, 4)`
-/// * `push(arr[0], 4)`      → `arr[0] = push(arr[0], 4)`
+/// Shared by the `Stmt::Expr` and `Stmt::Defer` arms so both statement
+/// positions get identical treatment.
+fn rewrite_cow_call_in_place(e: &mut Spanned<Expr>) {
+    if !is_cow_builtin_call(&e.node) {
+        return;
+    }
+    let span = e.span.clone();
+    let replaced = std::mem::replace(e, Spanned::new(Expr::Unit, span));
+    match rewrite_call_to_assign(replaced) {
+        // `rewrite_call_to_assign` always returns a `Stmt::Expr` wrapping
+        // either the rewritten self-assign or the original call unchanged.
+        Stmt::Expr(new_expr) => *e = new_expr,
+        _ => unreachable!("rewrite_call_to_assign returned non-Expr"),
+    }
+}
+
+/// An assignment target extracted from a COW chain's root lvalue, owned so
+/// it can outlive the borrow into the source call expression.
+enum AssignTarget {
+    Var(String),
+    Field {
+        object: Box<Spanned<Expr>>,
+        field: String,
+    },
+    Index {
+        object: Box<Spanned<Expr>>,
+        index: Box<Spanned<Expr>>,
+    },
+}
+
+/// Descend through a chain of COW builtin calls, following each call's
+/// first argument, and return the innermost base expression.
 ///
-/// If the first argument is none of the above (e.g. a deeper expression)
-/// the call is left as a plain `Stmt::Expr`.
-fn rewrite_call_to_assign(expr: Spanned<Expr>) -> Stmt {
-    if let Expr::Call { ref args, .. } = expr.node {
-        if !args.is_empty() {
-            let target_arg = args[0].clone();
-            let span = expr.span.clone();
-            match target_arg.node {
-                Expr::Ident(var_name) => {
-                    return Stmt::Expr(Spanned::new(
-                        Expr::Assign {
-                            target: var_name,
-                            value: Box::new(expr),
-                        },
-                        span,
-                    ));
-                }
-                Expr::FieldAccess { object, field } => {
-                    return Stmt::Expr(Spanned::new(
-                        Expr::FieldAssign {
-                            object,
-                            field,
-                            value: Box::new(expr),
-                        },
-                        span,
-                    ));
-                }
-                Expr::Index { object, index } => {
-                    return Stmt::Expr(Spanned::new(
-                        Expr::IndexAssign {
-                            object,
-                            index,
-                            value: Box::new(expr),
-                        },
-                        span,
-                    ));
-                }
-                _ => {}
-            }
+/// `s.trim().upper()` desugars to `upper(trim(s))`; the first argument of
+/// the outer `upper` call is itself the COW call `trim(s)`, whose first
+/// argument is the root `s`. For a plain (non-chained) first argument this
+/// just returns that argument unchanged.
+fn chain_root_lvalue(first_arg: &Expr) -> &Expr {
+    let mut cur = first_arg;
+    while is_cow_builtin_call(cur) {
+        match cur {
+            // `is_cow_builtin_call` guarantees a non-empty arg list.
+            Expr::Call { args, .. } => cur = &args[0].node,
+            _ => break,
         }
     }
-    Stmt::Expr(expr)
+    cur
+}
+
+/// Conservatively true when evaluating `expr` has no observable side
+/// effects, so duplicating it during an in-place COW rewrite is safe.
+///
+/// Anything containing a function call, await/spawn, assignment, etc.
+/// returns false — those must not be evaluated twice (see the
+/// `push(arr[next()], 4)` double-evaluation case).
+fn is_side_effect_free(expr: &Expr) -> bool {
+    match expr {
+        Expr::IntLit(_)
+        | Expr::FloatLit(_)
+        | Expr::StringLit(_)
+        | Expr::BoolLit(_)
+        | Expr::Unit
+        | Expr::Ident(_)
+        | Expr::NoneExpr => true,
+        Expr::FieldAccess { object, .. } => is_side_effect_free(&object.node),
+        Expr::Index { object, index } => {
+            is_side_effect_free(&object.node) && is_side_effect_free(&index.node)
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            is_side_effect_free(&left.node) && is_side_effect_free(&right.node)
+        }
+        Expr::UnaryOp { expr, .. } => is_side_effect_free(&expr.node),
+        _ => false,
+    }
+}
+
+/// Compute the assignment target for a COW call's root lvalue, or `None`
+/// when the root is not a self-assignable, side-effect-free lvalue.
+///
+/// A bare variable is always safe (reading a name twice has no effect).
+/// Field/index targets are only accepted when the parts that would be
+/// duplicated by the rewrite (the object, and for an index its index
+/// expression) are themselves side-effect-free, so we never evaluate a
+/// side-effecting receiver/index twice.
+fn assign_target(root: &Expr) -> Option<AssignTarget> {
+    match root {
+        Expr::Ident(name) => Some(AssignTarget::Var(name.clone())),
+        Expr::FieldAccess { object, field } if is_side_effect_free(&object.node) => {
+            Some(AssignTarget::Field {
+                object: object.clone(),
+                field: field.clone(),
+            })
+        }
+        Expr::Index { object, index }
+            if is_side_effect_free(&object.node) && is_side_effect_free(&index.node) =>
+        {
+            Some(AssignTarget::Index {
+                object: object.clone(),
+                index: index.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Rewrite a COW call expression into an assignment statement targeting the
+/// root lvalue the (possibly chained) call ultimately operates on.
+///
+/// * `push(items, 4)`        → `items = push(items, 4)`
+/// * `push(b.items, 4)`      → `b.items = push(b.items, 4)`
+/// * `push(arr[0], 4)`       → `arr[0] = push(arr[0], 4)`
+/// * `upper(trim(s))`        → `s = upper(trim(s))`   (i.e. `s.trim().upper()`)
+///
+/// The call is left as a plain `Stmt::Expr` (value discarded) when the
+/// chain does NOT root in a simple, side-effect-free lvalue — for example
+/// `upper(get_str())` (root is a non-lvalue call) or `push(arr[next()], 4)`
+/// (rewriting would evaluate `next()` twice). Leaving such cases as value
+/// calls is conservative but avoids both wrong targets and double-evaluation
+/// of side-effecting subexpressions.
+fn rewrite_call_to_assign(expr: Spanned<Expr>) -> Stmt {
+    // Determine the assignment target (owned, so the borrow into `expr`
+    // ends before we move `expr` into the assignment's value).
+    let target = match &expr.node {
+        Expr::Call { args, .. } if !args.is_empty() => {
+            assign_target(chain_root_lvalue(&args[0].node))
+        }
+        _ => None,
+    };
+
+    let span = expr.span.clone();
+    match target {
+        Some(AssignTarget::Var(var_name)) => Stmt::Expr(Spanned::new(
+            Expr::Assign {
+                target: var_name,
+                value: Box::new(expr),
+            },
+            span,
+        )),
+        Some(AssignTarget::Field { object, field }) => Stmt::Expr(Spanned::new(
+            Expr::FieldAssign {
+                object,
+                field,
+                value: Box::new(expr),
+            },
+            span,
+        )),
+        Some(AssignTarget::Index { object, index }) => Stmt::Expr(Spanned::new(
+            Expr::IndexAssign {
+                object,
+                index,
+                value: Box::new(expr),
+            },
+            span,
+        )),
+        None => Stmt::Expr(expr),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sp<T>(node: T) -> Spanned<T> {
+        Spanned::new(node, 0..0)
+    }
+
+    fn ident(name: &str) -> Spanned<Expr> {
+        sp(Expr::Ident(name.to_string()))
+    }
+
+    fn call(name: &str, args: Vec<Spanned<Expr>>) -> Spanned<Expr> {
+        sp(Expr::Call {
+            callee: Box::new(ident(name)),
+            args,
+        })
+    }
+
+    // --- BUG 1: statement-position COW method chains ---------------------
+
+    #[test]
+    fn chained_cow_call_in_statement_position_self_assigns_root() {
+        // `s.trim().upper()` desugars to `upper(trim(s))`. As a bare
+        // statement it must become `s = upper(trim(s))` rather than fall
+        // through the rewrite and silently discard the new string.
+        let inner = call("trim", vec![ident("s")]);
+        let outer = call("upper", vec![inner]);
+        let mut stmt = Stmt::Expr(outer);
+
+        rewrite_stmt(&mut stmt, false);
+
+        match stmt {
+            Stmt::Expr(Spanned {
+                node: Expr::Assign { target, value },
+                ..
+            }) => {
+                assert_eq!(target, "s");
+                // The assigned value is still the full chained COW call.
+                assert!(is_cow_builtin_call(&value.node));
+            }
+            other => panic!("expected `s = upper(trim(s))`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chain_not_rooted_in_lvalue_is_left_as_value_call() {
+        // `upper(make())` — the chain roots in a non-lvalue call, so there
+        // is no assignable target; leave it as a plain value call rather
+        // than invent a wrong one.
+        let inner = call("make", vec![]); // not a COW call, not an lvalue
+        let outer = call("upper", vec![inner]);
+        let mut stmt = Stmt::Expr(outer);
+
+        rewrite_stmt(&mut stmt, false);
+
+        match stmt {
+            Stmt::Expr(Spanned {
+                node: Expr::Call { .. },
+                ..
+            }) => {}
+            other => panic!("expected unchanged value call, got {other:?}"),
+        }
+    }
+
+    // --- BUG 2: defer direct COW call ------------------------------------
+
+    #[test]
+    fn defer_direct_cow_call_self_assigns() {
+        // `defer arr.push(4)` must self-assign so the new array isn't
+        // dropped at block exit.
+        let c = call("push", vec![ident("arr"), sp(Expr::IntLit(4))]);
+        let mut stmt = Stmt::Defer(c);
+
+        rewrite_stmt(&mut stmt, false);
+
+        match stmt {
+            Stmt::Defer(Spanned {
+                node: Expr::Assign { target, value },
+                ..
+            }) => {
+                assert_eq!(target, "arr");
+                assert!(is_cow_builtin_call(&value.node));
+            }
+            other => panic!("expected deferred `arr = push(arr, 4)`, got {other:?}"),
+        }
+    }
+
+    // --- BUG 3: double-evaluation of side-effecting targets --------------
+
+    #[test]
+    fn side_effecting_index_target_is_not_rewritten() {
+        // `push(arr[next()], 4)` — an in-place IndexAssign rewrite would
+        // evaluate `next()` twice. Leave it as a value call instead.
+        let index_expr = sp(Expr::Index {
+            object: Box::new(ident("arr")),
+            index: Box::new(call("next", vec![])),
+        });
+        let c = call("push", vec![index_expr, sp(Expr::IntLit(4))]);
+        let mut stmt = Stmt::Expr(c);
+
+        rewrite_stmt(&mut stmt, false);
+
+        match stmt {
+            Stmt::Expr(Spanned {
+                node: Expr::Call { .. },
+                ..
+            }) => {}
+            other => panic!("expected unchanged value call (no double-eval), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn simple_index_target_is_rewritten() {
+        // `push(arr[0], 4)` — the index is a literal, safe to duplicate, so
+        // this still rewrites to an IndexAssign (regression guard that the
+        // BUG 3 fix didn't over-broadly disable index targets).
+        let index_expr = sp(Expr::Index {
+            object: Box::new(ident("arr")),
+            index: Box::new(sp(Expr::IntLit(0))),
+        });
+        let c = call("push", vec![index_expr, sp(Expr::IntLit(4))]);
+        let mut stmt = Stmt::Expr(c);
+
+        rewrite_stmt(&mut stmt, false);
+
+        match stmt {
+            Stmt::Expr(Spanned {
+                node: Expr::IndexAssign { .. },
+                ..
+            }) => {}
+            other => panic!("expected `arr[0] = push(arr[0], 4)`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plain_variable_cow_call_still_self_assigns() {
+        // Regression guard for the common case: `arr.push(4)` => `push(arr, 4)`
+        // must still rewrite to `arr = push(arr, 4)`.
+        let c = call("push", vec![ident("arr"), sp(Expr::IntLit(4))]);
+        let mut stmt = Stmt::Expr(c);
+
+        rewrite_stmt(&mut stmt, false);
+
+        match stmt {
+            Stmt::Expr(Spanned {
+                node: Expr::Assign { target, .. },
+                ..
+            }) => assert_eq!(target, "arr"),
+            other => panic!("expected `arr = push(arr, 4)`, got {other:?}"),
+        }
+    }
 }

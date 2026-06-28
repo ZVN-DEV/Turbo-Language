@@ -18,8 +18,15 @@ Everything in the current design documents. What ships on day one.
 - Effects: `async`, `throws`, `io`, `unsafe`, `diverges` tracked in function signatures
 
 ### Compilation
-- LLVM backend for optimized release builds (x86-64, AArch64, RISC-V)
-- Cranelift backend for sub-second incremental dev builds
+- Cranelift backend for both fast JIT (`run`) and AOT (`build`) — the single
+  code-generation backend
+- ~~LLVM backend for optimized release builds (x86-64, AArch64, RISC-V)~~
+  **Removed/deferred in 0.9.1.** The experimental LLVM backend was dropped:
+  Cranelift is now the only backend (the LLVM path was a partial duplicate that
+  built incompletely and showed no measured speedup over Cranelift on the fib
+  microbenchmark). It is parked on the `llvm-backend` branch and will be reintroduced
+  only if a future optimizing backend reaches parity, builds cleanly, and shows
+  a measured win — ideally lowering through a shared mid-level IR.
 - WebAssembly target (`wasm32-wasi`) with dedicated optimization pipeline
 - Debug, release, and size-optimized build profiles
 

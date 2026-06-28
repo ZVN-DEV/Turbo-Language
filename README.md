@@ -102,7 +102,7 @@ Turbo compiles directly to machine code. Programs start instantly and run at nat
 - **JIT execution** via `turbolang run` for rapid development (Cranelift)
 - **AOT compilation** via `turbolang build` for production binaries (Cranelift)
 - **WASM** via `turbolang build --target wasm` for WebAssembly output
-- **Cross-compilation** via `turbolang build --target linux-arm64` from macOS
+- **Cross-compilation** via `turbolang build --target linux-x86` from macOS (a `linux-arm64` target is recognized but not yet shipped/validated — see below)
 
 ### Type System
 
@@ -274,7 +274,7 @@ fn main() {
 
 ### Standard Library
 
-100+ built-in functions with no imports required. Method syntax works via UFCS -- `s.trim()` is equivalent to `trim(s)`.
+104 built-in functions with no imports required. Method syntax works via UFCS -- `s.trim()` is equivalent to `trim(s)`.
 
 | Category | Highlights |
 |----------|------------|
@@ -340,8 +340,8 @@ See [`examples/speed-server/main.tb`](examples/speed-server/main.tb)
 | `turbolang run <file.tb>` | Compile and run via JIT |
 | `turbolang build <file.tb>` | Compile to native binary (Cranelift) |
 | `turbolang build --target wasm <file.tb>` | Compile to WebAssembly |
-| `turbolang build --target linux-arm64 <file.tb>` | Cross-compile for Linux ARM64 |
 | `turbolang build --target linux-x86 <file.tb>` | Cross-compile for Linux x86_64 |
+| `turbolang build --target linux-arm64 <file.tb>` | Cross-compile for Linux ARM64 (planned — recognized but not yet shipped/validated) |
 | `turbolang test <file.tb>` | Run `@test` functions |
 | `turbolang bench <file.tb>` | Benchmark with timing |
 | `turbolang check <file.tb>` | Type-check without compiling |
@@ -388,17 +388,29 @@ Full reference: [`docs/errors.md`](docs/errors.md)
 
 ## Performance
 
-Benchmarked on Apple Silicon (fib(40), recursive):
+`fib(40)` is a single recursive microbenchmark — it stresses function-call and
+recursion overhead, not a real-world workload (the suite has no real-world
+workloads yet). The figures below are the best of 5 wall-clock runs on an Apple
+M5 Max (macOS 26.5.1, 2026-06-27), comparing Turbo's AOT (`turbolang build`)
+output against native and interpreted baselines. Reproduce them with
+`./turbo/benchmarks/run_comparison.sh` and `./turbo/benchmarks/run_external_baselines.sh`.
 
-| Language | Time | Binary Size |
-|----------|------|-------------|
-| Rust (rustc -O) | 180ms | 441 KB |
-| **Turbo (Cranelift)** | **250ms** | **93 KB** |
-| C (cc -O2) | 290ms | 33 KB |
-| Node.js | 580ms | N/A |
-| Python | 13.1s | N/A |
+| Language | fib(40) | Binary size |
+|----------|---------|-------------|
+| C (clang -O2) | ~265 ms | 33 KB |
+| Rust (rustc -O) | ~265 ms | 455 KB |
+| **Turbo (AOT, Cranelift)** | **~330 ms** | **93 KB** |
+| Go (go build) | ~340 ms | — |
+| Node.js 22 | ~680 ms | — |
+| Ruby 3.1 | ~5.4 s | — |
+| Python 3.10 | ~13.3 s | — |
 
-Turbo compiles through a single Cranelift backend — fast JIT for `run`, optimized AOT for `build` — and still edges out `cc -O2` on this benchmark while producing a self-contained ~90 KB binary.
+On this microbenchmark Turbo's native output runs about 1.25–1.3x slower than C
+and Rust, lands in the same range as Go, and is far ahead of the interpreted
+runtimes — while emitting a self-contained ~93 KB binary with no runtime and no
+VM. Turbo uses a single Cranelift backend: a fast JIT for `turbolang run` and AOT
+for `turbolang build`. These are microbenchmark numbers from one machine; run the
+harness above to measure on yours.
 
 ## Project Structure
 
@@ -449,7 +461,7 @@ The test suite spans Rust unit tests, integration fixtures, and parity coverage;
 | **Homebrew** | `brew tap ZVN-DEV/turbo && brew install turbo-lang` |
 | **Docker** | [`distribution/Dockerfile`](distribution/Dockerfile) |
 | **LSP Server** | `turbo-lsp` -- diagnostics, hover, completions, references, document symbols, go-to-definition. `turbolang lsp` remains available for older editor integrations. |
-| **Install Script** | `curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh \| sh` |
+| **Install Script** | `curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh \| bash` |
 
 ## Contributing
 

@@ -69,6 +69,10 @@ pub(crate) use compile::compile_module;
 
 const RUNTIME_C: &str = include_str!("../runtime/turbo_rt.c");
 const RUNTIME_WASM_C: &str = include_str!("../runtime/turbo_rt_wasm.c");
+/// Shared overflow/cap guard header `#include`d by both C runtimes. The C
+/// sources are written to a temp dir and compiled there, so this header must
+/// be written alongside them or the `#include "turbo_rt_guards.h"` fails.
+const RUNTIME_GUARDS_H: &str = include_str!("../runtime/turbo_rt_guards.h");
 
 // ── Codegen context (generic over Module type) ──────────────────────
 

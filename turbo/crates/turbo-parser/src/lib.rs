@@ -2243,17 +2243,31 @@ fn split_interpolation_parts(s: &str, span: &Span) -> Result<Vec<InterpolPart>, 
     let mut current_lit = String::new();
     let chars: Vec<char> = s.chars().collect();
     let mut i = 0;
+    // Byte offset of `chars[i]` within the string *content* `s`. The content
+    // begins at `span.start + 1` in the original source (just past the opening
+    // quote), so a content byte offset `b` maps to source offset
+    // `span.start + 1 + b`. This 1:1 mapping is exact for strings without
+    // length-changing escapes (the common case) and otherwise keeps the caret
+    // on the right line — far better than the old behaviour, which left every
+    // interpolated sub-expression span at byte 0 of the file.
+    let mut byte_pos = 0usize;
 
     while i < chars.len() {
         if chars[i] == '\\' && i + 1 < chars.len() && (chars[i + 1] == '{' || chars[i + 1] == '}') {
             current_lit.push(chars[i + 1]);
+            byte_pos += chars[i].len_utf8() + chars[i + 1].len_utf8();
             i += 2;
         } else if chars[i] == '{' {
             if !current_lit.is_empty() {
                 parts.push(InterpolPart::Lit(current_lit.clone()));
                 current_lit.clear();
             }
+            byte_pos += chars[i].len_utf8(); // consume the opening `{`
             i += 1;
+            // The interpolated expression text starts here. Record where it maps
+            // to in the original source so the sub-parser's spans can be rebased
+            // onto real byte offsets (the `${`/`{` prefix is accounted for).
+            let expr_source_start = span.start + 1 + byte_pos;
             let mut depth = 1;
             let mut expr_str = String::new();
             while i < chars.len() && depth > 0 {
@@ -2268,6 +2282,7 @@ fn split_interpolation_parts(s: &str, span: &Span) -> Result<Vec<InterpolPart>, 
                 } else {
                     expr_str.push(chars[i]);
                 }
+                byte_pos += chars[i].len_utf8();
                 i += 1;
             }
             if depth != 0 {
@@ -2277,7 +2292,7 @@ fn split_interpolation_parts(s: &str, span: &Span) -> Result<Vec<InterpolPart>, 
                     span: span.clone(),
                 });
             }
-            let (tokens, lex_errors) = turbo_lexer::tokenize(&expr_str);
+            let (mut tokens, lex_errors) = turbo_lexer::tokenize(&expr_str);
             if !lex_errors.is_empty() {
                 return Err(ParseError {
                     code: ErrorCode::E0001,
@@ -2287,6 +2302,13 @@ fn split_interpolation_parts(s: &str, span: &Span) -> Result<Vec<InterpolPart>, 
                     ),
                     span: span.clone(),
                 });
+            }
+            // Rebase the sub-expression's token spans onto the original source so
+            // diagnostics (e.g. sema's "cannot interpolate unit value") underline
+            // the `${...}` use site instead of byte 0 of the file.
+            for tok in tokens.iter_mut() {
+                tok.span.start += expr_source_start;
+                tok.span.end += expr_source_start;
             }
             let mut sub_parser = Parser::new(tokens);
             let expr = sub_parser.parse_expr().map_err(|e| ParseError {
@@ -2309,6 +2331,7 @@ fn split_interpolation_parts(s: &str, span: &Span) -> Result<Vec<InterpolPart>, 
             }
             parts.push(InterpolPart::Expr(Box::new(expr)));
         } else {
+            byte_pos += chars[i].len_utf8();
             current_lit.push(chars[i]);
             i += 1;
         }
@@ -2864,6 +2887,41 @@ mod tests {
         } else {
             panic!("Expected Block with tail expr, got: {:?}", f.body.node);
         }
+    }
+
+    #[test]
+    fn test_interpolation_expr_span_points_at_use_site() {
+        // The span of an interpolated expression must index into the *original*
+        // source so diagnostics underline the `{...}` use site — not byte 0 of a
+        // freshly-lexed fragment. Regression for the E0100 caret landing on the
+        // wrong line.
+        let source = r#"fn main() { let s = "v={name}" }"#;
+        let module = parse_source(source);
+        let Item::Function(f) = &module.items[0].node else {
+            panic!("Expected function")
+        };
+        let Expr::Block { stmts, .. } = &f.body.node else {
+            panic!("Expected block, got: {:?}", f.body.node);
+        };
+        let Stmt::Let { value, .. } = &stmts[0].node else {
+            panic!("Expected let, got: {:?}", stmts[0].node);
+        };
+        let Expr::Interpolation(parts) = &value.node else {
+            panic!("Expected interpolation, got: {:?}", value.node);
+        };
+        let expr_part = parts
+            .iter()
+            .find_map(|p| match p {
+                InterpolPart::Expr(e) => Some(e),
+                InterpolPart::Lit(_) => None,
+            })
+            .expect("interpolation should contain an expression part");
+        assert_eq!(
+            &source[expr_part.span.clone()],
+            "name",
+            "interpolation expr span must slice the use site, got: {:?}",
+            &source[expr_part.span.clone()]
+        );
     }
 
     #[test]

@@ -24,7 +24,7 @@ export PATH="$PWD/target/release:$PATH"
 ### Curl Installer
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ZVN-DEV/Turbo-Language/master/distribution/install.sh | bash
 ```
 
 ### Docker
@@ -503,7 +503,7 @@ The resulting binary is a standalone native executable -- no runtime dependencie
 
 ### Language References
 
-- **[Standard Library Reference](stdlib.md)** -- all 64+ built-in functions with examples
+- **[Standard Library Reference](stdlib.md)** -- all 104 built-in functions with examples
 - **[Error Code Reference](errors.md)** -- every compiler error code explained
 - **[Safety Narrative](SAFETY.md)** -- what Turbo guarantees and what it does not
 

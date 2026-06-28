@@ -1,0 +1,14 @@
+// Regression: f64 values must survive the spawn/await ABI boundary.
+async fn scale(x: f64, factor: f64) -> f64 {
+    x * factor
+}
+
+async fn main() {
+    let a = spawn scale(2.5, 4.0)
+    let b = spawn scale(3.0, 0.5)
+    let ra = await a
+    let rb = await b
+    print(ra)
+    print(rb)
+    print(ra + rb)
+}

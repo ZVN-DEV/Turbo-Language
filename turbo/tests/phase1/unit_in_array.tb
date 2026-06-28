@@ -1,0 +1,6 @@
+// A unit value `()` has no runtime representation and must not be usable
+// as an array element. Sema rejects this instead of panicking in codegen.
+fn main() {
+    let a = [()]
+    print(len(a))
+}

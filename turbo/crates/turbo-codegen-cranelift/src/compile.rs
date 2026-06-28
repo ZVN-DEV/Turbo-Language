@@ -991,6 +991,10 @@ pub(crate) fn compile_module<M: Module>(
     // Declare all user functions + build return type map
     let mut user_fns: HashMap<String, FuncId> = HashMap::new();
     let mut fn_ret_types: HashMap<String, TurboTy> = HashMap::new();
+    // Real Cranelift param types per function — needed so spawn thunks can
+    // build a call_indirect signature whose register classes match the
+    // callee's true Fast-ABI signature (e.g. F64 params land in float regs).
+    let mut fn_param_cl_types: HashMap<String, Vec<types::Type>> = HashMap::new();
 
     for item in &ast_module.items {
         let Item::Function(f) = &item.node else {
@@ -1002,14 +1006,18 @@ pub(crate) fn compile_module<M: Module>(
         if f.name != "main" {
             sig.call_conv = CallConv::Fast;
         }
+        let mut param_cl_types = Vec::with_capacity(f.params.len());
         for param in &f.params {
-            sig.params.push(AbiParam::new(resolve_cl_type(
+            let cl = resolve_cl_type(
                 &param.ty.node,
                 ptr_type,
                 &enum_variants,
                 &f.type_param_names(),
-            )?));
+            )?;
+            sig.params.push(AbiParam::new(cl));
+            param_cl_types.push(cl);
         }
+        fn_param_cl_types.insert(f.name.clone(), param_cl_types);
         let ret_turbo = if let Some(ret_ty) = &f.return_type {
             let cl = resolve_cl_type(
                 &ret_ty.node,
@@ -2045,13 +2053,29 @@ pub(crate) fn compile_module<M: Module>(
             // Load fn_ptr from offset 0
             let fn_ptr = builder.ins().load(ptr_type, MemFlags::new(), args_ptr, 0);
 
+            // Real Cranelift param types of the spawned callee. Args are stored
+            // in the struct as raw i64 slots; for float params we must move the
+            // bits back into a float register so the callee's Fast-ABI signature
+            // reads them from the correct register class.
+            let callee_param_cl: Vec<types::Type> = fn_param_cl_types
+                .get(&site.callee_name)
+                .cloned()
+                .unwrap_or_else(|| vec![types::I64; site.num_args]);
+
             // Load each argument from the struct (offset 8, 16, 24, ...)
             let mut arg_vals = Vec::new();
             for i in 0..site.num_args {
                 let offset = ((i + 1) * 8) as i32;
-                let val = builder
+                let mut val = builder
                     .ins()
                     .load(types::I64, MemFlags::new(), args_ptr, offset);
+                // If the callee expects a float here, reinterpret the i64 bits
+                // as the float (the packing side bitcast F64 -> I64 on the way in).
+                if let Some(want) = callee_param_cl.get(i) {
+                    if want.is_float() && want.bits() == 64 {
+                        val = builder.ins().bitcast(*want, MemFlags::new(), val);
+                    }
+                }
                 arg_vals.push(val);
             }
 
@@ -2062,22 +2086,33 @@ pub(crate) fn compile_module<M: Module>(
                 // the fn_ptr is loaded dynamically. Use call_indirect instead.
                 let mut callee_sig = module.make_signature();
                 callee_sig.call_conv = CallConv::Fast;
-                for _ in 0..site.num_args {
-                    callee_sig.params.push(AbiParam::new(types::I64));
+                for i in 0..site.num_args {
+                    let p = callee_param_cl.get(i).copied().unwrap_or(types::I64);
+                    callee_sig.params.push(AbiParam::new(p));
                 }
-                // Check if the target function has a return type
-                let has_return = fn_ret_types
-                    .get(&site.callee_name)
-                    .map(|t| *t != TurboTy::Unit)
-                    .unwrap_or(false);
+                // Check if the target function has a return type, and whether
+                // that return is a float (so we declare the right register class).
+                let ret_turbo = fn_ret_types.get(&site.callee_name);
+                let has_return = ret_turbo.map(|t| *t != TurboTy::Unit).unwrap_or(false);
+                let ret_is_float = matches!(ret_turbo, Some(TurboTy::Float));
                 if has_return {
-                    callee_sig.returns.push(AbiParam::new(types::I64));
+                    let ret_cl = if ret_is_float {
+                        types::F64
+                    } else {
+                        types::I64
+                    };
+                    callee_sig.returns.push(AbiParam::new(ret_cl));
                 }
                 let sig_ref = builder.import_signature(callee_sig);
                 let call = builder.ins().call_indirect(sig_ref, fn_ptr, &arg_vals);
                 let results = builder.inst_results(call);
                 if !results.is_empty() {
-                    let result = results[0];
+                    let mut result = results[0];
+                    // The thunk always returns i64 to rt_spawn_thunk; if the
+                    // callee returned a float, move its bits into the i64 slot.
+                    if ret_is_float {
+                        result = builder.ins().bitcast(types::I64, MemFlags::new(), result);
+                    }
                     builder.ins().return_(&[result]);
                 } else {
                     let zero = builder.ins().iconst(types::I64, 0);

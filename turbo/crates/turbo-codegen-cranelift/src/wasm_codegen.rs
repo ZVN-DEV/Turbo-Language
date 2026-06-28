@@ -7,6 +7,7 @@
 //! The generated C code links against turbo_rt_wasm.c which provides
 //! the runtime functions (print, string ops, array ops, etc.).
 
+use crate::CodegenError;
 use std::collections::HashMap;
 use std::fmt::Write;
 use turbo_ast::*;
@@ -37,6 +38,11 @@ struct CEmitter {
     /// they were encountered (they will be emitted in LIFO order at scope
     /// exit, matching the Cranelift backend's semantics).
     defer_stack: Vec<Vec<Expr>>,
+    /// Unsupported-construct errors collected during emission. The emitter
+    /// keeps producing (syntactically valid) placeholder C so emission does
+    /// not panic, but `generate_c` returns the first error instead of the C
+    /// so an unsupported program fails to compile rather than miscompiling.
+    errors: Vec<CodegenError>,
 }
 
 impl CEmitter {
@@ -52,6 +58,35 @@ impl CEmitter {
             var_types: HashMap::new(),
             fn_return_types: HashMap::new(),
             defer_stack: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    /// Record an unsupported-construct compile error. `what` names the
+    /// construct; `span` (when known) is rendered as a byte range so the CLI
+    /// can point near the offending source. The emitter still returns a
+    /// placeholder so the C string stays well-formed for the rest of the pass.
+    fn record_unsupported(&mut self, what: &str, span: Option<&Span>) {
+        let loc = match span {
+            Some(s) => format!(" (bytes {}..{})", s.start, s.end),
+            None => String::new(),
+        };
+        self.errors.push(CodegenError {
+            code: ErrorCode::E0403,
+            message: format!("WASM backend does not support {what}{loc}"),
+        });
+    }
+
+    /// Short, stable name for an `Expr` variant, used in unsupported-construct
+    /// diagnostics so the message identifies the offending construct.
+    fn expr_kind_name(expr: &Expr) -> &'static str {
+        match expr {
+            Expr::Spawn(_) => "spawn expressions",
+            Expr::Await(_) => "await expressions",
+            Expr::Closure { .. } => "closure expressions",
+            // NB: `Expr::Match` is fully handled in `emit_expr` (compiled to a
+            // nested ternary), so it never reaches this fallback path.
+            _ => "this expression",
         }
     }
 
@@ -604,8 +639,13 @@ impl CEmitter {
                 let val = self.emit_expr(&value.node);
                 format!("(rt_array_set({obj}, {idx}, {val}), {val})")
             }
-            // Catch-all for unsupported expressions
-            _ => "0 /* unsupported expr */".to_string(),
+            // Catch-all for unsupported expressions: record a hard compile
+            // error (surfaced by generate_c) and emit a syntactically valid
+            // placeholder so the rest of emission does not panic.
+            _ => {
+                self.record_unsupported(Self::expr_kind_name(expr), None);
+                "0 /* unsupported expr */".to_string()
+            }
         }
     }
 
@@ -706,7 +746,7 @@ impl CEmitter {
         }
     }
 
-    fn get_field_index_str(&self, _obj_expr: &str, field: &str) -> String {
+    fn get_field_index_str(&mut self, _obj_expr: &str, field: &str) -> String {
         // Try to find the field index from known struct layouts
         // For now, we can't always determine the struct type at this point,
         // so we'll use a generic approach
@@ -718,7 +758,9 @@ impl CEmitter {
                 }
             }
         }
-        // Fallback: hash-based lookup if we can't determine statically
+        // No known struct has this field. Emitting index 0 here would silently
+        // read/write the wrong slot, so fail the compile instead.
+        self.record_unsupported(&format!("field access '{field}' (unknown field)"), None);
         format!("0 /* unknown field {field} */")
     }
 
@@ -760,8 +802,13 @@ impl CEmitter {
                     depth += 1;
                 }
                 _ => {
-                    // Unsupported pattern type (enum destructure, Ok/Err/Some/None)
-                    // For v1, emit a comment and skip
+                    // Unsupported pattern type (enum destructure, Ok/Err/Some/None).
+                    // Record a hard error so the program fails to compile rather
+                    // than silently never matching this arm.
+                    self.record_unsupported(
+                        "this match pattern (enum/Ok/Err/Some/None destructure)",
+                        Some(&arm.pattern.span),
+                    );
                     if is_last {
                         result.push_str("0 /* unsupported match pattern */");
                     } else {
@@ -1135,6 +1182,14 @@ impl CEmitter {
                                     writeln!(buf, "{}    }}", self.indent_str()).unwrap();
                                 }
                                 _ => {
+                                    // Fail loud: an enum/Ok/Err/Some/None
+                                    // destructure in statement-context match is
+                                    // not lowered here, so emitting just a
+                                    // comment would silently drop the arm.
+                                    self.record_unsupported(
+                                        "this match pattern (enum/Ok/Err/Some/None destructure)",
+                                        Some(&arm.pattern.span),
+                                    );
                                     writeln!(
                                         buf,
                                         "{}    /* unsupported match pattern */",
@@ -1602,9 +1657,19 @@ impl CEmitter {
 }
 
 /// Generate C source code from a Turbo AST module.
-pub fn generate_c(module: &turbo_ast::Module) -> String {
+///
+/// Returns `Err` if the program uses a construct the WASM backend cannot
+/// lower (unsupported expression, unsupported match pattern, or an unknown
+/// struct field). Previously these emitted a literal `0`, which silently
+/// miscompiled the program; failing here surfaces a real `CodegenError` to
+/// the CLI instead.
+pub fn generate_c(module: &turbo_ast::Module) -> Result<String, CodegenError> {
     let mut emitter = CEmitter::new();
-    emitter.emit_module(module)
+    let c = emitter.emit_module(module);
+    if let Some(err) = emitter.errors.into_iter().next() {
+        return Err(err);
+    }
+    Ok(c)
 }
 
 #[cfg(test)]
@@ -1616,7 +1681,7 @@ mod tests {
         assert!(lex_errors.is_empty(), "lex errors: {:?}", lex_errors);
         let (module, parse_errors) = turbo_parser::parse(tokens);
         assert!(parse_errors.is_empty(), "parse errors: {:?}", parse_errors);
-        generate_c(&module)
+        generate_c(&module).expect("wasm codegen produced an unsupported-construct error")
     }
 
     /// Extract the body of `turbo_main` (the renamed `main`) from the

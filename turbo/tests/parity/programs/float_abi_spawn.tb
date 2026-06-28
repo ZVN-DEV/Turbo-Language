@@ -1,0 +1,19 @@
+// Parity: a spawned function must round-trip f64 values across the
+// thread-handle ABI boundary. Float args are packed into the uniform i64
+// arg slot (bitcast F64->I64) going in, the thunk reinterprets them as
+// F64 to match the callee's real signature, and the f64 result is moved
+// back through the i64 slot and reinterpreted on await. JIT and AOT must
+// agree byte-for-byte.
+async fn scale(x: f64, factor: f64) -> f64 {
+    x * factor
+}
+
+async fn main() {
+    let a = spawn scale(2.5, 4.0)
+    let b = spawn scale(3.0, 0.5)
+    let ra = await a
+    let rb = await b
+    print(ra)
+    print(rb)
+    print(ra + rb)
+}

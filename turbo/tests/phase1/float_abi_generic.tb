@@ -1,0 +1,15 @@
+// Regression: f64 values must round-trip through a generic function's
+// uniform i64 type-parameter ABI slot.
+fn id<T>(x: T) -> T {
+    x
+}
+
+fn pick<T>(a: T, b: T) -> T {
+    b
+}
+
+fn main() {
+    print(id(3.75))
+    print(id(2.5) + id(0.25))
+    print(pick(1.5, 9.5))
+}
