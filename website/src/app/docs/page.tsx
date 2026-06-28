@@ -172,11 +172,11 @@ fn main() {
           </thead>
           <tbody>
             {[
-              ["C (clang -O2)", "~110 ms", "1.00x"],
-              ["Rust (rustc -O)", "~125 ms", "~1.13x"],
-              ["Go (go build)", "~130 ms", "~1.18x"],
-              ["Turbo (AOT, Cranelift)", "~240 ms", "~2.2x"],
-              ["Turbo (JIT)", "~220 ms", "~2.0x"],
+              ["C (clang -O2)", "~108 ms", "1.00x"],
+              ["Rust (rustc -O)", "~110 ms", "~1.02x"],
+              ["Go (go build)", "~120 ms", "~1.11x"],
+              ["Turbo (AOT, Cranelift)", "~150 ms", "~1.4x"],
+              ["Turbo (JIT)", "~205 ms", "~1.9x"],
             ].map(([lang, time, ratio]) => (
               <tr key={lang} className="border-b border-[#1a1a2e]">
                 <td className={`px-4 py-2 ${lang?.startsWith("Turbo") ? "text-[#00ff88] font-medium" : "text-gray-300"}`}>
@@ -191,11 +191,12 @@ fn main() {
       </div>
       <p className="mb-4 text-sm text-gray-400">
         Honest framing: on this string/hashmap-heavy workload Turbo&apos;s native
-        output runs about 2.2x slower than C and ~1.9x slower than Rust and Go
-        &mdash; further behind than the integer-only fib40. The gap is dominated
-        by Turbo&apos;s runtime hashmap and string handling, not codegen quality.
-        It&apos;s a real workload with reproducible numbers: fast enough to be
-        useful, with clear headroom. Reproduce with{" "}
+        output runs about 1.4x slower than C (down from ~2.2x). The earlier gap
+        came from the str&rarr;int map re-stringifying, re-parsing, and
+        re-allocating the value on every increment; int values are now stored
+        inline in the hashmap entry, so the counter loop does a single hash +
+        single probe with no per-update allocation. It&apos;s a real workload
+        with reproducible numbers. Reproduce with{" "}
         <code className="text-[#00ff88] bg-[#111118] px-1.5 py-0.5 rounded text-sm font-[family-name:var(--font-geist-mono)]">./turbo/benchmarks/run_wordcount.sh</code>.
       </p>
 

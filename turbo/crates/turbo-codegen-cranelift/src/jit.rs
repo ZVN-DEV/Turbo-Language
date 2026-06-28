@@ -216,6 +216,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
     jit_builder.symbol("rt_hashmap_remove", rt_hashmap_remove as *const u8);
     jit_builder.symbol("rt_hashmap_set_int", rt_hashmap_set_int as *const u8);
     jit_builder.symbol("rt_hashmap_get_int", rt_hashmap_get_int as *const u8);
+    jit_builder.symbol("rt_hashmap_inc", rt_hashmap_inc as *const u8);
     // ARC runtime
     jit_builder.symbol("rt_retain", rt_retain as *const u8);
     jit_builder.symbol("rt_release", rt_release as *const u8);
@@ -421,6 +422,7 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
     jit_builder.symbol("rt_hashmap_remove", rt_hashmap_remove as *const u8);
     jit_builder.symbol("rt_hashmap_set_int", rt_hashmap_set_int as *const u8);
     jit_builder.symbol("rt_hashmap_get_int", rt_hashmap_get_int as *const u8);
+    jit_builder.symbol("rt_hashmap_inc", rt_hashmap_inc as *const u8);
     jit_builder.symbol("rt_retain", rt_retain as *const u8);
     jit_builder.symbol("rt_release", rt_release as *const u8);
     // Filesystem builtins

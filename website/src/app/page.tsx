@@ -95,11 +95,11 @@ const benchmarks = [
 // The C/Rust/Go baselines run the identical algorithm over the identical input;
 // run_wordcount.sh enforces byte-for-byte identical output across all four.
 const wordcountBenchmarks = [
-  { label: "C (clang -O2)", ms: 110, size: "1.00x", highlight: false },
-  { label: "Rust (rustc -O)", ms: 125, size: "1.13x", highlight: false },
-  { label: "Go (go build)", ms: 130, size: "1.18x", highlight: false },
-  { label: "Turbo (AOT)", ms: 240, size: "2.2x", highlight: true },
-  { label: "Turbo (JIT)", ms: 220, size: "2.0x", highlight: false },
+  { label: "C (clang -O2)", ms: 108, size: "1.00x", highlight: false },
+  { label: "Rust (rustc -O)", ms: 110, size: "1.02x", highlight: false },
+  { label: "Go (go build)", ms: 120, size: "1.11x", highlight: false },
+  { label: "Turbo (AOT)", ms: 150, size: "1.4x", highlight: true },
+  { label: "Turbo (JIT)", ms: 205, size: "1.9x", highlight: false },
 ];
 
 const features = [
@@ -227,7 +227,7 @@ const features = [
 
 // Max ms for the bar chart scale (Python excluded from visual scale)
 const BAR_MAX = 700;
-const WORDCOUNT_BAR_MAX = 280;
+const WORDCOUNT_BAR_MAX = 230;
 
 // Flagship demo quickstart — single source of truth for both the rendered
 // block and the copy button, so the two can never drift.
@@ -583,9 +583,10 @@ export default function Home() {
               Read a ~5 MB file (1.05M words), tokenize, count frequencies in a
               hashmap, print the top 20 — file I/O, strings, hashmaps, sorting.
               On this string/hashmap-heavy work Turbo&apos;s native build is about
-              2.2x slower than C and ~1.9x slower than Rust and Go: further behind
-              than fib40, with the gap coming from runtime hashmap/string
-              handling rather than codegen. Real numbers, named headroom.
+              1.4x slower than C, down from ~2.2x: int values now live inline in
+              the hashmap entry, so the counter loop no longer re-stringifies,
+              re-parses, or re-allocates on every increment. Real, reproducible
+              numbers.
             </p>
           </div>
 

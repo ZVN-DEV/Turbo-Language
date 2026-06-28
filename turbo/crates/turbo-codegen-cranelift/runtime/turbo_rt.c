@@ -2277,10 +2277,19 @@ void rt_mutex_drop(const void *mptr) {
 #define HASHMAP_INIT_CAP 16
 #define HASHMAP_LOAD_FACTOR 0.75
 
+/* A value is stored either as an owned string (`value`, with is_int == 0) or
+ * inline as a 64-bit integer (`ivalue`, with is_int == 1). The inline-int
+ * variant lets the str->int API (set_int / get_int / inc) avoid stringifying,
+ * re-parsing, and re-allocating the value on every update — the hot path for
+ * word-count style counters. str->str semantics are unchanged: rt_hashmap_get
+ * and rt_hashmap_set always observe strings (an int entry is stringified on
+ * demand by rt_hashmap_get). */
 typedef struct {
     char *key;
-    char *value;
+    char *value;      /* owned string value; NULL when is_int */
+    long long ivalue; /* inline integer value; valid when is_int */
     char occupied;
+    char is_int; /* 1 if the value lives in ivalue, 0 if in value */
 } hashmap_entry;
 
 typedef struct {
@@ -2312,6 +2321,8 @@ static void hashmap_resize(turbo_hashmap *map, long long new_cap) {
             }
             map->entries[h].key = old[i].key;
             map->entries[h].value = old[i].value;
+            map->entries[h].ivalue = old[i].ivalue;
+            map->entries[h].is_int = old[i].is_int;
             map->entries[h].occupied = 1;
             map->count++;
         }
@@ -2336,15 +2347,20 @@ void rt_hashmap_set(void *map_ptr, const char *key, const char *value) {
     unsigned long h = hashmap_hash(key) % (unsigned long)map->capacity;
     while (map->entries[h].occupied) {
         if (strcmp(map->entries[h].key, key) == 0) {
-            /* Update existing key */
-            turbo_free(map->entries[h].value);
+            /* Update existing key. The previous value may have been an inline
+             * int (value == NULL), in which case there is nothing to free. */
+            if (map->entries[h].value) {
+                turbo_free(map->entries[h].value);
+            }
             map->entries[h].value = turbo_strdup(value);
+            map->entries[h].is_int = 0;
             return;
         }
         h = (h + 1) % (unsigned long)map->capacity;
     }
     map->entries[h].key = turbo_strdup(key);
     map->entries[h].value = turbo_strdup(value);
+    map->entries[h].is_int = 0;
     map->entries[h].occupied = 1;
     map->count++;
 }
@@ -2355,6 +2371,13 @@ const char *rt_hashmap_get(const void *map_ptr, const char *key) {
     long long checked = 0;
     while (map->entries[h].occupied && checked < map->capacity) {
         if (strcmp(map->entries[h].key, key) == 0) {
+            if (map->entries[h].is_int) {
+                /* Stringify the inline int on demand so str->str callers still
+                 * observe a decimal string (matches the JIT runtime). */
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%lld", map->entries[h].ivalue);
+                return turbo_strdup(buf);
+            }
             return turbo_strdup(map->entries[h].value);
         }
         h = (h + 1) % (unsigned long)map->capacity;
@@ -2425,9 +2448,12 @@ void rt_hashmap_remove(void *map_ptr, const char *key) {
     while (map->entries[h].occupied && checked < map->capacity) {
         if (strcmp(map->entries[h].key, key) == 0) {
             turbo_free(map->entries[h].key);
-            turbo_free(map->entries[h].value);
+            if (map->entries[h].value) {
+                turbo_free(map->entries[h].value);
+            }
             map->entries[h].key = NULL;
             map->entries[h].value = NULL;
+            map->entries[h].is_int = 0;
             map->entries[h].occupied = 0;
             map->count--;
             /* Re-insert any entries that may have been displaced */
@@ -2435,8 +2461,11 @@ void rt_hashmap_remove(void *map_ptr, const char *key) {
             while (map->entries[next].occupied) {
                 char *rk = map->entries[next].key;
                 char *rv = map->entries[next].value;
+                long long riv = map->entries[next].ivalue;
+                char ris = map->entries[next].is_int;
                 map->entries[next].key = NULL;
                 map->entries[next].value = NULL;
+                map->entries[next].is_int = 0;
                 map->entries[next].occupied = 0;
                 map->count--;
                 /* Re-insert */
@@ -2446,6 +2475,8 @@ void rt_hashmap_remove(void *map_ptr, const char *key) {
                 }
                 map->entries[rh].key = rk;
                 map->entries[rh].value = rv;
+                map->entries[rh].ivalue = riv;
+                map->entries[rh].is_int = ris;
                 map->entries[rh].occupied = 1;
                 map->count++;
                 next = (next + 1) % (unsigned long)map->capacity;
@@ -2458,31 +2489,97 @@ void rt_hashmap_remove(void *map_ptr, const char *key) {
 }
 
 /* ── HashMap str→int variant ─────────────────────────────────────────
- * Pragmatic implementation: stringify the int and reuse the str→str
- * storage. Avoids changing the entry union for the v0.8.0 MVP. A proper
- * generic HashMap<K,V> with a tagged value union is planned post-1.0.
- * Returns the same map pointer so call sites can write
- *   m = hashmap_set_int(m, k, v)
+ * Int values are stored inline in the entry (is_int == 1, value in ivalue),
+ * so set_int / get_int / inc do a single hash + single probe with no
+ * stringification, no re-parse, and no per-update allocation. A str->str
+ * write to the same key transparently switches the entry back to string
+ * storage; rt_hashmap_get stringifies an int entry on demand. Returns the
+ * same map pointer so call sites can write `m = hashmap_set_int(m, k, v)`
  * and treat the map as a value. */
 void *rt_hashmap_set_int(void *map_ptr, const char *key, long long value) {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%lld", value);
-    rt_hashmap_set(map_ptr, key, buf);
+    turbo_hashmap *map = (turbo_hashmap *)map_ptr;
+    if ((double)(map->count + 1) > (double)map->capacity * HASHMAP_LOAD_FACTOR) {
+        hashmap_resize(map, map->capacity * 2);
+    }
+    unsigned long h = hashmap_hash(key) % (unsigned long)map->capacity;
+    while (map->entries[h].occupied) {
+        if (strcmp(map->entries[h].key, key) == 0) {
+            if (map->entries[h].value) {
+                turbo_free(map->entries[h].value);
+                map->entries[h].value = NULL;
+            }
+            map->entries[h].ivalue = value;
+            map->entries[h].is_int = 1;
+            return map_ptr;
+        }
+        h = (h + 1) % (unsigned long)map->capacity;
+    }
+    map->entries[h].key = turbo_strdup(key);
+    map->entries[h].value = NULL;
+    map->entries[h].ivalue = value;
+    map->entries[h].is_int = 1;
+    map->entries[h].occupied = 1;
+    map->count++;
     return map_ptr;
 }
 
 /* Get an int value by key. Returns 0 on miss (no way to distinguish
  * missing from a stored 0 — callers that need that distinction should
- * guard with hashmap_has() first). */
+ * guard with hashmap_has() first). A string-typed value is parsed. */
 long long rt_hashmap_get_int(const void *map_ptr, const char *key) {
-    const char *s = rt_hashmap_get(map_ptr, key);
-    if (s == NULL) {
-        return 0;
+    const turbo_hashmap *map = (const turbo_hashmap *)map_ptr;
+    unsigned long h = hashmap_hash(key) % (unsigned long)map->capacity;
+    long long checked = 0;
+    while (map->entries[h].occupied && checked < map->capacity) {
+        if (strcmp(map->entries[h].key, key) == 0) {
+            if (map->entries[h].is_int) {
+                return map->entries[h].ivalue;
+            }
+            return map->entries[h].value ? strtoll(map->entries[h].value, NULL, 10) : 0;
+        }
+        h = (h + 1) % (unsigned long)map->capacity;
+        checked++;
     }
-    long long v = strtoll(s, NULL, 10);
-    /* rt_hashmap_get returns turbo_strdup'd memory; use turbo_free for arena safety. */
-    turbo_free((void *)s);
-    return v;
+    return 0;
+}
+
+/* Fused increment: add `delta` to the int value at `key` (a missing key
+ * counts as 0), store the result inline, and return the new value. A single
+ * hash + single probe + no allocation on the hot update path — this is the
+ * str->int counterpart of C's idiomatic `table[k]++`, and the lowering
+ * target for word-count style `count = get_int; set_int(count + 1)` loops. */
+long long rt_hashmap_inc(void *map_ptr, const char *key, long long delta) {
+    turbo_hashmap *map = (turbo_hashmap *)map_ptr;
+    if ((double)(map->count + 1) > (double)map->capacity * HASHMAP_LOAD_FACTOR) {
+        hashmap_resize(map, map->capacity * 2);
+    }
+    unsigned long h = hashmap_hash(key) % (unsigned long)map->capacity;
+    while (map->entries[h].occupied) {
+        if (strcmp(map->entries[h].key, key) == 0) {
+            long long cur;
+            if (map->entries[h].is_int) {
+                cur = map->entries[h].ivalue;
+            } else {
+                cur = map->entries[h].value ? strtoll(map->entries[h].value, NULL, 10) : 0;
+                if (map->entries[h].value) {
+                    turbo_free(map->entries[h].value);
+                    map->entries[h].value = NULL;
+                }
+            }
+            cur += delta;
+            map->entries[h].ivalue = cur;
+            map->entries[h].is_int = 1;
+            return cur;
+        }
+        h = (h + 1) % (unsigned long)map->capacity;
+    }
+    map->entries[h].key = turbo_strdup(key);
+    map->entries[h].value = NULL;
+    map->entries[h].ivalue = delta;
+    map->entries[h].is_int = 1;
+    map->entries[h].occupied = 1;
+    map->count++;
+    return delta;
 }
 
 /* ── HTTP server runtime ─────────────────────────────────────────────── */

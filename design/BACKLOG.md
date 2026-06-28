@@ -93,13 +93,22 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
   check that the mirror matches the published artifacts. **AC:** the in-repo formula is never stale/fake
   after a release, enforced by a check.
 
-- [ ] **BL-9 — Runtime hashmap/string-key performance.** _Surfaced by BL-2._ The word-count benchmark is
-  ~2.2x slower than C, root-caused to the str→int hashmap path re-stringifying the key on every increment
-  (and broader runtime string/hashmap handling). Profile the hashmap increment path (`turbo_rt.c`
-  `rt_hashmap_*` + the codegen lowering in `builtins.rs`) and cut the redundant allocation/hashing per
-  update (e.g. single lookup-or-insert, avoid re-stringify). **AC:** word-count Turbo-AOT/C ratio improves
-  measurably (target ≤1.5x) with the BL-2 runner still output-equal; add a microbenchmark for hashmap
-  increment throughput. Honest numbers only.
+- [x] **BL-9 — Runtime hashmap/string-key performance.** _Surfaced by BL-2. Done 2026-06-28._ The str→int
+  hashmap path was re-stringifying (`snprintf`), re-parsing (`strtoll`), and re-allocating (`strdup`/`free`)
+  the value on every increment — a `get_int` then a separate `set_int`, each hashing the key. **Fix:** int
+  values are now stored inline in the hashmap entry (tagged `is_int` + `ivalue`) in both runtimes
+  (`turbo_rt.c` AOT + `runtime.rs` JIT), so `hashmap_get_int`/`hashmap_set_int` do a single hash + single
+  probe with no per-update allocation or stringification; str→str semantics are unchanged (`hashmap_get`
+  stringifies an int entry on demand). Also added a fused `hashmap_inc(map, key[, delta]) -> int` primitive
+  (the str→int counterpart of C's `table[k]++`; single lookup-or-insert) wired through sema + JIT/AOT
+  codegen. **Measured (best of 5, ~5 MB, Apple M5 Max / macOS 26.5.1, `run_wordcount.sh`, output-equal):**
+  Turbo AOT **~150 ms vs C ~108 ms → ~1.4x** (was ~240 ms / ~2.2x) — clears the ≤1.5x AC. The fused
+  `hashmap_inc` is within run-to-run noise of the optimized `get_int`/`set_int` on word-count (the win was
+  the inline storage, not the second hash), so `wordcount.tb` is left UNCHANGED on the idiomatic
+  `get_int`/`set_int` pattern — the published number needs no benchmark rewrite. JIT still round-trips
+  strings for `get_int`/`set_int` (~205 ms / ~1.9x, ~unchanged). Microbenchmark: `bench_hashmap_inc.tb`
+  (~5M increments, ~46 ms AOT). Tests: `tests/phase1/hashmap_inc.{tb,expected}` + parity
+  `tests/parity/programs/hashmap_inc.tb` (JIT≡AOT).
 
 ---
 

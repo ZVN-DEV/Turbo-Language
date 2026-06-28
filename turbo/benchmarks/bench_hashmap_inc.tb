@@ -1,0 +1,37 @@
+// Benchmark: fused str->int hashmap increment throughput.
+// Cycles 5,000,000 increments over a small (16-key) working set — the hot
+// loop behind word-count style counters. With inline-int storage + the fused
+// rt_hashmap_inc primitive this is a single hash + single probe per update,
+// with no per-update allocation or stringification.
+//
+// Deterministic result (verifiable): every key is incremented iters/nkeys
+// times, so the summed counts equal `iters` and `unique` equals nkeys.
+// The trailing `elapsed_ms` line is timing and is expected to vary.
+fn main() {
+    let keys = [
+        "the", "of", "and", "to", "a", "in", "is", "it",
+        "for", "on", "with", "as", "by", "at", "be", "this"
+    ]
+    let nkeys = len(keys)
+    let iters = 5000000
+
+    let m = hashmap()
+    let start = time_ms()
+    let mut i = 0
+    while i < iters {
+        hashmap_inc(m, keys[i % nkeys])
+        i = i + 1
+    }
+    let elapsed = time_ms() - start
+
+    let mut total = 0
+    let mut k = 0
+    while k < nkeys {
+        total = total + hashmap_get_int(m, keys[k])
+        k = k + 1
+    }
+
+    print("increments " + to_str(total))
+    print("unique " + to_str(hashmap_len(m)))
+    print("elapsed_ms " + to_str(elapsed))
+}

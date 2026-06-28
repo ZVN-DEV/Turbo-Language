@@ -118,6 +118,7 @@ pub(crate) const BUILTIN_FNS: &[&str] = &[
     "hashmap_size",
     "hashmap_keys",
     "hashmap_remove",
+    "hashmap_inc",
     "to_json",
     "to_json_array",
     "deref",

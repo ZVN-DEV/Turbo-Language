@@ -1,0 +1,42 @@
+// Parity: rt_hashmap_inc + inline-int storage (set_int/get_int/get).
+// Hand-mirrored between runtime.rs (JIT, String storage) and turbo_rt.c (AOT,
+// tagged inline-int storage). A divergence in the str<->int conversion, the
+// get() stringify-on-demand path, or the increment arithmetic would surface as
+// a JIT/AOT stdout mismatch here. Network-free and fully deterministic.
+fn main() {
+    let m = hashmap()
+
+    // Build counts the word-count way: missing key counts as 0, fused inc.
+    let words = ["go", "rust", "go", "c", "go", "rust", "zig"]
+    let mut i = 0
+    while i < len(words) {
+        hashmap_inc(m, words[i])
+        i = i + 1
+    }
+    print(hashmap_get_int(m, "go"))   // 3
+    print(hashmap_get_int(m, "rust")) // 2
+    print(hashmap_get_int(m, "c"))    // 1
+    print(hashmap_get_int(m, "zig"))  // 1
+
+    // Custom + negative deltas.
+    print(hashmap_inc(m, "go", 10))    // 13
+    print(hashmap_inc(m, "rust", 0 - 5)) // -3
+
+    // str->str value converted to inline int on first increment.
+    hashmap_set(m, "mixed", "100")
+    print(hashmap_inc(m, "mixed", 23)) // 123
+    print(hashmap_get(m, "mixed"))     // 123 (stringified on demand)
+
+    // set_int then get() must observe the decimal string in both runtimes.
+    hashmap_set_int(m, "answer", 42)
+    print(hashmap_get(m, "answer"))    // 42
+
+    // Deterministic ordering via sorted keys.
+    let keys = hashmap_keys(m)
+    print(hashmap_len(m))              // 6
+    let mut j = 0
+    while j < len(keys) {
+        print(keys[j] + "=" + to_str(hashmap_get_int(m, keys[j])))
+        j = j + 1
+    }
+}
