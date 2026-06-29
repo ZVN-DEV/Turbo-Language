@@ -287,7 +287,7 @@ static void test_f64_to_str_canonical_edges(void) {
     check("test_f64_to_str_canonical_decimal_noise",
           strcmp(rt_f64_to_str(0.1 + 0.2), "0.3") == 0);
     check("test_f64_to_str_canonical_negative_zero",
-          strcmp(rt_f64_to_str(-0.0), "0") == 0);
+          strcmp(rt_f64_to_str(-0.0), "0.0") == 0);
     check("test_f64_to_str_canonical_repeating",
           strcmp(rt_f64_to_str(1.0 / 3.0), "0.333333333333333") == 0);
 }
