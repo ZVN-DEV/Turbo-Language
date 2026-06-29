@@ -1,0 +1,37 @@
+// BL-26 tail: the WASM runtime must format whole-valued floats with a
+// trailing `.0`, exactly like the JIT and AOT runtimes, so WASM output never
+// drifts from native. This exercises the float render paths the WASM backend
+// routes through rt_format_f64 (rt_print_f64 / rt_f64_to_str): bare literals,
+// float-typed variables, a float-returning call, and string interpolation.
+// Run as a three-way check (wasm == native == expected) by run_wasm_tests.sh.
+//
+// NOTE: floats reached via an array index, struct field, or unary negation
+// (e.g. `xs[0]`, `v.x`, `-3.0`) are deliberately NOT covered here. The WASM
+// backend mis-infers those as `int` and prints them through rt_print_i64
+// (truncating), a separate pre-existing type-inference gap in wasm_codegen.rs
+// that is independent of float formatting and out of scope for this change.
+fn scale(x: f64) -> f64 {
+    x * 2.0
+}
+
+fn main() {
+    // Bare literals: whole floats gain a trailing `.0`, non-whole are
+    // unchanged, and `0.0` renders as `0.0`.
+    print(2.0)
+    print(0.0)
+    print(100.0)
+    print(3.14)
+    print(2.5)
+
+    // Float-typed variables (whole + non-whole).
+    let a = 7.0
+    let b = 1.25
+    print(a)
+    print(b)
+
+    // Whole-valued result of a float-returning function.
+    print(scale(3.0))
+
+    // String interpolation of float variables.
+    print("a = {a}, b = {b}")
+}

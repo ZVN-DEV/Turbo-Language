@@ -31,9 +31,37 @@ static inline int rt_array_len_fits(long long len) {
 
 #define TURBO_F64_FORMAT "%.15g"
 
+/* True when `s` is a bare integer literal ([-]?[0-9]+), i.e. a whole-valued
+ * float that %g rendered with no fractional part. False for fractional /
+ * exponential forms and for inf/-inf/nan (which carry non-digit chars).
+ * Mirrors `f64_text_is_integral` in the JIT runtime (runtime.rs) and
+ * `rt_f64_text_is_integral` in the native runtime (turbo_rt.c). */
+static int rt_f64_text_is_integral(const char *s) {
+    if (*s == '-') s++;
+    if (*s == '\0') return 0;
+    for (; *s != '\0'; s++) {
+        if (*s < '0' || *s > '9') return 0;
+    }
+    return 1;
+}
+
 static void rt_format_f64(char *buf, size_t cap, double n) {
     if (n == 0.0) n = 0.0; /* normalize negative zero */
-    snprintf(buf, cap, TURBO_F64_FORMAT, n);
+    int len = snprintf(buf, cap, TURBO_F64_FORMAT, n);
+    /* BL-26: a whole-valued float renders without a fractional part under %g
+     * (`2.0` -> "2"), which is indistinguishable from the int `2`. Append a
+     * trailing ".0" when the rendered text is a bare integer so floats stay
+     * unambiguous. Fractional/exponential forms and inf/-inf/nan already
+     * contain a non-digit and are left untouched. The JIT runtime
+     * (format_f64 in runtime.rs) and native AOT runtime (rt_format_f64 in
+     * turbo_rt.c) apply the identical rule, keeping all three runtimes
+     * byte-identical. The `len + 2 < cap` guard ensures room for ".0\0"
+     * (snprintf may return a length >= cap on truncation). */
+    if (len >= 0 && (size_t)len + 2 < cap && rt_f64_text_is_integral(buf)) {
+        buf[len] = '.';
+        buf[len + 1] = '0';
+        buf[len + 2] = '\0';
+    }
 }
 
 /* ── Checked allocation helpers ──────────────────────────────────── */
