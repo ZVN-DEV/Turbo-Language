@@ -256,10 +256,26 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   sr-only skip-to-content link; `prefers-reduced-motion` guard in globals.css. All 21 routes stay static SSG;
   lint clean.
 
-- [ ] **BL-25 — Long-running-server memory model.** _[strategist theme 3]_ The flagship demo is an HTTP server, but
-  the string arena is freed per-run and the README warns AOT servers leak — a credibility landmine the moment a
-  skeptic runs it for real (also blocks a persistent embedded VM for BL-16). **AC:** fix the long-lived-process
-  memory model, OR demote "server" from flagship to a terminating demo and stop leading with it. (Investigate first.)
+- [x] **BL-25 — Long-running-server memory model.** _Done 2026-06-28 (code commit `8b3dcab` + docs, merged to master;
+  Kirby chose "truthful fix + go deep")._ The investigation found the README's leak warning was **backwards**: the
+  per-request bump arena already bounds **AOT** servers (~1.8 MB RSS plateau), while the unbounded leak was on **JIT**
+  (`turbolang run` — `handle_http_connection` never reset `STRING_ARENA`, which only drains when `main()` returns) —
+  and the flagship demo instructed exactly that JIT path. It also surfaced an UNDISCLOSED **use-after-free**: a
+  stateful AOT server (a startup hashmap mutated in a handler) had its entries freed by `rt_arena_end()`.
+  **A1** — the JIT HTTP handler records a per-request arena high-water mark and truncates back to it after each
+  response: RSS ~62 MB/1k-req leak → flat ~11 MB plateau (stateless `web-dashboard` byte-identical across requests;
+  non-server `run` unchanged). **A2** — persistent hashmaps allocate entry storage with real `malloc`/`free`
+  (scope-following: request-local maps stay arena-backed → no residual leak), so server state survives
+  `rt_arena_end()`: ASan heap-use-after-free in `rt_hashmap_inc` → clean, counter `1,2,1,3…` → `1..10`. JIT hashmaps
+  needed no A2 (they own keys/values as Rust `String`s). +2 ASan-gated C-runtime regression tests + an
+  `examples/stateful-counter/` demo; JIT≡AOT parity preserved (28/28). **Docs:** corrected the backwards leak claim
+  in `README.md` + `docs/SAFETY.md` (servers are bounded on both backends; residual narrowed to non-server infinite
+  loops) and listed the stateful-counter example. **Also fixed a latent CI red:** BL-26's whole-float change made
+  `rt_f64_to_str(-0.0)` → `"0.0"` but the C-runtime `test_rt.c` expectation (run by `tests.sh`, which the standard
+  local gate omits) still asserted `"0"` (commit `28b0dfb`) — `tests.sh` + the ASan `test_rt.c` build are now in the
+  local pre-push routine. _A2 follow-on: the AOT `channel_queue` uses `turbo_calloc`, so a channel created INSIDE a
+  handler is arena-scoped (a startup channel is malloc-backed and fine) — not the BL-25 bug, left untouched; revisit
+  for BL-16's embedded VM if in-handler channel persistence is ever needed._
 
 - [ ] **BL-27 — COW parity gaps surfaced by BL-10.** _[backend, follow-on]_ Two parts: native arrays (Part A,
   **DONE**) and the WASM backend (Part B, **still open**).

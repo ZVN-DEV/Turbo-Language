@@ -213,7 +213,7 @@ Turbo is honest about what it does not protect against. The following areas requ
 
 ### Memory Lifecycle in JIT Mode
 
-Turbo's JIT runtime uses a thread-local string arena that is freed after each execution. In long-running JIT programs, arena allocations are not individually freed -- memory grows until the program exits. For long-running services, use AOT compilation (`turbolang build`) and monitor memory usage. Proper ARC-based string deallocation is planned for a future release.
+Turbo's runtime uses a thread-local string arena. HTTP servers reclaim per-request memory on every request — the JIT (`turbolang run`) resets the arena to a per-request high-water mark and AOT (`turbolang build`) uses a per-request arena — so a long-running server's memory stays bounded (measured flat over thousands of requests on both backends), and state held in hashmaps persists correctly across requests (server-state maps are allocated outside the per-request arena, so they survive the per-request reset). The remaining case is a *non-server* long-running program that loops forever while continuously allocating strings: those arena allocations are freed when the program exits, not individually — ensure such a loop terminates or periodically restart the process. Proper ARC-based string deallocation is planned for a future release.
 
 ### File I/O Safety
 
@@ -297,7 +297,7 @@ Turbo and Go offer similar levels of runtime safety. Turbo catches more at compi
 **Rust provides stronger guarantees.** Rust's borrow checker prevents data races at compile time and guarantees memory safety without runtime cost. Turbo's CoW value semantics are simpler to learn and use but do not provide the same level of compile-time proof. In particular:
 
 - Turbo cannot statically prevent data races in concurrent code.
-- Turbo's arena-based allocation in JIT mode means memory is not individually freed.
+- Turbo's arena-based allocation frees memory in bulk (per-request for HTTP servers, at exit otherwise) rather than freeing each allocation individually.
 - Turbo does not track lifetimes, so dangling references in `@unsafe` code are the programmer's problem.
 
 The tradeoff is deliberate: Turbo trades Rust's maximum safety for a dramatically lower learning curve. For most application-level code (web servers, CLI tools, data processing), Turbo's safety level is sufficient. For kernel code, safety-critical systems, or adversarial environments, Rust's guarantees are worth the complexity.
@@ -320,7 +320,7 @@ The tradeoff is deliberate: Turbo trades Rust's maximum safety for a dramaticall
 | Division by zero | **Runtime check** -- division by zero aborts |
 | Shell injection | **Runtime blocked** -- metacharacters rejected |
 | Data races | **Programmer responsibility** -- use mutex/channel |
-| Memory lifecycle (JIT) | **Programmer responsibility** -- arena freed at exit |
+| Memory lifecycle | **Per-request for servers** -- arena reclaimed each request; freed at exit otherwise |
 | File I/O paths | **Programmer responsibility** -- no sandboxing |
 | HTTP security | **Programmer responsibility** -- use reverse proxy |
 | FFI safety | **Programmer responsibility** -- `@unsafe` voids guarantees |

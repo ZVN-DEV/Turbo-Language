@@ -21,6 +21,7 @@ turbolang run examples/web-dashboard/main.tb
 | [game-of-life](./game-of-life/) | Conway's Game of Life | String-as-grid, char_at, nested loops, algorithms |
 | [simple-script](./simple-script/) | Text Statistics Analyzer | Strings, HashMaps, arrays, pipes, string interpolation |
 | [speed-server](./speed-server/) | REST API Benchmark Server | HTTP server, JSON responses, fibonacci, primes, sorting |
+| [stateful-counter](./stateful-counter/) | Persistent Hit Counter | HTTP server, persistent in-memory state across requests (a startup hashmap survives the per-request arena), bounded memory |
 | [file-analyzer](./file-analyzer/) | Source Code Analyzer | File I/O, line parsing, statistics, progress bars |
 
 ### web-dashboard
