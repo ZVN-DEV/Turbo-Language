@@ -1,0 +1,45 @@
+// BL-26: empty array literals `[]` infer their element type from context.
+// JIT and AOT must agree on the printed output (element types, lengths, and
+// the values pushed into arrays that started out empty).
+
+fn count(xs: [str]) -> int {
+    return len(xs)
+}
+
+fn fill(mut xs: [str]) -> [str] {
+    xs = push(xs, "alpha")
+    xs = push(xs, "beta")
+    return xs
+}
+
+fn empty_ints_explicit() -> [int] {
+    return []
+}
+
+fn empty_ints_tail() -> [int] {
+    []
+}
+
+struct Bag {
+    tags: [str]
+}
+
+fn main() {
+    print(to_str(count([])))
+
+    let names = fill([])
+    print(to_str(len(names)))
+    print(names[0])
+    print(names[1])
+
+    let bag = Bag { tags: [] }
+    print(to_str(len(bag.tags)))
+
+    let mut xs = empty_ints_explicit()
+    xs = push(xs, 42)
+    print(to_str(len(xs)))
+    print(to_str(xs[0]))
+
+    let ys = empty_ints_tail()
+    print(to_str(len(ys)))
+}

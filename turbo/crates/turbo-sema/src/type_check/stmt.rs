@@ -152,7 +152,12 @@ impl Checker {
             }
             Stmt::Return(value) => {
                 let ret_ty = if let Some(val) = value {
-                    self.check_expr(val)
+                    // Hint the function's declared return type so a bare empty
+                    // array literal `return []` infers its element type from
+                    // the return slot (e.g. `fn f() -> [str] { return [] }`)
+                    // instead of failing with E0115 (BL-26).
+                    let expected = self.current_return_type.clone();
+                    self.check_expr_expecting(val, &expected)
                 } else {
                     Ty::Unit
                 };

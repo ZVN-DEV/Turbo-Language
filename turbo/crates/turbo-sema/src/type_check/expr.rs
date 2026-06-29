@@ -307,7 +307,9 @@ impl Checker {
                         return *ret_ty.clone();
                     }
                     for (i, arg) in args.iter().enumerate() {
-                        let arg_ty = self.check_expr(arg);
+                        // Hint the closure's parameter type so a bare empty
+                        // array literal `[]` infers its element type (BL-26).
+                        let arg_ty = self.check_expr_expecting(arg, &param_tys[i]);
                         if !arg_ty.contains_error()
                             && !param_tys[i].contains_error()
                             && !types_compatible(&param_tys[i], &arg_ty)
@@ -365,9 +367,13 @@ impl Checker {
                 let mut substitutions: HashMap<String, Ty> = HashMap::new();
                 let mut arg_types = Vec::new();
                 for (i, arg) in args.iter().enumerate() {
-                    let arg_ty = self.check_expr(arg);
-                    arg_types.push(arg_ty.clone());
                     let (_, ref param_ty) = &sig.params[i];
+                    // Pass the declared parameter type as a hint so a bare
+                    // empty array literal `[]` infers its element type from
+                    // the parameter (e.g. `f([])` where `f(xs: [str])`)
+                    // instead of failing with E0115 (BL-26).
+                    let arg_ty = self.check_expr_expecting(arg, param_ty);
+                    arg_types.push(arg_ty.clone());
 
                     // If param type is a type parameter, infer its concrete type
                     if let Ty::TypeParam(ref tp_name) = param_ty {
@@ -791,12 +797,21 @@ impl Checker {
         };
         self.push_scope();
 
+        // Consume any function-body tail-return hint at block entry so it only
+        // applies to *this* block's tail. Taking it here means nested blocks
+        // checked while walking `stmts` see `None` and can't mis-borrow the
+        // outer function's return type (BL-26).
+        let tail_hint = self.fn_body_tail_hint.take();
+
         for stmt in stmts {
             self.check_stmt(stmt);
         }
 
         let ty = if let Some(tail) = tail_expr {
-            self.check_expr(tail)
+            match &tail_hint {
+                Some(expected) => self.check_expr_expecting(tail, expected),
+                None => self.check_expr(tail),
+            }
         } else {
             Ty::Unit
         };
@@ -1260,7 +1275,14 @@ impl Checker {
 
         let mut provided = std::collections::HashSet::new();
         for (field_name, value) in fields {
-            let val_ty = self.check_expr(value);
+            // When the field exists, hint its declared type so a bare empty
+            // array literal `[]` infers its element type from the field
+            // (e.g. `Bag { tags: [] }` where `tags: [str]`) instead of
+            // failing with E0115 (BL-26).
+            let val_ty = match expected_fields.get(field_name.as_str()) {
+                Some(expected_ty) => self.check_expr_expecting(value, expected_ty),
+                None => self.check_expr(value),
+            };
             if let Some(expected_ty) = expected_fields.get(field_name.as_str()) {
                 if let Ty::TypeParam(ref tp_name) = expected_ty {
                     // Generic field: infer or check consistency

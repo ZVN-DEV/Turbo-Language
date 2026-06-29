@@ -1,0 +1,7 @@
+// BL-26: a bare empty array literal with no contextual type is genuinely
+// uninferrable and must produce a single clear E0115 diagnostic — not a
+// confusing internal error or a silently-wrong element type.
+fn main() {
+    let xs = []
+    print(to_str(len(xs)))
+}

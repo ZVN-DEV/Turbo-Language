@@ -1,0 +1,52 @@
+// BL-26: empty array literals `[]` infer their element type from context:
+// a function parameter, a struct field, an explicit `return`, and a tail
+// (implicit) return. Without inference these all fail with E0115.
+
+fn count(xs: [str]) -> int {
+    return len(xs)
+}
+
+// Receives an empty [str], fills it, and hands it back — proves the [str]
+// element type flows through the parameter and back out.
+fn fill(mut xs: [str]) -> [str] {
+    xs = push(xs, "alpha")
+    xs = push(xs, "beta")
+    return xs
+}
+
+fn empty_ints_explicit() -> [int] {
+    return []
+}
+
+fn empty_ints_tail() -> [int] {
+    []
+}
+
+struct Bag {
+    tags: [str]
+}
+
+fn main() {
+    // 1. empty literal as a function argument expecting [str]
+    print(to_str(count([])))
+
+    // 2. empty literal flows through a [str] parameter and back out
+    let names = fill([])
+    print(to_str(len(names)))
+    print(names[0])
+    print(names[1])
+
+    // 3. empty literal as a struct field of type [str]
+    let bag = Bag { tags: [] }
+    print(to_str(len(bag.tags)))
+
+    // 4. empty literal returned explicitly from a [int] function
+    let mut xs = empty_ints_explicit()
+    xs = push(xs, 42)
+    print(to_str(len(xs)))
+    print(to_str(xs[0]))
+
+    // 5. empty literal as a tail (implicit) return of a [int] function
+    let ys = empty_ints_tail()
+    print(to_str(len(ys)))
+}
