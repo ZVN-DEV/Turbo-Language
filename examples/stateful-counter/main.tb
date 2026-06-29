@@ -1,0 +1,46 @@
+// Stateful HTTP server — a hit counter held in server state.
+//
+// `state` is a hashmap created once at startup (outside any request) and
+// mutated on every request. This is the canonical "server keeps state across
+// requests" shape (BL-16). It exercises BL-25 A2: a hashmap created before the
+// per-request arena exists, then mutated while the arena is active.
+//
+// Run (JIT):    turbolang run examples/stateful-counter/main.tb
+// Run (native): turbolang build examples/stateful-counter/main.tb -o counter && ./counter
+// Then:         curl localhost:3000/hit   (repeat — count must strictly increase)
+//               curl localhost:3000/count
+//
+// Manual memory verification (the BL-25 evidence procedure):
+//   * Leak (JIT): hammer /hit with ~10k keep-alive requests while sampling
+//     `ps -o rss= -p <pid>`; RSS must plateau, not climb. (Before the A1 fix a
+//     stateless endpoint grew ~62 MB / 1000 requests unbounded; after, it is
+//     flat. The native build was always bounded by its per-request arena.)
+//   * Use-after-free (native): build turbo_rt.c with `-fsanitize=address`
+//     (-DRT_TEST_BUILD) and drive this counter; before the A2 fix ASan reports
+//     heap-use-after-free in rt_hashmap_inc (the key was freed by rt_arena_end);
+//     after the fix it is clean and the count is correct across all requests.
+
+fn main() {
+    let app = http_server(3000)
+    let state = hashmap()
+
+    route(app, "GET", "/", |req: str| -> str {
+        respond_html(200, "<h1>Hit counter</h1><p>GET /hit to increment, GET /count to read.</p>")
+    })
+
+    // Increment and return the new total. `state` is captured from startup;
+    // `hashmap_inc` mutates it while the per-request arena is live.
+    route(app, "GET", "/hit", |req: str| -> str {
+        let n = hashmap_inc(state, "hits", 1)
+        respond_json(200, "\{\"hits\": " + to_str(n) + "\}")
+    })
+
+    // Read the accumulated total without mutating.
+    route(app, "GET", "/count", |req: str| -> str {
+        let n = hashmap_get_int(state, "hits")
+        respond_json(200, "\{\"count\": " + to_str(n) + "\}")
+    })
+
+    print("stateful counter server on http://localhost:3000")
+    http_listen(app)
+}

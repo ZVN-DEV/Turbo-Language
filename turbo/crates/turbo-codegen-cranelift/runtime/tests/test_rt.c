@@ -54,6 +54,12 @@ extern const char *rt_respond_typed(long long status, const char *content_type, 
 extern long long rt_http_server(long long port);
 extern void rt_http_route(long long server_id, const char *method, const char *path, const void *handler, const void *env_ptr);
 extern void rt_http_listen(long long server_id);
+extern void *rt_hashmap_new(void);
+extern void rt_hashmap_set(void *map, const char *key, const char *value);
+extern const char *rt_hashmap_get(const void *map, const char *key);
+extern void *rt_hashmap_set_int(void *map, const char *key, long long value);
+extern long long rt_hashmap_get_int(const void *map, const char *key);
+extern long long rt_hashmap_inc(void *map, const char *key, long long delta);
 
 static int g_failures = 0;
 
@@ -591,6 +597,62 @@ static void test_typed_http_response_no_default_cors(void) {
     check("test_typed_http_response_no_default_cors omits wildcard CORS", ok);
 }
 
+/* ── BL-25 A2: stateful-server hashmap survives the per-request arena ──
+ *
+ * Regression for the use-after-free where a hashmap created at startup
+ * (server state, no arena active) was mutated inside a request handler
+ * (arena active): its keys/values were strdup'd into the per-request bump
+ * arena, so rt_arena_end() freed them and the next request read dangling
+ * pointers. This reproduces the exact HTTP-server lifecycle — create the map
+ * outside any arena, then for each "request" begin an arena, mutate + read
+ * the persistent map, and end the arena — and asserts the counter accumulates
+ * correctly across requests. Before the fix this fails (corrupt counts) or
+ * traps under AddressSanitizer; after it, the persistent map's storage is
+ * malloc-backed and survives. */
+static void test_hashmap_persists_across_request_arenas(void) {
+    void *state = rt_hashmap_new(); /* created at startup: no arena active */
+    int ok = 1;
+    const int requests = 64;
+    for (int i = 1; i <= requests; i++) {
+        rt_arena_begin();                      /* per-request arena installed */
+        /* hashmap_inc is the hot counter path: new key strdup'd on first hit */
+        long long n = rt_hashmap_inc(state, "hits", 1);
+        long long readback = rt_hashmap_get_int(state, "hits");
+        /* set_int + get on a second persistent key exercise key + string
+         * value storage as well, all mutated while the arena is live. */
+        rt_hashmap_set_int(state, "last", n);
+        const char *via_str = rt_hashmap_get(state, "last"); /* arena copy */
+        long long last = via_str ? strtoll(via_str, NULL, 10) : -1;
+        rt_arena_end();                        /* frees arena; map must survive */
+        if (n != i || readback != i || last != i) {
+            ok = 0;
+        }
+    }
+    /* Final read happens with no arena active, after 64 arena teardowns. */
+    ok = ok && rt_hashmap_get_int(state, "hits") == requests;
+    check("test_hashmap_persists_across_request_arenas counts correctly", ok);
+}
+
+/* A map created and dropped *inside* one request's arena must not require
+ * malloc bookkeeping — its storage rides the arena and is reclaimed at
+ * rt_arena_end. This guards the request-local branch of the BL-25 A2 fix:
+ * the value is observable within the request, and tearing the arena down
+ * does not crash. */
+static void test_hashmap_request_local_in_arena(void) {
+    int ok = 1;
+    for (int i = 0; i < 256; i++) {
+        rt_arena_begin();
+        void *local = rt_hashmap_new(); /* created with arena active */
+        rt_hashmap_set(local, "k", "v");
+        const char *got = rt_hashmap_get(local, "k");
+        if (!got || strcmp(got, "v") != 0) {
+            ok = 0;
+        }
+        rt_arena_end();
+    }
+    check("test_hashmap_request_local_in_arena reclaims via arena", ok);
+}
+
 int main(void) {
     printf("== turbo_rt C runtime tests ==\n");
 
@@ -623,6 +685,8 @@ int main(void) {
     test_turbo_free_mixed();
     test_header_injection_sanitized();
     test_typed_http_response_no_default_cors();
+    test_hashmap_persists_across_request_arenas();
+    test_hashmap_request_local_in_arena();
 
     if (g_failures == 0) {
         printf("\nAll tests passed.\n");
