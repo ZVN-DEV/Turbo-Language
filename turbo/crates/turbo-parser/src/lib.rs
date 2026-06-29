@@ -1059,7 +1059,21 @@ impl Parser {
             None
         };
 
-        self.expect(&Token::Eq)?;
+        let eq_span = self.expect(&Token::Eq)?;
+
+        // Empty right-hand side: `let x =` with nothing after the `=` before the
+        // end of the block (`}`) or end of file. Emit a single, clearly-worded
+        // diagnostic anchored on the `=`, instead of letting `parse_expr` blame
+        // whatever token it happens to land on (`expected expression, found `}``
+        // / `found end of file`), which reads as a confusing, misdirected error.
+        if matches!(self.peek(), Some(Token::RBrace) | None) {
+            return Err(ParseError {
+                code: ErrorCode::E0001,
+                message: "expected an expression after `=` in let binding".to_string(),
+                span: eq_span,
+            });
+        }
+
         let value = self.parse_expr()?;
         let end = value.span.end;
 
@@ -3485,6 +3499,76 @@ mod tests {
         assert!(
             !errors.is_empty(),
             "Expected parse error for unexpected `)`"
+        );
+    }
+
+    #[test]
+    fn test_empty_rhs_let_emits_single_clear_error() {
+        // BL-26: `let x =` with nothing after the `=` before the closing brace
+        // must produce exactly ONE diagnostic anchored on the `=`, not a
+        // misdirected "expected expression, found `}`" cascade.
+        let source = "fn main() {\n    let x =\n}\n";
+        let (_module, errors) = parse_with_errors(source);
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected exactly one parse error for empty-RHS let, got {}: {:?}",
+            errors.len(),
+            errors
+        );
+        assert_eq!(errors[0].code, ErrorCode::E0001);
+        assert!(
+            errors[0]
+                .message
+                .contains("expected an expression after `=`"),
+            "message should name the missing let RHS, got: {:?}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn test_empty_rhs_let_at_eof_emits_single_error() {
+        // Same condition but the source ends right after the `=` (no closing
+        // brace): still exactly one error, not a "found end of file" follow-on.
+        let source = "fn main() {\n    let x =\n";
+        let (_module, errors) = parse_with_errors(source);
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected exactly one parse error for empty-RHS let at EOF, got {}: {:?}",
+            errors.len(),
+            errors
+        );
+        assert_eq!(errors[0].code, ErrorCode::E0001);
+        assert!(
+            errors[0]
+                .message
+                .contains("expected an expression after `=`"),
+            "message should name the missing let RHS, got: {:?}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn test_empty_rhs_let_recovers_following_item() {
+        // The single empty-RHS error must not poison recovery: a well-formed
+        // function after the broken one should still be parsed.
+        let source = "fn main() {\n    let x =\n}\n\nfn other() {\n    print(\"ok\")\n}\n";
+        let (module, errors) = parse_with_errors(source);
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected exactly one parse error, got {}: {:?}",
+            errors.len(),
+            errors
+        );
+        let has_other = module
+            .items
+            .iter()
+            .any(|i| matches!(&i.node, Item::Function(f) if f.name == "other"));
+        assert!(
+            has_other,
+            "other() should still be parsed after the broken let binding"
         );
     }
 
