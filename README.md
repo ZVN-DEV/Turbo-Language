@@ -2,7 +2,7 @@
 
 # Turbo
 
-**TypeScript's ease. Rust's speed. No GC, no borrow checker.**
+**JavaScript's soul. Rust's speed. No GC, no borrow checker.**
 
 A compiled, type-safe programming language with familiar syntax and native performance. Compiles to machine code via Cranelift -- no VM, no garbage collector, no overhead.
 
@@ -53,7 +53,7 @@ turbolang build hello.tb      # AOT — produce a native binary
 
 ### Known Limitations (v0.10.x)
 
-> **Note — runtime string allocation:** HTTP servers reclaim per-request memory on every request — the JIT (`turbolang run`) resets its string arena to a per-request high-water mark and AOT (`turbolang build`) uses a per-request arena — so a long-running server stays bounded (flat RSS measured over thousands of requests on both backends), and server state held in hashmaps persists correctly across requests. The remaining case that grows is a *non-server* program that loops forever while continuously allocating strings: arena allocations are freed when the program exits, not individually. Proper ARC-based string deallocation is planned for a future release.
+> **Note — runtime string allocation:** HTTP servers reclaim per-request memory on every request — the JIT (`turbolang run`) resets its string arena to a per-request high-water mark and AOT (`turbolang build`) uses a per-request arena — so a long-running server stays bounded (designed to stay bounded — each backend resets/uses a per-request arena), and server state held in hashmaps persists correctly across requests. The remaining case that grows is a *non-server* program that loops forever while continuously allocating strings: arena allocations are freed when the program exits, not individually. Proper ARC-based string deallocation is planned for a future release.
 >
 > **Warning — HTTP server is experimental:** The built-in HTTP server binds to `127.0.0.1` by default and is not hardened for direct exposure to untrusted networks. Put it behind a reverse proxy (nginx, Caddy) in production. See [`SECURITY.md`](SECURITY.md) for the full threat model.
 
@@ -102,7 +102,7 @@ Turbo compiles directly to machine code. Programs start instantly and run at nat
 - **JIT execution** via `turbolang run` for rapid development (Cranelift)
 - **AOT compilation** via `turbolang build` for production binaries (Cranelift)
 - **WASM** via `turbolang build --target wasm` for WebAssembly output
-- **Cross-compilation** via `turbolang build --target linux-x86` from macOS (a `linux-arm64` target is recognized but not yet shipped/validated — see below)
+- **Cross-compilation** via `turbolang build --target linux-x86` from macOS (a `linux-arm64` target emits a valid ARM64 ELF but is not yet runtime-validated or shipped as a release artifact — see below)
 
 ### Type System
 
@@ -281,7 +281,7 @@ fn main() {
 | **I/O** | `print(value)`, `read_file(path)`, `write_file(path, data)`, `try_read_file(path)`, `try_write_file(path, data)` |
 | **Strings** | `s.trim()`, `s.upper()`, `s.split(",")`, `s.contains("x")`, `s.replace("a", "b")` |
 | **Arrays** | `arr.len()`, `arr.push(elem)`, `arr.map(fn)`, `arr.filter(fn)` |
-| **Math** | `abs(n)`, `min(a, b)`, `max(a, b)`, `pow(base, exp)`, `sqrt(x)` |
+| **Math** | `abs(n)`, `min(a, b)`, `max(a, b)`, `pow(base, exp)` (integer base/exponent), `sqrt(x)` |
 | **HashMap** | `hashmap()`, `hashmap_set(m, k, v)`, `hashmap_get(m, k)`, `hashmap_set_int(m, k, v)`, `hashmap_get_int(m, k)`, `hashmap_keys(m)` |
 | **JSON** | `json_get(json, key)`, `to_json(struct)`, `to_json_array(arr)` |
 | **HTTP** | `http_get(url)`, `http_post(url, body)`, `http_server(port)`, `route(...)` |
@@ -341,7 +341,7 @@ See [`examples/speed-server/main.tb`](examples/speed-server/main.tb)
 | `turbolang build <file.tb>` | Compile to native binary (Cranelift) |
 | `turbolang build --target wasm <file.tb>` | Compile to WebAssembly |
 | `turbolang build --target linux-x86 <file.tb>` | Cross-compile for Linux x86_64 |
-| `turbolang build --target linux-arm64 <file.tb>` | Cross-compile for Linux ARM64 (planned — recognized but not yet shipped/validated) |
+| `turbolang build --target linux-arm64 <file.tb>` | Cross-compile for Linux ARM64 (emits a valid ARM64 ELF, but not yet runtime-validated or shipped as a release artifact) |
 | `turbolang test <file.tb>` | Run `@test` functions |
 | `turbolang bench <file.tb>` | Benchmark with timing |
 | `turbolang check <file.tb>` | Type-check without compiling |
@@ -404,7 +404,7 @@ recursion overhead, not a real-world workload. Reproduce it with
 |----------|---------|-------------|
 | C (clang -O2) | ~265 ms | 33 KB |
 | Rust (rustc -O) | ~265 ms | 455 KB |
-| **Turbo (AOT, Cranelift)** | **~330 ms** | **93 KB** |
+| **Turbo (AOT, Cranelift)** | **~330 ms** | **~113 KB** |
 | Go (go build) | ~340 ms | — |
 | Node.js 22 | ~680 ms | — |
 | Ruby 3.1 | ~5.4 s | — |
@@ -412,7 +412,7 @@ recursion overhead, not a real-world workload. Reproduce it with
 
 On this microbenchmark Turbo's native output runs about 1.25–1.3x slower than C
 and Rust, lands in the same range as Go, and is far ahead of the interpreted
-runtimes — while emitting a self-contained ~93 KB binary with no runtime and no
+runtimes — while emitting a self-contained ~113 KB binary with no runtime and no
 VM. Turbo uses a single Cranelift backend: a fast JIT for `turbolang run` and AOT
 for `turbolang build`.
 
@@ -491,7 +491,7 @@ The test suite spans Rust unit tests, integration fixtures, and parity coverage;
 
 | Tool | Install / Link |
 |------|----------------|
-| **VS Code Extension** | `zvn-dev.turbo-lang` -- syntax highlighting, 25 snippets, LSP client (diagnostics, hover, go-to-definition, completions) |
+| **VS Code Extension** | `zvndev.turbo-lang` -- syntax highlighting, 25 snippets, LSP client (diagnostics, hover, go-to-definition, completions) |
 | **Tree-sitter Grammar** | [ZVN-DEV/tree-sitter-turbo](https://github.com/ZVN-DEV/tree-sitter-turbo) |
 | **Homebrew** | `brew tap ZVN-DEV/turbo && brew install turbo-lang` |
 | **Docker** | [`distribution/Dockerfile`](distribution/Dockerfile) |

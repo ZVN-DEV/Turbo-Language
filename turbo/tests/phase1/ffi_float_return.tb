@@ -1,0 +1,24 @@
+// Regression test for bug #11: an `@unsafe extern "C"` function declared with a
+// floating-point return type (`-> f64`) must be typed as a float, not an int.
+// Previously the native `floor`/`ceil` math builtins shadowed the user's
+// explicit extern declaration, so the result came back as `int` (printing `3`
+// and failing `let x: f64 = floor(..)` with E0110). The explicit FFI
+// declaration must win and propagate `f64` through sema and codegen.
+@unsafe
+extern "C" {
+    fn floor(x: f64) -> f64
+    fn ceil(x: f64) -> f64
+}
+
+fn main() {
+    // (a) used directly inside print() — must render as a float, not an int
+    print(floor(3.7))
+    print(ceil(3.2))
+
+    // (b) stored into a typed f64 binding and used in float math
+    let x: f64 = floor(3.7)
+    print(x + 0.5)
+
+    let y: f64 = ceil(3.2)
+    print(y + 0.5)
+}

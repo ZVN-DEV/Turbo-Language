@@ -4,9 +4,9 @@
 
 | Version | Status |
 |---------|--------|
-| 0.8.x   | Current — supported with security fixes |
-| 0.7.x   | Security fixes only while 0.8.x is the current series |
-| < 0.7   | Not supported |
+| 0.10.x  | Current — supported with security fixes |
+| 0.9.x   | Security fixes only while 0.10.x is the current series |
+| < 0.9   | Not supported |
 
 ## Reporting a Vulnerability
 
@@ -44,7 +44,7 @@ anonymity) once a fix ships.
 
 **Out of scope:**
 - Experimental features explicitly flagged in `CHANGELOG.md` as unstable
-  or experimental (currently: the WASM target and the LLVM backend).
+  or experimental (currently: the WASM target).
   Agent/tool language primitives are not shipped — and are not planned
   for the core — so they are out of scope by omission, not by experiment
 - Crashes triggered only by `@unsafe` code or raw pointer arithmetic —
@@ -132,7 +132,7 @@ OS permissions of the Turbo process.
 ## Known Hardening Limits
 
 The following are documented limitations rather than vulnerabilities;
-fixing them is tracked in `CHANGELOG.md` and `TODO.md`:
+fixing them is tracked in `CHANGELOG.md`:
 
 - **HTTP server primitives are development-grade.** See Security Model
   section 3 above for details. **Always put a reverse proxy (nginx,

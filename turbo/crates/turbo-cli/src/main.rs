@@ -2301,6 +2301,14 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
         let mut jit_times = Vec::new();
         let mut jit_output = String::new();
         let mut jit_ok = false;
+        // Warm-up: one untimed run to prime the OS page cache before the timed
+        // loop, so the recorded median reflects steady-state execution rather
+        // than a cold-start outlier. (Kept symmetric with the AOT warm-up below,
+        // where it matters far more — see that note.)
+        let _ = std::process::Command::new(&turbo_exe)
+            .arg("run")
+            .arg(path)
+            .output();
         for _ in 0..iterations {
             let start = std::time::Instant::now();
             let output = std::process::Command::new(&turbo_exe)
@@ -2376,6 +2384,15 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
                 let mut aot_times = Vec::new();
                 let mut aot_output = String::new();
                 let mut aot_ok = false;
+                // Warm-up: the first launch of a freshly built binary pays a
+                // one-time OS cold-start (page-fault-in, and on macOS a Gatekeeper
+                // assessment of the new executable) that is NOT representative of
+                // the binary's actual run time — it can be several times the
+                // steady-state cost. Without discarding it, the AOT median (which
+                // at low iteration counts lands on that cold sample) made AOT look
+                // ~5x slower than JIT even though the two backends run at parity.
+                // This run is intentionally untimed.
+                let _ = std::process::Command::new(&tmp_bin).output();
                 for _ in 0..iterations {
                     let start = std::time::Instant::now();
                     let output = std::process::Command::new(&tmp_bin).output();
@@ -2402,13 +2419,13 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
                     let median = aot_times[aot_times.len() / 2];
                     if quiet {
                         eprintln!(
-                            "  \x1b[33mAOT:\x1b[0m  \x1b[90m{:.3}s median ({} runs)\x1b[0m",
+                            "  \x1b[33mAOT (run only):\x1b[0m  \x1b[90m{:.3}s median ({} runs)\x1b[0m",
                             median.as_secs_f64(),
                             aot_times.len()
                         );
                     } else {
                         eprintln!(
-                            "  \x1b[33mAOT:\x1b[0m  {} \x1b[90m({:.3}s median, {} runs)\x1b[0m",
+                            "  \x1b[33mAOT (run only):\x1b[0m  {} \x1b[90m({:.3}s median, {} runs)\x1b[0m",
                             aot_output,
                             median.as_secs_f64(),
                             aot_times.len()
@@ -2440,6 +2457,9 @@ fn bench_file(file: Option<PathBuf>, iterations: u32, quiet: bool) {
     eprintln!("\x1b[1mResults: {passed}/{total} benchmarks completed\x1b[0m");
     eprintln!(
         "\x1b[90m(\"completed\" = produced a valid JIT timing; AOT parity is annotated per benchmark)\x1b[0m"
+    );
+    eprintln!(
+        "\x1b[90mnote: AOT figures are execution-only (steady state). The AOT build (a one-time\n      cc compile+link) is performed once, separately, and is NOT included in the\n      median above. JIT figures include code generation, which AOT amortizes away.\x1b[0m"
     );
 }
 

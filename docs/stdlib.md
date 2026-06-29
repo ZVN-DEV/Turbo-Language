@@ -548,7 +548,7 @@ Returns a pseudo-random integer uniformly distributed between `min` and `max`, *
 
 ## HashMap
 
-Turbo ships two flavors of hash map in v0.8.0: the original `str → str`
+Turbo ships two flavors of hash map: the original `str → str`
 API and a new `str → int` variant. Both share the same underlying map
 object — you pick a variant per call, not per map. A fully generic
 `HashMap<K, V>` is planned post-1.0; until then, if you need a different
@@ -568,7 +568,7 @@ Creates and returns a new, empty hash map.
 ```turbo
 let m = hashmap()
 hashmap_set(m, "name", "Turbo")
-hashmap_set(m, "version", "0.3")
+hashmap_set(m, "version", "1.2.0")
 ```
 
 Sets a string-valued key-value pair. If the key already exists, its
@@ -591,7 +591,7 @@ m = hashmap_set_int(m, "count", 1)
 m = hashmap_set_int(m, "count", hashmap_get_int(m, "count") + 1)
 ```
 
-**New in v0.8.0.** Stores an integer value under a string key. Returns
+Stores an integer value under a string key. Returns
 the same map so you can chain it idiomatically as
 `m = hashmap_set_int(m, k, v)`. Internally shares storage with the
 `str → str` variant — do not mix `hashmap_set` and `hashmap_set_int` on
@@ -604,9 +604,26 @@ let n = hashmap_get_int(m, "count")    // 1
 let missing = hashmap_get_int(m, "nope") // 0
 ```
 
-**New in v0.8.0.** Returns the integer value associated with the given
+Returns the integer value associated with the given
 key, or `0` if the key is not present. If you need to distinguish a
 missing key from a stored `0`, guard with `hashmap_has()` first.
+
+### hashmap_inc
+
+```turbo
+let m = hashmap()
+let a = hashmap_inc(m, "hits")        // 1 — a missing key counts as 0
+let b = hashmap_inc(m, "hits")        // 2
+let c = hashmap_inc(m, "hits", 10)    // 12 — optional delta (defaults to 1)
+```
+
+Fused `str → int` increment: adds `delta` (default `1`) to the integer value
+at `key`, treating a missing key as `0`, then stores and returns the new value.
+Internally a single hash + single probe, so it is the fast path for
+word-count-style counters — equivalent to
+`hashmap_set_int(m, k, hashmap_get_int(m, k) + delta)` but with one lookup
+instead of two. Shares storage with the other `str → int` entries; mutates `m`
+in place.
 
 ### hashmap_has
 
@@ -705,6 +722,16 @@ print(response)
 ```
 
 Performs an HTTP POST request with the given body string and returns the response body as a string.
+
+### http_post_with_headers
+
+```turbo
+let headers = "Content-Type: application/json\nAuthorization: Bearer sk-xxx"
+let response = http_post_with_headers("https://api.example.com/items", "{\"name\":\"turbo\"}", headers)
+print(response)
+```
+
+Performs an HTTP POST request with custom request headers and returns the response body as a string. The `headers` argument is a single string with one header per line, separated by `\n` (for example `"Content-Type: application/json\nAuthorization: Bearer sk-xxx"`); each line becomes a separate header on the outgoing request.
 
 ---
 
@@ -1001,9 +1028,9 @@ Writes a 64-bit integer value to the given memory address.
 | **Arrays** | `len`, `push`, `sort`, `slice` |
 | **Functional** | `map`, `filter`, `reduce` |
 | **Math** | `abs`, `min`, `max`, `pow`, `sqrt`, `random`, `random_range` |
-| **HashMap** | `hashmap`, `hashmap_set`, `hashmap_get`, `hashmap_set_int`, `hashmap_get_int`, `hashmap_has`, `hashmap_len`, `hashmap_keys`, `hashmap_remove` |
+| **HashMap** | `hashmap`, `hashmap_set`, `hashmap_get`, `hashmap_set_int`, `hashmap_get_int`, `hashmap_inc`, `hashmap_has`, `hashmap_len`, `hashmap_keys`, `hashmap_remove` |
 | **JSON** | `json_get`, `json_stringify`, `to_json`, `to_json_array` |
-| **HTTP Client** | `http_get`, `http_post` |
+| **HTTP Client** | `http_get`, `http_post`, `http_post_with_headers` |
 | **HTTP Server** | `http_server`, `http_server_public`, `route`, `http_listen`, `respond_text`, `respond_html`, `respond_json`, `request_body`, `request_method`, `request_path`, `request_query`, `request_header` |
 | **System** | `exec`, `env_get`, `exit`, `type_of` |
 | **Filesystem** | `file_exists`, `mkdir`, `delete_file`, `list_dir`, `path_join` |

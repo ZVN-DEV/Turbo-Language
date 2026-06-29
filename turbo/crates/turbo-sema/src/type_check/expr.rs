@@ -286,9 +286,15 @@ impl Checker {
             unreachable!()
         };
         if let Expr::Ident(name) = &callee.node {
-            // Built-in functions
-            if let Some(builtin_ty) = self.check_builtin_call(name, args, callee) {
-                return builtin_ty;
+            // Built-in functions. An explicit `extern "C"` declaration of the
+            // same name takes precedence (so e.g. `extern fn floor(x: f64) ->
+            // f64` is honored as a float-returning FFI call rather than the
+            // int-returning native `floor` builtin) — skip the builtin lookup
+            // and fall through to the registered function signature below.
+            if !self.extern_fns.contains(name) {
+                if let Some(builtin_ty) = self.check_builtin_call(name, args, callee) {
+                    return builtin_ty;
+                }
             }
 
             // Check if callee is a variable with fn type (closure call)

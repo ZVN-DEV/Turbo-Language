@@ -189,9 +189,11 @@ let x = pow(2, 63)    // runtime error: integer overflow in pow
 
 Negative exponents are also rejected at runtime rather than silently returning 1.
 
-### Stack Overflow Protection
+### Stack Overflow Protection (compile time)
 
-The compiler enforces a recursion depth limit of 256 levels. Deeply recursive or pathologically nested input produces a clear diagnostic (error code E0516) instead of crashing the process with a stack overflow.
+This is a *compile-time* limit, not a runtime one. The compiler caps AST/codegen nesting depth at 256 levels (error code E0516): pathologically nested input -- deeply nested expressions, blocks, or statically self-referential codegen -- produces a clear diagnostic at compile time instead of overflowing the compiler's own stack.
+
+It does **not** bound *runtime* recursion. A function whose call depth is data-driven can still recurse far past 256 frames at run time; that depth is bounded only by the OS stack and can overflow, aborting the process with `fatal runtime error: stack overflow`.
 
 ### Division by Zero
 
@@ -213,7 +215,7 @@ Turbo is honest about what it does not protect against. The following areas requ
 
 ### Memory Lifecycle in JIT Mode
 
-Turbo's runtime uses a thread-local string arena. HTTP servers reclaim per-request memory on every request — the JIT (`turbolang run`) resets the arena to a per-request high-water mark and AOT (`turbolang build`) uses a per-request arena — so a long-running server's memory stays bounded (measured flat over thousands of requests on both backends), and state held in hashmaps persists correctly across requests (server-state maps are allocated outside the per-request arena, so they survive the per-request reset). The remaining case is a *non-server* long-running program that loops forever while continuously allocating strings: those arena allocations are freed when the program exits, not individually — ensure such a loop terminates or periodically restart the process. Proper ARC-based string deallocation is planned for a future release.
+Turbo's runtime uses a thread-local string arena. HTTP servers reclaim per-request memory on every request — the JIT (`turbolang run`) resets the arena to a per-request high-water mark and AOT (`turbolang build`) uses a per-request arena — so a long-running server's memory stays bounded, and state held in hashmaps persists correctly across requests (server-state maps are allocated outside the per-request arena, so they survive the per-request reset). The remaining case is a *non-server* long-running program that loops forever while continuously allocating strings: those arena allocations are freed when the program exits, not individually — ensure such a loop terminates or periodically restart the process. Proper ARC-based string deallocation is planned for a future release.
 
 ### File I/O Safety
 
@@ -226,7 +228,7 @@ For recoverable I/O, use `try_read_file` and `try_write_file`, which return `Res
 The built-in HTTP server (`http_server`, `http_listen`, `route`) is designed for development and demos. It is not hardened for direct exposure to untrusted networks:
 
 - No TLS termination
-- Request size limits enforced (8 KB per header line, 64 KB total headers, 32 MB body, 256 max connections) but not configurable
+- Request size limits enforced (16 KB total request headers, 32 MB body, 256 max connections) but not configurable
 - No authentication or authorization middleware
 - Connection cap with 503 backpressure exists but is tuned for development loads
 
@@ -316,7 +318,7 @@ The tradeoff is deliberate: Turbo trades Rust's maximum safety for a dramaticall
 | Immutability violation | **Compile error** -- `let` vs `let mut` enforced |
 | Array bounds | **Runtime check** -- index out of bounds aborts |
 | Integer overflow (pow) | **Runtime check** -- overflow aborts |
-| Stack overflow | **Compile/runtime limit** -- 256-level recursion cap |
+| Stack overflow | **Compile-time limit** -- 256-level codegen-nesting cap (E0516); runtime call depth bounded by the OS stack |
 | Division by zero | **Runtime check** -- division by zero aborts |
 | Shell injection | **Runtime blocked** -- metacharacters rejected |
 | Data races | **Programmer responsibility** -- use mutex/channel |
