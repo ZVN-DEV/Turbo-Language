@@ -1920,304 +1920,342 @@ fn compile_call<M: Module>(
         "deref" => compile_builtin_deref(cx, args),
         "store" => compile_builtin_store(cx, args),
         _ => {
-            // Check if this is an enum variant construction via UFCS rewrite:
-            // Parser transforms Shape.Circle(5.0) into Call { callee: Ident("Circle"), args: [Ident("Shape"), 5.0] }
-            if !args.is_empty() {
-                if let Expr::Ident(ref first_name) = args[0].node {
-                    if let Some(variants) = cx.enum_variants.get(first_name.as_str()) {
-                        if let Some(variant_index) = variants.iter().position(|v| v == name) {
-                            // This is an enum variant construction with data
-                            let data_args = &args[1..]; // skip the enum type name
-                            let enum_name = first_name;
-
-                            if let Some(&max_slots) = cx.enum_max_slots.get(enum_name.as_str()) {
-                                // Data-carrying enum: allocate tagged union
-                                let total_slots = 1 + max_slots; // tag + payload
-                                let num_fields_val =
-                                    cx.builder.ins().iconst(types::I64, total_slots as i64);
-                                let alloc_fid = cx.rt_fns["rt_struct_alloc"];
-                                let alloc_fref =
-                                    cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
-                                let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
-                                let ptr = cx.builder.inst_results(call)[0];
-
-                                // Store tag at offset 0
-                                let tag_val =
-                                    cx.builder.ins().iconst(types::I64, variant_index as i64);
-                                cx.builder.ins().store(MemFlags::new(), tag_val, ptr, 0);
-
-                                // Get the field types for this variant
-                                let _field_tys = cx
-                                    .enum_variant_fields
-                                    .get(&(enum_name.clone(), name.to_string()))
-                                    .cloned()
-                                    .unwrap_or_default();
-
-                                // Store each field at offset (i+1)*8
-                                for (i, arg) in data_args.iter().enumerate() {
-                                    let (val, _tty) = compile_expr(cx, arg)?.ok_or_else(|| CodegenError { code: ErrorCode::E0400, message: "compile_call: `arg` produced no value during code generation".to_string() })?;
-                                    let offset = ((i + 1) * 8) as i32;
-
-                                    // Widen/convert to i64 for uniform storage
-                                    let val_ty = cx.builder.func.dfg.value_type(val);
-                                    let store_val = if val_ty.is_float() && val_ty.bits() == 64 {
-                                        cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
-                                    } else if val_ty.is_float() && val_ty.bits() == 32 {
-                                        let extended = cx.builder.ins().fpromote(types::F64, val);
-                                        cx.builder.ins().bitcast(
-                                            types::I64,
-                                            MemFlags::new(),
-                                            extended,
-                                        )
-                                    } else if val_ty.bits() < 64 && val_ty.is_int() {
-                                        cx.builder.ins().sextend(types::I64, val)
-                                    } else {
-                                        val
-                                    };
-
-                                    cx.builder
-                                        .ins()
-                                        .store(MemFlags::new(), store_val, ptr, offset);
-                                }
-
-                                return Ok(Some((ptr, TurboTy::Enum(enum_name.clone()))));
-                            } else {
-                                // Unit-only enum, but called with args (shouldn't happen after sema check)
-                                let val = cx.builder.ins().iconst(types::I64, variant_index as i64);
-                                return Ok(Some((val, TurboTy::Enum(enum_name.clone()))));
-                            }
-                        }
-                    }
-                }
+            // User-defined call fallback. A bare-identifier call can take one
+            // of several shapes; dispatch them in order, falling through to a
+            // plain user-function call when none of the specialized forms match.
+            if let Some(result) = compile_enum_variant_ctor(cx, name, args)? {
+                return Ok(result);
             }
+            if let Some(result) = compile_ufcs_method_call(cx, name, args)? {
+                return Ok(result);
+            }
+            if let Some(result) = compile_closure_call(cx, name, args)? {
+                return Ok(result);
+            }
+            compile_plain_fn_call(cx, name, args)
+        }
+    }
+}
 
-            // Check if this is a method call (UFCS: parser rewrites obj.method(args) -> method(obj, args))
-            if cx.user_fns.get(name.as_str()).is_none() && !args.is_empty() {
-                // Compile first arg to get its type, then check for method
-                let (first_val, first_tty) =
-                    compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
-                        code: ErrorCode::E0400,
-                        message:
-                            "compile_call: `&args[0]` produced no value during code generation"
-                                .to_string(),
-                    })?;
-                if let TurboTy::Struct(ref type_name) = first_tty {
-                    let mangled = format!("{}__{}", type_name, name);
-                    if let Some(&fid) = cx.user_fns.get(&mangled) {
-                        let mut arg_vals = vec![first_val];
-                        for arg in &args[1..] {
-                            if let Some((v, _)) = compile_expr(cx, arg)? {
-                                arg_vals.push(v);
-                            }
-                        }
-                        let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-                        let call = cx.builder.ins().call(fref, &arg_vals);
-                        let results = cx.builder.inst_results(call);
-                        let ret_tty = cx
-                            .fn_ret_types
-                            .get(&mangled)
+/// Enum-variant construction dispatched through the parser's UFCS rewrite, e.g.
+/// `Shape.Circle(5.0)` lowered to `Call { callee: Ident("Circle"), args:
+/// [Ident("Shape"), 5.0] }`. Returns `Ok(Some(..))` when the call is an enum
+/// variant constructor (already lowered), or `Ok(None)` to fall through.
+fn compile_enum_variant_ctor<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    name: &str,
+    args: &[Spanned<Expr>],
+) -> Result<Option<MaybeTyped>, CodegenError> {
+    // Check if this is an enum variant construction via UFCS rewrite:
+    // Parser transforms Shape.Circle(5.0) into Call { callee: Ident("Circle"), args: [Ident("Shape"), 5.0] }
+    if !args.is_empty() {
+        if let Expr::Ident(ref first_name) = args[0].node {
+            if let Some(variants) = cx.enum_variants.get(first_name.as_str()) {
+                if let Some(variant_index) = variants.iter().position(|v| v == name) {
+                    // This is an enum variant construction with data
+                    let data_args = &args[1..]; // skip the enum type name
+                    let enum_name = first_name;
+
+                    if let Some(&max_slots) = cx.enum_max_slots.get(enum_name.as_str()) {
+                        // Data-carrying enum: allocate tagged union
+                        let total_slots = 1 + max_slots; // tag + payload
+                        let num_fields_val =
+                            cx.builder.ins().iconst(types::I64, total_slots as i64);
+                        let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+                        let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+                        let call = cx.builder.ins().call(alloc_fref, &[num_fields_val]);
+                        let ptr = cx.builder.inst_results(call)[0];
+
+                        // Store tag at offset 0
+                        let tag_val = cx.builder.ins().iconst(types::I64, variant_index as i64);
+                        cx.builder.ins().store(MemFlags::new(), tag_val, ptr, 0);
+
+                        // Get the field types for this variant
+                        let _field_tys = cx
+                            .enum_variant_fields
+                            .get(&(enum_name.clone(), name.to_string()))
                             .cloned()
-                            .unwrap_or(TurboTy::Unit);
-                        if results.is_empty() {
-                            return Ok(None);
-                        } else {
-                            return Ok(Some((results[0], ret_tty)));
-                        }
-                    }
-                }
-            }
+                            .unwrap_or_default();
 
-            // Check if the callee is a variable with a function pointer type (closure)
-            if let Some((var, _cl_ty, TurboTy::Fn(ref param_tys, ref ret_ty))) =
-                cx.vars.get(name).cloned()
-            {
-                // Closure is a pair struct: [fn_ptr, env_ptr]
-                let closure_ptr = cx.builder.use_var(var);
-                let fn_ptr = cx
-                    .builder
-                    .ins()
-                    .load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
-                let env_ptr = cx
-                    .builder
-                    .ins()
-                    .load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
+                        // Store each field at offset (i+1)*8
+                        for (i, arg) in data_args.iter().enumerate() {
+                            let (val, _tty) = compile_expr(cx, arg)?.ok_or_else(|| CodegenError { code: ErrorCode::E0400, message: "compile_call: `arg` produced no value during code generation".to_string() })?;
+                            let offset = ((i + 1) * 8) as i32;
 
-                // Build the Cranelift signature: env_ptr first, then user params
-                let mut sig = cx.module.make_signature();
-                sig.call_conv = CallConv::Fast;
-                sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
-                let mut param_cl_tys = Vec::with_capacity(param_tys.len());
-                for param_tty in param_tys {
-                    let cl_ty = turbo_ty_to_cl_type(param_tty, cx.ptr_type);
-                    sig.params.push(AbiParam::new(cl_ty));
-                    param_cl_tys.push(cl_ty);
-                }
-                let ret_tty = *ret_ty.clone();
-                if ret_tty != TurboTy::Unit {
-                    let cl_ret = turbo_ty_to_cl_type(&ret_tty, cx.ptr_type);
-                    sig.returns.push(AbiParam::new(cl_ret));
-                }
-
-                let sig_ref = cx.builder.import_signature(sig);
-
-                let mut arg_values = vec![env_ptr]; // env_ptr is first hidden arg
-                for (i, arg) in args.iter().enumerate() {
-                    if let Some((val, _)) = compile_expr(cx, arg)? {
-                        // If the closure's param slot is a uniform i64 but the
-                        // value is a float (inferred-param closure called with a
-                        // float), move the bits through the integer register so
-                        // both sides agree on the register class.
-                        let val = if let Some(&expected) = param_cl_tys.get(i) {
-                            let actual = cx.builder.func.dfg.value_type(val);
-                            if actual != expected
-                                && actual.bits() == expected.bits()
-                                && (actual.is_float() && expected.is_int()
-                                    || actual.is_int() && expected.is_float())
-                            {
-                                cx.builder.ins().bitcast(expected, MemFlags::new(), val)
+                            // Widen/convert to i64 for uniform storage
+                            let val_ty = cx.builder.func.dfg.value_type(val);
+                            let store_val = if val_ty.is_float() && val_ty.bits() == 64 {
+                                cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
+                            } else if val_ty.is_float() && val_ty.bits() == 32 {
+                                let extended = cx.builder.ins().fpromote(types::F64, val);
+                                cx.builder
+                                    .ins()
+                                    .bitcast(types::I64, MemFlags::new(), extended)
+                            } else if val_ty.bits() < 64 && val_ty.is_int() {
+                                cx.builder.ins().sextend(types::I64, val)
                             } else {
                                 val
-                            }
-                        } else {
-                            val
-                        };
-                        arg_values.push(val);
-                    }
-                }
+                            };
 
-                let call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
-                let results = cx.builder.inst_results(call).to_vec();
-                if results.is_empty() {
-                    return Ok(None);
-                } else {
-                    let mut result = results[0];
-                    // If the closure's declared return is float but it came back
-                    // through a uniform i64 slot, reinterpret the bits as F64.
-                    if matches!(ret_tty, TurboTy::Float) {
-                        let rty = cx.builder.func.dfg.value_type(result);
-                        if rty.is_int() && rty.bits() == 64 {
-                            result = cx
-                                .builder
+                            cx.builder
                                 .ins()
-                                .bitcast(types::F64, MemFlags::new(), result);
+                                .store(MemFlags::new(), store_val, ptr, offset);
                         }
+
+                        return Ok(Some(Some((ptr, TurboTy::Enum(enum_name.clone())))));
+                    } else {
+                        // Unit-only enum, but called with args (shouldn't happen after sema check)
+                        let val = cx.builder.ins().iconst(types::I64, variant_index as i64);
+                        return Ok(Some(Some((val, TurboTy::Enum(enum_name.clone())))));
                     }
-                    return Ok(Some((result, ret_tty)));
                 }
             }
+        }
+    }
+    Ok(None)
+}
 
-            let func_id = *cx.user_fns.get(name.as_str()).ok_or_else(|| CodegenError {
-                code: ErrorCode::E0402,
-                message: format!("undefined function: {name}"),
-            })?;
+/// Method calls lowered through UFCS (the parser rewrites `obj.method(args)` to
+/// `method(obj, args)`). When `name` is not a free function, the first argument
+/// is compiled to recover its struct type and the mangled `Type__method`
+/// function is dispatched. Returns `Ok(Some(..))` when handled, `Ok(None)` to
+/// fall through.
+fn compile_ufcs_method_call<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    name: &str,
+    args: &[Spanned<Expr>],
+) -> Result<Option<MaybeTyped>, CodegenError> {
+    // Check if this is a method call (UFCS: parser rewrites obj.method(args) -> method(obj, args))
+    if cx.user_fns.get(name).is_none() && !args.is_empty() {
+        // Compile first arg to get its type, then check for method
+        let (first_val, first_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+            code: ErrorCode::E0400,
+            message: "compile_call: `&args[0]` produced no value during code generation"
+                .to_string(),
+        })?;
+        if let TurboTy::Struct(ref type_name) = first_tty {
+            let mangled = format!("{}__{}", type_name, name);
+            if let Some(&fid) = cx.user_fns.get(&mangled) {
+                let mut arg_vals = vec![first_val];
+                for arg in &args[1..] {
+                    if let Some((v, _)) = compile_expr(cx, arg)? {
+                        arg_vals.push(v);
+                    }
+                }
+                let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                let call = cx.builder.ins().call(fref, &arg_vals);
+                let results = cx.builder.inst_results(call);
+                let ret_tty = cx
+                    .fn_ret_types
+                    .get(&mangled)
+                    .cloned()
+                    .unwrap_or(TurboTy::Unit);
+                if results.is_empty() {
+                    return Ok(Some(None));
+                } else {
+                    return Ok(Some(Some((results[0], ret_tty))));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
 
-            let ret_tty = cx
-                .fn_ret_types
-                .get(name.as_str())
-                .cloned()
-                .unwrap_or(TurboTy::Unit);
-            let ret_is_result = matches!(&ret_tty, TurboTy::Result(_, _));
-            let type_params = cx
-                .fn_type_params
-                .get(name.as_str())
-                .cloned()
-                .unwrap_or_default();
+/// Indirect call through a closure value. A closure is a `[fn_ptr, env_ptr]`
+/// pair; this builds the Cranelift signature (env-first), reconciles float/int
+/// register classes for inferred-param slots, emits `call_indirect`, and
+/// reinterprets a float return arriving through a uniform i64 slot. Returns
+/// `Ok(Some(..))` when `name` is a closure-typed variable, `Ok(None)` otherwise.
+fn compile_closure_call<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    name: &str,
+    args: &[Spanned<Expr>],
+) -> Result<Option<MaybeTyped>, CodegenError> {
+    // Check if the callee is a variable with a function pointer type (closure)
+    if let Some((var, _cl_ty, TurboTy::Fn(ref param_tys, ref ret_ty))) = cx.vars.get(name).cloned()
+    {
+        // Closure is a pair struct: [fn_ptr, env_ptr]
+        let closure_ptr = cx.builder.use_var(var);
+        let fn_ptr = cx
+            .builder
+            .ins()
+            .load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+        let env_ptr = cx
+            .builder
+            .ins()
+            .load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
 
-            let func_ref = cx.module.declare_func_in_func(func_id, cx.builder.func);
-            let sig = cx.builder.func.dfg.ext_funcs[func_ref].signature;
-            let param_types: Vec<types::Type> = cx.builder.func.dfg.signatures[sig]
-                .params
-                .iter()
-                .map(|p| p.value_type)
-                .collect();
-            let mut arg_values = Vec::new();
-            let mut arg_ttys = Vec::new();
-            for (i, arg) in args.iter().enumerate() {
-                if let Some((val, tty)) = compile_expr(cx, arg)? {
-                    let val = if i < param_types.len() {
-                        let expected = param_types[i];
-                        let actual = cx.builder.func.dfg.value_type(val);
-                        if actual == expected {
-                            val
-                        } else if actual.is_int() && expected.is_int() {
-                            if actual.bits() > expected.bits() {
-                                cx.builder.ins().ireduce(expected, val)
-                            } else {
-                                cx.builder.ins().sextend(expected, val)
-                            }
-                        } else if actual.bits() == expected.bits()
-                            && (actual.is_float() && expected.is_int()
-                                || actual.is_int() && expected.is_float())
-                        {
-                            // Float type-argument flowing through a generic's
-                            // uniform i64 ABI slot (e.g. `fn id<T>(x: T)` called
-                            // with a float): move the bits through the integer
-                            // register so both sides agree on the register class.
-                            cx.builder.ins().bitcast(expected, MemFlags::new(), val)
-                        } else {
-                            val
-                        }
+        // Build the Cranelift signature: env_ptr first, then user params
+        let mut sig = cx.module.make_signature();
+        sig.call_conv = CallConv::Fast;
+        sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
+        let mut param_cl_tys = Vec::with_capacity(param_tys.len());
+        for param_tty in param_tys {
+            let cl_ty = turbo_ty_to_cl_type(param_tty, cx.ptr_type);
+            sig.params.push(AbiParam::new(cl_ty));
+            param_cl_tys.push(cl_ty);
+        }
+        let ret_tty = *ret_ty.clone();
+        if ret_tty != TurboTy::Unit {
+            let cl_ret = turbo_ty_to_cl_type(&ret_tty, cx.ptr_type);
+            sig.returns.push(AbiParam::new(cl_ret));
+        }
+
+        let sig_ref = cx.builder.import_signature(sig);
+
+        let mut arg_values = vec![env_ptr]; // env_ptr is first hidden arg
+        for (i, arg) in args.iter().enumerate() {
+            if let Some((val, _)) = compile_expr(cx, arg)? {
+                // If the closure's param slot is a uniform i64 but the
+                // value is a float (inferred-param closure called with a
+                // float), move the bits through the integer register so
+                // both sides agree on the register class.
+                let val = if let Some(&expected) = param_cl_tys.get(i) {
+                    let actual = cx.builder.func.dfg.value_type(val);
+                    if actual != expected
+                        && actual.bits() == expected.bits()
+                        && (actual.is_float() && expected.is_int()
+                            || actual.is_int() && expected.is_float())
+                    {
+                        cx.builder.ins().bitcast(expected, MemFlags::new(), val)
                     } else {
                         val
-                    };
-                    // COW: passing a named struct or array to a function
-                    // aliases the caller's binding — the callee receives the
-                    // same pointer. Retain it so the shared allocation's
-                    // refcount reflects both references; a `mut`-param write
-                    // inside the callee then sees refcount > 1 and copies
-                    // instead of mutating the caller's value in place
-                    // (`p.x = ..` via rt_struct_cow for structs, BL-10;
-                    // `a[i] = ..` via rt_array_set for arrays, BL-27 Part A).
-                    // Fresh temporaries (non-idents) are not aliased, so they
-                    // are left alone to avoid needless copies.
-                    if matches!(&arg.node, Expr::Ident(_))
-                        && matches!(&tty, TurboTy::Struct(_) | TurboTy::Array(_))
-                    {
-                        retain_if_needed(cx, val, &tty);
                     }
-                    arg_values.push(val);
-                    arg_ttys.push(tty);
+                } else {
+                    val
+                };
+                arg_values.push(val);
+            }
+        }
+
+        let call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
+        let results = cx.builder.inst_results(call).to_vec();
+        if results.is_empty() {
+            return Ok(Some(None));
+        } else {
+            let mut result = results[0];
+            // If the closure's declared return is float but it came back
+            // through a uniform i64 slot, reinterpret the bits as F64.
+            if matches!(ret_tty, TurboTy::Float) {
+                let rty = cx.builder.func.dfg.value_type(result);
+                if rty.is_int() && rty.bits() == 64 {
+                    result = cx
+                        .builder
+                        .ins()
+                        .bitcast(types::F64, MemFlags::new(), result);
                 }
             }
+            return Ok(Some(Some((result, ret_tty))));
+        }
+    }
+    Ok(None)
+}
 
-            // For generic functions, infer the actual return TurboTy from args.
-            let actual_ret_tty = if !type_params.is_empty() {
-                if let Some(f_def) = cx.fn_asts.get(name.as_str()) {
-                    if let Some(ret_ty) = &f_def.return_type {
-                        if let TypeExpr::Named(ref ret_name) = ret_ty.node {
-                            if type_params.contains(ret_name) {
-                                // Find which param carries this type parameter and
-                                // recover the concrete TurboTy from the matching
-                                // argument. We handle two shapes:
-                                //   fn f<T>(x: T)   -> T   — infer T from the arg
-                                //   fn f<T>(xs: [T]) -> T  — infer T from the arg's
-                                //                            array element type
-                                let mut inferred = None;
-                                for (i, param) in f_def.params.iter().enumerate() {
-                                    if i >= arg_ttys.len() {
-                                        continue;
-                                    }
-                                    match &param.ty.node {
-                                        TypeExpr::Named(pname) if pname == ret_name => {
-                                            inferred = Some(arg_ttys[i].clone());
-                                            break;
-                                        }
-                                        TypeExpr::Array(elem) if matches!(&elem.node, TypeExpr::Named(en) if en == ret_name) => {
-                                            if let TurboTy::Array(inner) = &arg_ttys[i] {
-                                                inferred = Some((**inner).clone());
-                                                break;
-                                            }
-                                        }
-                                        _ => {}
+/// Compile each call argument, reconciling its Cranelift value type against the
+/// callee's declared parameter slot (int width adjustment, and float<->int
+/// register-class bitcasts for generic uniform i64 slots), and inserting COW
+/// retains for aliased struct/array idents. Returns the compiled argument
+/// values alongside their `TurboTy`s.
+fn compile_fn_call_args<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+    param_types: &[types::Type],
+) -> Result<(Vec<Value>, Vec<TurboTy>), CodegenError> {
+    let mut arg_values = Vec::new();
+    let mut arg_ttys = Vec::new();
+    for (i, arg) in args.iter().enumerate() {
+        if let Some((val, tty)) = compile_expr(cx, arg)? {
+            let val = if i < param_types.len() {
+                let expected = param_types[i];
+                let actual = cx.builder.func.dfg.value_type(val);
+                if actual == expected {
+                    val
+                } else if actual.is_int() && expected.is_int() {
+                    if actual.bits() > expected.bits() {
+                        cx.builder.ins().ireduce(expected, val)
+                    } else {
+                        cx.builder.ins().sextend(expected, val)
+                    }
+                } else if actual.bits() == expected.bits()
+                    && (actual.is_float() && expected.is_int()
+                        || actual.is_int() && expected.is_float())
+                {
+                    // Float type-argument flowing through a generic's
+                    // uniform i64 ABI slot (e.g. `fn id<T>(x: T)` called
+                    // with a float): move the bits through the integer
+                    // register so both sides agree on the register class.
+                    cx.builder.ins().bitcast(expected, MemFlags::new(), val)
+                } else {
+                    val
+                }
+            } else {
+                val
+            };
+            // COW: passing a named struct or array to a function
+            // aliases the caller's binding — the callee receives the
+            // same pointer. Retain it so the shared allocation's
+            // refcount reflects both references; a `mut`-param write
+            // inside the callee then sees refcount > 1 and copies
+            // instead of mutating the caller's value in place
+            // (`p.x = ..` via rt_struct_cow for structs, BL-10;
+            // `a[i] = ..` via rt_array_set for arrays, BL-27 Part A).
+            // Fresh temporaries (non-idents) are not aliased, so they
+            // are left alone to avoid needless copies.
+            if matches!(&arg.node, Expr::Ident(_))
+                && matches!(&tty, TurboTy::Struct(_) | TurboTy::Array(_))
+            {
+                retain_if_needed(cx, val, &tty);
+            }
+            arg_values.push(val);
+            arg_ttys.push(tty);
+        }
+    }
+    Ok((arg_values, arg_ttys))
+}
+
+/// Reconcile the static return `TurboTy` of a generic function with the
+/// concrete types of its arguments. For `fn f<T>(x: T) -> T` (or `fn f<T>(xs:
+/// [T]) -> T`), the concrete `T` is recovered from the matching argument's
+/// type; otherwise the declared return type is used unchanged.
+fn infer_generic_ret_tty<M: Module>(
+    cx: &Ctx<'_, M>,
+    name: &str,
+    type_params: &[String],
+    ret_tty: TurboTy,
+    arg_ttys: &[TurboTy],
+) -> TurboTy {
+    // For generic functions, infer the actual return TurboTy from args.
+    if !type_params.is_empty() {
+        if let Some(f_def) = cx.fn_asts.get(name) {
+            if let Some(ret_ty) = &f_def.return_type {
+                if let TypeExpr::Named(ref ret_name) = ret_ty.node {
+                    if type_params.contains(ret_name) {
+                        // Find which param carries this type parameter and
+                        // recover the concrete TurboTy from the matching
+                        // argument. We handle two shapes:
+                        //   fn f<T>(x: T)   -> T   — infer T from the arg
+                        //   fn f<T>(xs: [T]) -> T  — infer T from the arg's
+                        //                            array element type
+                        let mut inferred = None;
+                        for (i, param) in f_def.params.iter().enumerate() {
+                            if i >= arg_ttys.len() {
+                                continue;
+                            }
+                            match &param.ty.node {
+                                TypeExpr::Named(pname) if pname == ret_name => {
+                                    inferred = Some(arg_ttys[i].clone());
+                                    break;
+                                }
+                                TypeExpr::Array(elem) if matches!(&elem.node, TypeExpr::Named(en) if en == ret_name) => {
+                                    if let TurboTy::Array(inner) = &arg_ttys[i] {
+                                        inferred = Some((**inner).clone());
+                                        break;
                                     }
                                 }
-                                inferred.unwrap_or(ret_tty)
-                            } else {
-                                ret_tty
+                                _ => {}
                             }
-                        } else {
-                            ret_tty
                         }
+                        inferred.unwrap_or(ret_tty)
                     } else {
                         ret_tty
                     }
@@ -2226,88 +2264,150 @@ fn compile_call<M: Module>(
                 }
             } else {
                 ret_tty
-            };
-
-            // For generic functions, widen bool args (I8) to I64 since
-            // the generic function's parameter is compiled as I64.
-            if !type_params.is_empty() {
-                for val in &mut arg_values {
-                    let vty = cx.builder.func.dfg.value_type(*val);
-                    if vty.bits() < 64 {
-                        *val = cx.builder.ins().sextend(types::I64, *val);
-                    }
-                }
             }
+        } else {
+            ret_tty
+        }
+    } else {
+        ret_tty
+    }
+}
 
-            // Try inline expansion: inline the callee body at this call site
-            // if we haven't exceeded the depth limit and the function is inlineable.
-            // Skip inlining for generic functions (type parameter inference needs
-            // normal call path), for Result-returning functions (heap-allocated
-            // tagged unions require proper call/return semantics), and for
-            // Optional-returning functions (SomeExpr/NoneExpr lose inner type info).
-            let ret_is_optional = matches!(&actual_ret_tty, TurboTy::Optional(_));
-            if cx.inline_depth < MAX_INLINE_DEPTH
-                && type_params.is_empty()
-                && !ret_is_result
-                && !ret_is_optional
-            {
-                if let Some(callee_def) = cx.fn_asts.get(name.as_str()).cloned() {
-                    if !has_return(&callee_def.body.node)
-                        && callee_def.params.len() == arg_values.len()
-                    {
-                        // Save and restore outer variable scope so inlined
-                        // parameter bindings don't leak out.
-                        let saved_vars = cx.vars.clone();
-                        let saved_depth = cx.inline_depth;
-                        cx.inline_depth += 1;
+/// Attempt to inline the callee body at the call site. Inlining is skipped for
+/// generic functions (type-parameter inference needs the normal call path),
+/// Result-returning functions (heap-allocated tagged unions need real
+/// call/return semantics), Optional-returning functions (Some/None lose inner
+/// type info), beyond `MAX_INLINE_DEPTH`, for callees containing `return`, and
+/// on arity mismatch. Returns `Ok(Some(..))` when the call was inlined,
+/// `Ok(None)` to fall back to a normal call instruction.
+fn try_inline_fn_call<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    name: &str,
+    type_params: &[String],
+    ret_is_result: bool,
+    actual_ret_tty: &TurboTy,
+    arg_values: &[Value],
+) -> Result<Option<MaybeTyped>, CodegenError> {
+    // Try inline expansion: inline the callee body at this call site
+    // if we haven't exceeded the depth limit and the function is inlineable.
+    // Skip inlining for generic functions (type parameter inference needs
+    // normal call path), for Result-returning functions (heap-allocated
+    // tagged unions require proper call/return semantics), and for
+    // Optional-returning functions (SomeExpr/NoneExpr lose inner type info).
+    let ret_is_optional = matches!(actual_ret_tty, TurboTy::Optional(_));
+    if cx.inline_depth < MAX_INLINE_DEPTH
+        && type_params.is_empty()
+        && !ret_is_result
+        && !ret_is_optional
+    {
+        if let Some(callee_def) = cx.fn_asts.get(name).cloned() {
+            if !has_return(&callee_def.body.node) && callee_def.params.len() == arg_values.len() {
+                // Save and restore outer variable scope so inlined
+                // parameter bindings don't leak out.
+                let saved_vars = cx.vars.clone();
+                let saved_depth = cx.inline_depth;
+                cx.inline_depth += 1;
 
-                        // Bind each parameter to the already-compiled argument value.
-                        for (i, param) in callee_def.params.iter().enumerate() {
-                            let cl_ty = resolve_cl_type(
-                                &param.ty.node,
-                                cx.ptr_type,
-                                cx.enum_variants,
-                                &type_params,
-                            )?;
-                            let turbo_ty =
-                                turbo_ty_from_type_expr(&param.ty.node, cx.enum_variants);
-                            let var = cx.fresh_var(cl_ty, turbo_ty.clone());
-                            cx.builder.def_var(var, arg_values[i]);
-                            cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
-                        }
-
-                        let result = compile_expr(cx, &callee_def.body)?;
-
-                        cx.vars = saved_vars;
-                        cx.inline_depth = saved_depth;
-
-                        return Ok(result);
-                    }
+                // Bind each parameter to the already-compiled argument value.
+                for (i, param) in callee_def.params.iter().enumerate() {
+                    let cl_ty = resolve_cl_type(
+                        &param.ty.node,
+                        cx.ptr_type,
+                        cx.enum_variants,
+                        type_params,
+                    )?;
+                    let turbo_ty = turbo_ty_from_type_expr(&param.ty.node, cx.enum_variants);
+                    let var = cx.fresh_var(cl_ty, turbo_ty.clone());
+                    cx.builder.def_var(var, arg_values[i]);
+                    cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
                 }
-            }
 
-            // Fall back to a normal call instruction.
-            let call = cx.builder.ins().call(func_ref, &arg_values);
-            let results = cx.builder.inst_results(call).to_vec();
-            if results.is_empty() {
-                Ok(None)
-            } else {
-                let mut result = results[0];
-                // Generic functions return their type-parameter result through a
-                // uniform i64 slot. If the inferred return type is float, the
-                // value arrives as raw i64 bits — reinterpret them as F64 so the
-                // Cranelift value type matches its TurboTy.
-                if matches!(actual_ret_tty, TurboTy::Float) {
-                    let rty = cx.builder.func.dfg.value_type(result);
-                    if rty.is_int() && rty.bits() == 64 {
-                        result = cx
-                            .builder
-                            .ins()
-                            .bitcast(types::F64, MemFlags::new(), result);
-                    }
-                }
-                Ok(Some((result, actual_ret_tty)))
+                let result = compile_expr(cx, &callee_def.body)?;
+
+                cx.vars = saved_vars;
+                cx.inline_depth = saved_depth;
+
+                return Ok(Some(result));
             }
         }
+    }
+    Ok(None)
+}
+
+/// Compile a plain call to a user-defined free function: resolve the function
+/// ref and its signature, compile and reconcile arguments (with COW retains),
+/// infer the concrete return type for generics, attempt inline expansion, and
+/// otherwise emit a normal call instruction, reinterpreting a float return that
+/// arrives through a generic's uniform i64 slot.
+fn compile_plain_fn_call<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    name: &str,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let func_id = *cx.user_fns.get(name).ok_or_else(|| CodegenError {
+        code: ErrorCode::E0402,
+        message: format!("undefined function: {name}"),
+    })?;
+
+    let ret_tty = cx.fn_ret_types.get(name).cloned().unwrap_or(TurboTy::Unit);
+    let ret_is_result = matches!(&ret_tty, TurboTy::Result(_, _));
+    let type_params = cx.fn_type_params.get(name).cloned().unwrap_or_default();
+
+    let func_ref = cx.module.declare_func_in_func(func_id, cx.builder.func);
+    let sig = cx.builder.func.dfg.ext_funcs[func_ref].signature;
+    let param_types: Vec<types::Type> = cx.builder.func.dfg.signatures[sig]
+        .params
+        .iter()
+        .map(|p| p.value_type)
+        .collect();
+
+    let (mut arg_values, arg_ttys) = compile_fn_call_args(cx, args, &param_types)?;
+
+    // For generic functions, infer the actual return TurboTy from args.
+    let actual_ret_tty = infer_generic_ret_tty(cx, name, &type_params, ret_tty, &arg_ttys);
+
+    // For generic functions, widen bool args (I8) to I64 since
+    // the generic function's parameter is compiled as I64.
+    if !type_params.is_empty() {
+        for val in &mut arg_values {
+            let vty = cx.builder.func.dfg.value_type(*val);
+            if vty.bits() < 64 {
+                *val = cx.builder.ins().sextend(types::I64, *val);
+            }
+        }
+    }
+
+    if let Some(result) = try_inline_fn_call(
+        cx,
+        name,
+        &type_params,
+        ret_is_result,
+        &actual_ret_tty,
+        &arg_values,
+    )? {
+        return Ok(result);
+    }
+
+    // Fall back to a normal call instruction.
+    let call = cx.builder.ins().call(func_ref, &arg_values);
+    let results = cx.builder.inst_results(call).to_vec();
+    if results.is_empty() {
+        Ok(None)
+    } else {
+        let mut result = results[0];
+        // Generic functions return their type-parameter result through a
+        // uniform i64 slot. If the inferred return type is float, the
+        // value arrives as raw i64 bits — reinterpret them as F64 so the
+        // Cranelift value type matches its TurboTy.
+        if matches!(actual_ret_tty, TurboTy::Float) {
+            let rty = cx.builder.func.dfg.value_type(result);
+            if rty.is_int() && rty.bits() == 64 {
+                result = cx
+                    .builder
+                    .ins()
+                    .bitcast(types::F64, MemFlags::new(), result);
+            }
+        }
+        Ok(Some((result, actual_ret_tty)))
     }
 }
