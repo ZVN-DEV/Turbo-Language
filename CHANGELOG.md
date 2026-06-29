@@ -3,6 +3,59 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.1] - 2026-06-29
+
+A correctness and polish patch. Closes two silent server-runtime bugs (a
+use-after-free and a data race), bounds long-running JIT server memory, turns a
+runtime segfault into a clean compile error, and clears the remaining diagnostics
+and language-ergonomics backlog. All changes are JIT/AOT parity-tested; CI now
+also gates the C-runtime tests and sanitizers on every change.
+
+### Fixed
+- **Stateful HTTP server use-after-free (critical).** A server holding state in a
+  hashmap created at startup and mutated inside a request handler had its entries
+  freed by the per-request memory arena, dangling on the next request. Persistent
+  hashmaps now allocate their entry storage with `malloc`/`free` and survive the
+  request boundary (request-local maps stay arena-backed — no leak). Confirmed
+  clean under AddressSanitizer.
+- **JIT HTTP server unbounded memory growth.** `turbolang run` servers never
+  reclaimed per-request string memory (the arena only drained when `main()`
+  returned, which a server never does), so RSS grew without bound. The request
+  handler now resets the arena to a per-request high-water mark — RSS stays flat
+  over thousands of requests. AOT servers were already bounded; the previous
+  README/SAFETY note warned about the wrong path and has been corrected.
+- **JIT hashmap data race under concurrent `spawn`.** Two threads mutating a
+  shared hashmap raced (undefined behavior / crashes). The JIT hashmap is now
+  mutex-guarded; an 8-thread × 50k-increment stress test went from crashing every
+  run to deterministically correct.
+- **Opaque-handle type confusion → segfault.** Assigning an integer into a
+  hashmap/mutex/HTTP-handle-typed variable (e.g. `m = hashmap_inc(m, k)`, which
+  returns an `int`) silently clobbered the handle and segfaulted on the next use.
+  Handles now have a distinct type, so this is a clean compile-time error
+  (`E0111`) instead of a runtime crash.
+- **Whole-number floats print ambiguously.** A `float` with no fractional part
+  printed without a decimal point (`2.0` → `2`), indistinguishable from an `int`.
+  Whole-valued floats now render with a trailing `.0` consistently across JIT,
+  AOT, and WASM.
+- **Misleading `let x =` diagnostic.** An empty right-hand side now produces one
+  clear error anchored on the `=` ("expected an expression after `=` in let
+  binding") instead of a message pointing at the next token or end of file.
+
+### Added
+- **Raw string literals** `r"..."` — backslashes and braces are taken literally,
+  so JSON, regexes, and Windows paths paste in verbatim.
+- **Empty-array element-type inference.** A bare `[]` now infers its element type
+  from an annotated `let`, parameter, struct field, or return type; genuinely
+  uninferrable cases still give a single clear diagnostic.
+- **`examples/stateful-counter/`** — a correct persistent-state HTTP server demo.
+
+### Changed
+- Decomposed the two largest internal functions (semantic analyzer's
+  `check_expr_inner`, code generator's `compile_call` fallback) into focused
+  handlers — no behavior change.
+- Diagnostics/CLI polish: cleaner IO error messages, a TTY-gated `test` summary
+  with total time, and no spurious REPL "unused variable" warnings.
+
 ## [0.10.0] - 2026-06-28
 
 A large correctness, language-features, and DX release driven by a full product
