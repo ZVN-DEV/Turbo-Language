@@ -2738,17 +2738,48 @@ pub(crate) extern "C" fn rt_mutex_clone(m: *const u8) -> *mut u8 {
 // hashmap created at startup and mutated inside a handler therefore keeps its
 // data across requests with no use-after-free, so the JIT needs no equivalent
 // of the AOT `persistent`/arena-scoping fix.
+//
+// BL-26 note: the map handle is shared across `spawn`ed OS threads by its raw
+// `i64` pointer. Forming `&mut *ptr` (or even two `&*ptr`) to the same boxed
+// `HashMap` from two threads is a data race / UB — concurrent inc/set lost
+// updates and concurrent rehash corrupted the table (segfault). The map is
+// therefore stored behind a `Mutex` and every operation holds the lock for its
+// whole duration, so access is serialized and no aliasing `&mut` ever crosses a
+// thread boundary. The handle the codegen sees is unchanged — still an opaque
+// `i64` pointer; only its pointee gains the lock. Single-threaded semantics are
+// identical (a lock/unlock per op). No operation calls back into another
+// hashmap op while holding the lock, so the non-reentrant `Mutex` cannot
+// deadlock, and every value handed back to the program is an owned copy (an
+// arena string or a fresh array), never a borrow into the locked map.
+
+/// The pointee behind a JIT hashmap handle: a `HashMap<String, String>` guarded
+/// by a `Mutex` so concurrent `spawn` access is data-race-free (BL-26).
+type HashMapHandle = Mutex<HashMap<String, String>>;
+
+/// Lock the hashmap behind `map_ptr` for the duration of one operation.
+///
+/// The handle box is created by [`rt_hashmap_new`] and intentionally never
+/// freed, so it lives for the whole process — the returned guard's `'static`
+/// borrow is sound. A poisoned lock (a thread panicking mid-op) is recovered
+/// rather than re-panicked: a panic inside these `extern "C"` functions already
+/// aborts the process, so poisoning is effectively unreachable, and recovering
+/// avoids turning it into a second abort.
+fn lock_hashmap(map_ptr: *const u8) -> std::sync::MutexGuard<'static, HashMap<String, String>> {
+    let handle: &'static HashMapHandle = unsafe { &*(map_ptr as *const HashMapHandle) };
+    handle
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Create a new empty HashMap<String, String>. Returns an opaque pointer.
 pub(crate) extern "C" fn rt_hashmap_new() -> *mut u8 {
     let map: HashMap<String, String> = HashMap::new();
-    let boxed = Box::new(map);
+    let boxed: Box<HashMapHandle> = Box::new(Mutex::new(map));
     Box::into_raw(boxed) as *mut u8
 }
 
 /// Set a key-value pair in the hashmap.
 pub(crate) extern "C" fn rt_hashmap_set(map_ptr: *mut u8, key: *const u8, value: *const u8) {
-    let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
     let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("")
@@ -2757,31 +2788,29 @@ pub(crate) extern "C" fn rt_hashmap_set(map_ptr: *mut u8, key: *const u8, value:
         .to_str()
         .unwrap_or("")
         .to_string();
-    map.insert(key, value);
+    lock_hashmap(map_ptr).insert(key, value);
 }
 
 /// Get a value by key. Returns a C string pointer, or null if not found.
 pub(crate) extern "C" fn rt_hashmap_get(map_ptr: *const u8, key: *const u8) -> *const u8 {
-    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
     let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    match map.get(key) {
-        Some(v) => {
-            let cs = cstring_or_empty(v.as_str());
-            arena_str(cs)
-        }
+    // Clone out an owned value under the lock, then release it before allocating
+    // the arena string — the returned pointer must never borrow into the map.
+    let found = lock_hashmap(map_ptr).get(key).cloned();
+    match found {
+        Some(v) => arena_str(cstring_or_empty(v)),
         None => std::ptr::null(),
     }
 }
 
 /// Check if a key exists. Returns 1 (true) or 0 (false).
 pub(crate) extern "C" fn rt_hashmap_has(map_ptr: *const u8, key: *const u8) -> i8 {
-    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
     let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    if map.contains_key(key) {
+    if lock_hashmap(map_ptr).contains_key(key) {
         1
     } else {
         0
@@ -2790,14 +2819,15 @@ pub(crate) extern "C" fn rt_hashmap_has(map_ptr: *const u8, key: *const u8) -> i
 
 /// Return the number of entries in the hashmap.
 pub(crate) extern "C" fn rt_hashmap_len(map_ptr: *const u8) -> i64 {
-    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
-    map.len() as i64
+    lock_hashmap(map_ptr).len() as i64
 }
 
 /// Return all keys as a [str] array (same format as rt_str_split).
 pub(crate) extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
-    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
-    let mut keys: Vec<&str> = map.keys().map(|k| k.as_str()).collect();
+    // Snapshot the keys as owned strings under the lock, then release it before
+    // sorting / allocating the result array (the returned strings are arena
+    // copies, never borrows into the map).
+    let mut keys: Vec<String> = lock_hashmap(map_ptr).keys().cloned().collect();
     keys.sort(); // deterministic order for testing
     let len = keys.len() as i64;
     // Array format: [refcount: i64][len: i64][ptr0: i64][ptr1: i64]...
@@ -2823,7 +2853,7 @@ pub(crate) extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
         *(data_ptr as *mut i64) = len;
     }
     for (i, key) in keys.iter().enumerate() {
-        let cs = cstring_or_empty(*key);
+        let cs = cstring_or_empty(key.as_str());
         unsafe {
             *((data_ptr as *mut i64).add(1 + i)) = arena_str(cs) as i64;
         }
@@ -2833,11 +2863,10 @@ pub(crate) extern "C" fn rt_hashmap_keys(map_ptr: *const u8) -> *mut u8 {
 
 /// Remove a key from the hashmap.
 pub(crate) extern "C" fn rt_hashmap_remove(map_ptr: *mut u8, key: *const u8) {
-    let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
     let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    map.remove(key);
+    lock_hashmap(map_ptr).remove(key);
 }
 
 /// Set a key → int pair. Stringifies the int into the existing
@@ -2849,23 +2878,21 @@ pub(crate) extern "C" fn rt_hashmap_set_int(
     key: *const u8,
     value: i64,
 ) -> *mut u8 {
-    let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
     let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("")
         .to_string();
-    map.insert(key, value.to_string());
+    lock_hashmap(map_ptr).insert(key, value.to_string());
     map_ptr
 }
 
 /// Get an int value by key. Returns 0 on miss (callers that need to
 /// distinguish missing from a stored 0 should guard with hashmap_has).
 pub(crate) extern "C" fn rt_hashmap_get_int(map_ptr: *const u8, key: *const u8) -> i64 {
-    let map = unsafe { &*(map_ptr as *const HashMap<String, String>) };
     let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("");
-    match map.get(key) {
+    match lock_hashmap(map_ptr).get(key) {
         Some(v) => v.parse::<i64>().unwrap_or(0),
         None => 0,
     }
@@ -2877,11 +2904,13 @@ pub(crate) extern "C" fn rt_hashmap_get_int(map_ptr: *const u8, key: *const u8) 
 /// shared String storage, so the observable behaviour (get_int reads the
 /// value, get returns its decimal string) stays identical to AOT.
 pub(crate) extern "C" fn rt_hashmap_inc(map_ptr: *mut u8, key: *const u8, delta: i64) -> i64 {
-    let map = unsafe { &mut *(map_ptr as *mut HashMap<String, String>) };
     let key = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
         .to_str()
         .unwrap_or("")
         .to_string();
+    // The whole read-modify-write runs under one held lock, so concurrent
+    // increments on a shared map serialize and never lose updates (BL-26).
+    let mut map = lock_hashmap(map_ptr);
     let slot = map.entry(key).or_insert_with(|| "0".to_string());
     let new_val = slot.parse::<i64>().unwrap_or(0) + delta;
     *slot = new_val.to_string();
@@ -3459,5 +3488,111 @@ mod ssrf_tests {
         assert!(rt_http_url_blocked_reason(&long).is_some());
         // a public host is allowed
         assert_eq!(rt_http_url_blocked_reason("https://example.com/"), None);
+    }
+}
+
+#[cfg(test)]
+mod hashmap_concurrency_tests {
+    //! BL-26 regression: the JIT hashmap is shared across `spawn`ed threads by
+    //! its raw `i64` handle. Before the map was put behind a `Mutex`, each op
+    //! formed `&mut *ptr` to the same boxed `HashMap`, so two threads mutating
+    //! the same map was a data race / UB — lost updates and table corruption
+    //! (segfault). These tests hammer one shared map from many OS threads and
+    //! assert an exact, deterministic result; they crash/fail reliably against
+    //! the unlocked code and pass reliably once every op holds the lock.
+    use super::{
+        rt_hashmap_get_int, rt_hashmap_inc, rt_hashmap_len, rt_hashmap_new, rt_hashmap_set_int,
+        HashMapHandle,
+    };
+    use std::ffi::CString;
+
+    /// Reconstruct and drop the leaked handle box so the test doesn't leak.
+    fn free_map(map: *mut u8) {
+        // SAFETY: `map` was produced by `rt_hashmap_new`, which boxes a
+        // `HashMapHandle`, and is no longer referenced by any thread.
+        unsafe {
+            drop(Box::from_raw(map as *mut HashMapHandle));
+        }
+    }
+
+    #[test]
+    fn concurrent_inc_on_shared_key_has_no_lost_updates() {
+        const N: usize = 8;
+        const K: i64 = 50_000;
+
+        let map = rt_hashmap_new();
+        let map_addr = map as usize;
+        // The key CString must outlive every worker thread.
+        let key = CString::new("shared").unwrap();
+        let key_addr = key.as_ptr() as usize;
+
+        let handles: Vec<_> = (0..N)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let map_ptr = map_addr as *mut u8;
+                    let key_ptr = key_addr as *const u8;
+                    for _ in 0..K {
+                        rt_hashmap_inc(map_ptr, key_ptr, 1);
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("worker thread panicked (map corruption)");
+        }
+
+        let total = rt_hashmap_get_int(map as *const u8, key.as_ptr() as *const u8);
+        assert_eq!(
+            total,
+            N as i64 * K,
+            "lost updates: concurrent rt_hashmap_inc raced"
+        );
+        assert_eq!(rt_hashmap_len(map as *const u8), 1);
+        drop(key);
+        free_map(map);
+    }
+
+    #[test]
+    fn concurrent_distinct_inserts_do_not_corrupt_the_table() {
+        // Each thread inserts its own disjoint key range, so the map grows
+        // (and rehashes) under concurrent mutation from every thread — the path
+        // most likely to segfault when access is unsynchronized.
+        const N: usize = 8;
+        const K: usize = 4_000;
+
+        let map = rt_hashmap_new();
+        let map_addr = map as usize;
+
+        let handles: Vec<_> = (0..N)
+            .map(|tid| {
+                std::thread::spawn(move || {
+                    let map_ptr = map_addr as *mut u8;
+                    for i in 0..K {
+                        let k = CString::new(format!("t{tid}_{i}")).unwrap();
+                        rt_hashmap_set_int(map_ptr, k.as_ptr() as *const u8, (tid * K + i) as i64);
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("worker thread panicked (map corruption)");
+        }
+
+        assert_eq!(
+            rt_hashmap_len(map as *const u8),
+            (N * K) as i64,
+            "concurrent inserts dropped or corrupted entries"
+        );
+        // Spot-check that values survived intact across the concurrent rehashes.
+        for tid in 0..N {
+            for i in [0usize, K / 2, K - 1] {
+                let k = CString::new(format!("t{tid}_{i}")).unwrap();
+                assert_eq!(
+                    rt_hashmap_get_int(map as *const u8, k.as_ptr() as *const u8),
+                    (tid * K + i) as i64
+                );
+            }
+        }
+        free_map(map);
     }
 }
