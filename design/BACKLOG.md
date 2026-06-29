@@ -70,10 +70,16 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
   source **byte-for-byte**. Idempotent + semantics-preserving across all 204 phase1 + regression +
   adversarial programs; `init` scaffold passes `fmt --check`. turbo-formatter tests 8 → 36.
 
-- [ ] **BL-6 — Split the two god-functions.** `turbo-sema/src/type_check/expr.rs::check_expr_inner`
-  (~4,540 lines) and the `compile_call` `_` fallback arm in `turbo-codegen-cranelift/src/expr.rs`
-  (~311 lines, six concerns). Decompose into per-`Expr`-variant handlers with no behavior change.
-  **AC:** full suite stays green; no function over ~400 lines remains in those two hotspots.
+- [x] **BL-6 — Split the two god-functions.** _Done 2026-06-28 (sema commit `65a5ada`, codegen commit `d08fe36`,
+  merged to master)._ `check_expr_inner` (~4,540 lines) → a thin dispatcher delegating to 35 per-variant
+  `check_<variant>` handlers (the ~2,800-line builtin section fanned out to 13 category helpers via
+  `check_builtin_call`); longest fn now `check_match` at 370 lines. The `compile_call` `_` fallback arm (~311 lines,
+  six concerns) → `compile_call` 577→202 lines via `compile_enum_variant_ctor` / `compile_ufcs_method_call` /
+  `compile_closure_call` / `compile_plain_fn_call` (+ `compile_fn_call_args` / `infer_generic_ret_tty` /
+  `try_inline_fn_call`), all ≤84 lines. Zero behavior change — verified by identical ErrorCode/builtin-name/return
+  multisets (sema) and JIT≡AOT parity (codegen); full suite green (267 integration / 28 parity). Holdout (out of
+  scope, named): the pre-existing `compile_expr_inner` Expr-dispatcher (1,347 lines) — BL-6 codegen was scoped to
+  `compile_call`'s `_` arm; a future split could target it.
 
 ## P3 — coverage & ops
 
