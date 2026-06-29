@@ -1,0 +1,44 @@
+// BL-26 regression: concurrent `spawn` threads hammering ONE shared hashmap.
+//
+// Each worker fuses `hashmap_inc(m, "shared")` `iters` times on the SAME map
+// handle. `hashmap_inc` is a read-modify-write; before the JIT hashmap was put
+// behind a lock, two spawned threads each took `&mut *ptr` to the same boxed
+// HashMap concurrently — a data race / UB that lost updates (total < N*iters)
+// and could corrupt the map (concurrent String rewrite -> segfault). With the
+// map serialized behind a Mutex, the whole RMW runs under one held lock, so the
+// final total is exact: 8 workers x 50000 increments = 400000, and the map has
+// the single shared key. Mirrors `mutex_update_counter.tb` (the BL-18 analog).
+//
+// JIT-only by design: this lives in tests/phase1 (run via `turbolang run`), not
+// parity, because the AOT C-runtime hashmap is a separate concern (BL-26 scopes
+// only the JIT/Rust runtime.rs hashmap).
+fn worker(m: i64, iters: i64) -> i64 {
+    let mut i = 0
+    while i < iters {
+        hashmap_inc(m, "shared")
+        i = i + 1
+    }
+    0
+}
+
+fn main() {
+    let m = hashmap()
+    let a = spawn worker(m, 50000)
+    let b = spawn worker(m, 50000)
+    let c = spawn worker(m, 50000)
+    let d = spawn worker(m, 50000)
+    let e = spawn worker(m, 50000)
+    let f = spawn worker(m, 50000)
+    let g = spawn worker(m, 50000)
+    let h = spawn worker(m, 50000)
+    await a
+    await b
+    await c
+    await d
+    await e
+    await f
+    await g
+    await h
+    print(hashmap_get_int(m, "shared"))
+    print(hashmap_len(m))
+}
