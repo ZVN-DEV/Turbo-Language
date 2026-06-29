@@ -563,6 +563,13 @@ pub(crate) struct Checker {
     pub(crate) current_return_type: Ty,
     /// Hint for closure parameter types when checking closures passed to map/filter/reduce
     pub(crate) closure_param_hint: Option<Vec<Ty>>,
+    /// Expected type of the current function body's tail expression (its
+    /// implicit return slot). Set just before checking a function body and
+    /// consumed by `check_block` so an idiomatic empty-array tail return
+    /// (`fn f() -> [str] { [] }`) infers its element type instead of failing
+    /// with E0115. `check_block` `take()`s it at entry so only the body
+    /// block's own tail sees it — nested blocks do not (BL-26).
+    pub(crate) fn_body_tail_hint: Option<Ty>,
     /// When true, `main` is not required (used for `turbolang test` mode)
     pub(crate) test_mode: bool,
     /// Whether we are currently checking inside an `@unsafe` function
@@ -606,6 +613,7 @@ impl Checker {
             scopes: Vec::new(),
             current_return_type: Ty::Unit,
             closure_param_hint: None,
+            fn_body_tail_hint: None,
             in_unsafe_context: false,
             test_mode: false,
             loop_depth: 0,

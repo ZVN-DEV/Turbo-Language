@@ -972,8 +972,12 @@ impl Checker {
             );
         }
 
-        // Check body
+        // Check body. Hint the declared return type so an empty-array tail
+        // expression (`fn f() -> [str] { [] }`) infers its element type from
+        // the return slot (BL-26); `check_block` consumes the hint.
+        self.fn_body_tail_hint = Some(ret_ty.clone());
         let body_ty = self.check_expr(&f.body);
+        self.fn_body_tail_hint = None;
 
         // Check return type matches.
         // Skip if the body ends with a `return` statement — those are checked
@@ -1057,7 +1061,11 @@ impl Checker {
             );
         }
 
+        // Hint the declared return type for an empty-array tail return (BL-26);
+        // `check_block` consumes it.
+        self.fn_body_tail_hint = Some(sig.ret.clone());
         let body_ty = self.check_expr(&f.body);
+        self.fn_body_tail_hint = None;
 
         let body_has_return = if let Expr::Block { stmts, .. } = &f.body.node {
             stmts
@@ -1117,5 +1125,36 @@ impl Checker {
         let result = self.check_expr_inner(expr);
         self.expr_depth -= 1;
         result
+    }
+
+    /// Check an expression that appears in a position with a known expected
+    /// type — a function parameter, struct field, or return slot.
+    ///
+    /// The only behavioural difference from [`check_expr`] is that a bare
+    /// empty array literal `[]` infers its element type from `expected`
+    /// instead of failing with `E0115` ("cannot infer type of empty array").
+    /// This mirrors the let-binding special case (`let xs: [int] = []`) for
+    /// the other annotated contexts. Everything else is unchanged: callers
+    /// still compare the returned type against what they expect, and a `[]`
+    /// flowing into a non-array or still-generic slot (e.g. a `[T]` parameter
+    /// whose `T` is unbound) keeps the genuine E0115 diagnostic.
+    pub(crate) fn check_expr_expecting(&mut self, expr: &Spanned<Expr>, expected: &Ty) -> Ty {
+        if let Expr::ArrayLit(elems) = &expr.node {
+            // Only an *empty* literal needs a hint; a non-empty one infers
+            // its element type from its first element as usual.
+            if elems.is_empty()
+                && matches!(expected, Ty::Array(_))
+                // The expected element type must be fully concrete. A `[T]`
+                // (or any type still mentioning a generic parameter) is
+                // genuinely uninferrable from `[]`, so let it fall through to
+                // the normal E0115 path. `erase_type_params` rewrites every
+                // `TypeParam` to `Error`; if that leaves `expected` unchanged
+                // there were no type parameters to resolve.
+                && erase_type_params(expected) == *expected
+            {
+                return expected.clone();
+            }
+        }
+        self.check_expr(expr)
     }
 }
