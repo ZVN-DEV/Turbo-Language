@@ -168,11 +168,33 @@ fn arena_str(cs: std::ffi::CString) -> *const u8 {
     ptr as *const u8
 }
 
-/// Free all strings in the arena. Called after JIT main() returns.
-pub(crate) extern "C" fn rt_arena_reset() {
+/// Number of strings currently held in the per-thread arena. The HTTP
+/// request loop records this at the start of each request and uses it as a
+/// high-water mark to reclaim only the strings allocated *during* that
+/// request (see [`arena_reset_to`]).
+fn arena_mark() -> usize {
+    STRING_ARENA.with(|arena| arena.borrow().len())
+}
+
+/// Free and drop every arena string from index `mark` onward, leaving the
+/// earlier entries untouched.
+///
+/// This is the surgical core of the per-request reclamation the JIT HTTP
+/// server performs (BL-25 A1). By recording the arena length at the start of
+/// a request ([`arena_mark`]) and truncating back to it once the response is
+/// written, only strings allocated *during* that request are freed; strings
+/// allocated before the mark — e.g. server state captured at startup, which
+/// on a worker thread lives in the main thread's arena anyway — are
+/// preserved, so the reset can never free memory that must outlive the
+/// request. This mirrors the AOT runtime's per-request bump arena
+/// (`rt_arena_begin` / `rt_arena_end` in `turbo_rt.c`).
+fn arena_reset_to(mark: usize) {
     STRING_ARENA.with(|arena| {
         let mut strings = arena.borrow_mut();
-        for entry in strings.drain(..) {
+        if mark >= strings.len() {
+            return;
+        }
+        for entry in strings.drain(mark..) {
             unsafe {
                 if entry.is_raw {
                     let layout = std::alloc::Layout::from_size_align(entry.cap, 1).unwrap();
@@ -185,6 +207,13 @@ pub(crate) extern "C" fn rt_arena_reset() {
             }
         }
     });
+}
+
+/// Free all strings in the arena. Called after JIT `main()` returns (the
+/// non-server `turbolang run` path) to release every runtime-allocated string
+/// at once.
+pub(crate) extern "C" fn rt_arena_reset() {
+    arena_reset_to(0);
 }
 
 pub(crate) extern "C" fn rt_print_str(s: *const u8) {
@@ -2196,6 +2225,15 @@ pub(crate) fn handle_http_connection(
     let mut writer = write_stream;
 
     loop {
+        // BL-25 A1: record the per-thread string-arena high-water mark at the
+        // start of every request. Each string-returning rt_* call invoked by
+        // the handler appends to the thread-local arena; without a reset the
+        // server would leak every such string for the process lifetime (the
+        // JIT only drained the arena after `main()` returned, which a server's
+        // `main()` never does). We truncate back to this mark once the
+        // response is written, reclaiming exactly the request-scoped strings.
+        let req_arena_mark = arena_mark();
+
         // Read request line (bounded)
         let mut request_line = String::new();
         match bounded_read_line(&mut reader, &mut request_line, RT_HTTP_MAX_HEADER_LINE) {
@@ -2360,6 +2398,14 @@ pub(crate) fn handle_http_connection(
         }
 
         let _ = writer.flush();
+
+        // BL-25 A1: reclaim every string this request allocated in the arena,
+        // truncating back to the mark taken at the top of the loop. Strings
+        // allocated before the mark are untouched, so persistent server state
+        // (captured at startup) is never freed. The early `break`/`return`
+        // paths above run before any handler call, so they allocate no arena
+        // strings and need no reset.
+        arena_reset_to(req_arena_mark);
 
         if !keep_alive {
             break;
@@ -2682,6 +2728,16 @@ pub(crate) extern "C" fn rt_mutex_clone(m: *const u8) -> *mut u8 {
 }
 
 // ── HashMap runtime functions ───────────────────────────────────────
+//
+// BL-25 A2 note: unlike the AOT C runtime, the JIT hashmap stores its keys
+// and values as Rust `String`s owned by a boxed `HashMap` (global allocator),
+// completely independent of the per-request string arena. The per-request
+// arena reset (`arena_reset_to`, above) only frees entries the request pushed
+// into `STRING_ARENA` — the value copies handed back by `rt_hashmap_get` /
+// `rt_hashmap_keys` — never the map's own owned key/value storage. A server
+// hashmap created at startup and mutated inside a handler therefore keeps its
+// data across requests with no use-after-free, so the JIT needs no equivalent
+// of the AOT `persistent`/arena-scoping fix.
 
 /// Create a new empty HashMap<String, String>. Returns an opaque pointer.
 pub(crate) extern "C" fn rt_hashmap_new() -> *mut u8 {

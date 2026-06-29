@@ -2331,7 +2331,62 @@ typedef struct {
     hashmap_entry *entries;
     long long capacity;
     long long count;
+    /* BL-25 A2: lifetime scope of this map's *storage* (the entries array and
+     * the strdup'd keys / string values). Set once at creation:
+     *   1 (persistent) — the map was created outside any per-request arena
+     *       (e.g. server state built in main()). Its storage uses real
+     *       malloc/free so it survives rt_arena_end() and can be mutated
+     *       across requests without dangling. This is the str->str twin of
+     *       the JIT runtime, where Rust's HashMap owns its String key/values.
+     *   0 (request-local) — the map was created while a request arena was
+     *       active. Its storage lives in that arena and is reclaimed in bulk
+     *       at rt_arena_end(), so a map built and dropped inside one handler
+     *       does not leak.
+     * Reads (rt_hashmap_get / rt_hashmap_keys) still hand back arena-scoped
+     * copies regardless, since those results are request-local. */
+    char persistent;
 } turbo_hashmap;
+
+/* Duplicate `s` into storage whose lifetime matches the owning map's scope
+ * (see turbo_hashmap.persistent). A persistent map gets a malloc'd copy that
+ * outlives the per-request arena; a request-local map gets an arena copy.
+ * The matching free is plain turbo_free(), which already frees malloc'd
+ * pointers and no-ops on arena-backed ones. */
+static char *hashmap_strdup(const turbo_hashmap *map, const char *s) {
+    if (!s) return NULL;
+    if (!map->persistent) {
+        return turbo_strdup(s);
+    }
+    size_t len = strlen(s) + 1;
+    char *dup = (char *)malloc(len);
+    if (!dup) {
+        fprintf(stderr, "runtime error: out of memory (hashmap key/value)\n");
+        exit(1);
+    }
+    memcpy(dup, s, len);
+    return dup;
+}
+
+/* Allocate a zeroed entries array for `map` in the map's storage scope. */
+static hashmap_entry *hashmap_alloc_entries(const turbo_hashmap *map, long long count) {
+    size_t total;
+    if (__builtin_mul_overflow((size_t)count, sizeof(hashmap_entry), &total)) {
+        fprintf(stderr, "runtime error: hashmap capacity overflow\n");
+        exit(1);
+    }
+    if (!map->persistent) {
+        /* Request-local: arena storage, reclaimed at rt_arena_end(). */
+        hashmap_entry *e = (hashmap_entry *)turbo_arena_alloc(t_current_arena, total);
+        memset(e, 0, total);
+        return e;
+    }
+    hashmap_entry *e = (hashmap_entry *)calloc((size_t)count, sizeof(hashmap_entry));
+    if (!e) {
+        fprintf(stderr, "runtime error: out of memory (hashmap entries)\n");
+        exit(1);
+    }
+    return e;
+}
 
 static unsigned long hashmap_hash(const char *key) {
     unsigned long hash = 5381;
@@ -2344,7 +2399,10 @@ static unsigned long hashmap_hash(const char *key) {
 static void hashmap_resize(turbo_hashmap *map, long long new_cap) {
     hashmap_entry *old = map->entries;
     long long old_cap = map->capacity;
-    map->entries = (hashmap_entry *)turbo_calloc((size_t)new_cap, sizeof(hashmap_entry));
+    /* New bucket array must live in the map's storage scope, not whatever
+     * arena happens to be active during the request that triggered the
+     * resize (BL-25 A2). */
+    map->entries = hashmap_alloc_entries(map, new_cap);
     map->capacity = new_cap;
     map->count = 0;
     for (long long i = 0; i < old_cap; i++) {
@@ -2367,7 +2425,12 @@ static void hashmap_resize(turbo_hashmap *map, long long new_cap) {
 
 void *rt_hashmap_new(void) {
     turbo_hashmap *map = (turbo_hashmap *)turbo_alloc(sizeof(turbo_hashmap));
-    map->entries = (hashmap_entry *)turbo_calloc(HASHMAP_INIT_CAP, sizeof(hashmap_entry));
+    /* A map created with no request arena active is server-scoped (persistent);
+     * one created inside a handler is request-local. The struct itself follows
+     * the same scope via turbo_alloc above, so it is reclaimed (request-local)
+     * or lives for the process (persistent) consistently with its storage. */
+    map->persistent = (t_current_arena == NULL) ? 1 : 0;
+    map->entries = hashmap_alloc_entries(map, HASHMAP_INIT_CAP);
     map->capacity = HASHMAP_INIT_CAP;
     map->count = 0;
     return map;
@@ -2387,14 +2450,14 @@ void rt_hashmap_set(void *map_ptr, const char *key, const char *value) {
             if (map->entries[h].value) {
                 turbo_free(map->entries[h].value);
             }
-            map->entries[h].value = turbo_strdup(value);
+            map->entries[h].value = hashmap_strdup(map, value);
             map->entries[h].is_int = 0;
             return;
         }
         h = (h + 1) % (unsigned long)map->capacity;
     }
-    map->entries[h].key = turbo_strdup(key);
-    map->entries[h].value = turbo_strdup(value);
+    map->entries[h].key = hashmap_strdup(map, key);
+    map->entries[h].value = hashmap_strdup(map, value);
     map->entries[h].is_int = 0;
     map->entries[h].occupied = 1;
     map->count++;
@@ -2549,7 +2612,7 @@ void *rt_hashmap_set_int(void *map_ptr, const char *key, long long value) {
         }
         h = (h + 1) % (unsigned long)map->capacity;
     }
-    map->entries[h].key = turbo_strdup(key);
+    map->entries[h].key = hashmap_strdup(map, key);
     map->entries[h].value = NULL;
     map->entries[h].ivalue = value;
     map->entries[h].is_int = 1;
@@ -2608,7 +2671,7 @@ long long rt_hashmap_inc(void *map_ptr, const char *key, long long delta) {
         }
         h = (h + 1) % (unsigned long)map->capacity;
     }
-    map->entries[h].key = turbo_strdup(key);
+    map->entries[h].key = hashmap_strdup(map, key);
     map->entries[h].value = NULL;
     map->entries[h].ivalue = delta;
     map->entries[h].is_int = 1;
