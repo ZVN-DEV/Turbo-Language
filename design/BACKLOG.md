@@ -318,7 +318,7 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
 
 ### P3 — polish (batch; do NOT spawn busywork PRs — fold opportunistically)
 
-- [ ] **BL-26 — Error/CLI/runtime polish cluster.** Weak/missing `Help:` that should echo the actual signature/field
+- [x] **BL-26 — Error/CLI/runtime polish cluster.** _FULLY DONE 2026-06-28 (3 rounds)._ Weak/missing `Help:` that should echo the actual signature/field
   list/missing variant (E0100/E0200/E0315); messages rename the user's type via aliases (`i64`→`int`) instead of
   echoing source spelling (E0110); import error doesn't teach `import { x } from "./m.tb"`; `explain` rejects `100`/
   `e0100` (normalize input); whole-number floats print as ints (ambiguous type); raw `(os error 2)` jargon in file
@@ -352,10 +352,28 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   — remaining `(os error N)` IO leaks translated to plain language, `test` summary gains TTY-gated color + total-time,
   and the REPL no longer flags a later-used binding as `unused` (commit `87fd7fb`).
 
-  **STILL OPEN (deferred — bigger/separate work):** empty-`[]` inference; empty-RHS `let x =` parser-recovery
-  double-error; the JIT hashmap `&mut *ptr` data race under concurrent `spawn`; and a new WASM whole-float-printing
-  drift introduced by the Round-2 fix (`turbo_rt_wasm.c` still prints whole floats without `.0` — align it with the
-  shared JIT/AOT helper when WASM output parity matters).
+  **DONE 2026-06-28 (Round 3 — 4 parallel branches, all merged to master, full suite green: 271 integration / 29
+  parity / 7 WASM / C-runtime tests.sh, clippy + fmt clean):** **empty-`[]` inference** — a bare `[]` now adopts its
+  element type from an annotated let/param/struct-field/return context (concrete-type guard keeps genuinely
+  uninferrable `let xs = []` / generic `[T]` a clean `E0115`; commit `d93be28`); **empty-RHS `let x =`** now emits one
+  clear diagnostic anchored on the `=` ("expected an expression after `=` in let binding") — the literal double-error
+  was already gone, the message was just misdirected at `}`/EOF (commit `aabf0f0`); **WASM whole-float drift** —
+  `turbo_rt_wasm.c`'s `rt_format_f64` ported byte-identical from the AOT rule, verified `wasm == native == expected`
+  under wasmtime 43 (commit `a5386eb`); **JIT hashmap data race** — the JIT hashmap is now `Mutex<HashMap>` behind the
+  same i64 handle (one `lock_hashmap` helper for all 10 ops, no reentrancy/deadlock, no escaping borrows); an
+  8-thread × 50k-inc stress repro went from **30/30 crashes → 30/30 correct** (commit `bc0170c`). **BL-26 is fully
+  resolved.** _New finding while aligning WASM floats → tracked as **BL-28**._
+
+- [ ] **BL-28 — WASM backend mis-types index/field/unary float expressions as `int` (value truncation).** _[found
+  during BL-26 Round 3 WASM-float work]_ On the WASM target, a `float` value reached via an **array index** (`xs[0]`),
+  **struct field** (`v.x`), or **unary negation** (`-3.0`, `-0.0`) is mis-tagged as `int` by `infer_type_tag` in
+  `wasm_codegen.rs` (it falls through to `"int"` for `Expr::Index` / `Expr::FieldAccess` / `Expr::UnaryOp`), so it is
+  printed via `rt_print_i64` — which not only drops the `.0` but **truncates the value** (`xs[1] == 2.5` prints `2`,
+  `-3.0` prints `-3`). Native (JIT/AOT) handles these correctly; this is WASM-only. Also mis-dispatches `to_str()` of
+  float arrays/structs to `rt_i64_to_str`. **AC:** WASM `infer_type_tag` resolves the element/field/operand float type
+  (the WASM backend needs to track array element types + struct field types it currently doesn't) so these values
+  print/serialize correctly; add WASM↔native parity coverage for float-via-index/field/negation. Distinct from BL-27
+  Part B (that's WASM struct/array *CoW value semantics*; this is *scalar float type inference*).
 
 ---
 _When all boxes are checked, STOP and ask for the next priorities — do not invent hygiene work._
