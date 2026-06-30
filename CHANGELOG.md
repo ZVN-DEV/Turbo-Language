@@ -3,6 +3,49 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.2] - 2026-06-29
+
+A trust-and-polish patch from a full public smoke audit. Fixes one real
+correctness bug (C-FFI float returns), two CLI rough edges, and a broad
+honesty pass across the docs, marketing site, and repository metadata so every
+public surface matches what actually ships (Cranelift-only — no LLVM backend,
+no agent keywords).
+
+### Fixed
+- **C-FFI float returns were typed `int`.** An `@unsafe extern "C"` function
+  declared `-> f64`/`-> f32` whose name collided with a native math builtin
+  (`floor`/`ceil`/`round`) was silently shadowed by the builtin, so its result
+  came back as an `int` — `let x: f64 = floor(3.7)` failed to compile (E0110)
+  and `print(floor(3.7))` printed `3` instead of `3.0`. Extern-declared names
+  now resolve to their FFI signature in both sema and codegen; plain
+  (non-extern) builtin calls are unchanged. Regression test added.
+- **`turbo-lsp --version` failed.** It ignored the flag and tried to start an
+  LSP session, printing a handshake error. It now prints `turbo-lsp <version>`
+  (and `--help`) and exits cleanly.
+- **`turbolang bench` made AOT look slower than JIT.** The AOT figure folded in
+  the one-time `cc` compile+link. AOT timing is now execution-only and clearly
+  labeled, with the build step reported separately.
+
+### Changed
+- **Documentation honesty pass.** `docs/SAFETY.md`: the 256-level recursion cap
+  is a compile-time codegen-nesting guard (E0516), not a runtime guarantee —
+  deep runtime recursion is bounded only by the OS stack; corrected the HTTP
+  header cap to a single 16 KB total; dropped the unbacked "measured flat RSS"
+  wording. `SECURITY.md`: supported-versions table refreshed to the 0.10.x
+  series, removed a phantom "LLVM backend" from experimental features, dropped a
+  dead `TODO.md` reference. `examples/README.md`: stopped listing shipped
+  features (`?.`, result types, WASM) as unimplemented. `README.md`: tagline
+  now "JavaScript's soul. Rust's speed." (matches the site); corrected the AOT
+  binary-size figure (~113 KB), `pow`'s integer-only contract, and the
+  `linux-arm64` status. `COMPATIBILITY.md` realigned to 0.10.x. `docs/stdlib.md`
+  documents `hashmap_inc` and `http_post_with_headers` and is de-pinned from
+  0.8.0.
+- **Public metadata corrected.** GitHub description and turbolang.dev no longer
+  advertise an LLVM backend or agent primitives that don't ship; the marketing
+  site was redeployed; `turbolang.dev/errors/E0NNN` now resolves to the
+  canonical error doc; VS Code publisher normalized to `zvndev`; the Homebrew
+  tap README's repo link fixed.
+
 ## [0.10.1] - 2026-06-29
 
 A correctness and polish patch. Closes two silent server-runtime bugs (a
