@@ -1786,6 +1786,15 @@ fn compile_call<M: Module>(
         });
     };
 
+    // An explicit `extern "C"` declaration takes precedence over a same-named
+    // native builtin: route the call through the FFI function declaration so
+    // its declared `f64`/`f32` return is read from the FP register and tagged
+    // correctly, rather than falling into the int-returning math builtin (e.g.
+    // `floor`/`ceil`). Mirrors the same precedence in turbo-sema's check_call.
+    if cx.extern_fns.contains(name.as_str()) {
+        return compile_plain_fn_call(cx, name, args);
+    }
+
     match name.as_str() {
         "print" => compile_print(cx, args),
         "panic" => compile_panic(cx, args),

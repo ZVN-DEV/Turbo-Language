@@ -10,7 +10,7 @@
 use cranelift::prelude::isa::CallConv;
 use cranelift::prelude::*;
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use turbo_ast::*;
 
 use crate::closures::{extract_all_closures, extract_all_spawn_sites, CaptureInfo};
@@ -1073,6 +1073,7 @@ pub(crate) fn compile_module<M: Module>(
     }
 
     // Declare extern (FFI) functions
+    let mut extern_fn_names: HashSet<String> = HashSet::new();
     for item in &ast_module.items {
         let Item::Extern(ext) = &item.node else {
             continue;
@@ -1111,6 +1112,7 @@ pub(crate) fn compile_module<M: Module>(
 
             user_fns.insert(f.name.clone(), id);
             fn_ret_types.insert(f.name.clone(), ret_turbo);
+            extern_fn_names.insert(f.name.clone());
         }
     }
 
@@ -1388,6 +1390,7 @@ pub(crate) fn compile_module<M: Module>(
                 builder,
                 module,
                 user_fns: &user_fns,
+                extern_fns: &extern_fn_names,
                 fn_ret_types: &fn_ret_types,
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
@@ -1525,6 +1528,7 @@ pub(crate) fn compile_module<M: Module>(
                     builder,
                     module,
                     user_fns: &user_fns,
+                    extern_fns: &extern_fn_names,
                     fn_ret_types: &fn_ret_types,
                     fn_asts: &fn_asts,
                     fn_type_params: &fn_type_params,
@@ -1648,6 +1652,7 @@ pub(crate) fn compile_module<M: Module>(
                 builder,
                 module,
                 user_fns: &user_fns,
+                extern_fns: &extern_fn_names,
                 fn_ret_types: &fn_ret_types,
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
@@ -1739,6 +1744,7 @@ pub(crate) fn compile_module<M: Module>(
                 builder,
                 module,
                 user_fns: &user_fns,
+                extern_fns: &extern_fn_names,
                 fn_ret_types: &fn_ret_types,
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
@@ -1925,6 +1931,7 @@ pub(crate) fn compile_module<M: Module>(
                 builder,
                 module,
                 user_fns: &user_fns,
+                extern_fns: &extern_fn_names,
                 fn_ret_types: &fn_ret_types,
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,

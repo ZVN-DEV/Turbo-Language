@@ -22,7 +22,7 @@
 //! assert!(result.errors.is_empty());
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use turbo_ast::*;
 
 mod exhaustiveness;
@@ -548,6 +548,11 @@ pub(crate) struct Checker {
     pub(crate) errors: Vec<SemaError>,
     pub(crate) warnings: Vec<SemaWarning>,
     pub(crate) functions: HashMap<String, FnSig>,
+    /// Names declared in an `extern "C" { ... }` block. An explicit FFI
+    /// declaration takes precedence over a same-named native math builtin
+    /// (e.g. `floor`/`ceil`), so the user's declared return type — including
+    /// `f64`/`f32` — is honored instead of the builtin's int/float default.
+    pub(crate) extern_fns: HashSet<String>,
     pub(crate) structs: HashMap<String, StructInfo>,
     pub(crate) enums: HashMap<String, EnumInfo>,
     /// Methods: type_name -> method_name -> FnSig
@@ -604,6 +609,7 @@ impl Checker {
             errors: Vec::new(),
             warnings: Vec::new(),
             functions: HashMap::new(),
+            extern_fns: HashSet::new(),
             structs: HashMap::new(),
             enums: HashMap::new(),
             methods: HashMap::new(),

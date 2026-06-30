@@ -1,6 +1,6 @@
 # Compatibility and Stability
 
-Turbo is pre-1.0. This document describes what today's `0.9.x` releases
+Turbo is pre-1.0. This document describes what today's `0.10.x` releases
 guarantee, what is still fluid, and what the `1.0` stability contract
 will mean when we cut it. It is a contract, not a marketing pitch — if
 you are shipping production code against a pre-1.0 Turbo you should
@@ -14,10 +14,10 @@ read this in full.
 We are intentionally dwelling in the `0.x` series for a long while,
 cutting many point releases, rather than racing to `1.0`. That means:
 
-- **Point releases (`0.9.0` → `0.9.1`)** — additive, bug fixes, no
+- **Point releases (`0.10.0` → `0.10.1`)** — additive, bug fixes, no
   syntactic breaking changes. Safe to auto-update in CI if you re-run
   your test suite.
-- **Minor releases (`0.9.x` → `0.10.0`)** — may break syntax, remove
+- **Minor releases (`0.10.x` → `0.11.0`)** — may break syntax, remove
   deprecated builtins, reshape the stdlib, or renumber error codes in
   the `E05xx` range. Read the CHANGELOG before upgrading.
 - **Major release (`1.0`)** — the stability contract below kicks in.
@@ -46,7 +46,7 @@ not promises today.
 - **Tier-1 platform support.** Every `1.x` release builds and passes
   the integration suite on all tier-1 platforms (see below).
 
-## What Is Explicitly Fluid in `0.9.x`
+## What Is Explicitly Fluid in `0.10.x`
 
 Do not build load-bearing production code against these unless you
 are prepared to update it on every minor release.
@@ -80,7 +80,7 @@ are prepared to update it on every minor release.
 | Tier | Platforms | Guarantee |
 |------|-----------|-----------|
 | **Tier 1** | macOS `arm64`, macOS `x86_64`, Linux `x86_64` | Built and tested on every release. Release artifacts shipped. Bugs block release. |
-| **Tier 2** | Linux `arm64` | Built on every release. Release artifacts shipped. Bugs tracked but do not block release. |
+| **Tier 2** | Linux `arm64` | Cross-compile target only — `--target linux-arm64` emits a valid ARM64 ELF, but it is not yet runtime-validated and no release artifact is shipped. Bugs tracked but do not block release. |
 | **Experimental** | WASM, Windows (`x86_64`) | Best effort. No release artifacts yet. Breakage between releases is allowed. |
 
 Tier assignments are reviewed each minor release. A platform moves up
@@ -107,7 +107,7 @@ disclosure policy in `SECURITY.md`.
 
 ## What This Means in Practice
 
-- **If you are experimenting.** Track the latest `0.9.x`. Re-run your
+- **If you are experimenting.** Track the latest `0.10.x`. Re-run your
   tests on every bump. File issues.
 - **If you are shipping something today.** Pin an exact Turbo version
   (`turbolang --version` in CI). Vendor the install script or the

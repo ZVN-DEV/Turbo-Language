@@ -112,7 +112,7 @@ For a full-featured web framework example, see [TurboServo](https://github.com/Z
 
 ## Roadmap Examples
 
-The [`roadmap/`](./roadmap/) directory contains example projects that demonstrate features currently in development. These use syntax that is not yet implemented in the compiler (optional chaining `?.`, `from` imports, `Shared<T>`, result types, WASM targets, regions). They are design documents showing where Turbo is headed — not runnable code.
+The [`roadmap/`](./roadmap/) directory contains example projects that demonstrate features currently in development. These use syntax that is not yet implemented in the compiler (`from` imports, `Shared<T>`, regions). They are design documents showing where Turbo is headed — not runnable code.
 
 | Example | Description | Status |
 |---------|-------------|--------|

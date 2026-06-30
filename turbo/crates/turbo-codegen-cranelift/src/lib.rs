@@ -29,7 +29,7 @@ use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use turbo_ast::*;
 
@@ -95,6 +95,10 @@ pub(crate) struct Ctx<'a, M: Module> {
     pub(crate) builder: FunctionBuilder<'a>,
     pub(crate) module: &'a mut M,
     pub(crate) user_fns: &'a HashMap<String, FuncId>,
+    /// Names declared in an `extern "C" { ... }` block. A call to one of these
+    /// is routed through the FFI function declaration (honoring its declared
+    /// `f64`/`f32` return) instead of any same-named native builtin.
+    pub(crate) extern_fns: &'a HashSet<String>,
     pub(crate) fn_ret_types: &'a HashMap<String, TurboTy>,
     pub(crate) fn_asts: &'a HashMap<String, &'a FnDef>,
     pub(crate) fn_type_params: &'a HashMap<String, Vec<String>>,

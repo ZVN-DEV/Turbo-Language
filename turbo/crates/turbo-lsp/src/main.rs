@@ -41,6 +41,28 @@ mod resolve;
 mod semantic_tokens;
 
 fn main() {
+    // Handle informational CLI flags before opening the stdio connection. An
+    // editor launching us as an LSP never passes these — they're for a human
+    // who ran the binary by hand — so we print and exit cleanly instead of
+    // attempting an LSP handshake against a client that isn't there (which
+    // otherwise fails with "initialization handshake failed: disconnected
+    // channel"). No args => start the server, exactly as before.
+    if let Some(arg) = std::env::args().nth(1) {
+        match arg.as_str() {
+            "--version" | "-V" => {
+                println!("turbo-lsp {}", env!("CARGO_PKG_VERSION"));
+                return;
+            }
+            "--help" | "-h" => {
+                println!(
+                    "turbo-lsp — Language Server for Turbo. Usage: turbo-lsp [--version|--help]. Started by your editor over stdio."
+                );
+                return;
+            }
+            _ => {}
+        }
+    }
+
     let (connection, io_threads) = Connection::stdio();
 
     let capabilities = ServerCapabilities {

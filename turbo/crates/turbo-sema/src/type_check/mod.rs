@@ -533,6 +533,10 @@ impl Checker {
                         is_unsafe: false,
                     },
                 );
+                // Record this as an explicit FFI declaration so call-site type
+                // checking prefers it over any same-named native builtin (e.g.
+                // the int-returning `floor`/`ceil` math builtins).
+                self.extern_fns.insert(f.name.clone());
             }
         }
 

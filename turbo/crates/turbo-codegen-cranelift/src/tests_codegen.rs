@@ -80,6 +80,7 @@ fn test_codegen_rejects_pathologically_deep_ast() {
             let mut data_desc = DataDescription::new();
             let mut string_counter = 0usize;
             let user_fns: HashMap<String, FuncId> = HashMap::new();
+            let extern_fns: std::collections::HashSet<String> = std::collections::HashSet::new();
             let fn_ret_types: HashMap<String, TurboTy> = HashMap::new();
             let fn_asts: HashMap<String, &FnDef> = HashMap::new();
             let fn_type_params: HashMap<String, Vec<String>> = HashMap::new();
@@ -99,6 +100,7 @@ fn test_codegen_rejects_pathologically_deep_ast() {
                 builder,
                 module: &mut module,
                 user_fns: &user_fns,
+                extern_fns: &extern_fns,
                 fn_ret_types: &fn_ret_types,
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
