@@ -89,6 +89,10 @@ jobs:
       contents: write
 
     steps:
+      # Check out the repo so we can pull the matching CHANGELOG section into the
+      # GitHub release body (the release job otherwise only has the artifacts).
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
 
       - name: Generate checksums
@@ -156,6 +160,26 @@ jobs:
 
           echo "Signed checksums.txt -> checksums.txt.sig"
 
+      # Pull this tag's section out of CHANGELOG.md so the GitHub release ships
+      # with real notes instead of an empty body. Falls back to a minimal body
+      # if no matching section is found, so a release never fails on this.
+      - name: Extract release notes from CHANGELOG
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v hdr="## [${VERSION}]" '
+            index($0, hdr) == 1 { f = 1; print; next }
+            f && /^## \[/       { exit }
+            f                   { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            printf "Release %s\n\nSee CHANGELOG.md for details.\n" "${GITHUB_REF_NAME}" > RELEASE_NOTES.md
+          fi
+          echo "----- release notes for ${GITHUB_REF_NAME} -----"
+          cat RELEASE_NOTES.md
+
       - name: Create Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
@@ -165,6 +189,7 @@ jobs:
             turbolang-x86_64-unknown-linux-gnu/*.tar.gz
             checksums.txt
             checksums.txt.sig
+          body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
           fail_on_unmatched_files: false
