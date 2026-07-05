@@ -64,9 +64,9 @@ Build the runner from the repository root:
 docker build -t turbo-playground-runner -f website/playground-runner/Dockerfile .
 ```
 
-Run it with the hardening flags documented in
+Run it with the hardening flags or deploy it with the Fly config documented in
 [`playground-runner/README.md`](playground-runner/README.md), then configure the
-website runtime:
+website runtime in Vercel:
 
 ```bash
 TURBO_PLAYGROUND_RUNNER_URL=https://runner.example.com/run

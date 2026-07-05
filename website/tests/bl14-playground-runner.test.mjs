@@ -56,12 +56,14 @@ async function loadRunnerSmoke() {
 test("standalone playground runner artifacts exist and stay container-oriented", () => {
   assert.equal(existsSync(join(root, "playground-runner/runner.mjs")), true);
   assert.equal(existsSync(join(root, "playground-runner/Dockerfile")), true);
+  assert.equal(existsSync(join(root, "playground-runner/fly.toml")), true);
   assert.equal(existsSync(join(root, "playground-runner/README.md")), true);
   assert.equal(existsSync(join(root, "playground-runner/smoke.mjs")), true);
 
   const packageJson = JSON.parse(read("package.json"));
   const runner = read("playground-runner/runner.mjs");
   const dockerfile = read("playground-runner/Dockerfile");
+  const flyConfig = read("playground-runner/fly.toml");
   const readme = read("playground-runner/README.md");
 
   assert.equal(
@@ -79,8 +81,17 @@ test("standalone playground runner artifacts exist and stay container-oriented",
   assert.match(dockerfile, /HEALTHCHECK/);
   assert.match(dockerfile, /\/healthz/);
   assert.doesNotMatch(dockerfile, /\b(curl|wget)\b/);
+  assert.match(flyConfig, /app = "turbolang-playground-runner"/);
+  assert.match(flyConfig, /dockerfile = "website\/playground-runner\/Dockerfile"/);
+  assert.match(flyConfig, /internal_port = 8787/);
+  assert.match(flyConfig, /auto_stop_machines = "off"/);
+  assert.match(flyConfig, /auto_start_machines = true/);
+  assert.match(flyConfig, /min_machines_running = 1/);
+  assert.match(flyConfig, /path = "\/healthz"/);
+  assert.match(flyConfig, /memory_mb = 256/);
   assert.match(readme, /--read-only/);
   assert.match(readme, /--cap-drop=ALL/);
+  assert.match(readme, /flyctl deploy --config website\/playground-runner\/fly\.toml/);
   assert.match(readme, /TURBO_PLAYGROUND_RUNNER_URL/);
 });
 

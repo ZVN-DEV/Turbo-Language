@@ -15,6 +15,41 @@ From the repository root:
 docker build -t turbo-playground-runner -f website/playground-runner/Dockerfile .
 ```
 
+## Deploy on Fly.io
+
+The repo includes `fly.toml` for the public runner. Create the app once, set a
+random bearer token as a Fly secret, deploy from the repository root, then point
+Vercel at the deployed `/run` URL with the same token.
+
+```bash
+flyctl apps create turbolang-playground-runner --org zvn-dev
+
+TOKEN="$(openssl rand -hex 32)"
+flyctl secrets set \
+  --app turbolang-playground-runner \
+  TURBO_PLAYGROUND_RUNNER_TOKEN="$TOKEN"
+
+flyctl deploy --config website/playground-runner/fly.toml
+```
+
+After deployment, configure the website runtime:
+
+```bash
+cd website
+vercel env add TURBO_PLAYGROUND_RUNNER_URL production
+vercel env add TURBO_PLAYGROUND_RUNNER_TOKEN production
+vercel env add TURBO_PLAYGROUND_RUNNER_URL preview
+vercel env add TURBO_PLAYGROUND_RUNNER_TOKEN preview
+```
+
+Use `https://turbolang-playground-runner.fly.dev/run` for
+`TURBO_PLAYGROUND_RUNNER_URL`. After Vercel redeploys, smoke the public site:
+
+```bash
+cd website
+TURBO_PLAYGROUND_SITE_URL=https://turbolang.dev npm run smoke:playground
+```
+
 ## Run Locally
 
 Use a random token and point the website at the mapped `/run` endpoint:
