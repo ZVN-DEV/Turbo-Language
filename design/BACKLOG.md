@@ -202,7 +202,8 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   `website/playground-runner/Dockerfile`, starts the resulting image, waits for `/healthz`, and runs
   `npm run smoke:playground-runner` against the containerized service. That CI pass exposed and fixed a stale
   `rust:1.86-slim` builder image pin that no longer satisfies the current lockfile (`home@0.5.12` requires
-  Rust 1.88).
+  Rust 1.88), then exposed and fixed the missing `docs/errors` public-docs tree that `turbo-cli/build.rs`
+  requires during the runner image build.
   The public page deliberately does **not** proxy arbitrary source to a
   shell-running `/api/run`; BL-14 remains open until the runner is deployed behind the website and smoke-tested at
   `turbolang.dev/play`._

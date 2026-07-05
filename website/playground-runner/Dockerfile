@@ -2,6 +2,7 @@ FROM rust:1.88-slim AS builder
 
 WORKDIR /build
 COPY turbo/ ./turbo/
+COPY docs/errors/ ./docs/errors/
 RUN cd turbo && cargo build --release -p turbo-cli
 
 FROM node:22-bookworm-slim
