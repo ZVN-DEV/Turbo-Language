@@ -34,6 +34,14 @@ export default function Footer() {
                   Examples
                 </Link>
               </li>
+              <li>
+                <Link
+                  href="/play"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
+                >
+                  Playground
+                </Link>
+              </li>
             </ul>
           </div>
           <div>

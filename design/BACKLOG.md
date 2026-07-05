@@ -170,6 +170,38 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   `turbolang playground` serves a working browser playground — but only after a CLI install. For a *language*,
   "run code in 5s" is the highest-converting action. **AC:** host the existing playground at `turbolang.dev/play`
   and add it as the hero's primary secondary-CTA ("Try in browser →") + a persistent nav item.
+  _Progress 2026-07-04 (branch `codex/bl14-browser-playground`): added a static `/play` route, homepage
+  secondary CTA, persistent nav/footer links, sitemap coverage, and regression tests. `/play` now server-renders the
+  default playground UI without a client-side rendering bailout while still hydrating shared `?code=` links. Added a same-origin
+  `/api/playground/run` proxy contract that refuses local shell execution, rejects non-JSON content types, caps
+  request JSON before parsing, validates source size/shape, and only forwards to `TURBO_PLAYGROUND_RUNNER_URL`
+  when a separate sandbox runner is configured. Added a dependency-free
+  `website/playground-runner/` service + Dockerfile that runs `turbolang` through `execFile` with a fixed minimal
+  child environment inside the documented container hardening boundary; startup now refuses missing/blank
+  `TURBO_PLAYGROUND_RUNNER_TOKEN` unless explicitly opted into tokenless isolated-local testing, configured tokens are trimmed, blank tokens are never accepted as bearer secrets, and startup no longer logs token-derived fingerprints. The runner now rejects excess concurrent executions with HTTP 429. Runner tests cover auth, HTTP `/run`, non-JSON content-type
+  rejection, malformed UTF-8 request rejection, concurrency backpressure, failed execution stderr, SIGKILL-enforced timeout, oversized-output failure, JSON failure envelopes, and source-policy
+  rejection for compile-time imports, unsafe/FFI features, plus host-access filesystem/process/network builtins including `args`
+  and `http_post_with_headers` while allowing pure path string helpers; bundled examples are now regression-checked
+  against that public-runner policy, and the collections example was smoke-run through
+  `turbo/target/release/turbolang` (`Total: 29`, `Count: 4`). The website proxy now returns explicit no-store /
+  nosniff JSON, passes through safe runner validation/backpressure errors (400/413/429) instead of flattening them into a generic
+  502, while still hiding upstream server/auth failures behind proxy-owned errors. Added scriptable runner and
+  public-site smoke probes (`npm run smoke:playground-runner`, `npm run smoke:playground`) that check `/healthz`,
+  `/play`, safe execution, and `exec` rejection before deployment. Local public-site smoke against `next start`
+  verified `/play` contains the real playground UI, has no CSR bailout marker, safely executes code through the
+  runner, and rejects `exec`. Local smoke against
+  `turbo/target/release/turbolang` returned stdout and enforced token auth. A
+  configured `next start` smoke
+  (`TURBO_PLAYGROUND_RUNNER_URL=http://localhost:8790/run`) successfully proxied `/api/playground/run` through the
+  runner and returned Turbo stdout. Browser QA verified desktop and 320px mobile `/play` rendering, Run, example
+  selection, copy/share fallback behavior, and fixed the cramped mobile header by hiding the external GitHub nav
+  link below `sm`. Full local gates passed: `cargo fmt --check` from `turbo/`, `cargo test --workspace --manifest-path turbo/Cargo.toml`,
+  `cargo build --release --manifest-path turbo/Cargo.toml`, `cd turbo && ./tests/run_tests.sh` (272 passed, 0 failed, 10 skipped),
+  `cd turbo && ./tests/parity/run_parity.sh` (29 passed), and `cargo clippy --workspace --manifest-path turbo/Cargo.toml -- -D warnings`.
+  `docker`/`podman` were unavailable in the local environment, so the runner image build still needs CI or deploy-host verification.
+  The public page deliberately does **not** proxy arbitrary source to a
+  shell-running `/api/run`; BL-14 remains open until the runner is deployed behind the website and smoke-tested at
+  `turbolang.dev/play`._
 
 - [x] **BL-15 — Website SEO: duplicate metadata, no sitemap/robots/OG card.** _[frontend#1,#3] Done (commit
   `4482ae9`, merged to master)._ Root layout sets `metadataBase` (turbolang.dev) + a `title` template; all 15

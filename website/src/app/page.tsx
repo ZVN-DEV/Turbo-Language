@@ -333,10 +333,10 @@ export default function Home() {
                   </svg>
                 </Link>
                 <Link
-                  href="/docs/examples"
+                  href="/play"
                   className="inline-flex items-center gap-1.5 text-sm text-gray-300 hover:text-[#00ff88] transition-colors"
                 >
-                  See the flagship demo
+                  Try in browser
                   <svg
                     width="16"
                     height="16"

@@ -41,7 +41,7 @@ export default function CliPage() {
               ["turbo-lsp", "Start Language Server Protocol server"],
               ["turbolang check <file.tb>", "Type-check without compiling"],
               ["turbolang explain <code>", "Explain an error code (e.g. E0100)"],
-              ["turbolang playground", "Launch browser-based playground"],
+              ["turbolang playground", "Launch the local playground server"],
             ].map(([cmd, desc]) => (
               <tr key={cmd} className="border-b border-[#1a1a2e]">
                 <td className="px-4 py-2">
@@ -55,6 +55,31 @@ export default function CliPage() {
           </tbody>
         </table>
       </div>
+
+      <h2 id="playground" className="text-2xl font-bold text-white mt-10 mb-4">
+        Playground
+      </h2>
+      <p className="mb-4">
+        The hosted{" "}
+        <Link
+          href="/play"
+          className="text-[#00ff88] hover:text-[#00cc6a] font-medium"
+        >
+          Turbo Playground
+        </Link>{" "}
+        is the fastest way to try syntax in a browser. It uses a configured
+        sandbox runner when hosted execution is available, and otherwise gives
+        you a local run command. It does not execute arbitrary code in the
+        website process.
+      </p>
+      <p className="mb-4">
+        Without a hosted sandbox, run the trusted local playground from your
+        own machine:
+      </p>
+      <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
+        <code>{`$ turbolang playground
+# opens http://localhost:8080`}</code>
+      </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
         turbolang run

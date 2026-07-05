@@ -42,6 +42,43 @@ npx vercel deploy --prebuilt
 
 After deployment, smoke the public or preview URL by checking the landing page, installation page, CLI docs, examples page, and any route changed in the commit.
 
+For the hosted playground, use the scripted smoke once the sandbox runner is
+configured:
+
+```bash
+TURBO_PLAYGROUND_SITE_URL=https://turbolang.dev npm run smoke:playground
+```
+
+The smoke checks the public `/play` page, a safe execution through
+`/api/playground/run`, and rejection of the forbidden `exec` process API.
+
+### Hosted Playground Execution
+
+The `/play` page is static, but live execution is intentionally delegated to a
+separate sandbox runner. The Next.js API only accepts JSON, validates the source
+envelope, and forwards to that runner; do not add shell execution to the app.
+
+Build the runner from the repository root:
+
+```bash
+docker build -t turbo-playground-runner -f website/playground-runner/Dockerfile .
+```
+
+Run it with the hardening flags documented in
+[`playground-runner/README.md`](playground-runner/README.md), then configure the
+website runtime:
+
+```bash
+TURBO_PLAYGROUND_RUNNER_URL=https://runner.example.com/run
+TURBO_PLAYGROUND_RUNNER_TOKEN=...
+```
+
+The runner token is trimmed before use; whitespace-only values are treated as
+missing.
+
+If those variables are absent, `/api/playground/run` returns an explicit
+unavailable response and the page shows the local CLI command instead.
+
 ## Content Ownership
 
 When compiler, CLI, release, or packaging behavior changes, update the matching website pages in `website/src/app/**` in the same cycle or record the doc gap in `.omx/product-cycles/open-tasks.md`.
