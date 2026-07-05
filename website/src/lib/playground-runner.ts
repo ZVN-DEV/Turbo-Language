@@ -28,9 +28,11 @@ export type PlaygroundProxyResponse = {
 export const MAX_PLAYGROUND_SOURCE_BYTES = 64 * 1024;
 export const MAX_PLAYGROUND_REQUEST_BYTES = MAX_PLAYGROUND_SOURCE_BYTES + 4096;
 export const MAX_PLAYGROUND_OUTPUT_BYTES = 128 * 1024;
+export const MAX_PLAYGROUND_RUNNER_RESPONSE_BYTES = MAX_PLAYGROUND_OUTPUT_BYTES + 4096;
 export const PLAYGROUND_RUNNER_TIMEOUT_MS = 6000;
 
 const encoder = new TextEncoder();
+const jsonDecoder = new TextDecoder("utf-8", { fatal: true });
 
 export async function readPlaygroundRunRequest(
   request: Request,
@@ -225,7 +227,7 @@ export async function proxyPlaygroundRun(
       cache: "no-store",
       signal: AbortSignal.timeout(PLAYGROUND_RUNNER_TIMEOUT_MS),
     });
-    const runnerResult = normalizeRunnerResult(await response.json().catch(() => null));
+    const runnerResult = normalizeRunnerResult(await readRunnerJsonResponse(response));
 
     if (!response.ok) {
       if (runnerResult && isSafeRunnerError(response.status)) {
@@ -279,6 +281,43 @@ export function runError(stderr: string): PlaygroundRunResult {
 
 function encodedByteLength(value: string): number {
   return encoder.encode(value).length;
+}
+
+async function readRunnerJsonResponse(response: Response): Promise<unknown> {
+  if (!hasJsonContentType(response.headers) || !response.body) {
+    return null;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+
+    size += value.byteLength;
+    if (size > MAX_PLAYGROUND_RUNNER_RESPONSE_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+
+    chunks.push(value);
+  }
+
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  try {
+    return JSON.parse(jsonDecoder.decode(bytes));
+  } catch {
+    return null;
+  }
 }
 
 function normalizedConfiguredToken(token: string | undefined): string | null {

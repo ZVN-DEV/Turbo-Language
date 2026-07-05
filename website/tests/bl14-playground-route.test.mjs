@@ -61,6 +61,13 @@ function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function runnerJsonResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+}
+
 async function loadRunner() {
   const url = pathToFileURL(join(root, "playground-runner/runner.mjs"));
   url.searchParams.set("cache", String(Date.now()));
@@ -287,6 +294,7 @@ test("playground proxy reads JSON request bodies with a hard size limit", async 
 test("playground runner proxy validates payloads and runner responses", () => {
   const {
     MAX_PLAYGROUND_OUTPUT_BYTES,
+    MAX_PLAYGROUND_RUNNER_RESPONSE_BYTES,
     MAX_PLAYGROUND_SOURCE_BYTES,
     normalizeRunnerResult,
     runnerUnavailableResult,
@@ -296,6 +304,7 @@ test("playground runner proxy validates payloads and runner responses", () => {
 
   assert.equal(MAX_PLAYGROUND_SOURCE_BYTES, 64 * 1024);
   assert.equal(MAX_PLAYGROUND_OUTPUT_BYTES, 128 * 1024);
+  assert.equal(MAX_PLAYGROUND_RUNNER_RESPONSE_BYTES, 128 * 1024 + 4096);
   assert.deepEqual(plain(validatePlaygroundRunPayload({ source: "fn main() {}" })), {
     ok: true,
     source: "fn main() {}",
@@ -348,7 +357,10 @@ test("playground runner proxy validates payloads and runner responses", () => {
 });
 
 test("playground runner proxy handles configured and failed runner calls", async () => {
-  const { proxyPlaygroundRun } = loadTsModule("src/lib/playground-runner.ts");
+  const {
+    MAX_PLAYGROUND_RUNNER_RESPONSE_BYTES,
+    proxyPlaygroundRun,
+  } = loadTsModule("src/lib/playground-runner.ts");
 
   let capturedRequest = null;
   const success = await proxyPlaygroundRun("fn main() { print(1) }", {
@@ -356,15 +368,12 @@ test("playground runner proxy handles configured and failed runner calls", async
     token: " secret ",
     fetcher: async (url, init) => {
       capturedRequest = { url, init };
-      return {
-        ok: true,
-        json: async () => ({
-          stdout: "1\n",
-          stderr: "",
-          success: true,
-          durationMs: 4,
-        }),
-      };
+      return runnerJsonResponse({
+        stdout: "1\n",
+        stderr: "",
+        success: true,
+        durationMs: 4,
+      });
     },
   });
 
@@ -393,7 +402,7 @@ test("playground runner proxy handles configured and failed runner calls", async
         runnerUrl: "https://runner.example/run",
         fetcher: async () => {
           missingTokenCalledRunner = true;
-          return { ok: false, status: 401, json: async () => ({}) };
+          return runnerJsonResponse({}, 401);
         },
       })
     ),
@@ -409,7 +418,7 @@ test("playground runner proxy handles configured and failed runner calls", async
         token: "   ",
         fetcher: async () => {
           blankTokenCalledRunner = true;
-          return { ok: false, status: 401, json: async () => ({}) };
+          return runnerJsonResponse({}, 401);
         },
       })
     ),
@@ -422,15 +431,15 @@ test("playground runner proxy handles configured and failed runner calls", async
       await proxyPlaygroundRun("fn main() { exec(\"ls\") }", {
         runnerUrl: "https://runner.example/run",
         token: "secret",
-        fetcher: async () => ({
-          ok: false,
-          status: 400,
-          json: async () => ({
-            stdout: "",
-            stderr: "Playground execution does not allow process API `exec`.",
-            success: false,
-          }),
-        }),
+        fetcher: async () =>
+          runnerJsonResponse(
+            {
+              stdout: "",
+              stderr: "Playground execution does not allow process API `exec`.",
+              success: false,
+            },
+            400
+          ),
       })
     ),
     {
@@ -448,15 +457,15 @@ test("playground runner proxy handles configured and failed runner calls", async
       await proxyPlaygroundRun("fn main() {}", {
         runnerUrl: "https://runner.example/run",
         token: "secret",
-        fetcher: async () => ({
-          ok: false,
-          status: 429,
-          json: async () => ({
-            stdout: "",
-            stderr: "Playground runner is busy. Try again shortly.",
-            success: false,
-          }),
-        }),
+        fetcher: async () =>
+          runnerJsonResponse(
+            {
+              stdout: "",
+              stderr: "Playground runner is busy. Try again shortly.",
+              success: false,
+            },
+            429
+          ),
       })
     ),
     {
@@ -474,7 +483,31 @@ test("playground runner proxy handles configured and failed runner calls", async
       await proxyPlaygroundRun("fn main() {}", {
         runnerUrl: "https://runner.example/run",
         token: "secret",
-        fetcher: async () => ({ ok: false, status: 500, json: async () => ({}) }),
+        fetcher: async () =>
+          runnerJsonResponse({
+            stdout: "",
+            stderr: "",
+            success: true,
+            padding: "x".repeat(MAX_PLAYGROUND_RUNNER_RESPONSE_BYTES + 1),
+          }),
+      })
+    ),
+    {
+      status: 502,
+      result: {
+        stdout: "",
+        stderr: "Playground runner returned an invalid response.",
+        success: false,
+      },
+    }
+  );
+
+  assert.deepEqual(
+    plain(
+      await proxyPlaygroundRun("fn main() {}", {
+        runnerUrl: "https://runner.example/run",
+        token: "secret",
+        fetcher: async () => runnerJsonResponse({}, 500),
       })
     ),
     {
@@ -492,10 +525,8 @@ test("playground runner proxy handles configured and failed runner calls", async
       await proxyPlaygroundRun("fn main() {}", {
         runnerUrl: "https://runner.example/run",
         token: "secret",
-        fetcher: async () => ({
-          ok: true,
-          json: async () => ({ stdout: 1, stderr: "", success: true }),
-        }),
+        fetcher: async () =>
+          runnerJsonResponse({ stdout: 1, stderr: "", success: true }),
       })
     ),
     {
