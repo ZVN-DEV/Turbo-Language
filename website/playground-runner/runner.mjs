@@ -320,11 +320,23 @@ export async function runTurboSource(source, options = {}) {
   try {
     await writeFile(sourcePath, source, "utf8");
     const result = await execTurbo(turboBin, sourcePath, runDir, timeoutMs);
+    const durationMs = Math.max(0, Math.round(performance.now() - started));
+    const stdout = sanitizeRunnerOutput(result.stdout);
+    const stderr = sanitizeRunnerOutput(result.stderr);
+    if (encodedByteLength(stdout) + encodedByteLength(stderr) > MAX_OUTPUT_BYTES) {
+      return {
+        stdout: "",
+        stderr: playgroundOutputLimitMessage(),
+        success: false,
+        durationMs,
+      };
+    }
+
     return {
-      stdout: sanitizeRunnerOutput(result.stdout),
-      stderr: sanitizeRunnerOutput(result.stderr),
+      stdout,
+      stderr,
       success: result.success,
-      durationMs: Math.max(0, Math.round(performance.now() - started)),
+      durationMs,
     };
   } finally {
     await rm(runDir, { recursive: true, force: true });
@@ -350,7 +362,7 @@ function execTurbo(turboBin, sourcePath, cwd, timeoutMs) {
           if (error.killed || error.signal === "SIGTERM") {
             nextStderr = appendLine(nextStderr, `error: execution timed out after ${timeoutMs}ms`);
           } else if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
-            nextStderr = appendLine(nextStderr, "error: playground output exceeded 128 KiB");
+            nextStderr = appendLine(nextStderr, playgroundOutputLimitMessage());
           } else if (!nextStderr.trim()) {
             nextStderr = `error: ${error.message}`;
           }
@@ -396,6 +408,14 @@ function acquireRunSlot() {
 
 function appendLine(current, line) {
   return current.trim().length === 0 ? line : `${current.replace(/\s+$/, "")}\n${line}`;
+}
+
+function encodedByteLength(value) {
+  return encoder.encode(value).length;
+}
+
+function playgroundOutputLimitMessage() {
+  return "error: playground output exceeded 128 KiB";
 }
 
 function stripAnsi(input) {

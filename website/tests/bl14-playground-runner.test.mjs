@@ -581,6 +581,40 @@ test("standalone playground runner reports oversized output", async () => {
   }
 });
 
+test("standalone playground runner reports oversized combined output", async () => {
+  const { MAX_OUTPUT_BYTES, runTurboSource } = await loadRunner();
+  const tmpRoot = await mkdtemp(join(tmpdir(), "turbo-runner-combined-output-test-"));
+  const fakeTurbo = join(tmpRoot, "turbolang");
+  const stdoutBytes = Math.floor(MAX_OUTPUT_BYTES * 0.75);
+  const stderrBytes = MAX_OUTPUT_BYTES - stdoutBytes + 1;
+
+  await writeFile(
+    fakeTurbo,
+    [
+      "#!/bin/sh",
+      `head -c ${stdoutBytes} /dev/zero | tr '\\0' x`,
+      `head -c ${stderrBytes} /dev/zero | tr '\\0' y >&2`,
+      "",
+    ].join("\n"),
+    "utf8"
+  );
+  await chmod(fakeTurbo, 0o755);
+
+  try {
+    const result = await runTurboSource("fn main() { print(\"lots\") }", {
+      tmpRoot,
+      turboBin: fakeTurbo,
+      timeoutMs: 5000,
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /playground output exceeded 128 KiB/);
+  } finally {
+    await rm(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 test("standalone playground runner serves health, auth, and run responses", async () => {
   const {
     SERVER_HEADERS_TIMEOUT_MS,
