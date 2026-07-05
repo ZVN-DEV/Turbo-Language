@@ -7,6 +7,17 @@ import vm from "node:vm";
 import ts from "typescript";
 
 const root = process.cwd();
+const RUNNER_UNAVAILABLE_RESULT = {
+  stdout: "",
+  stderr:
+    "Hosted execution is not configured yet. Copy the local command to run this source with the Turbo CLI.",
+  success: false,
+  unavailable: true,
+};
+const RUNNER_UNAVAILABLE_RESPONSE = {
+  status: 503,
+  result: RUNNER_UNAVAILABLE_RESULT,
+};
 
 function read(path) {
   return readFileSync(join(root, path), "utf8");
@@ -315,13 +326,7 @@ test("playground runner proxy validates payloads and runner responses", () => {
   assert.equal(validatedRunnerUrl("https://user:pass@runner.example/run"), null);
   assert.equal(validatedRunnerUrl("http://localhost:8080/run")?.toString(), "http://localhost:8080/run");
   assert.equal(validatedRunnerUrl("https://runner.example/run")?.toString(), "https://runner.example/run");
-  assert.deepEqual(plain(runnerUnavailableResult()), {
-    stdout: "",
-    stderr:
-      "Hosted execution is not configured yet. Copy the local command to run this source with the Turbo CLI.",
-    success: false,
-    unavailable: true,
-  });
+  assert.deepEqual(plain(runnerUnavailableResult()), RUNNER_UNAVAILABLE_RESULT);
 });
 
 test("playground runner proxy handles configured and failed runner calls", async () => {
@@ -358,16 +363,10 @@ test("playground runner proxy handles configured and failed runner calls", async
   assert.equal(capturedRequest.init.cache, "no-store");
   assert.equal(capturedRequest.init.body, JSON.stringify({ source: "fn main() { print(1) }" }));
 
-  assert.deepEqual(plain(await proxyPlaygroundRun("fn main() {}", {})), {
-    status: 503,
-    result: {
-      stdout: "",
-      stderr:
-        "Hosted execution is not configured yet. Copy the local command to run this source with the Turbo CLI.",
-      success: false,
-      unavailable: true,
-    },
-  });
+  assert.deepEqual(
+    plain(await proxyPlaygroundRun("fn main() {}", {})),
+    RUNNER_UNAVAILABLE_RESPONSE
+  );
 
   let missingTokenCalledRunner = false;
   assert.deepEqual(
@@ -380,16 +379,7 @@ test("playground runner proxy handles configured and failed runner calls", async
         },
       })
     ),
-    {
-      status: 503,
-      result: {
-        stdout: "",
-        stderr:
-          "Hosted execution is not configured yet. Copy the local command to run this source with the Turbo CLI.",
-        success: false,
-        unavailable: true,
-      },
-    }
+    RUNNER_UNAVAILABLE_RESPONSE
   );
   assert.equal(missingTokenCalledRunner, false);
 
@@ -405,16 +395,7 @@ test("playground runner proxy handles configured and failed runner calls", async
         },
       })
     ),
-    {
-      status: 503,
-      result: {
-        stdout: "",
-        stderr:
-          "Hosted execution is not configured yet. Copy the local command to run this source with the Turbo CLI.",
-        success: false,
-        unavailable: true,
-      },
-    }
+    RUNNER_UNAVAILABLE_RESPONSE
   );
   assert.equal(blankTokenCalledRunner, false);
 
