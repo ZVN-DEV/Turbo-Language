@@ -286,6 +286,7 @@ test("playground proxy reads JSON request bodies with a hard size limit", async 
 
 test("playground runner proxy validates payloads and runner responses", () => {
   const {
+    MAX_PLAYGROUND_OUTPUT_BYTES,
     MAX_PLAYGROUND_SOURCE_BYTES,
     normalizeRunnerResult,
     runnerUnavailableResult,
@@ -294,6 +295,7 @@ test("playground runner proxy validates payloads and runner responses", () => {
   } = loadTsModule("src/lib/playground-runner.ts");
 
   assert.equal(MAX_PLAYGROUND_SOURCE_BYTES, 64 * 1024);
+  assert.equal(MAX_PLAYGROUND_OUTPUT_BYTES, 128 * 1024);
   assert.deepEqual(plain(validatePlaygroundRunPayload({ source: "fn main() {}" })), {
     ok: true,
     source: "fn main() {}",
@@ -318,6 +320,22 @@ test("playground runner proxy validates payloads and runner responses", () => {
   assert.deepEqual(
     plain(normalizeRunnerResult({ stdout: "ok\n", stderr: "", success: true, durationMs: 12 })),
     { stdout: "ok\n", stderr: "", success: true, durationMs: 12 }
+  );
+  assert.equal(
+    normalizeRunnerResult({
+      stdout: "x".repeat(MAX_PLAYGROUND_OUTPUT_BYTES + 1),
+      stderr: "",
+      success: true,
+    }),
+    null
+  );
+  assert.equal(
+    normalizeRunnerResult({
+      stdout: "x".repeat(MAX_PLAYGROUND_OUTPUT_BYTES),
+      stderr: "y",
+      success: true,
+    }),
+    null
   );
   assert.equal(normalizeRunnerResult({ stdout: 3, stderr: "", success: true }), null);
   assert.equal(validatedRunnerUrl(undefined), null);

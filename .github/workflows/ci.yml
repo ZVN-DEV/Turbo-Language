@@ -208,6 +208,10 @@ jobs:
         run: npm ci
         working-directory: website
 
+      - name: npm test
+        run: npm test
+        working-directory: website
+
       - name: npm run lint
         run: npm run lint
         working-directory: website

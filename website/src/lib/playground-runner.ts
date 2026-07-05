@@ -27,6 +27,7 @@ export type PlaygroundProxyResponse = {
 
 export const MAX_PLAYGROUND_SOURCE_BYTES = 64 * 1024;
 export const MAX_PLAYGROUND_REQUEST_BYTES = MAX_PLAYGROUND_SOURCE_BYTES + 4096;
+export const MAX_PLAYGROUND_OUTPUT_BYTES = 128 * 1024;
 export const PLAYGROUND_RUNNER_TIMEOUT_MS = 6000;
 
 const encoder = new TextEncoder();
@@ -172,6 +173,12 @@ export function normalizeRunnerResult(
   ) {
     return null;
   }
+  if (
+    encodedByteLength(candidate.stdout) + encodedByteLength(candidate.stderr) >
+    MAX_PLAYGROUND_OUTPUT_BYTES
+  ) {
+    return null;
+  }
 
   const result: PlaygroundRunResult = {
     stdout: candidate.stdout,
@@ -266,8 +273,12 @@ export function runnerUnavailableResult(): PlaygroundRunResult {
   };
 }
 
-function runError(stderr: string): PlaygroundRunResult {
+export function runError(stderr: string): PlaygroundRunResult {
   return { stdout: "", stderr, success: false };
+}
+
+function encodedByteLength(value: string): number {
+  return encoder.encode(value).length;
 }
 
 function normalizedConfiguredToken(token: string | undefined): string | null {

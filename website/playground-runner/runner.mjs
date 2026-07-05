@@ -130,7 +130,7 @@ function identifiersOutsideStringsAndComments(source) {
       continue;
     }
     if (source.startsWith('"""', i)) {
-      i = skipTripleString(source, i + 3);
+      i = scanTripleString(source, i + 3, idents);
       continue;
     }
     if (source.startsWith('r"', i)) {
@@ -177,9 +177,26 @@ function skipBlockComment(source, i) {
   return i;
 }
 
-function skipTripleString(source, i) {
-  const end = source.indexOf('"""', i);
-  return end === -1 ? source.length : end + 3;
+function scanTripleString(source, i, idents) {
+  while (i < source.length) {
+    if (source.startsWith('"""', i)) {
+      return i + 3;
+    }
+    if (
+      source[i] === "\\" &&
+      (source[i + 1] === "{" || source[i + 1] === "}")
+    ) {
+      i += 2;
+      continue;
+    }
+    if (source[i] === "{") {
+      i = scanStringInterpolation(source, i + 1, idents);
+      continue;
+    }
+
+    i += 1;
+  }
+  return source.length;
 }
 
 function skipRawString(source, i) {
@@ -214,7 +231,7 @@ function scanStringInterpolation(source, i, idents) {
       continue;
     }
     if (source.startsWith('"""', i)) {
-      i = skipTripleString(source, i + 3);
+      i = scanTripleString(source, i + 3, idents);
       continue;
     }
     if (source.startsWith('r"', i)) {

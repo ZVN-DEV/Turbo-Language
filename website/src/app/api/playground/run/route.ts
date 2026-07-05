@@ -2,15 +2,12 @@ import { NextResponse } from "next/server";
 import {
   proxyPlaygroundRun,
   readPlaygroundRunRequest,
+  runError,
   validatePlaygroundRunPayload,
 } from "@/lib/playground-runner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-function runError(stderr: string) {
-  return { stdout: "", stderr, success: false };
-}
 
 function jsonRunResult(body: unknown, status: number) {
   return NextResponse.json(body, {

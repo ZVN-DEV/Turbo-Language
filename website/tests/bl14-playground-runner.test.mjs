@@ -250,6 +250,27 @@ test("standalone playground runner validates payloads, auth, and output", async 
       category: "process",
     }
   );
+  assert.deepEqual(
+    findForbiddenPlaygroundApi('fn main() { print("""x {read_file("/etc/passwd")} y""") }'),
+    {
+      name: "read_file",
+      category: "filesystem",
+    }
+  );
+  assert.deepEqual(
+    findForbiddenPlaygroundApi('fn main() { print("""x {http_get("https://example.com")} y""") }'),
+    {
+      name: "http_get",
+      category: "network",
+    }
+  );
+  assert.deepEqual(
+    findForbiddenPlaygroundApi('fn main() { print("""x {shell_exec("pwd")} y""") }'),
+    {
+      name: "shell_exec",
+      category: "process",
+    }
+  );
   assert.deepEqual(findForbiddenPlaygroundApi("import { secret } from \"/etc/passwd\""), {
     name: "import",
     category: "file import",
@@ -292,6 +313,7 @@ test("standalone playground runner validates payloads, auth, and output", async 
         "    print(\"extern store deref unsafe\")",
         "    print(\"literal escaped \\{exec(\\\"pwd\\\")}\")",
         "    print(\"\"\"list_dir\"\"\")",
+        "    print(\"\"\"literal escaped \\{read_file(\\\"/etc/passwd\\\")}\"\"\")",
         "}",
       ].join("\n")
     ),
