@@ -46,6 +46,14 @@ export async function readPlaygroundRunRequest(
     };
   }
 
+  if (declaredContentLengthExceeds(request.headers, maxBytes)) {
+    return {
+      ok: false,
+      status: 413,
+      message: "Playground request is too large.",
+    };
+  }
+
   if (!request.body) {
     return invalidJsonRequest();
   }
@@ -81,7 +89,7 @@ export async function readPlaygroundRunRequest(
 
   let text: string;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    text = jsonDecoder.decode(bytes);
   } catch {
     return invalidJsonRequest();
   }
@@ -336,6 +344,17 @@ function hasJsonContentType(headers: Headers): boolean {
   if (!contentType) return false;
 
   return contentType.split(";", 1)[0].trim().toLowerCase() === "application/json";
+}
+
+function declaredContentLengthExceeds(headers: Headers, maxBytes: number): boolean {
+  const contentLength = headers.get("content-length");
+  if (!contentLength) return false;
+
+  const normalized = contentLength.trim();
+  if (!/^\d+$/.test(normalized)) return false;
+
+  const length = Number(normalized);
+  return !Number.isSafeInteger(length) || length > maxBytes;
 }
 
 function isTimeoutError(error: unknown): boolean {

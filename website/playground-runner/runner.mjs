@@ -488,6 +488,15 @@ async function handleRun(request, response) {
     return;
   }
 
+  if (declaredContentLengthExceeds(request.headers["content-length"], MAX_REQUEST_BYTES)) {
+    writeJson(response, 413, {
+      stdout: "",
+      stderr: "Playground request is too large.",
+      success: false,
+    });
+    return;
+  }
+
   const body = await readJsonRequest(request);
   if (!body.ok) {
     writeJson(response, body.status, { stdout: "", stderr: body.message, success: false });
@@ -536,6 +545,19 @@ function hasJsonContentType(contentType) {
   if (typeof contentType !== "string") return false;
 
   return contentType.split(";", 1)[0].trim().toLowerCase() === "application/json";
+}
+
+function declaredContentLengthExceeds(contentLength, maxBytes) {
+  if (Array.isArray(contentLength)) {
+    return contentLength.some((value) => declaredContentLengthExceeds(value, maxBytes));
+  }
+  if (typeof contentLength !== "string") return false;
+
+  const normalized = contentLength.trim();
+  if (!/^\d+$/.test(normalized)) return false;
+
+  const length = Number(normalized);
+  return !Number.isSafeInteger(length) || length > maxBytes;
 }
 
 function writeJson(response, status, body) {

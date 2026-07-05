@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -51,6 +52,34 @@ async function loadRunnerSmoke() {
   const url = pathToFileURL(join(root, "playground-runner/smoke.mjs"));
   url.searchParams.set("cache", String(Date.now()));
   return import(url.href);
+}
+
+function readRawHttpResponse(port, requestText, timeoutMs = 750) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    let data = "";
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolve(data);
+    }, timeoutMs);
+
+    socket.setEncoding("utf8");
+    socket.on("connect", () => {
+      socket.write(requestText);
+    });
+    socket.on("data", (chunk) => {
+      data += chunk;
+      if (data.includes("Playground request is too large")) {
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(data);
+      }
+    });
+    socket.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
 }
 
 test("standalone playground runner artifacts exist and stay container-oriented", () => {
@@ -617,6 +646,7 @@ test("standalone playground runner reports oversized combined output", async () 
 
 test("standalone playground runner serves health, auth, and run responses", async () => {
   const {
+    MAX_REQUEST_BYTES,
     SERVER_HEADERS_TIMEOUT_MS,
     SERVER_KEEP_ALIVE_TIMEOUT_MS,
     SERVER_REQUEST_TIMEOUT_MS,
@@ -702,6 +732,21 @@ test("standalone playground runner serves health, auth, and run responses", asyn
       stderr: "Request body must be valid JSON.",
       success: false,
     });
+
+    const declaredTooLarge = await readRawHttpResponse(
+      port,
+      [
+        "POST /run HTTP/1.1",
+        "Host: 127.0.0.1",
+        "Authorization: Bearer server-secret",
+        "Content-Type: application/json",
+        `Content-Length: ${MAX_REQUEST_BYTES + 1}`,
+        "",
+        "",
+      ].join("\r\n")
+    );
+    assert.match(declaredTooLarge, /^HTTP\/1\.1 413 /);
+    assert.match(declaredTooLarge, /Playground request is too large/);
 
     const run = await fetch(`${baseUrl}/run`, {
       method: "POST",

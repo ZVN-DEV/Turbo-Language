@@ -277,6 +277,22 @@ test("playground proxy reads JSON request bodies with a hard size limit", async 
     message: "Request body must be valid JSON.",
   });
 
+  const declaredTooLarge = await readPlaygroundRunRequest(
+    new Request("http://localhost/api/playground/run", {
+      method: "POST",
+      headers: {
+        "content-length": String(MAX_PLAYGROUND_REQUEST_BYTES + 1),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ source: "fn main() {}" }),
+    })
+  );
+  assert.deepEqual(plain(declaredTooLarge), {
+    ok: false,
+    status: 413,
+    message: "Playground request is too large.",
+  });
+
   const tooLarge = await readPlaygroundRunRequest(
     new Request("http://localhost/api/playground/run", {
       method: "POST",
