@@ -195,7 +195,9 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   (`TURBO_PLAYGROUND_RUNNER_URL=http://localhost:8790/run`) successfully proxied `/api/playground/run` through the
   runner and returned Turbo stdout. Browser QA verified desktop and 320px mobile `/play` rendering, Run, example
   selection, copy/share fallback behavior, and fixed the cramped mobile header by hiding the external GitHub nav
-  link below `sm`. Full local gates passed: `cargo fmt --check` from `turbo/`, `cargo test --workspace --manifest-path turbo/Cargo.toml`,
+  link below `sm`. The website proxy now treats an HTTPS runner URL without a nonblank
+  `TURBO_PLAYGROUND_RUNNER_TOKEN` as incomplete configuration and does not make unauthenticated upstream runner
+  calls. Full local gates passed: `cargo fmt --check` from `turbo/`, `cargo test --workspace --manifest-path turbo/Cargo.toml`,
   `cargo build --release --manifest-path turbo/Cargo.toml`, `cd turbo && ./tests/run_tests.sh` (272 passed, 0 failed, 10 skipped),
   `cd turbo && ./tests/parity/run_parity.sh` (29 passed), and `cargo clippy --workspace --manifest-path turbo/Cargo.toml -- -D warnings`.
   Local Docker image verification is blocked by an OrbStack data-image permission issue on this Mac, but PR CI now builds

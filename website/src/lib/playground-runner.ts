@@ -194,7 +194,8 @@ export async function proxyPlaygroundRun(
   options: PlaygroundProxyOptions
 ): Promise<PlaygroundProxyResponse> {
   const runnerUrl = validatedRunnerUrl(options.runnerUrl);
-  if (!runnerUrl) {
+  const token = normalizedConfiguredToken(options.token);
+  if (!runnerUrl || (runnerUrl.protocol === "https:" && !token)) {
     return { status: 503, result: runnerUnavailableResult() };
   }
 
@@ -202,7 +203,6 @@ export async function proxyPlaygroundRun(
     accept: "application/json",
     "content-type": "application/json",
   });
-  const token = normalizedConfiguredToken(options.token);
   if (token) {
     headers.set("authorization", `Bearer ${token}`);
   }

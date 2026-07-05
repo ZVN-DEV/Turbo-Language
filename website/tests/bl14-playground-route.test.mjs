@@ -369,10 +369,60 @@ test("playground runner proxy handles configured and failed runner calls", async
     },
   });
 
+  let missingTokenCalledRunner = false;
+  assert.deepEqual(
+    plain(
+      await proxyPlaygroundRun("fn main() {}", {
+        runnerUrl: "https://runner.example/run",
+        fetcher: async () => {
+          missingTokenCalledRunner = true;
+          return { ok: false, status: 401, json: async () => ({}) };
+        },
+      })
+    ),
+    {
+      status: 503,
+      result: {
+        stdout: "",
+        stderr:
+          "Hosted execution is not configured yet. Copy the local command to run this source with the Turbo CLI.",
+        success: false,
+        unavailable: true,
+      },
+    }
+  );
+  assert.equal(missingTokenCalledRunner, false);
+
+  let blankTokenCalledRunner = false;
+  assert.deepEqual(
+    plain(
+      await proxyPlaygroundRun("fn main() {}", {
+        runnerUrl: "https://runner.example/run",
+        token: "   ",
+        fetcher: async () => {
+          blankTokenCalledRunner = true;
+          return { ok: false, status: 401, json: async () => ({}) };
+        },
+      })
+    ),
+    {
+      status: 503,
+      result: {
+        stdout: "",
+        stderr:
+          "Hosted execution is not configured yet. Copy the local command to run this source with the Turbo CLI.",
+        success: false,
+        unavailable: true,
+      },
+    }
+  );
+  assert.equal(blankTokenCalledRunner, false);
+
   assert.deepEqual(
     plain(
       await proxyPlaygroundRun("fn main() { exec(\"ls\") }", {
         runnerUrl: "https://runner.example/run",
+        token: "secret",
         fetcher: async () => ({
           ok: false,
           status: 400,
@@ -398,6 +448,7 @@ test("playground runner proxy handles configured and failed runner calls", async
     plain(
       await proxyPlaygroundRun("fn main() {}", {
         runnerUrl: "https://runner.example/run",
+        token: "secret",
         fetcher: async () => ({
           ok: false,
           status: 429,
@@ -423,6 +474,7 @@ test("playground runner proxy handles configured and failed runner calls", async
     plain(
       await proxyPlaygroundRun("fn main() {}", {
         runnerUrl: "https://runner.example/run",
+        token: "secret",
         fetcher: async () => ({ ok: false, status: 500, json: async () => ({}) }),
       })
     ),
@@ -440,6 +492,7 @@ test("playground runner proxy handles configured and failed runner calls", async
     plain(
       await proxyPlaygroundRun("fn main() {}", {
         runnerUrl: "https://runner.example/run",
+        token: "secret",
         fetcher: async () => ({
           ok: true,
           json: async () => ({ stdout: 1, stderr: "", success: true }),
@@ -460,6 +513,7 @@ test("playground runner proxy handles configured and failed runner calls", async
     plain(
       await proxyPlaygroundRun("fn main() {}", {
         runnerUrl: "https://runner.example/run",
+        token: "secret",
         fetcher: async () => {
           throw Object.assign(new Error("timeout"), { name: "TimeoutError" });
         },
