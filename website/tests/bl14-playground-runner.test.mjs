@@ -77,6 +77,7 @@ test("standalone playground runner artifacts exist and stay container-oriented",
   assert.doesNotMatch(runner, /createHash|token=\$\{fingerprint\}/);
   assert.match(runner, /killSignal:\s*"SIGKILL"/);
   assert.match(runner, /TURBO_PLAYGROUND_RUNNER_ALLOW_UNSAFE_HOST/);
+  assert.match(dockerfile, /FROM rust:1\.88-slim AS builder/);
   assert.match(dockerfile, /USER turbo/);
   assert.match(dockerfile, /TURBO_PLAYGROUND_RUNNER_ALLOW_UNSAFE_HOST=1/);
   assert.match(dockerfile, /HEALTHCHECK/);

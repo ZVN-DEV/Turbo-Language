@@ -200,7 +200,9 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   `cd turbo && ./tests/parity/run_parity.sh` (29 passed), and `cargo clippy --workspace --manifest-path turbo/Cargo.toml -- -D warnings`.
   Local Docker image verification is blocked by an OrbStack data-image permission issue on this Mac, but PR CI now builds
   `website/playground-runner/Dockerfile`, starts the resulting image, waits for `/healthz`, and runs
-  `npm run smoke:playground-runner` against the containerized service.
+  `npm run smoke:playground-runner` against the containerized service. That CI pass exposed and fixed a stale
+  `rust:1.86-slim` builder image pin that no longer satisfies the current lockfile (`home@0.5.12` requires
+  Rust 1.88).
   The public page deliberately does **not** proxy arbitrary source to a
   shell-running `/api/run`; BL-14 remains open until the runner is deployed behind the website and smoke-tested at
   `turbolang.dev/play`._
