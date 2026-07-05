@@ -65,6 +65,7 @@ test("standalone playground runner artifacts exist and stay container-oriented",
   const dockerfile = read("playground-runner/Dockerfile");
   const flyConfig = read("playground-runner/fly.toml");
   const readme = read("playground-runner/README.md");
+  const ciWorkflow = read("../.github/workflows/ci.yml");
 
   assert.equal(
     packageJson.scripts["smoke:playground-runner"],
@@ -93,6 +94,9 @@ test("standalone playground runner artifacts exist and stay container-oriented",
   assert.match(readme, /--cap-drop=ALL/);
   assert.match(readme, /flyctl deploy --config website\/playground-runner\/fly\.toml/);
   assert.match(readme, /TURBO_PLAYGROUND_RUNNER_URL/);
+  assert.match(ciWorkflow, /name: Playground runner image/);
+  assert.match(ciWorkflow, /docker build -t turbo-playground-runner:ci -f website\/playground-runner\/Dockerfile \./);
+  assert.match(ciWorkflow, /npm run smoke:playground-runner/);
 });
 
 test("standalone playground runner smoke probe covers deploy contract", async () => {

@@ -198,7 +198,9 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   link below `sm`. Full local gates passed: `cargo fmt --check` from `turbo/`, `cargo test --workspace --manifest-path turbo/Cargo.toml`,
   `cargo build --release --manifest-path turbo/Cargo.toml`, `cd turbo && ./tests/run_tests.sh` (272 passed, 0 failed, 10 skipped),
   `cd turbo && ./tests/parity/run_parity.sh` (29 passed), and `cargo clippy --workspace --manifest-path turbo/Cargo.toml -- -D warnings`.
-  `docker`/`podman` were unavailable in the local environment, so the runner image build still needs CI or deploy-host verification.
+  Local Docker image verification is blocked by an OrbStack data-image permission issue on this Mac, but PR CI now builds
+  `website/playground-runner/Dockerfile`, starts the resulting image, waits for `/healthz`, and runs
+  `npm run smoke:playground-runner` against the containerized service.
   The public page deliberately does **not** proxy arbitrary source to a
   shell-running `/api/run`; BL-14 remains open until the runner is deployed behind the website and smoke-tested at
   `turbolang.dev/play`._
