@@ -221,6 +221,11 @@ test("playground helper behavior is safe for pasted commands and share links", (
 test("bundled playground examples only use APIs allowed by the public runner", async () => {
   const { examples } = loadTsModule("src/lib/playground.ts");
   const { findForbiddenPlaygroundApi } = await loadRunner();
+  const wordCount = examples.find((example) => example.id === "word-count");
+
+  assert.ok(wordCount, "playground should include a string-key counting example");
+  assert.match(wordCount.code, /hashmap_inc/);
+  assert.equal(wordCount.expected, "browser: 1\ndata: 3\nscripts: 1\nturbo: 2");
 
   for (const example of examples) {
     assert.equal(

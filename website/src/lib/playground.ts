@@ -80,6 +80,34 @@ fn main() {
 }`,
     expected: "Total: 29\nCount: 4",
   },
+  {
+    id: "word-count",
+    label: "Word Count",
+    filename: "word_count.tb",
+    code: `fn main() {
+    let text = "turbo scripts data data turbo browser data"
+    let words = split(text, " ")
+    let counts = hashmap()
+
+    let mut i = 0
+    while i < len(words) {
+        let word = trim(words[i])
+        if len(word) > 0 {
+            hashmap_inc(counts, word)
+        }
+        i += 1
+    }
+
+    let keys = hashmap_keys(counts)
+    let mut j = 0
+    while j < len(keys) {
+        let word = keys[j]
+        print(word + ": " + to_str(hashmap_get_int(counts, word)))
+        j += 1
+    }
+}`,
+    expected: "browser: 1\ndata: 3\nscripts: 1\nturbo: 2",
+  },
 ];
 
 export const defaultExample = examples[0];
