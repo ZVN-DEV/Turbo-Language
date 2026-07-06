@@ -166,7 +166,13 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   color). Operational errors get the full colored `error[E06xx]:` envelope — file-not-found E0611 + import
   E0610 drop the raw `(os error N)` jargon. _WASM runtime traps left naked (separate backend) — minor follow-up._
 
-- [ ] **BL-14 — No in-browser "Try it"; playground gated behind install.** _[designer#4, strategist theme 2]_
+- [x] **BL-14 — No in-browser "Try it"; playground gated behind install.** _[designer#4, strategist theme 2]_
+  _DONE 2026-07-06: PR #27 merged (post-review fixes: output truncation instead of discard, JSON-escape-aware
+  response cap, real FizzBuzz expected output, ALLOW_UNSAFE_HOST moved from the image to explicit per-deployment
+  opt-in). Runner deployed to Fly app `turbolang-playground-runner` (org zvn-dev, 2 machines iad, token secret
+  set); Vercel production has `TURBO_PLAYGROUND_RUNNER_URL=https://turbolang-playground-runner.fly.dev/run` +
+  token. Verified live: `/healthz` ok, authenticated run returns stdout, tokenless requests 401, `exec` rejected,
+  and `npm run smoke:playground -- https://turbolang.dev` passed against production._
   `turbolang playground` serves a working browser playground — but only after a CLI install. For a *language*,
   "run code in 5s" is the highest-converting action. **AC:** host the existing playground at `turbolang.dev/play`
   and add it as the hero's primary secondary-CTA ("Try in browser →") + a persistent nav item.
