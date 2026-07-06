@@ -839,8 +839,8 @@ impl Checker {
             self.constants.insert(c.name.clone(), ty);
         }
 
-        // Check for main (not required in test mode)
-        if !self.test_mode && !self.functions.contains_key("main") {
+        // Check for main when using the binary/program entry point.
+        if self.require_main && !self.functions.contains_key("main") {
             let span = if module.items.is_empty() {
                 0..0
             } else {

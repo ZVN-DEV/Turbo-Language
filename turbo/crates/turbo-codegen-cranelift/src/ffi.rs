@@ -92,7 +92,7 @@ fn parse_checked_source(source: &str) -> Result<(Module, HashMap<String, Functio
         return Err(format!("parse error: {}", parse_errors[0]));
     }
 
-    let sema_result = turbo_sema::check_test(&module);
+    let sema_result = turbo_sema::check_library(&module);
     if !sema_result.errors.is_empty() {
         return Err(format!("semantic error: {}", sema_result.errors[0].message));
     }
@@ -182,6 +182,9 @@ fn register_host_fn(
     name: *const c_char,
     fn_ptr: *const c_void,
 ) -> Result<(), String> {
+    if vm.program.is_some() {
+        return Err("host functions must be registered before turbo_eval".to_string());
+    }
     if fn_ptr.is_null() {
         return Err("host function pointer is null".to_string());
     }
@@ -461,6 +464,28 @@ fn main() {
             let mut out = 0;
             assert!(!turbo_call_i64(vm, fn_name.as_ptr(), &mut out));
             assert!(last_error(vm).contains("zero-argument"));
+
+            turbo_vm_free(vm);
+        }
+    }
+
+    #[test]
+    fn libturbo_rejects_host_registration_after_eval() {
+        unsafe {
+            let vm = turbo_vm_new();
+            let source = cstring("fn main() {}");
+            assert!(turbo_eval(vm, source.as_ptr()), "{}", last_error(vm));
+
+            let add = cstring("host_add");
+            assert!(!turbo_vm_register_host_fn(
+                vm,
+                add.as_ptr(),
+                host_add as *const () as *const c_void,
+            ));
+            assert_eq!(
+                last_error(vm),
+                "host functions must be registered before turbo_eval"
+            );
 
             turbo_vm_free(vm);
         }

@@ -192,7 +192,7 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   compiles and runs a C host that exchanges typed values through registered callbacks. Docs in `docs/libturbo.md`
   mark the current boundary as trusted first-party only and record the sandbox feasibility result: go for trusted
   embedding, no-go for untrusted scripts until the runtime symbol table becomes capability-shaped. Verified with
-  the full backlog gates plus a compiled C host smoke.
+  the full backlog gates plus the CI-backed `examples/libturbo-c-host/smoke.sh` C host smoke.
 
 ### P2 — robustness, language depth, conversion
 

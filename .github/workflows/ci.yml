@@ -169,6 +169,9 @@ jobs:
       - name: Build
         run: cargo build --release --workspace --manifest-path turbo/Cargo.toml
 
+      - name: libturbo C host smoke
+        run: bash examples/libturbo-c-host/smoke.sh
+
       - name: Report binary size
         run: |
           SIZE=$(stat --format=%s turbo/target/release/turbolang 2>/dev/null || stat -f%z turbo/target/release/turbolang)

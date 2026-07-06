@@ -53,17 +53,23 @@ fn register_libm_symbols(jit_builder: &mut JITBuilder) {
 }
 
 pub(crate) struct JitProgram {
-    module: JITModule,
+    module: Option<JITModule>,
     user_fns: HashMap<String, FuncId>,
 }
 
 impl JitProgram {
+    fn module(&self) -> &JITModule {
+        self.module
+            .as_ref()
+            .expect("JIT module is present until JitProgram is dropped")
+    }
+
     fn finalized_function(&self, fn_name: &str) -> Result<*const u8, CodegenError> {
         let func_id = self.user_fns.get(fn_name).ok_or_else(|| CodegenError {
             code: ErrorCode::E0405,
             message: format!("no function `{fn_name}` found"),
         })?;
-        Ok(self.module.get_finalized_function(*func_id))
+        Ok(self.module().get_finalized_function(*func_id))
     }
 
     pub(crate) fn has_function(&self, fn_name: &str) -> bool {
@@ -87,6 +93,20 @@ impl JitProgram {
         let func_ptr = self.finalized_function(fn_name)?;
         let func: fn() -> *const u8 = unsafe { std::mem::transmute(func_ptr) };
         Ok(func())
+    }
+}
+
+impl Drop for JitProgram {
+    fn drop(&mut self) {
+        if let Some(module) = self.module.take() {
+            // SAFETY: dropping JitProgram is the end of the VM/program lifetime. Callers
+            // must not use finalized function pointers or C API returned strings after the
+            // owning program/VM is dropped; libturbo documents those pointers as valid only
+            // until `turbo_vm_free` or the next string result.
+            unsafe {
+                module.free_memory();
+            }
+        }
     }
 }
 
@@ -287,7 +307,10 @@ pub(crate) fn compile_jit_program(
         message: e.to_string(),
     })?;
 
-    Ok(JitProgram { module, user_fns })
+    Ok(JitProgram {
+        module: Some(module),
+        user_fns,
+    })
 }
 
 pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {

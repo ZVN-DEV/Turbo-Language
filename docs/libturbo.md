@@ -5,7 +5,8 @@ It lets a native host evaluate Turbo source, register C host functions by name,
 and call selected Turbo functions through a small C ABI.
 
 The current spike ships from `turbo-codegen-cranelift` as `rlib`, `cdylib`, and
-`staticlib`.
+`staticlib`. The built library artifact is named
+`libturbo_codegen_cranelift.{dylib,so,a}`, not `libturbo`.
 
 ## Build
 
@@ -37,8 +38,9 @@ const char *turbo_call_str(TurboVm *vm, const char *fn_name);
 
 `turbo_eval` lexes, parses, type-checks, JIT-compiles, and evaluates the source.
 If the module defines `fn main()`, `main` must be zero-argument and return unit;
-it is run after compilation. Host functions must be registered before
-`turbo_eval` and declared from Turbo with `@unsafe extern "C"`.
+it is run synchronously on the calling thread after compilation. A blocking
+`main`, such as an HTTP server, blocks the host. Host functions must be
+registered before `turbo_eval` and declared from Turbo with `@unsafe extern "C"`.
 
 `turbo_call_i64` and `turbo_call_str` currently accept zero-argument Turbo
 functions with explicit `-> i64`/`-> int` or `-> str` return types. The returned
@@ -47,6 +49,18 @@ or `turbo_vm_free`.
 
 On failure, calls return `false` or `NULL`; use `turbo_vm_last_error` for the
 diagnostic.
+
+Runtime faults in Turbo code, including failed `assert`/`assert_eq`, divide by
+zero, integer overflow, array out-of-bounds, and `exit()`, call `process::exit`
+and terminate the host process. They are not catchable through
+`turbo_vm_last_error`.
+
+All `turbo_*` calls, including use of a `TurboVm` handle, are single-thread
+only. There is no internal synchronization.
+
+Multiple `TurboVm` instances share thread-local and process-global runtime
+state, including the string arena and HTTP server registry. They are not
+isolated from each other; use one live VM at a time.
 
 ## Example
 

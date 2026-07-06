@@ -1,6 +1,28 @@
 #ifndef LIBTURBO_H
 #define LIBTURBO_H
 
+/*
+ * Embeddable Turbo JIT C API.
+ *
+ * The built library artifact is named
+ * libturbo_codegen_cranelift.{dylib,so,a}, not libturbo.
+ *
+ * Runtime faults in Turbo code, including failed assert/assert_eq, divide by
+ * zero, integer overflow, array out-of-bounds, and exit(), call process::exit
+ * and terminate the host process. They are not catchable through
+ * turbo_vm_last_error.
+ *
+ * All turbo_* calls, including use of a TurboVm handle, are single-thread only;
+ * there is no internal synchronization.
+ *
+ * Multiple TurboVm instances share thread-local and process-global runtime
+ * state such as the string arena and HTTP server registry. They are not
+ * isolated from each other; use one live VM at a time.
+ *
+ * turbo_eval runs fn main() synchronously on the calling thread. A blocking
+ * main, such as an HTTP server, blocks the host.
+ */
+
 #include <stdbool.h>
 #include <stdint.h>
 
