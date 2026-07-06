@@ -48,6 +48,7 @@ function loadTsModule(path) {
       DOMException,
       Headers,
       performance,
+      process,
       TextEncoder,
       TextDecoder,
       URL,
@@ -115,6 +116,27 @@ test("the hosted playground route exists and does not wire local shell execution
   assert.match(helpers, /turbolang run/);
   assert.match(helpers, /MAX_SHARE_URL_LENGTH = 8000/);
   assert.match(client, /Share link too large/);
+});
+
+test("hosted playground page ships browser security headers", async () => {
+  const config = loadTsModule("next.config.ts").default;
+  const rules = await config.headers();
+  const playgroundRule = rules.find((rule) => rule.source === "/play");
+
+  assert.ok(playgroundRule, "next config should target the hosted playground route");
+
+  const headers = Object.fromEntries(
+    playgroundRule.headers.map(({ key, value }) => [key.toLowerCase(), value])
+  );
+
+  assert.equal(headers["x-content-type-options"], "nosniff");
+  assert.equal(headers["referrer-policy"], "strict-origin-when-cross-origin");
+  assert.equal(headers["permissions-policy"], "camera=(), microphone=(), geolocation=()");
+  assert.match(headers["content-security-policy"], /default-src 'self'/);
+  assert.match(headers["content-security-policy"], /connect-src 'self'/);
+  assert.match(headers["content-security-policy"], /object-src 'none'/);
+  assert.match(headers["content-security-policy"], /base-uri 'self'/);
+  assert.match(headers["content-security-policy"], /frame-ancestors 'none'/);
 });
 
 test("public playground smoke probe covers deployed page and execution contract", async () => {

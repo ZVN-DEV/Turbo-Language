@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import Link from "next/link";
 import type { PlaygroundRunResult } from "@/lib/playground-runner";
 import {
@@ -15,16 +15,115 @@ import {
 type CopyTarget = "command" | "share";
 type CopyState = { status: "copied" | "manual"; target: CopyTarget } | null;
 type OutputMode = "expected" | "command" | "result";
+type PlaygroundState = {
+  code: string;
+  manualCopyText: string | null;
+  outputMode: OutputMode;
+  runResult: PlaygroundRunResult | null;
+  shareError: string | null;
+};
+type PlaygroundAction =
+  | { type: "apply-shared-code"; code: string }
+  | { type: "copy-failed-manual"; target: CopyTarget; text: string }
+  | { type: "copy-succeeded"; target: CopyTarget }
+  | { type: "edit-code"; code: string }
+  | { type: "load-example"; code: string }
+  | { type: "run-finished"; result: PlaygroundRunResult }
+  | { type: "run-started" }
+  | { type: "run-stopped"; result: PlaygroundRunResult }
+  | { type: "share-too-large"; message: string }
+  | { type: "show-command" };
+
+const initialPlaygroundState: PlaygroundState = {
+  code: defaultExample.code,
+  manualCopyText: null,
+  outputMode: "expected",
+  runResult: null,
+  shareError: null,
+};
+
+function playgroundReducer(
+  state: PlaygroundState,
+  action: PlaygroundAction
+): PlaygroundState {
+  switch (action.type) {
+    case "apply-shared-code":
+      return {
+        ...state,
+        code: action.code,
+        manualCopyText: null,
+        outputMode: "command",
+        runResult: null,
+        shareError: null,
+      };
+    case "copy-failed-manual":
+      return {
+        ...state,
+        manualCopyText: action.text,
+        shareError: action.target === "share" ? null : state.shareError,
+      };
+    case "copy-succeeded":
+      return {
+        ...state,
+        manualCopyText: null,
+        shareError: action.target === "share" ? null : state.shareError,
+      };
+    case "edit-code":
+      return {
+        ...state,
+        code: action.code,
+        outputMode: "command",
+        shareError: null,
+      };
+    case "load-example":
+      return {
+        ...state,
+        code: action.code,
+        manualCopyText: null,
+        outputMode: "expected",
+        runResult: null,
+        shareError: null,
+      };
+    case "run-finished":
+      return {
+        ...state,
+        runResult: action.result,
+      };
+    case "run-started":
+      return {
+        ...state,
+        manualCopyText: null,
+        outputMode: "result",
+        runResult: null,
+        shareError: null,
+      };
+    case "run-stopped":
+      return {
+        ...state,
+        outputMode: "result",
+        runResult: action.result,
+      };
+    case "share-too-large":
+      return {
+        ...state,
+        manualCopyText: null,
+        outputMode: "command",
+        shareError: action.message,
+      };
+    case "show-command":
+      return {
+        ...state,
+        outputMode: "command",
+      };
+  }
+}
 
 export default function PlaygroundClient() {
   const [exampleId, setExampleId] = useState(defaultExample.id);
-  const [code, setCode] = useState(defaultExample.code);
+  const [{ code, manualCopyText, outputMode, runResult, shareError }, dispatch] =
+    useReducer(playgroundReducer, initialPlaygroundState);
   const [copyState, setCopyState] = useState<CopyState>(null);
-  const [manualCopyText, setManualCopyText] = useState<string | null>(null);
-  const [shareError, setShareError] = useState<string | null>(null);
-  const [runResult, setRunResult] = useState<PlaygroundRunResult | null>(null);
   const [isRunning, setIsRunning] = useState(false);
-  const [outputMode, setOutputMode] = useState<OutputMode>("expected");
 
   const selectedExample =
     examples.find((example) => example.id === exampleId) ?? defaultExample;
@@ -38,21 +137,13 @@ export default function PlaygroundClient() {
     const sharedCode = new URLSearchParams(window.location.search).get("code");
     if (!sharedCode) return;
 
-    setCode(sharedCode);
-    setOutputMode("command");
-    setRunResult(null);
-    setManualCopyText(null);
-    setShareError(null);
+    dispatch({ type: "apply-shared-code", code: sharedCode });
   }, []);
 
   function loadExample(id: string) {
     const next = examples.find((example) => example.id === id) ?? defaultExample;
     setExampleId(next.id);
-    setCode(next.code);
-    setOutputMode("expected");
-    setRunResult(null);
-    setManualCopyText(null);
-    setShareError(null);
+    dispatch({ type: "load-example", code: next.code });
   }
 
   function setTimedCopyState(nextState: NonNullable<CopyState>) {
@@ -63,8 +154,7 @@ export default function PlaygroundClient() {
   async function copyText(text: string, target: CopyTarget) {
     try {
       await navigator.clipboard.writeText(text);
-      setManualCopyText(null);
-      if (target === "share") setShareError(null);
+      dispatch({ type: "copy-succeeded", target });
       setTimedCopyState({ status: "copied", target });
     } catch {
       const fallback = document.createElement("textarea");
@@ -78,12 +168,10 @@ export default function PlaygroundClient() {
       const copiedFallback = document.execCommand("copy");
       document.body.removeChild(fallback);
       if (copiedFallback) {
-        setManualCopyText(null);
-        if (target === "share") setShareError(null);
+        dispatch({ type: "copy-succeeded", target });
         setTimedCopyState({ status: "copied", target });
       } else {
-        setManualCopyText(text);
-        if (target === "share") setShareError(null);
+        dispatch({ type: "copy-failed-manual", target, text });
         setTimedCopyState({ status: "manual", target });
       }
     }
@@ -92,20 +180,19 @@ export default function PlaygroundClient() {
   async function runCode() {
     if (isRunning) return;
     if (code.trim().length === 0) {
-      setRunResult({
-        stdout: "",
-        stderr: "Enter Turbo source before running it.",
-        success: false,
+      dispatch({
+        type: "run-stopped",
+        result: {
+          stdout: "",
+          stderr: "Enter Turbo source before running it.",
+          success: false,
+        },
       });
-      setOutputMode("result");
       return;
     }
 
     setIsRunning(true);
-    setRunResult(null);
-    setManualCopyText(null);
-    setShareError(null);
-    setOutputMode("result");
+    dispatch({ type: "run-started" });
 
     const started = performance.now();
     try {
@@ -120,24 +207,30 @@ export default function PlaygroundClient() {
           ? result.durationMs
           : Math.max(0, Math.round(performance.now() - started));
 
-      setRunResult({
-        stdout: typeof result.stdout === "string" ? result.stdout : "",
-        stderr:
-          typeof result.stderr === "string"
-            ? result.stderr
-            : `Playground request failed with HTTP ${response.status}.`,
-        success: response.ok && result.success === true,
-        durationMs,
-        unavailable: result.unavailable === true,
+      dispatch({
+        type: "run-finished",
+        result: {
+          stdout: typeof result.stdout === "string" ? result.stdout : "",
+          stderr:
+            typeof result.stderr === "string"
+              ? result.stderr
+              : `Playground request failed with HTTP ${response.status}.`,
+          success: response.ok && result.success === true,
+          durationMs,
+          unavailable: result.unavailable === true,
+        },
       });
     } catch {
-      setRunResult({
-        stdout: "",
-        stderr:
-          "Could not reach hosted execution. Copy the local command to run this source with the Turbo CLI.",
-        success: false,
-        durationMs: Math.max(0, Math.round(performance.now() - started)),
-        unavailable: true,
+      dispatch({
+        type: "run-finished",
+        result: {
+          stdout: "",
+          stderr:
+            "Could not reach hosted execution. Copy the local command to run this source with the Turbo CLI.",
+          success: false,
+          durationMs: Math.max(0, Math.round(performance.now() - started)),
+          unavailable: true,
+        },
       });
     } finally {
       setIsRunning(false);
@@ -148,11 +241,10 @@ export default function PlaygroundClient() {
     const shareUrl = shareUrlFor(window.location.href, code);
 
     if (shareUrl.length > MAX_SHARE_URL_LENGTH) {
-      setOutputMode("command");
-      setManualCopyText(null);
-      setShareError(
-        `Share links are limited to ${MAX_SHARE_URL_LENGTH.toLocaleString()} encoded URL characters. Copy the local run command instead.`
-      );
+      dispatch({
+        type: "share-too-large",
+        message: `Share links are limited to ${MAX_SHARE_URL_LENGTH.toLocaleString()} encoded URL characters. Copy the local run command instead.`,
+      });
       return;
     }
 
@@ -160,7 +252,7 @@ export default function PlaygroundClient() {
   }
 
   function copyCommand() {
-    setOutputMode("command");
+    dispatch({ type: "show-command" });
     void copyText(runCommand, "command");
   }
 
@@ -280,11 +372,9 @@ export default function PlaygroundClient() {
             </div>
             <textarea
               value={code}
-              onChange={(event) => {
-                setCode(event.target.value);
-                setOutputMode("command");
-                setShareError(null);
-              }}
+              onChange={(event) =>
+                dispatch({ type: "edit-code", code: event.target.value })
+              }
               spellCheck={false}
               className="min-h-[520px] min-w-0 resize-none bg-transparent p-4 font-[family-name:var(--font-geist-mono)] text-sm leading-6 text-gray-200 outline-none selection:bg-accent/20"
               aria-label="Turbo source editor"
