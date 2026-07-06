@@ -178,7 +178,7 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   `summary_large_image` card. All 21 routes stay static SSG; lint + tsc clean. Per-page `og:title`/`og:desc`
   left inheriting the brand default (noted as a one-helper follow-up).
 
-- [ ] **BL-16 — Commit the embeddable-typed-scripting wedge: `libturbo` C API spike.** _[strategist] STRATEGIC._
+- [x] **BL-16 — Commit the embeddable-typed-scripting wedge: `libturbo` C API spike.** _[strategist] DONE (commit `0b3841c`)._
   The biggest gap is positioning, not code: as a "general-purpose compiled language" Turbo loses to Go/Rust on
   every axis. The one differentiated asset is a real Cranelift JIT. There is **zero `cdylib`/`staticlib`** in the
   repo. **AC (spike):** ship the codegen crate as a `cdylib`/`staticlib`; minimal `libturbo` C API
@@ -187,6 +187,12 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
   docs; one line in `design/VISION.md` committing the north star. Target **trusted/first-party scripts first** (no
   sandbox). Separately time-box a **sandbox-feasibility** investigation (can the JIT be stripped of file/net/
   syscall in a quarter?) → go/no-go, NOT a finished sandbox. Do this BEFORE any LLVM/perf or domain-sidecar work.
+  **Done:** `turbo-codegen-cranelift` now builds `rlib`/`cdylib`/`staticlib`; `libturbo.h` exposes VM creation,
+  host callback registration, `turbo_eval`, and zero-arg `i64`/`str` Turbo calls; `examples/libturbo-c-host`
+  compiles and runs a C host that exchanges typed values through registered callbacks. Docs in `docs/libturbo.md`
+  mark the current boundary as trusted first-party only and record the sandbox feasibility result: go for trusted
+  embedding, no-go for untrusted scripts until the runtime symbol table becomes capability-shaped. Verified with
+  the full backlog gates plus a compiled C host smoke.
 
 ### P2 — robustness, language depth, conversion
 
