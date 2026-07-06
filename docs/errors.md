@@ -99,6 +99,7 @@ Every compiler diagnostic includes a unique error code (e.g. `E0100`). Use `turb
 | E0404 | Linker or build tool error |
 | E0405 | Cranelift backend error |
 | E0406 | Missing function definition |
+| E0407 | JIT finalization failed |
 
 ## Misc Errors (E0500-E0599)
 

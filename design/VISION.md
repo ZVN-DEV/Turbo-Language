@@ -97,6 +97,7 @@ This is a trust move. A small core that actually ships and stays stable is worth
 - **WebAssembly as a first-class target.** WASM is not an afterthought -- it is a primary compilation target with its own optimization pipeline. Build web frontends, edge functions, and browser-based tools in the same language as your backend.
 - **JavaScript interop bridge.** For WASM targets, a seamless interop layer lets you call JavaScript APIs, manipulate the DOM, and integrate with existing JS ecosystems. TypeScript type definitions are generated automatically.
 - **C FFI for ecosystem access.** Call into C libraries with zero overhead. Bind to system APIs, graphics libraries, database drivers, and the vast ecosystem of C code. FFI declarations are type-checked and memory-safe at the boundary.
+- **Embeddable typed scripting.** Turbo's JIT ships as `libturbo` so native hosts can embed trusted first-party scripts, exchange typed values, and register C callbacks without waiting for a sandboxed third-party story.
 - **Embedded and IoT support.** A `no_std` mode strips the standard library to a minimal core suitable for microcontrollers and constrained environments. Deterministic memory management and no GC make Turbo viable where Rust goes today.
 - **Server-native.** Async runtime built in. HTTP, gRPC, and WebSocket support in the standard library. Connection pooling, graceful shutdown, and structured concurrency are language-level patterns.
 

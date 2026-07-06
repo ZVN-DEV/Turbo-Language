@@ -175,6 +175,8 @@ pub enum ErrorCode {
     E0405,
     /// Missing function definition
     E0406,
+    /// JIT finalization failed
+    E0407,
 
     // ── Misc errors (E0500-E0599) ───────────────────────────────────
     /// Cannot assign to immutable variable
@@ -303,6 +305,7 @@ impl ErrorCode {
             ErrorCode::E0404 => "E0404",
             ErrorCode::E0405 => "E0405",
             ErrorCode::E0406 => "E0406",
+            ErrorCode::E0407 => "E0407",
             // Misc
             ErrorCode::E0501 => "E0501",
             ErrorCode::E0502 => "E0502",
@@ -409,6 +412,7 @@ impl ErrorCode {
             ErrorCode::E0404 => "linker or build tool error",
             ErrorCode::E0405 => "Cranelift backend error",
             ErrorCode::E0406 => "missing function definition",
+            ErrorCode::E0407 => "JIT finalization failed",
             // Misc
             ErrorCode::E0501 => "cannot assign to immutable variable",
             ErrorCode::E0502 => "cannot assign to field of immutable variable",
@@ -516,6 +520,7 @@ impl ErrorCode {
             ErrorCode::E0404,
             ErrorCode::E0405,
             ErrorCode::E0406,
+            ErrorCode::E0407,
             ErrorCode::E0501,
             ErrorCode::E0502,
             ErrorCode::E0503,

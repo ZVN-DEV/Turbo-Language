@@ -13,7 +13,7 @@
 //! * `exhaustiveness` — match-pattern validity helpers.
 //! * This file (`lib.rs`) — shared type definitions ([`Ty`], `Checker`,
 //!   helper structs), free helper functions, and the public
-//!   [`check`] / [`check_test`] entry points.
+//!   [`check`] / [`check_library`] / [`check_test`] entry points.
 //!
 //! ```ignore
 //! let (tokens, _) = turbo_lexer::tokenize(src);
@@ -575,8 +575,8 @@ pub(crate) struct Checker {
     /// with E0115. `check_block` `take()`s it at entry so only the body
     /// block's own tail sees it — nested blocks do not (BL-26).
     pub(crate) fn_body_tail_hint: Option<Ty>,
-    /// When true, `main` is not required (used for `turbolang test` mode)
-    pub(crate) test_mode: bool,
+    /// Whether this entry point requires a top-level `main` function.
+    pub(crate) require_main: bool,
     /// Whether we are currently checking inside an `@unsafe` function
     pub(crate) in_unsafe_context: bool,
     /// Nesting depth of loops (for break/continue validation)
@@ -621,7 +621,7 @@ impl Checker {
             closure_param_hint: None,
             fn_body_tail_hint: None,
             in_unsafe_context: false,
-            test_mode: false,
+            require_main: true,
             loop_depth: 0,
             expr_depth: 0,
         }
@@ -646,18 +646,26 @@ impl Checker {
 
 /// Run semantic analysis on a module. Returns errors found.
 pub fn check(module: &Module) -> SemaResult {
-    let mut checker = Checker::new();
-    checker.check_module(module);
-    SemaResult {
-        errors: checker.errors,
-        warnings: checker.warnings,
-    }
+    check_with_main_requirement(module, true)
 }
 
 /// Run semantic analysis in test mode (no `main` required). Returns errors found.
 pub fn check_test(module: &Module) -> SemaResult {
+    check_with_main_requirement(module, false)
+}
+
+/// Run semantic analysis for embedded/library modules.
+///
+/// This entry point accepts modules without `fn main()` so libturbo and other
+/// embedding surfaces can compile callable library functions while preserving
+/// the normal type and semantic checks.
+pub fn check_library(module: &Module) -> SemaResult {
+    check_with_main_requirement(module, false)
+}
+
+fn check_with_main_requirement(module: &Module, require_main: bool) -> SemaResult {
     let mut checker = Checker::new();
-    checker.test_mode = true;
+    checker.require_main = require_main;
     checker.check_module(module);
     SemaResult {
         errors: checker.errors,
@@ -2001,6 +2009,30 @@ fn main() { }"#,
         assert!(
             result.errors.iter().any(|e| e.code == ErrorCode::E0110),
             "check_test should still report type errors, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_check_library_no_main_ok() {
+        let (tokens, _) = turbo_lexer::tokenize("fn answer() -> i64 { 42 }");
+        let (module, _) = turbo_parser::parse(tokens);
+        let result = check_library(&module);
+        assert!(
+            result.errors.is_empty(),
+            "check_library should not require main, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn test_check_library_still_type_checks() {
+        let (tokens, _) = turbo_lexer::tokenize("fn answer() -> i64 { \"wrong\" }");
+        let (module, _) = turbo_parser::parse(tokens);
+        let result = check_library(&module);
+        assert!(
+            result.errors.iter().any(|e| e.code == ErrorCode::E0109),
+            "check_library should still report type errors, got: {:?}",
             result.errors
         );
     }

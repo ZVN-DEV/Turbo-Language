@@ -23,6 +23,7 @@ turbolang run examples/web-dashboard/main.tb
 | [speed-server](./speed-server/) | REST API Benchmark Server | HTTP server, JSON responses, fibonacci, primes, sorting |
 | [stateful-counter](./stateful-counter/) | Persistent Hit Counter | HTTP server, persistent in-memory state across requests (a startup hashmap survives the per-request arena), bounded memory |
 | [file-analyzer](./file-analyzer/) | Source Code Analyzer | File I/O, line parsing, statistics, progress bars |
+| [libturbo-c-host](./libturbo-c-host/) | C Host Embedding Demo | `libturbo`, JIT eval, host callbacks, typed `i64`/`str` exchange |
 
 ### web-dashboard
 
@@ -87,6 +88,10 @@ An HTTP server on port 8080 with endpoints for fibonacci, prime counting, sortin
 turbolang run examples/speed-server/main.tb
 # curl http://localhost:8080/api/fib
 ```
+
+### libturbo-c-host
+
+A C host embedding demo that registers native callbacks, evaluates Turbo source through `libturbo`, then calls Turbo functions returning `i64` and `str`. Build and run it with the commands in [`examples/libturbo-c-host/README.md`](./libturbo-c-host/README.md).
 
 ---
 
