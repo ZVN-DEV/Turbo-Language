@@ -4,7 +4,9 @@ kill_signal = "SIGTERM"
 kill_timeout = 5
 
 [build]
-  dockerfile = "website/playground-runner/Dockerfile"
+  # Relative to this config file; deploy from the repo root (`fly deploy . -c website/playground-runner/fly.toml`)
+  # so the Docker build context includes turbo/ and docs/errors/.
+  dockerfile = "Dockerfile"
 
 [env]
   PORT = "8787"

@@ -363,6 +363,17 @@ notes its source lane. Same rules apply (real tests, full green suite, no hygien
 
 ### P3 — polish (batch; do NOT spawn busywork PRs — fold opportunistically)
 
+- [ ] **BL-29 — Harvest the surviving `automation/*` branches.** _[triage done 2026-07-06]_ Of the twelve 2026-06-27
+  autonomous-agent branches, seven were verified superseded by master and deleted (local + origin). Five contain
+  genuine gaps vs current master but were authored pre-refactor, so each needs re-porting, not merging:
+  `automation/hashmap-doc-truth-20260627-0811` (sema `BUILTIN_FNS` misses `hashmap_set_int`/`hashmap_get_int` —
+  shipped builtins are unguarded against redefinition), `automation/stdlib-import-truth-20260627-1011`
+  (`STDLIB_MODULES` lacks `std/fs`/`std/system`/`std/time` + many shipped builtins, so `import std/fs { path_join }`
+  fails today), `automation/lsp-builtin-completions-20260627-1111` (LSP completions omit all builtins; needs a
+  `builtin_function_names()` sema export), `automation/fmt-directory-20260627-1411` (`turbo fmt` can't take a
+  directory; re-port onto the `turbo-formatter` crate), `automation/recursive-bench-discovery-20260627-1511`
+  (`collect_bench_files` doesn't recurse like `collect_test_files` does). Delete each branch once its gap ships.
+
 - [x] **BL-26 — Error/CLI/runtime polish cluster.** _FULLY DONE 2026-06-28 (3 rounds)._ Weak/missing `Help:` that should echo the actual signature/field
   list/missing variant (E0100/E0200/E0315); messages rename the user's type via aliases (`i64`→`int`) instead of
   echoing source spelling (E0110); import error doesn't teach `import { x } from "./m.tb"`; `explain` rejects `100`/
