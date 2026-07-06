@@ -52,7 +52,47 @@ fn register_libm_symbols(jit_builder: &mut JITBuilder) {
     jit_builder.symbol("pow", pow as *const u8);
 }
 
-fn build_jit_module() -> Result<(JITModule, cranelift::prelude::types::Type), CodegenError> {
+pub(crate) struct JitProgram {
+    module: JITModule,
+    user_fns: HashMap<String, FuncId>,
+}
+
+impl JitProgram {
+    fn finalized_function(&self, fn_name: &str) -> Result<*const u8, CodegenError> {
+        let func_id = self.user_fns.get(fn_name).ok_or_else(|| CodegenError {
+            code: ErrorCode::E0405,
+            message: format!("no function `{fn_name}` found"),
+        })?;
+        Ok(self.module.get_finalized_function(*func_id))
+    }
+
+    pub(crate) fn has_function(&self, fn_name: &str) -> bool {
+        self.user_fns.contains_key(fn_name)
+    }
+
+    pub(crate) fn call_zero_arg_void(&self, fn_name: &str) -> Result<(), CodegenError> {
+        let func_ptr = self.finalized_function(fn_name)?;
+        let func: fn() = unsafe { std::mem::transmute(func_ptr) };
+        func();
+        Ok(())
+    }
+
+    pub(crate) fn call_zero_arg_i64(&self, fn_name: &str) -> Result<i64, CodegenError> {
+        let func_ptr = self.finalized_function(fn_name)?;
+        let func: fn() -> i64 = unsafe { std::mem::transmute(func_ptr) };
+        Ok(func())
+    }
+
+    pub(crate) fn call_zero_arg_str(&self, fn_name: &str) -> Result<*const u8, CodegenError> {
+        let func_ptr = self.finalized_function(fn_name)?;
+        let func: fn() -> *const u8 = unsafe { std::mem::transmute(func_ptr) };
+        Ok(func())
+    }
+}
+
+fn build_jit_module(
+    host_symbols: &[(&str, *const u8)],
+) -> Result<(JITModule, cranelift::prelude::types::Type), CodegenError> {
     let mut flag_builder = settings::builder();
     flag_builder.set("use_colocated_libcalls", "false").unwrap();
     flag_builder.set("is_pic", "false").unwrap();
@@ -79,6 +119,9 @@ fn build_jit_module() -> Result<(JITModule, cranelift::prelude::types::Type), Co
     let ptr_type = isa.pointer_type();
     let mut jit_builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
     register_runtime_symbols(&mut jit_builder);
+    for (name, ptr) in host_symbols {
+        jit_builder.symbol(*name, *ptr);
+    }
 
     Ok((JITModule::new(jit_builder), ptr_type))
 }
@@ -232,22 +275,38 @@ fn register_runtime_symbols(jit_builder: &mut JITBuilder) {
 
 // ── Public entry points ─────────────────────────────────────────────
 
-pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
-    let (mut module, ptr_type) = build_jit_module()?;
+pub(crate) fn compile_jit_program(
+    ast_module: &turbo_ast::Module,
+    host_symbols: &[(&str, *const u8)],
+) -> Result<JitProgram, CodegenError> {
+    compile_jit_program_with_finalize_code(ast_module, host_symbols, ErrorCode::E0406)
+}
+
+fn compile_jit_program_with_finalize_code(
+    ast_module: &turbo_ast::Module,
+    host_symbols: &[(&str, *const u8)],
+    finalize_code: ErrorCode,
+) -> Result<JitProgram, CodegenError> {
+    let (mut module, ptr_type) = build_jit_module(host_symbols)?;
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
 
     module.finalize_definitions().map_err(|e| CodegenError {
-        code: ErrorCode::E0406,
+        code: finalize_code,
         message: e.to_string(),
     })?;
 
-    let main_id = user_fns.get("main").ok_or_else(|| CodegenError {
-        code: ErrorCode::E0405,
-        message: "no `main` function found".to_string(),
-    })?;
-    let main_ptr = module.get_finalized_function(*main_id);
-    let main_fn: fn() = unsafe { std::mem::transmute(main_ptr) };
-    main_fn();
+    Ok(JitProgram { module, user_fns })
+}
+
+pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
+    let program = compile_jit_program(ast_module, &[])?;
+    if !program.has_function("main") {
+        return Err(CodegenError {
+            code: ErrorCode::E0405,
+            message: "no `main` function found".to_string(),
+        });
+    }
+    program.call_zero_arg_void("main")?;
     // Free all runtime-allocated strings
     crate::runtime::rt_arena_reset();
 
@@ -258,21 +317,14 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
 /// The function is called via JIT and the process exits with the function's outcome
 /// (0 on success, 1 on assertion failure).
 pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result<(), CodegenError> {
-    let (mut module, ptr_type) = build_jit_module()?;
-    let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
-
-    module.finalize_definitions().map_err(|e| CodegenError {
-        code: ErrorCode::E0405,
-        message: e.to_string(),
-    })?;
-
-    let func_id = user_fns.get(fn_name).ok_or_else(|| CodegenError {
-        code: ErrorCode::E0405,
-        message: format!("no function `{fn_name}` found"),
-    })?;
-    let func_ptr = module.get_finalized_function(*func_id);
-    let func: fn() = unsafe { std::mem::transmute(func_ptr) };
-    func();
+    let program = compile_jit_program_with_finalize_code(ast_module, &[], ErrorCode::E0405)?;
+    if !program.has_function(fn_name) {
+        return Err(CodegenError {
+            code: ErrorCode::E0405,
+            message: format!("no function `{fn_name}` found"),
+        });
+    }
+    program.call_zero_arg_void(fn_name)?;
     // Free all runtime-allocated strings
     crate::runtime::rt_arena_reset();
 

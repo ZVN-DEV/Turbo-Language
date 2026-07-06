@@ -50,6 +50,8 @@ mod wasm_codegen;
 mod jit;
 pub use jit::{jit_run, jit_run_function};
 
+mod ffi;
+
 mod aot;
 pub use aot::{aot_compile, wasm_compile};
 
