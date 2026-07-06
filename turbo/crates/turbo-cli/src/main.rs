@@ -3654,6 +3654,7 @@ fn detailed_explanation(code: ErrorCode) -> Option<&'static str> {
         ErrorCode::E0404 => Some(include_str!("errors/E0404.md")),
         ErrorCode::E0405 => Some(include_str!("errors/E0405.md")),
         ErrorCode::E0406 => Some(include_str!("errors/E0406.md")),
+        ErrorCode::E0407 => Some(include_str!("errors/E0407.md")),
         // Misc errors (E0500-E0599)
         ErrorCode::E0501 => Some(include_str!("errors/E0501.md")),
         ErrorCode::E0502 => Some(include_str!("errors/E0502.md")),

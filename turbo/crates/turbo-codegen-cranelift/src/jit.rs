@@ -279,19 +279,11 @@ pub(crate) fn compile_jit_program(
     ast_module: &turbo_ast::Module,
     host_symbols: &[(&str, *const u8)],
 ) -> Result<JitProgram, CodegenError> {
-    compile_jit_program_with_finalize_code(ast_module, host_symbols, ErrorCode::E0406)
-}
-
-fn compile_jit_program_with_finalize_code(
-    ast_module: &turbo_ast::Module,
-    host_symbols: &[(&str, *const u8)],
-    finalize_code: ErrorCode,
-) -> Result<JitProgram, CodegenError> {
     let (mut module, ptr_type) = build_jit_module(host_symbols)?;
     let user_fns = compile_module(&mut module, ast_module, ptr_type, Linkage::Local, false)?;
 
     module.finalize_definitions().map_err(|e| CodegenError {
-        code: finalize_code,
+        code: ErrorCode::E0407,
         message: e.to_string(),
     })?;
 
@@ -317,7 +309,7 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
 /// The function is called via JIT and the process exits with the function's outcome
 /// (0 on success, 1 on assertion failure).
 pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result<(), CodegenError> {
-    let program = compile_jit_program_with_finalize_code(ast_module, &[], ErrorCode::E0405)?;
+    let program = compile_jit_program(ast_module, &[])?;
     if !program.has_function(fn_name) {
         return Err(CodegenError {
             code: ErrorCode::E0405,
