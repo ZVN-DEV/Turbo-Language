@@ -109,12 +109,13 @@ test("standalone playground runner artifacts exist and stay container-oriented",
   assert.match(dockerfile, /FROM rust:1\.88-slim AS builder/);
   assert.match(dockerfile, /COPY docs\/errors\/ \.\/docs\/errors\//);
   assert.match(dockerfile, /USER turbo/);
-  assert.match(dockerfile, /TURBO_PLAYGROUND_RUNNER_ALLOW_UNSAFE_HOST=1/);
+  assert.doesNotMatch(dockerfile, /TURBO_PLAYGROUND_RUNNER_ALLOW_UNSAFE_HOST=1/);
   assert.match(dockerfile, /HEALTHCHECK/);
   assert.match(dockerfile, /\/healthz/);
   assert.doesNotMatch(dockerfile, /\b(curl|wget)\b/);
   assert.match(flyConfig, /app = "turbolang-playground-runner"/);
   assert.match(flyConfig, /dockerfile = "website\/playground-runner\/Dockerfile"/);
+  assert.match(flyConfig, /TURBO_PLAYGROUND_RUNNER_ALLOW_UNSAFE_HOST = "1"/);
   assert.match(flyConfig, /internal_port = 8787/);
   assert.match(flyConfig, /auto_stop_machines = "off"/);
   assert.match(flyConfig, /auto_start_machines = true/);
@@ -123,10 +124,12 @@ test("standalone playground runner artifacts exist and stay container-oriented",
   assert.match(flyConfig, /memory_mb = 256/);
   assert.match(readme, /--read-only/);
   assert.match(readme, /--cap-drop=ALL/);
+  assert.match(readme, /-e TURBO_PLAYGROUND_RUNNER_ALLOW_UNSAFE_HOST=1/);
   assert.match(readme, /flyctl deploy --config website\/playground-runner\/fly\.toml/);
   assert.match(readme, /TURBO_PLAYGROUND_RUNNER_URL/);
   assert.match(ciWorkflow, /name: Playground runner image/);
   assert.match(ciWorkflow, /docker build -t turbo-playground-runner:ci -f website\/playground-runner\/Dockerfile \./);
+  assert.match(ciWorkflow, /-e TURBO_PLAYGROUND_RUNNER_ALLOW_UNSAFE_HOST=1/);
   assert.match(ciWorkflow, /npm run smoke:playground-runner/);
 });
 
@@ -610,7 +613,7 @@ test("standalone playground runner reports oversized output", async () => {
   }
 });
 
-test("standalone playground runner reports oversized combined output", async () => {
+test("standalone playground runner truncates oversized combined output", async () => {
   const { MAX_OUTPUT_BYTES, runTurboSource } = await loadRunner();
   const tmpRoot = await mkdtemp(join(tmpdir(), "turbo-runner-combined-output-test-"));
   const fakeTurbo = join(tmpRoot, "turbolang");
@@ -636,9 +639,10 @@ test("standalone playground runner reports oversized combined output", async () 
       timeoutMs: 5000,
     });
 
-    assert.equal(result.success, false);
-    assert.equal(result.stdout, "");
-    assert.match(result.stderr, /playground output exceeded 128 KiB/);
+    assert.equal(result.success, true);
+    assert.equal(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr), MAX_OUTPUT_BYTES);
+    assert.match(result.stdout, /^x+$/);
+    assert.match(result.stderr, /^y+\nnote: output truncated at 128 KiB$/);
   } finally {
     await rm(tmpRoot, { recursive: true, force: true });
   }

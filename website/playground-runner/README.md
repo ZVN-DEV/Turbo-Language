@@ -65,6 +65,7 @@ docker run --rm \
   --pids-limit=64 \
   --memory=256m \
   --cpus=1 \
+  -e TURBO_PLAYGROUND_RUNNER_ALLOW_UNSAFE_HOST=1 \
   -e TURBO_PLAYGROUND_RUNNER_TOKEN="$TOKEN" \
   -e TURBO_PLAYGROUND_RUNNER_MAX_CONCURRENT=2 \
   -p 8787:8787 \
@@ -90,9 +91,10 @@ npm run smoke:playground-runner
 The smoke probe checks `/healthz`, an authenticated safe execution, and the
 source-policy rejection for the forbidden `exec` process API.
 
-`TURBO_PLAYGROUND_RUNNER_ALLOW_UNSAFE_HOST=1` is set in the Docker image so the
-process can start inside the container. Do not set it for a public host process
-outside an isolation boundary.
+`TURBO_PLAYGROUND_RUNNER_ALLOW_UNSAFE_HOST=1` is required because the runner is
+executing inside an isolated container. Pass it explicitly for containerized
+local runs or per deployment; do not set it for a public host process outside
+an isolation boundary.
 
 `TURBO_PLAYGROUND_RUNNER_TOKEN` is required at startup. Surrounding whitespace
 is trimmed; blank tokens are treated as missing. For an isolated one-off local
@@ -141,7 +143,8 @@ Limits:
   `path_dir`, `path_base`, and `path_ext` remain allowed. The playground is for
   language exploration, not host access. Executable string interpolation is
   scanned by the same policy; literal string text is not.
-- Combined stdout/stderr capture is capped at 128 KiB by Node's `execFile`.
+- Each stdout/stderr stream is bounded by Node's `execFile`; successful
+  combined output is truncated to a 128 KiB response budget with a stderr note.
 - Execution times out after 5 seconds by default and uses `SIGKILL` for
   deterministic process termination. Set `TURBO_PLAYGROUND_RUNNER_TIMEOUT_MS`
   to a positive integer to tune this per deployment.

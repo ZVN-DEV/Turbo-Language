@@ -376,7 +376,7 @@ test("playground runner proxy validates payloads and runner responses", () => {
 
   assert.equal(MAX_PLAYGROUND_SOURCE_BYTES, 64 * 1024);
   assert.equal(MAX_PLAYGROUND_OUTPUT_BYTES, 128 * 1024);
-  assert.equal(MAX_PLAYGROUND_RUNNER_RESPONSE_BYTES, 128 * 1024 + 4096);
+  assert.equal(MAX_PLAYGROUND_RUNNER_RESPONSE_BYTES, 128 * 1024 * 6 + 4096);
   assert.deepEqual(plain(validatePlaygroundRunPayload({ source: "fn main() {}" })), {
     ok: true,
     source: "fn main() {}",
@@ -456,6 +456,21 @@ test("playground runner proxy handles configured and failed runner calls", async
     success: true,
     durationMs: 4,
   });
+
+  const escapedOutput = await proxyPlaygroundRun("fn main() { print(1) }", {
+    runnerUrl: "https://runner.example/run",
+    token: "secret",
+    fetcher: async () =>
+      runnerJsonResponse({
+        stdout: "\n".repeat(128 * 1024),
+        stderr: "",
+        success: true,
+      }),
+  });
+
+  assert.equal(escapedOutput.status, 200);
+  assert.equal(escapedOutput.result.success, true);
+  assert.equal(escapedOutput.result.stdout.length, 128 * 1024);
   assert.equal(capturedRequest.url.toString(), "https://runner.example/run");
   assert.equal(capturedRequest.init.method, "POST");
   assert.equal(capturedRequest.init.headers.get("authorization"), "Bearer secret");

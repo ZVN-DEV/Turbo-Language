@@ -244,6 +244,7 @@ jobs:
           docker run -d --rm \
             --name turbo-playground-runner-ci \
             -p 8787:8787 \
+            -e TURBO_PLAYGROUND_RUNNER_ALLOW_UNSAFE_HOST=1 \
             -e TURBO_PLAYGROUND_RUNNER_TOKEN=ci-secret \
             turbo-playground-runner:ci
           trap 'docker stop turbo-playground-runner-ci >/dev/null 2>&1 || true' EXIT

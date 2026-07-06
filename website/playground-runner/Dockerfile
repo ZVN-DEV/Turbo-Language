@@ -13,7 +13,6 @@ COPY website/playground-runner/runner.mjs /app/runner.mjs
 
 ENV NODE_ENV=production
 ENV PORT=8787
-ENV TURBO_PLAYGROUND_RUNNER_ALLOW_UNSAFE_HOST=1
 ENV TURBO_PLAYGROUND_RUNNER_BIN=/usr/local/bin/turbolang
 
 USER turbo

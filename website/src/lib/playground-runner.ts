@@ -28,7 +28,11 @@ export type PlaygroundProxyResponse = {
 export const MAX_PLAYGROUND_SOURCE_BYTES = 64 * 1024;
 export const MAX_PLAYGROUND_REQUEST_BYTES = MAX_PLAYGROUND_SOURCE_BYTES + 4096;
 export const MAX_PLAYGROUND_OUTPUT_BYTES = 128 * 1024;
-export const MAX_PLAYGROUND_RUNNER_RESPONSE_BYTES = MAX_PLAYGROUND_OUTPUT_BYTES + 4096;
+// This caps the raw JSON envelope, not the decoded stdout/stderr strings.
+// JSON can encode each output byte as a 6-byte \uNNNN escape, so reserve for
+// worst-case escaping plus a small envelope headroom.
+export const MAX_PLAYGROUND_RUNNER_RESPONSE_BYTES =
+  MAX_PLAYGROUND_OUTPUT_BYTES * 6 + 4096;
 export const PLAYGROUND_RUNNER_TIMEOUT_MS = 6000;
 
 const encoder = new TextEncoder();

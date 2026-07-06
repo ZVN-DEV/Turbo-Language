@@ -67,10 +67,10 @@ export default function CliPage() {
         >
           Turbo Playground
         </Link>{" "}
-        is the fastest way to try syntax in a browser. It uses a configured
-        sandbox runner when hosted execution is available, and otherwise gives
-        you a local run command. It does not execute arbitrary code in the
-        website process.
+        lets you try syntax in a browser without installing anything. It uses
+        a configured sandbox runner when hosted execution is available, and
+        otherwise gives you a local run command. It does not execute arbitrary code
+        in the website process.
       </p>
       <p className="mb-4">
         Without a hosted sandbox, run the trusted local playground from your

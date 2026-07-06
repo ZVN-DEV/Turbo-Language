@@ -20,6 +20,7 @@ export const SERVER_SOCKET_TIMEOUT_MS = 15000;
 
 const encoder = new TextEncoder();
 const jsonDecoder = new TextDecoder("utf-8", { fatal: true });
+const utf8Decoder = new TextDecoder("utf-8");
 const friendlySourceName = "playground.tb";
 let activeRunCount = 0;
 const forbiddenPlaygroundApis = new Map([
@@ -323,11 +324,20 @@ export async function runTurboSource(source, options = {}) {
     const durationMs = Math.max(0, Math.round(performance.now() - started));
     const stdout = sanitizeRunnerOutput(result.stdout);
     const stderr = sanitizeRunnerOutput(result.stderr);
-    if (encodedByteLength(stdout) + encodedByteLength(stderr) > MAX_OUTPUT_BYTES) {
+    if (result.outputLimitExceeded) {
       return {
         stdout: "",
         stderr: playgroundOutputLimitMessage(),
         success: false,
+        durationMs,
+      };
+    }
+
+    if (encodedByteLength(stdout) + encodedByteLength(stderr) > MAX_OUTPUT_BYTES) {
+      const truncated = truncateCombinedOutput(stdout, stderr);
+      return {
+        ...truncated,
+        success: result.success,
         durationMs,
       };
     }
@@ -358,10 +368,12 @@ function execTurbo(turboBin, sourcePath, cwd, timeoutMs) {
       },
       (error, stdout, stderr) => {
         let nextStderr = stderr ?? "";
+        let outputLimitExceeded = false;
         if (error) {
           if (error.killed || error.signal === "SIGTERM") {
             nextStderr = appendLine(nextStderr, `error: execution timed out after ${timeoutMs}ms`);
           } else if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+            outputLimitExceeded = true;
             nextStderr = appendLine(nextStderr, playgroundOutputLimitMessage());
           } else if (!nextStderr.trim()) {
             nextStderr = `error: ${error.message}`;
@@ -372,6 +384,7 @@ function execTurbo(turboBin, sourcePath, cwd, timeoutMs) {
           stdout: stdout ?? "",
           stderr: nextStderr,
           success: !error,
+          outputLimitExceeded,
         });
       }
     );
@@ -416,6 +429,34 @@ function encodedByteLength(value) {
 
 function playgroundOutputLimitMessage() {
   return "error: playground output exceeded 128 KiB";
+}
+
+function playgroundOutputTruncatedMessage() {
+  return "note: output truncated at 128 KiB";
+}
+
+function truncateCombinedOutput(stdout, stderr) {
+  const notice = playgroundOutputTruncatedMessage();
+  const stdoutBudget = Math.max(0, MAX_OUTPUT_BYTES - encodedByteLength(notice));
+  const nextStdout = truncateUtf8ToBytes(stdout, stdoutBudget);
+  const stderrBudget = Math.max(
+    0,
+    MAX_OUTPUT_BYTES - encodedByteLength(nextStdout) - encodedByteLength(notice) - 1
+  );
+  const nextStderr = appendLine(truncateUtf8ToBytes(stderr, stderrBudget), notice);
+
+  return { stdout: nextStdout, stderr: nextStderr };
+}
+
+function truncateUtf8ToBytes(value, maxBytes) {
+  const bytes = encoder.encode(value);
+  if (bytes.byteLength <= maxBytes) return value;
+
+  let truncated = utf8Decoder.decode(bytes.subarray(0, maxBytes));
+  while (encodedByteLength(truncated) > maxBytes) {
+    truncated = truncated.slice(0, -1);
+  }
+  return truncated;
 }
 
 function stripAnsi(input) {
