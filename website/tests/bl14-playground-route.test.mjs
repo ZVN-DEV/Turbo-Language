@@ -18,6 +18,13 @@ const RUNNER_UNAVAILABLE_RESPONSE = {
   status: 503,
   result: RUNNER_UNAVAILABLE_RESULT,
 };
+const PLAYGROUND_SECURITY_HEADERS = {
+  "content-security-policy":
+    "default-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+  "permissions-policy": "camera=(), microphone=(), geolocation=()",
+  "referrer-policy": "strict-origin-when-cross-origin",
+  "x-content-type-options": "nosniff",
+};
 
 function read(path) {
   return readFileSync(join(root, path), "utf8");
@@ -148,6 +155,7 @@ test("public playground smoke probe covers deployed page and execution contract"
 
     if (String(url) === "https://turbolang.dev/play") {
       return {
+        headers: new Headers(PLAYGROUND_SECURITY_HEADERS),
         ok: true,
         status: 200,
         text: async () => "<main>Turbo Playground Try Turbo in the browser</main>",
@@ -202,6 +210,27 @@ test("public playground smoke probe covers deployed page and execution contract"
       "https://turbolang.dev/api/playground/run",
       "https://turbolang.dev/api/playground/run",
     ]
+  );
+
+  await assert.rejects(
+    () =>
+      runPlaygroundSmoke({
+        fetcher: async (url, init = {}) => {
+          if (String(url) === "https://turbolang.dev/play") {
+            return {
+              headers: new Headers(),
+              ok: true,
+              status: 200,
+              text: async () =>
+                "<main>Turbo Playground Try Turbo in the browser</main>",
+            };
+          }
+
+          return fetcher(url, init);
+        },
+        siteUrl: "https://turbolang.dev",
+      }),
+    /playground page security headers/
   );
 });
 

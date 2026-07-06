@@ -7,6 +7,30 @@ import {
 } from "./playground-smoke-utils.mjs";
 
 const safeSource = 'fn main() { print("site smoke ok") }';
+const requiredPlaygroundPageHeaders = [
+  {
+    header: "content-security-policy",
+    includes: [
+      "default-src 'self'",
+      "connect-src 'self'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "frame-ancestors 'none'",
+    ],
+  },
+  {
+    header: "permissions-policy",
+    includes: ["camera=()", "microphone=()", "geolocation=()"],
+  },
+  {
+    header: "referrer-policy",
+    equals: "strict-origin-when-cross-origin",
+  },
+  {
+    header: "x-content-type-options",
+    equals: "nosniff",
+  },
+];
 
 export function playgroundPageUrl(rawSiteUrl) {
   return endpointUrl(rawSiteUrl, "/play");
@@ -35,6 +59,7 @@ export async function runPlaygroundSmoke(options = {}) {
   if (!html.includes("Turbo Playground") || !html.includes("Try Turbo in the browser")) {
     throw new Error("playground page smoke check did not find the hosted runner UI");
   }
+  assertPlaygroundPageSecurityHeaders(page);
 
   await assertSafeRun(fetcher, playgroundRunUrl(siteUrl), safeSource, "site smoke ok\n", {
     label: "playground API",
@@ -47,6 +72,35 @@ export async function runPlaygroundSmoke(options = {}) {
 
   log("public playground smoke passed");
   return { ok: true };
+}
+
+function assertPlaygroundPageSecurityHeaders(response) {
+  const missing = [];
+
+  for (const requirement of requiredPlaygroundPageHeaders) {
+    const value = response.headers?.get(requirement.header);
+    if (!value) {
+      missing.push(requirement.header);
+      continue;
+    }
+
+    if (requirement.equals && value.toLowerCase() !== requirement.equals) {
+      missing.push(`${requirement.header}=${requirement.equals}`);
+      continue;
+    }
+
+    for (const expected of requirement.includes ?? []) {
+      if (!value.includes(expected)) {
+        missing.push(`${requirement.header}:${expected}`);
+      }
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `playground page security headers smoke check failed: ${missing.join(", ")}`
+    );
+  }
 }
 
 async function readText(response, label) {
