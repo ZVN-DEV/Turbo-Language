@@ -91,8 +91,24 @@ impl Checker {
         } else if let Some(fn_ty) = self.named_fn_value_ty(name) {
             // A bare function name used as a value (not called): it becomes a
             // first-class function value with the function's signature. Only
-            // non-generic, non-async, non-FFI functions can be used this way.
+            // non-generic, non-async, non-`@unsafe`, non-FFI functions can be
+            // used this way.
             fn_ty
+        } else if let Some(sig) = self.functions.get(name).filter(|s| s.is_unsafe).cloned() {
+            // An `@unsafe` function cannot be used as a first-class value:
+            // invoking it through a value bypasses the per-call unsafe-context
+            // check, letting an unsafe call run from safe code. Reject it here
+            // regardless of context. Still yield the function's type so a
+            // subsequent call doesn't cascade into a spurious second error.
+            self.error(
+                ErrorCode::E0530,
+                format!(
+                    "cannot use `@unsafe` function `{name}` as a value — call it directly inside an `@unsafe` context"
+                ),
+                expr.span.clone(),
+            );
+            let param_tys = sig.params.iter().map(|(_, ty)| ty.clone()).collect();
+            Ty::Fn(param_tys, Box::new(sig.ret))
         } else {
             let in_scope: Vec<&str> = self
                 .scopes
@@ -109,14 +125,17 @@ impl Checker {
     }
 
     /// If `name` is a top-level user function usable as a first-class value,
-    /// return its `fn(params) -> ret` type. Generic, async, and FFI functions
-    /// are excluded (their calling convention isn't a plain uniform fat pair).
+    /// return its `fn(params) -> ret` type. Generic, async, `@unsafe`, and FFI
+    /// functions are excluded: the first three because their calling convention
+    /// isn't a plain uniform fat pair, and `@unsafe` because a value form would
+    /// let an unsafe call escape the unsafe-context check. This list must match
+    /// codegen's adapter-generation filter in `compile.rs`.
     pub(crate) fn named_fn_value_ty(&self, name: &str) -> Option<Ty> {
         if name == "main" || self.extern_fns.contains(name) {
             return None;
         }
         let sig = self.functions.get(name)?;
-        if !sig.type_params.is_empty() || sig.is_async {
+        if !sig.type_params.is_empty() || sig.is_async || sig.is_unsafe {
             return None;
         }
         let param_tys = sig.params.iter().map(|(_, ty)| ty.clone()).collect();

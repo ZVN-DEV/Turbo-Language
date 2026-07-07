@@ -2580,7 +2580,7 @@ pub(crate) fn compile_indirect_call_from_value<M: Module>(
 /// value (e.g. `let g = dbl`). A named function is compiled with a plain
 /// `(params...) -> ret` signature, but every function value must be callable
 /// through the uniform env-first closure ABI. We therefore point the value's
-/// `fn_ptr` at the function's env-first adapter (`__fnval_<name>`, generated in
+/// `fn_ptr` at the function's env-first adapter (`__fnval$<name>`, generated in
 /// `compile.rs`), which ignores the env pointer and forwards to the real
 /// function. The env pointer is null. Returns `Ok(None)` when `name` is not an
 /// adaptable user function.
@@ -2588,7 +2588,7 @@ fn compile_named_fn_value<M: Module>(
     cx: &mut Ctx<'_, M>,
     name: &str,
 ) -> Result<Option<MaybeTyped>, CodegenError> {
-    let adapter_name = format!("__fnval_{name}");
+    let adapter_name = format!("__fnval${name}");
     let Some(&adapter_fid) = cx.user_fns.get(&adapter_name) else {
         return Ok(None);
     };

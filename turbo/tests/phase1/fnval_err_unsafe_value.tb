@@ -1,0 +1,6 @@
+@unsafe fn dangerous(x: i64) -> i64 { x + 1 }
+
+fn main() {
+    let f = dangerous
+    print(f(42))
+}

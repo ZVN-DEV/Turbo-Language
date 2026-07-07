@@ -1352,13 +1352,15 @@ pub(crate) fn compile_module<M: Module>(
     // A named function is compiled with a plain `(params...) -> ret` signature,
     // but every function value must be callable through the uniform env-first
     // closure ABI (`(env_ptr, params...) -> ret`, `CallConv::Fast`). For each
-    // eligible top-level function we declare an adapter `__fnval_<name>` that
+    // eligible top-level function we declare an adapter `__fnval$<name>` that
     // takes (and ignores) a leading env pointer and forwards to the real
     // function. `Expr::Ident(name)` in value position then produces the pair
-    // `[addr(__fnval_<name>), null]`. Generation is eager (one thin adapter per
+    // `[addr(__fnval$<name>), null]`. Generation is eager (one thin adapter per
     // eligible function) — simple and robust; unused adapters are dead code.
     // Eligibility must match turbo-sema's `named_fn_value_ty`: non-`main`,
-    // non-generic, non-async, non-FFI.
+    // non-generic, non-async, non-`@unsafe`, non-FFI. `@unsafe` functions are
+    // excluded so an unsafe call can't escape the unsafe-context check by
+    // hiding behind a value (turbo-sema rejects the value form with E0530).
     let fnval_adapter_targets: Vec<&FnDef> = ast_module
         .items
         .iter()
@@ -1367,6 +1369,7 @@ pub(crate) fn compile_module<M: Module>(
                 if f.name != "main"
                     && f.type_param_names().is_empty()
                     && !f.is_async
+                    && !f.is_unsafe
                     && !extern_fn_names.contains(&f.name) =>
             {
                 Some(f)
@@ -1376,7 +1379,7 @@ pub(crate) fn compile_module<M: Module>(
         .collect();
 
     for f in &fnval_adapter_targets {
-        let adapter_name = format!("__fnval_{}", f.name);
+        let adapter_name = format!("__fnval${}", f.name);
         let mut sig = module.make_signature();
         sig.call_conv = CallConv::Fast;
         sig.params.push(AbiParam::new(ptr_type)); // hidden env pointer (ignored)
@@ -2234,7 +2237,7 @@ pub(crate) fn compile_module<M: Module>(
     // adapter drops its leading env pointer and directly calls the real
     // function with the remaining arguments, returning its result unchanged.
     for f in &fnval_adapter_targets {
-        let adapter_name = format!("__fnval_{}", f.name);
+        let adapter_name = format!("__fnval${}", f.name);
         let adapter_fid = user_fns[&adapter_name];
         let target_fid = user_fns[&f.name];
 
