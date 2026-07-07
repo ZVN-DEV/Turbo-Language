@@ -1328,6 +1328,7 @@ dependencies = [
 name = "turbo-formatter"
 version = "0.10.2"
 dependencies = [
+ "proptest",
  "turbo-ast",
  "turbo-lexer",
  "turbo-parser",
