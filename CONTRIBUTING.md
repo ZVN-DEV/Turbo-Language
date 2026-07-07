@@ -20,7 +20,7 @@ cd Turbo-Language
 cargo build --manifest-path turbo/Cargo.toml
 
 # Run all unit tests
-cargo test --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+cargo test --workspace --manifest-path turbo/Cargo.toml
 
 # Run a source file to sanity-check
 cargo run --manifest-path turbo/Cargo.toml -- run turbo/tests/phase1/hello.tb
@@ -62,7 +62,7 @@ cargo fmt --all --manifest-path turbo/Cargo.toml
 cargo clippy --all --manifest-path turbo/Cargo.toml -- -D warnings
 
 # Unit tests
-cargo test --workspace --exclude turbo-codegen-llvm --manifest-path turbo/Cargo.toml
+cargo test --workspace --manifest-path turbo/Cargo.toml
 
 # Integration tests (requires release build)
 cargo build --release -p turbo-cli --manifest-path turbo/Cargo.toml

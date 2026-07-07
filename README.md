@@ -36,6 +36,8 @@ turbolang --version
 command -v turbo-lsp
 ```
 
+> **Prerequisite:** `turbolang build` (AOT) links the C runtime, so it needs a C compiler (`cc`) on your `PATH` — Xcode Command Line Tools on macOS, `gcc`/`clang` on Linux. `turbolang run` (JIT) has no such requirement.
+
 ### Hello, World
 
 ```turbo
