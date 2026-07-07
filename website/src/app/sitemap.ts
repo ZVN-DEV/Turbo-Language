@@ -28,7 +28,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     .map((entry) => `/docs/${entry.name}`)
     .sort();
 
-  const routes = ["/", "/play", "/docs", ...docsRoutes];
+  const routes = ["/", "/play", "/packages", "/docs", ...docsRoutes];
 
   return routes.map((route) => ({
     url: `${SITE_URL}${route === "/" ? "" : route}`,

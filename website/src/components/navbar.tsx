@@ -33,6 +33,12 @@ export default function Navbar() {
           >
             Examples
           </Link>
+          <Link
+            href="/packages"
+            className="text-sm text-gray-400 hover:text-white transition-colors font-[family-name:var(--font-geist-sans)]"
+          >
+            Packages
+          </Link>
           <a
             href="https://github.com/ZVN-DEV/Turbo-Language"
             target="_blank"

@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "_comment": "Canonical Turbo package index. This is a STATIC, git-versioned, curated registry — there is no dynamic registry service and no auth. Publishing a package is a pull request that appends one object to `packages` below. Each object: { \"name\" (unique, matches the turbo_modules dir name), \"repo\" (\"owner/name\" on GitHub), \"description\", \"categories\" (array of lowercase tags), optional \"min_turbo_version\" (semver the package needs), optional \"homepage\" (URL). The array is intentionally empty: no first-party Turbo package is cleanly installable as a registry entry yet, and listing a package before it resolves as a real turbo_modules dependency would be dishonest. See docs/packages.md for the full schema and publishing flow.",
+  "packages": []
+}

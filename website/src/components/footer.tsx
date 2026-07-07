@@ -108,6 +108,14 @@ export default function Footer() {
             </h3>
             <ul className="space-y-2">
               <li>
+                <Link
+                  href="/packages"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
+                >
+                  Packages
+                </Link>
+              </li>
+              <li>
                 <a
                   href="https://github.com/ZVN-DEV/turbo-vscode"
                   target="_blank"

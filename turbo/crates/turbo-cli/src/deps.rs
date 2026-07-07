@@ -148,14 +148,35 @@ pub(crate) fn default_registry_repo(name: &str) -> Option<String> {
     }
 }
 
-pub(crate) fn resolve_registry_repo(
+/// Resolve a bare package name to its `owner/repo`, consulting sources in
+/// precedence order:
+///   1. an explicit `[registries]` mapping in `turbo.toml` (project override),
+///   2. the fetched registry index (`name` -> `repo`),
+///   3. the `turbo-*` -> `ZVN-DEV/{name}` built-in default.
+pub(crate) fn resolve_registry_repo_with_index(
     name: &str,
     registries: &HashMap<String, String>,
+    index: Option<&crate::registry::RegistryIndex>,
 ) -> Option<String> {
-    registries
-        .get(name)
-        .cloned()
-        .or_else(|| default_registry_repo(name))
+    if let Some(repo) = registries.get(name).cloned() {
+        return Some(repo);
+    }
+    if let Some(index) = index {
+        if let Some(repo) = crate::registry::resolve_repo_from_index(name, index) {
+            return Some(repo);
+        }
+    }
+    default_registry_repo(name)
+}
+
+/// Whether any `version`-style dependency needs the registry index to resolve —
+/// i.e. it has no explicit `[registries]` entry. When false, `install`/`update`
+/// skip the network fetch entirely.
+fn needs_registry_index(deps: &[DependencySpec], registries: &HashMap<String, String>) -> bool {
+    deps.iter().any(|dep| {
+        matches!(dep.source, DependencySource::Version { .. })
+            && !registries.contains_key(&dep.name)
+    })
 }
 
 pub(crate) fn validate_dependency_name(name: &str) -> Result<(), String> {
@@ -480,6 +501,16 @@ pub(crate) fn install_deps() {
     let deps = parse_dependencies_from_manifest(&toml);
     validate_manifest_dependency_names(&deps);
     let registries = parse_registry_map(&toml);
+    // Consult the published registry index for `name -> repo` mappings, but only
+    // when a bare `version` dependency lacks an explicit `[registries]` entry.
+    // A registry outage degrades to the `turbo-*` default rather than aborting.
+    // (Not cached to disk: the CLI has no cache dir today, and the index is
+    // fetched at most once per command regardless of dependency count.)
+    let index = if needs_registry_index(&deps, &registries) {
+        crate::registry::load_index_quietly()
+    } else {
+        None
+    };
     let mut lockfile = read_lockfile();
     let mut count = 0u32;
     let mut unsupported = Vec::new();
@@ -650,7 +681,9 @@ pub(crate) fn install_deps() {
                 }
             }
             DependencySource::Version { version } => {
-                let Some(repo) = resolve_registry_repo(&dep.name, &registries) else {
+                let Some(repo) =
+                    resolve_registry_repo_with_index(&dep.name, &registries, index.as_ref())
+                else {
                     eprintln!(
                         "  \x1b[31m\u{2717}\x1b[0m No registry mapping found for {} {}",
                         dep.name, version
@@ -758,6 +791,11 @@ pub(crate) fn update_deps() {
     let deps = parse_dependencies_from_manifest(&toml);
     validate_manifest_dependency_names(&deps);
     let registries = parse_registry_map(&toml);
+    let index = if needs_registry_index(&deps, &registries) {
+        crate::registry::load_index_quietly()
+    } else {
+        None
+    };
     let mut lockfile = read_lockfile();
     let mut count = 0u32;
     let mut unsupported = Vec::new();
@@ -863,7 +901,9 @@ pub(crate) fn update_deps() {
                 }
             }
             DependencySource::Version { version } => {
-                let Some(repo) = resolve_registry_repo(&dep.name, &registries) else {
+                let Some(repo) =
+                    resolve_registry_repo_with_index(&dep.name, &registries, index.as_ref())
+                else {
                     eprintln!(
                         "  \x1b[31m\u{2717}\x1b[0m No registry mapping found for {} {}",
                         dep.name, version
@@ -957,6 +997,75 @@ turbo-test-utils = { github = "ZVN-DEV/turbo-test-utils" }
             registries.get("turbo-test-utils").map(String::as_str),
             Some("ZVN-DEV/turbo-test-utils")
         );
+    }
+
+    fn index_with(name: &str, repo: &str) -> crate::registry::RegistryIndex {
+        crate::registry::parse_registry_index(&format!(
+            r#"{{ "schema_version": 1, "packages": [ {{ "name": "{name}", "repo": "{repo}", "description": "d" }} ] }}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn resolve_prefers_explicit_registry_over_index_and_default() {
+        let mut registries = HashMap::new();
+        registries.insert("turbo-db".to_string(), "explicit/turbo-db".to_string());
+        let index = index_with("turbo-db", "indexed/turbo-db");
+        assert_eq!(
+            resolve_registry_repo_with_index("turbo-db", &registries, Some(&index)).as_deref(),
+            Some("explicit/turbo-db")
+        );
+    }
+
+    #[test]
+    fn resolve_uses_index_when_no_explicit_mapping() {
+        let registries = HashMap::new();
+        // A name that would NOT match the `turbo-*` default, proving the index
+        // is what resolved it.
+        let index = index_with("cool-lib", "someone/cool-lib");
+        assert_eq!(
+            resolve_registry_repo_with_index("cool-lib", &registries, Some(&index)).as_deref(),
+            Some("someone/cool-lib")
+        );
+    }
+
+    #[test]
+    fn resolve_falls_back_to_turbo_default_without_index() {
+        let registries = HashMap::new();
+        assert_eq!(
+            resolve_registry_repo_with_index("turbo-http", &registries, None).as_deref(),
+            Some("ZVN-DEV/turbo-http")
+        );
+        // A non-`turbo-*` name with no mapping and no index resolves to nothing.
+        assert_eq!(
+            resolve_registry_repo_with_index("cool-lib", &registries, None),
+            None
+        );
+    }
+
+    #[test]
+    fn needs_index_only_for_unmapped_version_deps() {
+        let deps = parse_dependencies_from_manifest(
+            r#"
+[dependencies]
+turbo-db = "0.1"
+"#,
+        );
+        let empty = HashMap::new();
+        assert!(needs_registry_index(&deps, &empty));
+
+        let mut mapped = HashMap::new();
+        mapped.insert("turbo-db".to_string(), "ZVN-DEV/turbo-db".to_string());
+        assert!(!needs_registry_index(&deps, &mapped));
+
+        // Path/GitHub deps never need the index.
+        let path_deps = parse_dependencies_from_manifest(
+            r#"
+[dependencies]
+local = { path = "../local" }
+"#,
+        );
+        assert!(!needs_registry_index(&path_deps, &empty));
     }
 
     #[test]
