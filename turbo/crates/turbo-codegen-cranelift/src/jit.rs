@@ -243,6 +243,7 @@ fn register_runtime_symbols(jit_builder: &mut JITBuilder) {
     jit_builder.symbol("rt_http_server_public", rt_http_server_public as *const u8);
     jit_builder.symbol("rt_http_route", rt_http_route as *const u8);
     jit_builder.symbol("rt_http_listen", rt_http_listen as *const u8);
+    jit_builder.symbol("rt_http_config", rt_http_config as *const u8);
     jit_builder.symbol("rt_respond", rt_respond as *const u8);
     jit_builder.symbol("rt_respond_typed", rt_respond_typed as *const u8);
     jit_builder.symbol("rt_request_body", rt_request_body as *const u8);

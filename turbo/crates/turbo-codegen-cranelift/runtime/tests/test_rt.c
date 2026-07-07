@@ -66,6 +66,11 @@ extern const char *rt_hashmap_get(const void *map, const char *key);
 extern void *rt_hashmap_set_int(void *map, const char *key, long long value);
 extern long long rt_hashmap_get_int(const void *map, const char *key);
 extern long long rt_hashmap_inc(void *map, const char *key, long long delta);
+extern int rt_write_all(int fd, const char *buf, size_t len);
+extern long long rt_http_config(const char *key, long long value);
+extern void *rt_spawn_with_args(long long (*thunk)(void *), void *args_ptr,
+                                long long ptr_mask, long long num_args);
+extern long long rt_await_handle(void *handle_ptr);
 
 static int g_failures = 0;
 
@@ -806,6 +811,105 @@ static void test_heap_arc_release_during_active_arena_decrements(void) {
     check("test_heap_arc_release_during_active_arena_decrements", ok);
 }
 
+/* ── 38: rt_write_all completes a small write and reports EPIPE ─────────
+ *
+ * Guards the partial-write robustness on the response path. A small write to
+ * a pipe with a live reader must fully succeed (returns 0) and deliver the
+ * exact bytes. A write to a pipe whose read end is closed must return -1
+ * (EPIPE) rather than blocking or crashing — the server uses this to tear a
+ * dead connection down instead of looping on a broken socket. */
+static void test_write_all_partial_and_epipe(void) {
+    int ok = 1;
+
+    int fds[2];
+    if (pipe(fds) != 0) {
+        check("test_write_all_partial_and_epipe pipe", 0);
+        return;
+    }
+    const char *msg = "hello world";
+    int r1 = rt_write_all(fds[1], msg, strlen(msg));
+    char buf[32] = {0};
+    ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
+    ok = ok && r1 == 0 && n == (ssize_t)strlen(msg) && strcmp(buf, msg) == 0;
+    close(fds[0]);
+    close(fds[1]);
+
+    /* EPIPE path: close the read end, then write. SIGPIPE must be ignored so
+     * the write returns -1 (EPIPE) instead of killing the process. */
+    signal(SIGPIPE, SIG_IGN);
+    int fds2[2];
+    if (pipe(fds2) != 0) {
+        check("test_write_all_partial_and_epipe pipe2", 0);
+        return;
+    }
+    close(fds2[0]);
+    int r2 = rt_write_all(fds2[1], msg, strlen(msg));
+    ok = ok && r2 == -1;
+    close(fds2[1]);
+
+    check("test_write_all_partial_and_epipe", ok);
+}
+
+/* Spawn thunk that reads the string argument at slot 1 and returns a simple
+ * additive checksum of its bytes, so the caller can verify the bytes are
+ * intact after the request arena has been torn down. */
+static long long spawn_read_str_thunk(void *args_ptr) {
+    long long *slots = (long long *)args_ptr;
+    const char *s = (const char *)(size_t)slots[1];
+    if (!s) return -1;
+    long long sum = 0;
+    for (const char *p = s; *p; p++) sum += (unsigned char)*p;
+    return sum;
+}
+
+/* ── 39: rt_spawn_with_args deep-copies arena-backed string args (issue #56) ─
+ *
+ * Reproduces the dangling-pointer hazard: build a request-arena string and a
+ * spawn args struct (both RT_RC_ARENA), spawn a thread that reads the string,
+ * then end the arena BEFORE joining. The fix deep-copies the string (and the
+ * args struct) into malloc'd storage synchronously inside rt_spawn_with_args,
+ * so the thread reads intact bytes. Without the fix the thread would read
+ * freed arena memory — an ASan use-after-free / wrong checksum. */
+static void test_spawn_copies_arena_string(void) {
+    rt_arena_begin();
+    const char *s = rt_str_concat("request-", "payload"); /* RT_RC_ARENA string */
+    long long expected = 0;
+    for (const char *p = s; *p; p++) expected += (unsigned char)*p;
+
+    void *args = rt_struct_alloc(2); /* [fn_ptr, str] — arena-backed */
+    ((long long *)args)[0] = (long long)(size_t)spawn_read_str_thunk;
+    ((long long *)args)[1] = (long long)(size_t)s;
+
+    /* ptr_mask bit 0 marks arg slot 0 as a string; num_args = 1. */
+    void *h = rt_spawn_with_args(spawn_read_str_thunk, args, 1, 1);
+
+    /* Tear down the request arena — the deep-copy already happened
+     * synchronously inside rt_spawn_with_args, so the thread is safe. */
+    rt_arena_end();
+
+    long long got = rt_await_handle(h);
+    check("test_spawn_copies_arena_string reads intact string after arena end",
+          got == expected);
+}
+
+/* ── 40: rt_http_config validates keys and values ───────────────────────── */
+static void test_http_config_validation(void) {
+    int ok = 1;
+    ok = ok && rt_http_config("max_body_bytes", 1024) == 1;
+    ok = ok && rt_http_config("bogus_key", 5) == 0;         /* unknown key */
+    ok = ok && rt_http_config("max_body_bytes", 0) == 0;    /* value < 1 */
+    ok = ok && rt_http_config("max_body_bytes", -1) == 0;   /* negative */
+    ok = ok && rt_http_config(NULL, 5) == 0;                /* null key */
+    ok = ok && rt_http_config("max_header_bytes", 100) == 0; /* below 256 min */
+    ok = ok && rt_http_config("max_header_bytes", 8192) == 1;
+    ok = ok && rt_http_config("max_connections", 128) == 1;
+    ok = ok && rt_http_config("read_timeout_ms", 5000) == 1;
+    ok = ok && rt_http_config("write_timeout_ms", 5000) == 1;
+    ok = ok && rt_http_config("keepalive_max_requests", 50) == 1;
+    ok = ok && rt_http_config("idle_timeout_ms", 3000) == 1;
+    check("test_http_config_validation accepts valid, rejects bad", ok);
+}
+
 int main(void) {
     printf("== turbo_rt C runtime tests ==\n");
 
@@ -847,6 +951,9 @@ int main(void) {
     test_string_arc_array_struct_slots();
     test_arena_arc_sentinel_noop_in_window();
     test_heap_arc_release_during_active_arena_decrements();
+    test_write_all_partial_and_epipe();
+    test_spawn_copies_arena_string();
+    test_http_config_validation();
 
     if (g_failures == 0) {
         printf("\nAll tests passed.\n");

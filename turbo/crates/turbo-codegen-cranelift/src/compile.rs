@@ -493,7 +493,8 @@ pub(crate) fn compile_module<M: Module>(
         module,
         &mut rt_fns,
         "rt_spawn_with_args",
-        &[ptr_type, ptr_type],
+        // (thunk_ptr, args_struct_ptr, ptr_mask, num_args) -> handle_ptr
+        &[ptr_type, ptr_type, types::I64, types::I64],
         Some(ptr_type),
     )?;
     declare_rt_fn(
@@ -618,6 +619,13 @@ pub(crate) fn compile_module<M: Module>(
         None,
     )?;
     declare_rt_fn(module, &mut rt_fns, "rt_http_listen", &[types::I64], None)?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_http_config",
+        &[ptr_type, types::I64],
+        Some(types::I64),
+    )?;
     declare_rt_fn(
         module,
         &mut rt_fns,

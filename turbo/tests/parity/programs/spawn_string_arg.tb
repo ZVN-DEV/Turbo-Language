@@ -1,0 +1,14 @@
+// Parity: spawning a function with a string argument agrees across JIT and
+// AOT. This exercises the rt_spawn_with_args pointer-mask ABI (the string arg
+// is flagged for the arena-escape deep-copy). The spawned function reads the
+// string and returns its length; awaiting yields the same value on both
+// backends.
+async fn namelen(name: str) -> i64 {
+    len(name)
+}
+
+async fn main() {
+    let h = spawn namelen("turbolang")
+    print(await h)   // 9
+    print("done")
+}

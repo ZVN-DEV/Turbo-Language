@@ -1,0 +1,39 @@
+// http_config tunables: a bad key returns 0, a valid key returns 1, and a
+// tiny max_body_bytes cap makes the server reject an oversized POST with 413
+// while still serving a small one. Exercises the full http_config pipeline
+// (builtin -> runtime) plus the 413 payload-too-large path.
+
+fn serve(app: i64) {
+    http_listen(app)
+}
+
+// shell_exec word-splits its command without honouring shell quotes, so the
+// POST bodies below must contain no spaces.
+@unsafe fn curl_post_headers(url: str, body: str) -> str {
+    shell_exec("curl -sS -X POST -d " + body + " -D - -o /dev/null " + url)
+}
+
+@unsafe fn main() {
+    // Unknown key -> 0 (runtime error printed to stderr, no panic).
+    assert(http_config("definitely_not_a_key", 5) == 0)
+    // Valid key -> 1. Cap the body at 8 bytes.
+    assert(http_config("max_body_bytes", 8) == 1)
+
+    let app = http_server(18083)
+    route(app, "POST", "/echo", |req: str| -> str {
+        respond_text(200, request_body(req))
+    })
+
+    spawn serve(app)
+    let _ = shell_exec("sleep 0.2")
+
+    // A 2-byte body is within the 8-byte cap -> 200.
+    let small = curl_post_headers("http://127.0.0.1:18083/echo", "hi")
+    assert(contains(small, "200"))
+
+    // A 16-byte body exceeds the cap -> 413 Payload Too Large.
+    let big = curl_post_headers("http://127.0.0.1:18083/echo", "abcdefghijklmnop")
+    assert(contains(big, "413"))
+
+    print("config knobs ok")
+}

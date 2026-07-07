@@ -57,7 +57,7 @@ turbolang build hello.tb      # AOT — produce a native binary
 
 > **Note — runtime string allocation:** Strings, arrays, structs, results, and optionals use the runtime ARC header and are released at scope exit, reassignment, and typed container drops. HTTP servers still use per-request arenas for request-scoped allocations, so handler temporaries are reclaimed in bulk at the end of each request while server state held in hashmaps persists correctly across requests.
 >
-> **Warning — HTTP server is experimental:** The built-in HTTP server binds to `127.0.0.1` by default and is not hardened for direct exposure to untrusted networks. Put it behind a reverse proxy (nginx, Caddy) in production. See [`SECURITY.md`](SECURITY.md) for the full threat model.
+> **Note — HTTP server is behind-proxy production-grade:** The built-in HTTP server binds to `127.0.0.1` by default, enforces body/header/connection caps and read/write/idle timeouts, does graceful shutdown on `SIGTERM`/`SIGINT`, and exposes tunables via `http_config`. It provides no TLS/HTTP2 — put it behind a reverse proxy (nginx, Caddy) for public exposure. See [`docs/production-server.md`](docs/production-server.md) for deployment and [`SECURITY.md`](SECURITY.md) for the threat model.
 
 > **Roadmap note — agent/tool features live in a sidecar, not the compiler.** Earlier design sketches explored `agent` and `tool fn` keywords. Those are no longer planned as core-language features — they'll ship (post-1.0) as a separate `turbo-agent` library that builds on Turbo's async, HTTP, and typed-serialization primitives. The compiler itself stays focused on being a fast, small, general-purpose systems/application language. Today's release ships native compilation, WASM output, async primitives, HTTP building blocks, REPL/playground, formatter, and LSP.
 
@@ -217,6 +217,12 @@ fn main() {
     http_listen(app)
 }
 ```
+
+The server is thread-per-connection and meant to run behind a reverse proxy
+(nginx/Caddy) for TLS, HTTP/2, and public exposure. It supports graceful
+shutdown (`SIGTERM`/`SIGINT`) and tunable limits (body/header size, connection
+cap, timeouts, keep-alive) via `http_config(key, value)`. See
+[`docs/production-server.md`](docs/production-server.md) for deployment.
 
 ### C FFI
 

@@ -93,6 +93,7 @@ pub(crate) const BUILTIN_FNS: &[&str] = &[
     "http_server_public",
     "route",
     "http_listen",
+    "http_config",
     "respond",
     "respond_text",
     "respond_html",

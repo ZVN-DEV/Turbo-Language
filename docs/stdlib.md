@@ -776,7 +776,30 @@ route(app, "GET", "/", |req: str| -> str { respond_text(200, "ok") })
 http_listen(app)
 ```
 
-Starts the HTTP server and begins accepting connections. This call blocks until the server is stopped.
+Starts the HTTP server and begins accepting connections. This call blocks until the server is stopped. On `SIGTERM`/`SIGINT` the server stops accepting new connections, drains in-flight requests (up to a 10 s deadline), and exits `0`.
+
+### http_config
+
+```turbo
+http_config("max_body_bytes", 1048576)   // 1 MiB body cap
+http_config("read_timeout_ms", 5000)
+let app = http_server(8080)
+http_listen(app)
+```
+
+Sets an HTTP server tunable. **Must be called before `http_listen`.** Returns `1` on success, or `0` for an unknown key or an invalid value (a runtime error is printed to stderr; the program does not panic). Keys and defaults:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `max_body_bytes` | 33554432 (32 MiB) | Max request body; over-cap → `413` |
+| `max_header_bytes` | 16384 (16 KiB) | Max total request headers; over-cap → `431` (range 256 … 16 MiB) |
+| `max_connections` | 256 | Max concurrent connections; over-cap → `503` |
+| `read_timeout_ms` | 10000 | Socket read timeout while reading a request |
+| `write_timeout_ms` | 10000 | Socket write timeout (closes slow-write clients) |
+| `keepalive_max_requests` | 1000 | Requests served per keep-alive connection before close |
+| `idle_timeout_ms` | 10000 | Wait for the next request on an idle keep-alive connection |
+
+All values must be `>= 1`. See [`docs/production-server.md`](production-server.md) for deployment guidance.
 
 ### respond
 
@@ -1031,7 +1054,7 @@ Writes a 64-bit integer value to the given memory address.
 | **HashMap** | `hashmap`, `hashmap_set`, `hashmap_get`, `hashmap_set_int`, `hashmap_get_int`, `hashmap_inc`, `hashmap_has`, `hashmap_len`, `hashmap_keys`, `hashmap_remove` |
 | **JSON** | `json_get`, `json_stringify`, `to_json`, `to_json_array` |
 | **HTTP Client** | `http_get`, `http_post`, `http_post_with_headers` |
-| **HTTP Server** | `http_server`, `http_server_public`, `route`, `http_listen`, `respond_text`, `respond_html`, `respond_json`, `request_body`, `request_method`, `request_path`, `request_query`, `request_header` |
+| **HTTP Server** | `http_server`, `http_server_public`, `http_config`, `route`, `http_listen`, `respond_text`, `respond_html`, `respond_json`, `request_body`, `request_method`, `request_path`, `request_query`, `request_header` |
 | **System** | `exec`, `env_get`, `exit`, `type_of` |
 | **Filesystem** | `file_exists`, `mkdir`, `delete_file`, `list_dir`, `path_join` |
 | **Date / Time** | `time_now`, `time_ms`, `format_time` |

@@ -208,6 +208,29 @@ pub(crate) fn compile_builtin_route<M: Module>(
     Ok(None)
 }
 
+/// http_config(key, value) -> i64 — set an HTTP server tunable before listen.
+/// Returns 1 on success, 0 on unknown key or bad value.
+pub(crate) fn compile_builtin_http_config<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (key_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+        code: ErrorCode::E0400,
+        message: "compile_builtin_http_config: `&args[0]` produced no value during code generation"
+            .to_string(),
+    })?;
+    let (value_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+        code: ErrorCode::E0400,
+        message: "compile_builtin_http_config: `&args[1]` produced no value during code generation"
+            .to_string(),
+    })?;
+    let fid = cx.rt_fns["rt_http_config"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[key_val, value_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Int)))
+}
+
 /// http_listen(server_id) -> () — starts the server, blocks forever
 pub(crate) fn compile_builtin_http_listen<M: Module>(
     cx: &mut Ctx<'_, M>,

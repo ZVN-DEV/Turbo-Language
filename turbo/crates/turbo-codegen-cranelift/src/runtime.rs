@@ -2118,12 +2118,101 @@ unsafe impl Send for HttpServer {}
 pub(crate) static HTTP_SERVERS: Mutex<Vec<HttpServer>> = Mutex::new(Vec::new());
 const RT_HTTP_MAX_SERVERS: usize = 16;
 const RT_HTTP_MAX_ROUTES: usize = 64;
-const RT_HTTP_MAX_ACTIVE_CONNECTIONS: usize = 256;
 /// Maximum bytes for a single HTTP header line.
 const RT_HTTP_MAX_HEADER_LINE: usize = 8192;
-/// Maximum total bytes for all HTTP headers combined.
-const RT_HTTP_MAX_HEADERS_TOTAL: usize = 65536;
 const RT_RESPONSE_SEP: char = '\u{1f}';
+
+// ── HTTP server tunables (http_config) ──────────────────────────────────
+//
+// JIT twin of the C runtime's `g_http_config` (turbo_rt.c). Set at startup via
+// `http_config(key, value)` before `http_listen`; read by the accept loop and
+// per-connection handlers once listening. Stored as atomics since worker
+// threads read them concurrently, though there is no writer after listen
+// begins. Keep the keys, defaults, and validation in lockstep with the C side.
+use std::sync::atomic::AtomicI64;
+static HTTP_CFG_MAX_BODY: AtomicI64 = AtomicI64::new(RT_HTTP_MAX_BODY as i64);
+static HTTP_CFG_MAX_HEADER: AtomicI64 = AtomicI64::new(16 * 1024);
+static HTTP_CFG_MAX_CONN: AtomicI64 = AtomicI64::new(256);
+static HTTP_CFG_READ_TIMEOUT_MS: AtomicI64 = AtomicI64::new(10000);
+static HTTP_CFG_WRITE_TIMEOUT_MS: AtomicI64 = AtomicI64::new(10000);
+static HTTP_CFG_KEEPALIVE_MAX: AtomicI64 = AtomicI64::new(1000);
+static HTTP_CFG_IDLE_TIMEOUT_MS: AtomicI64 = AtomicI64::new(10000);
+
+/// Graceful-shutdown flag, set from the SIGTERM/SIGINT handler installed in
+/// `rt_http_listen`.
+static HTTP_SHUTDOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+const RT_HTTP_CFG_MAX_HEADER_LIMIT: i64 = 16 * 1024 * 1024;
+const RT_HTTP_CFG_MAX_CONN_LIMIT: i64 = 1_000_000;
+const RT_HTTP_CFG_MIN_HEADER: i64 = 256;
+
+/// `http_config(key, value)` -> 1 on success, 0 on unknown key or bad value.
+/// Must be called before `http_listen`. Twin of C `rt_http_config`.
+pub(crate) extern "C" fn rt_http_config(key: *const u8, value: i64) -> i64 {
+    if key.is_null() {
+        eprintln!("runtime error: http_config: null key");
+        return 0;
+    }
+    let key_str = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    if value < 1 {
+        eprintln!(
+            "runtime error: http_config: '{}' must be >= 1 (got {})",
+            key_str, value
+        );
+        return 0;
+    }
+    use std::sync::atomic::Ordering;
+    match key_str {
+        "max_body_bytes" => {
+            HTTP_CFG_MAX_BODY.store(value, Ordering::Relaxed);
+            1
+        }
+        "max_header_bytes" => {
+            if !(RT_HTTP_CFG_MIN_HEADER..=RT_HTTP_CFG_MAX_HEADER_LIMIT).contains(&value) {
+                eprintln!(
+                    "runtime error: http_config: 'max_header_bytes' must be in [{}, {}] (got {})",
+                    RT_HTTP_CFG_MIN_HEADER, RT_HTTP_CFG_MAX_HEADER_LIMIT, value
+                );
+                return 0;
+            }
+            HTTP_CFG_MAX_HEADER.store(value, Ordering::Relaxed);
+            1
+        }
+        "max_connections" => {
+            if value > RT_HTTP_CFG_MAX_CONN_LIMIT {
+                eprintln!(
+                    "runtime error: http_config: 'max_connections' must be <= {} (got {})",
+                    RT_HTTP_CFG_MAX_CONN_LIMIT, value
+                );
+                return 0;
+            }
+            HTTP_CFG_MAX_CONN.store(value, Ordering::Relaxed);
+            1
+        }
+        "read_timeout_ms" => {
+            HTTP_CFG_READ_TIMEOUT_MS.store(value, Ordering::Relaxed);
+            1
+        }
+        "write_timeout_ms" => {
+            HTTP_CFG_WRITE_TIMEOUT_MS.store(value, Ordering::Relaxed);
+            1
+        }
+        "keepalive_max_requests" => {
+            HTTP_CFG_KEEPALIVE_MAX.store(value, Ordering::Relaxed);
+            1
+        }
+        "idle_timeout_ms" => {
+            HTTP_CFG_IDLE_TIMEOUT_MS.store(value, Ordering::Relaxed);
+            1
+        }
+        _ => {
+            eprintln!("runtime error: http_config: unknown key '{}'", key_str);
+            0
+        }
+    }
+}
 
 /// Create a new HTTP server bound to localhost. Returns a server id (index).
 pub(crate) extern "C" fn rt_http_server(port: i64) -> i64 {
@@ -2250,16 +2339,39 @@ pub(crate) fn handle_http_connection(
     routes: &[(String, String, RouteHandler, *const u8)],
 ) {
     use std::io::{Read, Write};
+    use std::sync::atomic::Ordering;
 
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    // Snapshot config once per connection (set before listen, never mutated).
+    let max_body = HTTP_CFG_MAX_BODY.load(Ordering::Relaxed).max(0) as u64;
+    let max_header = HTTP_CFG_MAX_HEADER.load(Ordering::Relaxed).max(0) as usize;
+    let read_timeout_ms = HTTP_CFG_READ_TIMEOUT_MS.load(Ordering::Relaxed).max(0) as u64;
+    let write_timeout_ms = HTTP_CFG_WRITE_TIMEOUT_MS.load(Ordering::Relaxed).max(0) as u64;
+    let idle_timeout_ms = HTTP_CFG_IDLE_TIMEOUT_MS.load(Ordering::Relaxed).max(0) as u64;
+    let keepalive_max = HTTP_CFG_KEEPALIVE_MAX.load(Ordering::Relaxed).max(0) as u64;
+    let ms = |v: u64| std::time::Duration::from_millis(if v == 0 { 1 } else { v });
+
+    // Slowloris-on-write protection: bound how long a single response write may
+    // block on a slow-reading client.
+    if write_timeout_ms > 0 {
+        let _ = stream.set_write_timeout(Some(ms(write_timeout_ms)));
+    }
     let write_stream = match stream.try_clone() {
         Ok(s) => s,
         Err(_) => return,
     };
     let mut reader = std::io::BufReader::new(stream);
     let mut writer = write_stream;
+    let mut requests_served: u64 = 0;
 
     loop {
+        // During graceful shutdown, stop serving new requests on this
+        // (now idle) keep-alive connection.
+        if HTTP_SHUTDOWN.load(Ordering::Relaxed) {
+            break;
+        }
+        // Idle keep-alive wait uses the (typically longer) idle timeout; the
+        // active read timeout is applied once a request has started arriving.
+        let _ = reader.get_ref().set_read_timeout(Some(ms(idle_timeout_ms)));
         // BL-25 A1: record the per-thread string-arena high-water mark at the
         // start of every request. Each string-returning rt_* call invoked by
         // the handler appends to the thread-local arena; without a reset the
@@ -2281,6 +2393,11 @@ pub(crate) fn handle_http_connection(
             }
             _ => {}
         }
+
+        // A request has started arriving — switch from the idle keep-alive
+        // timeout to the (typically shorter) active read timeout so a slow
+        // trickle of header/body bytes cannot hold the worker forever.
+        let _ = reader.get_ref().set_read_timeout(Some(ms(read_timeout_ms)));
 
         let parts: Vec<&str> = request_line.split_whitespace().collect();
         if parts.len() < 2 {
@@ -2315,7 +2432,7 @@ pub(crate) fn handle_http_connection(
             if line.trim().is_empty() {
                 break;
             }
-            if headers_raw.len() + line.len() > RT_HTTP_MAX_HEADERS_TOTAL {
+            if headers_raw.len() + line.len() > max_header {
                 let _ = writer.write_all(
                     b"HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                 );
@@ -2326,7 +2443,9 @@ pub(crate) fn handle_http_connection(
                 // Parse as i64 first so we can cleanly reject negative values
                 // and overflow instead of silently collapsing to usize::MAX
                 // or OOM'ing on a later `vec![0u8; N]`. Mirrors the
-                // strtoll + bounds logic in `turbo_rt.c`.
+                // strtoll + bounds logic in `turbo_rt.c`. A malformed/negative
+                // length is 400 Bad Request; a well-formed length above the
+                // configured cap is 413 Payload Too Large.
                 let raw: i64 = line
                     .split(':')
                     .nth(1)
@@ -2334,10 +2453,17 @@ pub(crate) fn handle_http_connection(
                     .trim()
                     .parse()
                     .unwrap_or(-1);
-                if raw < 0 || raw as u64 > RT_HTTP_MAX_BODY as u64 {
+                if raw < 0 {
                     eprintln!("[rt_http] rejecting Content-Length: {}", raw);
                     let _ = writer.write_all(
                         b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    return;
+                }
+                if raw as u64 > max_body {
+                    eprintln!("[rt_http] rejecting Content-Length: {} (over cap)", raw);
+                    let _ = writer.write_all(
+                        b"HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                     );
                     return;
                 }
@@ -2356,7 +2482,21 @@ pub(crate) fn handle_http_connection(
             break;
         }
 
+        // This is the last request on the connection if the client asked to
+        // close, we hit the per-connection keep-alive request cap, or a
+        // graceful shutdown is in progress.
+        requests_served += 1;
+        if keepalive_max > 0 && requests_served >= keepalive_max {
+            keep_alive = false;
+        }
+        if HTTP_SHUTDOWN.load(Ordering::Relaxed) {
+            keep_alive = false;
+        }
         let conn_header = if keep_alive { "keep-alive" } else { "close" };
+
+        // A failed response write (dead peer / write timeout) tears the
+        // connection down rather than looping on a broken socket.
+        let mut conn_dead = false;
 
         // Find matching route
         let mut matched = false;
@@ -2379,7 +2519,7 @@ pub(crate) fn handle_http_connection(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: {}\r\nContent-Length: 0\r\n\r\n",
                         conn_header
                     );
-                    let _ = writer.write_all(resp.as_bytes());
+                    conn_dead |= writer.write_all(resp.as_bytes()).is_err();
                 } else {
                     let resp = unsafe {
                         std::ffi::CStr::from_ptr(response_ptr as *const std::ffi::c_char)
@@ -2410,13 +2550,13 @@ pub(crate) fn handle_http_connection(
                             resp_body.len(),
                             resp_body
                         );
-                        let _ = writer.write_all(http_resp.as_bytes());
+                        conn_dead |= writer.write_all(http_resp.as_bytes()).is_err();
                     } else {
                         let http_resp = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: {}\r\nContent-Length: {}\r\n\r\n{}",
                             conn_header, resp.len(), resp
                         );
-                        let _ = writer.write_all(http_resp.as_bytes());
+                        conn_dead |= writer.write_all(http_resp.as_bytes()).is_err();
                     }
                 }
                 matched = true;
@@ -2429,10 +2569,10 @@ pub(crate) fn handle_http_connection(
                 "HTTP/1.1 404 Not Found\r\nConnection: {}\r\nContent-Length: 9\r\n\r\nNot Found",
                 conn_header
             );
-            let _ = writer.write_all(not_found.as_bytes());
+            conn_dead |= writer.write_all(not_found.as_bytes()).is_err();
         }
 
-        let _ = writer.flush();
+        conn_dead |= writer.flush().is_err();
 
         // BL-25 A1: reclaim every string this request allocated in the arena,
         // truncating back to the mark taken at the top of the loop. Strings
@@ -2442,10 +2582,32 @@ pub(crate) fn handle_http_connection(
         // strings and need no reset.
         arena_reset_to(req_arena_mark);
 
-        if !keep_alive {
+        if conn_dead || !keep_alive {
             break;
         }
     }
+}
+
+/// SIGTERM/SIGINT handler: flip the graceful-shutdown flag. Only an atomic
+/// store — async-signal-safe.
+extern "C" fn rt_http_shutdown_signal(_sig: libc::c_int) {
+    HTTP_SHUTDOWN.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Install the SIGTERM/SIGINT handlers once for the process (twin of the C
+/// runtime's `rt_http_install_signal_handlers`). Rust's std already sets
+/// SIGPIPE to SIG_IGN at startup, so response writes to a dead peer surface as
+/// EPIPE errors rather than killing the process.
+fn rt_http_install_signal_handlers() {
+    static SIG_ONCE: std::sync::Once = std::sync::Once::new();
+    SIG_ONCE.call_once(|| unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = rt_http_shutdown_signal as *const () as usize;
+        libc::sigemptyset(&mut sa.sa_mask);
+        sa.sa_flags = 0; // no SA_RESTART / no SA_SIGINFO
+        libc::sigaction(libc::SIGTERM, &sa, std::ptr::null_mut());
+        libc::sigaction(libc::SIGINT, &sa, std::ptr::null_mut());
+    });
 }
 
 /// Start the HTTP server. Spawns a thread per connection with keep-alive.
@@ -2466,28 +2628,57 @@ pub(crate) extern "C" fn rt_http_listen(server_id: i64) {
         (host, port, routes)
     };
 
+    rt_http_install_signal_handlers();
+
     let routes = Arc::new(SendableRoutes(routes));
     let active_connections = Arc::new(AtomicUsize::new(0));
     let addr = format!("{}:{}", host, port);
     let listener = TcpListener::bind(&addr).expect("failed to bind HTTP server");
+    // Non-blocking accept so the loop can poll the graceful-shutdown flag
+    // between connections (there is no event loop; a short sleep bounds the
+    // idle CPU cost). Each accepted stream is switched back to blocking for
+    // the per-connection handler, which applies its own read/write timeouts.
+    let _ = listener.set_nonblocking(true);
+    let max_conn = HTTP_CFG_MAX_CONN.load(Ordering::Relaxed).max(0) as usize;
 
-    for stream in listener.incoming().flatten() {
-        if active_connections.fetch_add(1, Ordering::AcqRel) >= RT_HTTP_MAX_ACTIVE_CONNECTIONS {
-            active_connections.fetch_sub(1, Ordering::AcqRel);
-            let mut stream = stream;
-            let _ = std::io::Write::write_all(
-                &mut stream,
-                b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: 18\r\n\r\nserver overloaded\n",
-            );
-            continue;
+    while !HTTP_SHUTDOWN.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((stream, _addr)) => {
+                let _ = stream.set_nonblocking(false);
+                if active_connections.fetch_add(1, Ordering::AcqRel) >= max_conn {
+                    active_connections.fetch_sub(1, Ordering::AcqRel);
+                    let mut stream = stream;
+                    let _ = std::io::Write::write_all(
+                        &mut stream,
+                        b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: 18\r\n\r\nserver overloaded\n",
+                    );
+                    continue;
+                }
+                let routes = Arc::clone(&routes);
+                let active_connections = Arc::clone(&active_connections);
+                std::thread::spawn(move || {
+                    let _guard = ActiveConnectionGuard(active_connections);
+                    handle_http_connection(stream, &routes.0);
+                });
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
         }
-        let routes = Arc::clone(&routes);
-        let active_connections = Arc::clone(&active_connections);
-        std::thread::spawn(move || {
-            let _guard = ActiveConnectionGuard(active_connections);
-            handle_http_connection(stream, &routes.0);
-        });
     }
+
+    // Graceful shutdown: stop accepting, then drain in-flight connections up to
+    // a bounded deadline before exiting 0. Detached workers observe
+    // HTTP_SHUTDOWN and close after finishing their current request.
+    drop(listener);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(10000);
+    while active_connections.load(Ordering::Acquire) > 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    std::process::exit(0);
 }
 
 /// Build a response string in "STATUS<sep>text/plain<sep>BODY" format.
@@ -2609,16 +2800,77 @@ pub(crate) extern "C" fn rt_sleep_ms(ms: i64) {
     std::thread::sleep(std::time::Duration::from_millis(ms as u64));
 }
 
-/// Spawn a thunk with an args pointer on a new OS thread.
-/// The thunk is `extern "C" fn(args_ptr: *mut u8) -> i64`.
-/// Returns a pointer to a heap-allocated JoinHandle.
+/// Copy a NUL-terminated C string into a fresh refcounted heap string
+/// (refcount 1) independent of any request-scoped allocation. Used by the
+/// spawn arena-escape fix so a string argument handed to another thread
+/// survives past the request that produced it.
+unsafe fn rc_copy_cstr(ptr: *const u8) -> *const u8 {
+    if ptr.is_null() {
+        return ptr;
+    }
+    let cstr = std::ffi::CStr::from_ptr(ptr as *const std::ffi::c_char);
+    let bytes = cstr.to_bytes_with_nul();
+    let dst = rc_alloc(bytes.len(), 0);
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len());
+    dst as *const u8
+}
+
+/// Spawn a thunk on a new OS thread with a packed args struct
+/// `[fn_ptr, arg0, arg1, ...]` (`num_args + 1` eight-byte slots). The thunk is
+/// `extern "C" fn(args_ptr: *mut u8) -> i64`. Returns a pointer to a
+/// heap-allocated JoinHandle.
+///
+/// Arena-escape fix (issue #56, twin of the C runtime `rt_spawn_with_args`):
+/// the args struct is allocated by the caller via `rt_struct_alloc` and, for a
+/// spawn inside an HTTP request handler, its string arguments are request-
+/// scoped — freed once the handler returns. Since the spawned thread outlives
+/// the request, we copy the struct into a stable heap buffer and deep-copy each
+/// flagged string argument into an independent refcounted allocation before
+/// crossing the thread boundary. `ptr_mask` bit i marks arg slot i as a string
+/// pointer; `num_args` is the argument count. (The JIT has no arena sentinel,
+/// so flagged string args are copied unconditionally — a copy is always safe.)
 pub(crate) extern "C" fn rt_spawn_with_args(
     thunk: extern "C" fn(*mut u8) -> i64,
     args_ptr: *mut u8,
+    ptr_mask: i64,
+    num_args: i64,
 ) -> *mut u8 {
-    // Cast pointer to usize (which is Send) to pass across thread boundary
-    let args_addr = args_ptr as usize;
-    let handle = std::thread::spawn(move || thunk(args_addr as *mut u8));
+    let num_args = if num_args < 0 { 0 } else { num_args as usize };
+    let slots = num_args + 1;
+
+    // Copy the args struct into a stable heap buffer owned by this call.
+    let mut buf: Vec<i64> = vec![0i64; slots];
+    if !args_ptr.is_null() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(args_ptr as *const i64, buf.as_mut_ptr(), slots);
+        }
+    }
+    // Deep-copy flagged string arguments so they outlive the request arena.
+    for i in 0..num_args {
+        if (ptr_mask >> i) & 1 == 1 {
+            let s = buf[i + 1] as usize as *const u8;
+            if !s.is_null() {
+                buf[i + 1] = unsafe { rc_copy_cstr(s) } as i64;
+            }
+        }
+    }
+
+    // Hand the buffer to the thread as a raw pointer, reclaiming it after the
+    // thunk consumes it. (The copied string args are ARC-managed by the callee
+    // and are intentionally not freed here.)
+    let data_ptr = buf.as_mut_ptr();
+    let cap = buf.capacity();
+    let len = buf.len();
+    std::mem::forget(buf);
+    let args_addr = data_ptr as usize;
+
+    let handle = std::thread::spawn(move || {
+        let result = thunk(args_addr as *mut u8);
+        unsafe {
+            drop(Vec::from_raw_parts(args_addr as *mut i64, len, cap));
+        }
+        result
+    });
     let boxed: Box<std::thread::JoinHandle<i64>> = Box::new(handle);
     Box::into_raw(boxed) as *mut u8
 }
