@@ -1281,11 +1281,11 @@ dependencies = [
 
 [[package]]
 name = "turbo-ast"
-version = "0.10.2"
+version = "0.10.3"
 
 [[package]]
 name = "turbo-cli"
-version = "0.10.2"
+version = "0.10.3"
 dependencies = [
  "ariadne",
  "clap",
@@ -1306,7 +1306,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-codegen-cranelift"
-version = "0.10.2"
+version = "0.10.3"
 dependencies = [
  "cranelift",
  "cranelift-codegen",
@@ -1326,7 +1326,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-formatter"
-version = "0.10.2"
+version = "0.10.3"
 dependencies = [
  "proptest",
  "turbo-ast",
@@ -1336,14 +1336,14 @@ dependencies = [
 
 [[package]]
 name = "turbo-lexer"
-version = "0.10.2"
+version = "0.10.3"
 dependencies = [
  "logos",
 ]
 
 [[package]]
 name = "turbo-lsp"
-version = "0.10.2"
+version = "0.10.3"
 dependencies = [
  "lsp-server",
  "lsp-types",
@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-parser"
-version = "0.10.2"
+version = "0.10.3"
 dependencies = [
  "proptest",
  "turbo-ast",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-sema"
-version = "0.10.2"
+version = "0.10.3"
 dependencies = [
  "turbo-ast",
  "turbo-lexer",
