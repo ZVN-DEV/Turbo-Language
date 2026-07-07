@@ -1,6 +1,6 @@
 # The Variant Strategy
 
-> **Status: Historical Reference.** The memory model decision is finalized — CTRC + auto-clone is the default. This document is preserved for reference on alternative performance profiles. For the active specification, see MEMORY-MODEL.md.
+> **Status: Historical Reference (Planned/exploratory — none of this is implemented).** This document explores memory-model and runtime *options* that were never built. The "finalized" CTRC + auto-clone decision it references is itself a design decision, not shipping behavior — Turbo actually ships runtime ARC + copy-on-write (see MEMORY-MODEL.md). Every variant below (Ownership-Lite, Region-Based, Hybrid, CTRC) and every keyword it mentions (`region`, `Shared<T>`, `actor`, the `--memory=`/`--runtime=` flags, the LLVM release/WASM/embedded backends) is **unbuilt**. The LLVM backend referenced in the build-profile tables was removed in 0.9.1; Cranelift is the only backend. Read this purely as a record of alternatives considered.
 >
 > **2026-04 update:** The original shared-core list below included `agent` and `tool` as core-language keywords. Those features have been moved out of the core into the planned `turbo-agent` sidecar library. References to "agents" as a workload type are kept here for benchmark-workload purposes only. See **VISION.md** and **COMPATIBILITY.md**.
 

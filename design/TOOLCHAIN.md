@@ -1,5 +1,7 @@
 # Toolchain — Ship Everything on Day One
 
+> **Status: Partially implemented.** The `turbolang` CLI ships these commands today: `run`, `build`, `test`, `fmt`, `init`, `lsp`, `repl`, `bench`, `doc`, and `playground` (see [`CLAUDE.md`](../CLAUDE.md)). Much of the rest of this document is **Planned**: the package manager and `packages.turbo.dev` registry (`add`/`remove`/`publish`, lockfiles, workspaces), the runtime/allocation profilers, structured logging, metrics, the `[build] memory`/`runtime` selectors, and most of the `turbo/` standard library modules shown below. Critically, **there is no async runtime** — the async I/O examples (`await fs.read(...)`) describe design intent, not current behavior; real concurrency today is `spawn`/`await` on OS threads. Treat command listings and stdlib modules as the target toolchain unless verified against the CLI. Unbuilt subsections are marked **Planned** inline.
+
 ## Philosophy
 Lessons from research: Cargo, Go's toolchain, and Deno are the gold standard. Ship the full toolchain. No third-party tools needed to be productive on day one. One binary, all tools.
 
@@ -752,8 +754,10 @@ mock = "0.5"
 
 [build]
 target = "native"          # or "wasm32-wasi"
-memory = "ownership"       # or "regions", "hybrid", "ctrc"
-runtime = "default"        # or "actor", "minimal"
+# memory / runtime selectors below are PLANNED — not implemented.
+# Today there is one memory model (runtime ARC + COW) and one runtime (OS threads).
+memory = "ownership"       # [Planned] or "regions", "hybrid", "ctrc"
+runtime = "default"        # [Planned] or "actor", "minimal"
 opt-level = "release"      # or "dev", "size"
 
 [lints]
@@ -785,6 +789,8 @@ style = "allow"
 Turbo ships a rich standard library under the `turbo/` namespace. Every module is available from day one with no external dependencies. The design philosophy: **if you need it in your first week, it should be in the standard library.**
 
 ### `turbo/io` — File System and I/O
+
+> **Planned — not yet implemented.** There is no async I/O runtime and no `turbo/io` module today. The `await fs.read(...)` API below is design intent; do not read the `async` here as "runs on an event loop."
 
 All I/O is async by default. No callback hell, no sync/async split -- just `await`.
 

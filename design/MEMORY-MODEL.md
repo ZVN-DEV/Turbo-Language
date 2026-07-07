@@ -1,5 +1,11 @@
 # Memory Model
 
+> **Status: Planned (design vision).** This document describes a target memory model — Auto-Clone with Compile-Time Reference Counting (CTRC) and a four-level escape-hatch ladder — that is **not** what Turbo ships today. None of the following exist in the compiler: CTRC / compile-time refcount elision, auto-clone dataflow analysis, `let ref` borrows, `region` blocks, `Shared<T>` / `WeakRef<T>`, `@no_clone` / `@manual`, the ownership/borrow checker, and the `--memory-report` / `turbolang profile` tooling.
+>
+> **What actually ships today:** a **runtime ARC** model. Heap values (arrays, structs, enums) are reference-counted at runtime via `rt_rc_alloc` / `rt_release`, with **copy-on-write** for arrays/structs/enums (see the COW builtins). The built-in HTTP server adds **per-request bump arenas** that reset between requests. Strings currently **malloc-and-leak until process exit** — runtime string ARC is **in development** in a parallel branch. There is no compile-time elision: reference counting happens at runtime.
+>
+> Read the rest of this file as the design north star, not a description of current behavior. Unbuilt sections are marked **Planned** inline.
+
 ## Philosophy
 
 Memory management is the hardest unsolved problem in language design. Every mainstream approach carries real costs that their advocates downplay:
@@ -56,6 +62,8 @@ fn fetch_user_posts(user_id: str) -> [Post] {
 **You never need to go deeper than your use case requires.** A web developer building CRUD APIs may never encounter a single memory annotation in their entire Turbo career. A game engine developer can drop into explicit regions and manual control for their hot paths. Both are first-class citizens of the same language.
 
 ### Auto-Clone Semantics
+
+> **Planned — not yet implemented.** There is no compile-time move/clone dataflow analysis. Today, arrays/structs/enums use runtime ARC with copy-on-write; there is no `@no_clone` and no clone-cost warnings.
 
 This is the single most important design decision that separates Turbo from Rust. In Rust, using a value after it has been moved is a compile error. In JavaScript, values are freely shared. Turbo sides with JavaScript: **if you use a value after it has been "moved," the compiler silently clones it for you.**
 
@@ -136,6 +144,8 @@ warning: auto-clone of 'large_dataset' copies approximately 50MB
 This design is the KEY differentiator versus Rust. A JavaScript developer writing Turbo for the first time will never encounter a "value moved here" error. They write code naturally, and the compiler makes it work. Only when they are ready to optimize -- or when the compiler warns them about expensive clones -- do they need to think about memory at all.
 
 ### Escape Hatches Ladder
+
+> **Planned — not yet implemented.** None of the ladder levels exist. There is no `let ref` (Level 1), no `region` block (Level 2), and no `@manual` mode (Level 3). Today there is exactly one memory model: runtime ARC + COW, plus per-request arenas inside the HTTP server.
 
 Turbo's memory model is organized as a ladder of progressive complexity. Every developer starts at Level 0 and only climbs as high as their use case demands. Most developers will never go past Level 1.
 
@@ -230,6 +240,8 @@ fn process_audio_buffer(input: &[f32], output: &mut [f32]) {
 | 3 | Engine devs, embedded, kernel, FFI | "I control every byte" | Yes, within `@manual` blocks. Compiler warns. |
 
 ### Memory Profiling Built-In
+
+> **Planned — not yet implemented.** `turbolang build --memory-report`, `turbolang profile`, `--profile=memory`, and the allocation flame graphs do not exist. There is no built-in memory profiler today.
 
 Turbo's philosophy of "write it like JavaScript, then optimize" requires world-class tooling to show developers where their implicit memory decisions have performance costs. Memory profiling is not a third-party add-on -- it is built into the compiler and runtime from day one.
 
@@ -357,6 +369,8 @@ The question developers will ask is: "If Turbo feels like JavaScript, why not ju
 
 ## Default Memory Model: Auto-Clone + CTRC
 
+> **Planned — not yet implemented.** Despite the "Turbo ships with…" wording below, Turbo does **not** ship auto-clone or CTRC. The shipping default is runtime ARC + copy-on-write (plus per-request arenas in the HTTP server); strings currently leak until exit (string ARC in development). The ownership/region/hybrid "opt-in performance profiles" below are also unbuilt.
+
 Turbo ships with auto-clone and compile-time reference counting (CTRC) as the default memory model for all Turbo code. This is the model described in "The JavaScript Promise" section above: values auto-clone when shared, the compiler elides reference counting operations where ownership can be statically proven, and developers never need to think about memory unless they choose to optimize.
 
 The auto-clone + CTRC default is described in detail in "The Default: Compile-Time Reference Counting (CTRC)" section below, enhanced with the escape hatch ladder (Levels 0-3). This is not one of several competing candidates -- it is the chosen default that ships with Turbo.
@@ -372,6 +386,8 @@ These profiles are selected per-module or per-function, not per-project. A web a
 ---
 
 ## Performance Profiles (Advanced, Opt-In)
+
+> **Planned — not yet implemented.** None of the profiles below (Rust-Lite Ownership, Region-Based, Hybrid) are available. `&T` / `&mut T` borrows, `Shared<T>`, `WeakRef<T>`, `region` blocks, and lifetime annotations do not exist in the compiler. This section is design exploration.
 
 The following strategies are available as opt-in performance profiles for developers who need finer control. They are documented here for completeness and for the benefit of contributors working on the compiler. Most Turbo developers will never need to read this section.
 
@@ -1042,6 +1058,8 @@ All four profiles are built on the same compiler frontend and share the followin
 ---
 
 ## Decision Framework
+
+> **Planned — design decision, not shipping behavior.** "CTRC with auto-clone is the chosen default" records a *design* decision. It is not implemented: today's runtime uses plain runtime ARC + COW with no compile-time elision and no auto-clone. The benchmark suite, criteria, and development plan above describe intended work, not completed work.
 
 **Decision: CTRC with auto-clone is the chosen default.** After evaluating all four strategies against the weighted criteria below, CTRC (Compile-Time Reference Counting) with auto-clone semantics was selected as Turbo's default memory model. It scored highest on developer experience (the top-weighted criterion tied with performance) and delivered acceptable performance through aggressive compile-time elision.
 

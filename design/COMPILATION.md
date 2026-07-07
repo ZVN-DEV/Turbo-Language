@@ -1,5 +1,14 @@
 # Compilation Strategy
 
+> **Status: Partially implemented — read backend claims with care.** The single source of truth for the real pipeline is [`CLAUDE.md`](../CLAUDE.md): `Lexer → Parser → AST → Sema → Cranelift (JIT or AOT)`. Key corrections to this document:
+> - **Cranelift is the only code-generation backend.** The LLVM backend was **removed in 0.9.1**. There is no dual-backend "automatic Cranelift-for-dev / LLVM-for-release" switch: both `turbolang run` (JIT) and `turbolang build` (AOT) use Cranelift. LTO, PGO, and "full LLVM optimization" are **Planned**, not shipping.
+> - **The WASM path is not LLVM→wasm32.** It compiles **AST → C → `clang --target=wasm32-wasi`**. The auto-generated JS bridge, `--npm` output, and TypeScript `.d.ts` generation are **Planned**.
+> - **The HIR/MIR middle-end, borrow/region analysis, and monomorphization passes** described under "Compiler Architecture" are **Planned** — today Sema type-checks the AST and Cranelift lowers it directly.
+> - **ASan** works today (used in the C-runtime test harness). **TSan/LSan**, `--coverage`, `--timings`, `--sanitize` flags, no-std/embedded targets, RISC-V, PGO, and incremental caching are **Planned** unless verified in the CLI.
+> - **Cross-compilation to Linux x86_64 is real.** Other target triples listed below are aspirational.
+>
+> Unbuilt subsections are marked **Planned** inline.
+
 ## Core Decision: WASM-First for Web
 
 No JS codegen target. WASM + robust JS interop bridge via WASM Component Model + JS bindings.
@@ -10,11 +19,13 @@ Rather than transpiling to JavaScript (as TypeScript, CoffeeScript, and others d
 
 ## Compilation Targets
 
-| Target | Backend | Use Case |
+> **Backend column reality:** Cranelift is the only backend; the WASM path is AST → C → clang. The table below shows the *intended* target matrix; RISC-V and the JS interop bridge are Planned.
+
+| Target | Backend (today) | Use Case |
 |--------|---------|----------|
-| Native (x86_64, ARM64, RISC-V) | LLVM | CLI tools, servers, desktop apps, embedded |
-| WebAssembly | LLVM -> wasm32 | Browser apps, edge computing, WASI |
-| Web interop | WASM + JS bridge layer | DOM access, browser APIs, calling JS libs |
+| Native (x86_64, ARM64) | Cranelift | CLI tools, servers, desktop apps |
+| WebAssembly | AST → C → `clang wasm32-wasi` | Edge computing, WASI |
+| Web interop | WASM + JS bridge layer *(Planned)* | DOM access, browser APIs, calling JS libs |
 
 ---
 
@@ -28,10 +39,9 @@ Rather than transpiling to JavaScript (as TypeScript, CoffeeScript, and others d
 - Minimal optimizations (just enough to run correctly — no LTO, no vectorization, no PGO)
 - Rich debug info, source maps, full DWARF symbols
 - Hot reload support via file watching
-- The switch between Cranelift (dev) and LLVM (release) is **automatic** based on the command:
-  - `turbolang run` / `turbolang dev` / `turbolang build` → Cranelift (fast compile, ~80% of release performance)
-  - `turbolang build --release` → LLVM (full optimization, maximum runtime performance)
 - Inspired by Zig's fast compilation, Go's speed, Vite's dev server model, and Rust's ongoing cranelift integration
+
+> **Planned — not yet implemented.** The "automatic Cranelift-for-dev / LLVM-for-release" switch below does not exist. The LLVM backend was removed in 0.9.1; both `run` and `build` use Cranelift today, and there is no separate optimizing release backend. The dev/release commands and flags in the next block describe the intended model.
 
 ```
 # Typical dev workflow — all use Cranelift for sub-second builds
@@ -45,6 +55,8 @@ turbolang build --release   # full LLVM optimization pipeline
 ```
 
 ### Release Mode -- Maximum Performance
+
+> **Planned — not yet implemented.** There is no LLVM release backend and no LTO/PGO pipeline today. `turbolang build --release` runs through Cranelift like every other build.
 
 - Full LLVM backend with all optimizations
 - LTO (Link-Time Optimization) -- whole program optimization
@@ -62,6 +74,8 @@ turbolang build --release --pgo=use      # apply PGO profile data
 
 ### WASM Mode
 
+> **Partially implemented.** The real WASM path is **AST → C → `clang --target=wasm32-wasi`**, not LLVM→wasm32. The auto-generated JS bridge, `--npm` packaging, and `.d.ts` generation are **Planned**.
+
 - LLVM -> wasm32-wasi target
 - WASM-specific optimizations (binaryen, wasm-opt)
 - Size optimization available (`--opt-size`)
@@ -75,6 +89,8 @@ turbolang build --target wasm --npm         # npm-compatible package output
 ```
 
 ### Embedded Mode
+
+> **Planned — not yet implemented.** No-std, embedded target triples, and panic=abort mode do not exist today.
 
 - No-std support (no heap allocation required)
 - Size-optimized (`-Os`, `-Oz`)
@@ -91,6 +107,8 @@ turbolang build --embedded --opt-size                  # minimal binary
 ---
 
 ## Compiler Architecture
+
+> **Planned — the real pipeline is simpler.** Per [`CLAUDE.md`](../CLAUDE.md), the shipping pipeline is `Lexer → Parser → AST → Sema → Cranelift`. There is no HIR or MIR, no borrow/region analysis, no separate monomorphization pass, and no LLVM-IR path. The HIR/MIR/LLVM architecture below is design intent.
 
 ### Frontend
 
@@ -390,6 +408,8 @@ ERROR: AddressSanitizer: heap-use-after-free
 
 ### Thread Sanitizer (TSan)
 
+> **Planned — not yet implemented.** There is no `--sanitize=thread` flag, and there is no async runtime or actor system for it to instrument. `spawn`/`await` are OS threads; race-checking those is a future goal.
+
 Detect data races in concurrent code at runtime.
 
 - Reports unsynchronized reads/writes to shared memory
@@ -510,7 +530,7 @@ Compilation Timings:
 | Feature | Turbo | Rust | Go | Zig | Carbon |
 |---------|------|------|-----|-----|--------|
 | Dev build speed | <1s | 5-30s | <1s | <1s | N/A |
-| LLVM backend | Yes | Yes | No (custom) | Yes | Yes |
+| LLVM backend | No (removed 0.9.1; Cranelift only) | Yes | No (custom) | Yes | Yes |
 | WASM target | Yes | Yes | Experimental | Yes | No |
 | Cross-compilation | Built-in | Via rustup | Built-in | Built-in | N/A |
 | Incremental compilation | Yes | Yes | Yes | Partial | N/A |
@@ -522,7 +542,7 @@ Compilation Timings:
 
 ### Key Differentiators
 
-- **Dual backend strategy**: Cranelift for development (sub-second incremental builds), full LLVM for release. The switch is automatic — `turbolang run` uses Cranelift, `turbolang build --release` uses LLVM. This gives us Go-like iteration speed without sacrificing Rust-like release performance.
+- **Cranelift backend** *(dual-backend strategy is Planned)*: Today Cranelift powers both JIT (`run`) and AOT (`build`) for sub-second iteration. The "full LLVM for release" half of this differentiator was removed in 0.9.1 and is a future goal — an optimizing release backend would be reintroduced only if it reaches parity and shows a measured win.
 - **WASM as a first-class target**: Not an afterthought. The JS bridge layer is auto-generated and type-safe, with TypeScript definitions included.
 - **Built-in cross-compilation**: No external toolchain setup. Every installation can build for every supported target out of the box.
 - **Embedded support without compromise**: No-std, no-alloc builds are supported from day one, with the same language and the same toolchain.

@@ -1,9 +1,13 @@
 # Concurrency Model
 
+> **Status: Partially implemented.** What ships today: `spawn`/`await` backed by **real OS threads** — one `pthread` per `spawn`, and `await` joins it. This is true parallelism, *not* a green-thread scheduler. Also shipping: integer **channels** and an integer **mutex** (see the callout under [Synchronization Primitives](#synchronization-primitives)). Everything else on this page — the M:N lightweight-task scheduler, `Future<T>`, `all()`/`race()`/`timeout`/`all_settled`, top-level await, structured concurrency (`scope`), actors and supervision trees, async streams, `select`, `Send`/`Sync` checking, cancellation tokens, and selectable runtime variants — is **design intent, not built**. Unbuilt sections are marked **Planned** inline. This document keeps the full vision; the labels tell you what runs today.
+
 ## Philosophy
 Hybrid model combining the best approaches from Go, Rust, Elixir, Kotlin, and Swift. Not one concurrency model — a layered system where developers use the right tool for the right job.
 
 ## Feels Like JavaScript
+
+> **Planned — not yet implemented.** Turbo's concurrency today is OS-thread `spawn`/`await`, not a JavaScript-style async runtime. The `async`/`await` keyword machinery, `Future<T>`, `all()`/`race()`, top-level await, and `for await...in` described below are design intent. There is no event loop, no scheduler, and no "colored function" solution shipping today.
 
 If you've written async JavaScript, you already know how to write async Turbo. The mental model is the same: `async` functions, `await` calls, and streaming — no new concepts to learn.
 
@@ -139,7 +143,12 @@ for user in users {
 
 ## The Seven Layers
 
+> **Status of this section:** Layer 3 (Channels) and the `spawn`/`await` primitive shown in Layer 1 ship today — but as **OS threads**, not lightweight tasks. Layers 2, 4, 5, 6, and 7 (structured concurrency, actors, the async/await runtime, Send/Sync enforcement, and async streams) are **Planned**.
+
 ### 1. Lightweight Tasks (like Go goroutines)
+
+> **Planned — not yet implemented.** `spawn`/`await` are real and give you true parallelism, but each `spawn` creates **one OS thread** (a `pthread`) and `await` joins it. There is no M:N scheduler, no work-stealing, no ~2KB growable stacks, and no "millions of tasks." The bullets below describe the planned lightweight-task runtime.
+
 - Millions of concurrent tasks, M:N scheduled onto OS threads
 - Cheap to create (~2KB initial stack, growable)
 - Work-stealing scheduler distributes across CPU cores
@@ -157,6 +166,9 @@ let result = await handle  // like: const result = await promise
 ```
 
 ### 2. Structured Concurrency (like Kotlin/Swift)
+
+> **Planned — not yet implemented.** There is no `scope`, no parent-child task tree, and no cancellation propagation today.
+
 - Parent-child task relationships
 - Automatic cancellation propagation (cancel parent → cancels all children)
 - No orphan tasks — every task has a scope
@@ -177,6 +189,9 @@ async fn fetch_all(urls: [str]) -> [Data] ! Error {
 ```
 
 ### 3. Channels (like Go)
+
+> **Partially implemented.** Integer channels ship today (`channel`, send, receive). The typed generic `channel<Message>`, buffering controls, async iteration (`for await msg in rx`), and the `select` statement shown below are **Planned**.
+
 - Typed, buffered/unbuffered
 - `select` for multiplexing across channels
 - Used for communication between tasks
@@ -208,6 +223,9 @@ select {
 ```
 
 ### 4. Actors (like Elixir)
+
+> **Planned — not yet implemented.** There is no `actor` keyword, no supervisor, and no supervision trees in the language today. This is design intent for a future release (and, per the README roadmap note, supervision may live in the separate `turbo-agent` sidecar rather than the core language).
+
 - Isolated stateful processes with message passing — a pure concurrency primitive with no AI/LLM involvement
 - Each actor has its own state — no shared mutable state
 - Supervision trees for fault tolerance (restart strategies)
@@ -243,6 +261,9 @@ let supervisor = Supervisor.new(strategy: .one_for_one)
 ```
 
 ### 5. Async/Await Syntax
+
+> **Planned — not yet implemented.** `spawn`/`await` work today for parallelism, but there is no `async fn` runtime, no futures, and no suspension: `await` joins an OS thread rather than driving a state machine. The `async fn` / `await http.get(...)` form below is design intent.
+
 - Familiar from JS/C#/Rust
 - Backed by the lightweight task runtime (not OS threads)
 - Zero-cost when not used
@@ -256,6 +277,9 @@ async fn fetch_user(id: u64) -> User ! Error {
 ```
 
 ### 6. Fearless Concurrency (like Rust)
+
+> **Planned — not yet implemented.** There is no ownership/borrow checker, no `Send`/`Sync` traits, and no compile-time data-race analysis today. `Shared<T>` does not exist. Safe sharing today relies on the integer mutex and the programmer.
+
 - Ownership system prevents data races at compile time
 - `Send` trait: type can be transferred across task boundaries
 - `Sync` trait: type can be shared (immutable reference) across tasks
@@ -275,6 +299,9 @@ spawn async {
 ```
 
 ### 7. Async Streams
+
+> **Planned — not yet implemented.** There is no `Stream<T>` type, no `yield`, and no `for await...in` today.
+
 - First-class `Stream<T>` type for streaming data
 - Critical for LLM token streaming, real-time data, SSE
 - Composable with standard iterator operations
@@ -328,6 +355,8 @@ let uppercase_stream = token_stream("Hello")
 
 ## Runtime Variants
 
+> **Planned — not yet implemented.** There is one runtime today: OS threads. There is no work-stealing scheduler, no actor runtime, no event loop, and no `--runtime=` build flag.
+
 ### Tokio-style (default)
 - Work-stealing thread pool
 - M:N cooperative scheduling
@@ -351,6 +380,8 @@ let uppercase_stream = token_stream("Hello")
 ```
 
 ## Cancellation
+
+> **Planned — not yet implemented.** There is no `CancelToken`, `spawn_cancellable`, or `timeout` block today.
 
 > **JS equivalent:** Cancellation in Turbo works like `AbortController` in JavaScript. Create a cancellation token, pass it to the task, and call `cancel()` to stop it -- same pattern as `AbortController.abort()`. Timeouts work like `Promise.race([fetch(url), timeout(5000)])` but built into the language.
 
@@ -387,6 +418,9 @@ match result {
 ```
 
 ## Data Race Prevention
+
+> **Planned — not yet implemented.** None of the compile-time guarantees below exist today. Turbo does not check Send/Sync, does not track ownership, and cannot catch data races at compile time. Concurrent code that shares mutable state is the programmer's responsibility (use the integer mutex).
+
 - Compiler enforces Send/Sync boundaries at compile time
 - Immutable data is freely shareable (Sync by default)
 - Mutable data requires explicit synchronization
@@ -394,6 +428,8 @@ match result {
 - Channel communication is always safe by design
 
 ## Comparison With Other Languages
+
+> **Planned — not yet implemented.** The "Yes" cells for Turbo below describe the target model, not shipping behavior. Today, of these rows, only Channels (integer) ship; lightweight tasks, structured concurrency, actors, compile-time race prevention, async streams, and supervision trees are all Planned.
 
 | Feature | Turbo | Go | Rust | Elixir | Kotlin | Swift |
 |---------|------|-----|------|--------|--------|-------|
@@ -406,6 +442,9 @@ match result {
 | Supervision trees | Yes | No | No | Yes (OTP) | No | No |
 
 ## Performance Targets
+
+> **Planned — targets, not measurements.** These numbers describe the future lightweight-task runtime. Today's `spawn` is an OS-thread create (microseconds and a full thread stack, not <1us / ~2KB), so these targets do not describe current behavior.
+
 - Task spawn overhead: <1us (comparable to Go goroutines)
 - Channel send/recv: <100ns for unbuffered
 - Context switch: <200ns between tasks
