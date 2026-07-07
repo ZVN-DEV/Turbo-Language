@@ -56,7 +56,8 @@ mod aot;
 pub use aot::{aot_compile, wasm_compile};
 
 mod expr;
-pub(crate) use expr::{compile_expr, retain_if_needed};
+pub(crate) use expr::{compile_expr, release_expr_temp_if_needed, retain_if_needed};
+pub(crate) use expr::{retain_array_elements_if_needed, retain_array_prefix_if_needed};
 
 mod stmt;
 pub(crate) use stmt::compile_stmt;
@@ -179,8 +180,12 @@ impl<'a, M: Module> Ctx<'a, M> {
             })?;
 
         self.data_desc.clear();
-        let mut bytes = s.as_bytes().to_vec();
+        let mut bytes = Vec::with_capacity(16 + s.len() + 1);
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+        bytes.extend_from_slice(&i64::MAX.to_le_bytes());
+        bytes.extend_from_slice(s.as_bytes());
         bytes.push(0);
+        self.data_desc.set_align(8);
         self.data_desc.define(bytes.into_boxed_slice());
 
         self.module
@@ -191,8 +196,8 @@ impl<'a, M: Module> Ctx<'a, M> {
             })?;
 
         let data_ref = self.module.declare_data_in_func(data_id, self.builder.func);
-        let ptr = self.builder.ins().global_value(self.ptr_type, data_ref);
-        Ok(ptr)
+        let raw_ptr = self.builder.ins().global_value(self.ptr_type, data_ref);
+        Ok(self.builder.ins().iadd_imm(raw_ptr, 16))
     }
 
     pub(crate) fn rt_call(&mut self, name: &str, args: &[Value]) {

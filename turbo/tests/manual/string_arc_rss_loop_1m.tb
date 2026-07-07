@@ -1,0 +1,18 @@
+fn churn(n: i64) -> str {
+    let mut s = "seed"
+    let mut i = 0
+    while i < n {
+        let joined = s + "x"
+        let replaced = replace(joined, "x", "y")
+        let uppered = upper(replaced)
+        let parts = split(uppered, "Y")
+        s = join(parts, "")
+        i = i + 1
+    }
+    s
+}
+
+fn main() {
+    let result = churn(1000000)
+    print(len(result))
+}

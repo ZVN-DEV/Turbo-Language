@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 const F64_FORMAT: &[u8] = b"%.15g\0";
+const RT_RC_IMMORTAL: i64 = i64::MAX;
 
 /// Build a `CString` from the given value, falling back to an empty string
 /// if the input contains an interior nul byte.
@@ -115,6 +116,34 @@ fn checked_array_layout(cap: usize) -> Option<std::alloc::Layout> {
     std::alloc::Layout::from_size_align(total_bytes, 8).ok()
 }
 
+/// Compute the shared ARC allocation layout for non-array objects.
+/// Format: [cap: i64][refcount: i64][data bytes...]
+fn checked_rc_layout(data_size: usize) -> Option<std::alloc::Layout> {
+    let total_bytes = data_size.checked_add(16)?;
+    std::alloc::Layout::from_size_align(total_bytes, 8).ok()
+}
+
+fn rc_alloc(data_size: usize, cap: i64) -> *mut u8 {
+    let layout = match checked_rc_layout(data_size) {
+        Some(l) => l,
+        None => {
+            eprintln!("runtime error: ARC allocation overflow");
+            std::process::exit(1);
+        }
+    };
+    let raw = unsafe { std::alloc::alloc_zeroed(layout) };
+    if raw.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    register_alloc(raw, layout);
+    unsafe {
+        *(raw as *mut i64) = cap;
+        *(raw.add(8) as *mut i64) = 1;
+        raw.add(16)
+    }
+}
+
 // ── Allocation registry for ARC deallocation ────────────────────────
 //
 // Every rt_* allocation that uses refcounted headers registers the raw
@@ -138,11 +167,11 @@ fn unregister_alloc(raw_ptr: *mut u8) -> Option<std::alloc::Layout> {
     ALLOC_REGISTRY.with(|reg| reg.borrow_mut().remove(&(raw_ptr as usize)))
 }
 
-// ── Thread-local string arena ────────────────────────────────────────
+// ── Legacy thread-local string arena ─────────────────────────────────
 //
-// Every rt_* function that returns a newly-allocated CString registers
-// the pointer here via `arena_str()`. At the end of JIT execution (or
-// after each HTTP request), `rt_arena_reset()` frees them all.
+// String-returning rt_* functions now allocate refcounted strings through
+// `arena_str()`. The arena reset path remains for compatibility with any older
+// raw entries, but normal string reclamation is handled by rt_release.
 
 struct ArenaEntry {
     ptr: *mut u8,
@@ -154,17 +183,13 @@ thread_local! {
     static STRING_ARENA: RefCell<Vec<ArenaEntry>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Leak a CString into the arena. Returns the raw pointer for FFI.
+/// Copy a CString into the shared ARC string layout. Returns the data pointer.
 fn arena_str(cs: std::ffi::CString) -> *const u8 {
-    let cap = cs.as_bytes_with_nul().len();
-    let ptr = cs.into_raw() as *mut u8;
-    STRING_ARENA.with(|arena| {
-        arena.borrow_mut().push(ArenaEntry {
-            ptr,
-            cap,
-            is_raw: false,
-        });
-    });
+    let bytes = cs.as_bytes_with_nul();
+    let ptr = rc_alloc(bytes.len(), 0);
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+    }
     ptr as *const u8
 }
 
@@ -500,6 +525,16 @@ pub(crate) extern "C" fn rt_str_concat(a: *const u8, b: *const u8) -> *const u8 
     result.push_str(b_str);
     let c_string = cstring_or_empty(result);
     arena_str(c_string)
+}
+
+pub(crate) extern "C" fn rt_str_copy(s: *const u8) -> *const u8 {
+    if s.is_null() {
+        return rt_alloc_string("");
+    }
+    let value = unsafe { std::ffi::CStr::from_ptr(s as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    rt_alloc_string(value)
 }
 
 pub(crate) extern "C" fn rt_str_concat_inplace(a: *const u8, b: *const u8) -> *const u8 {
@@ -2564,7 +2599,7 @@ pub(crate) extern "C" fn rt_request_body(req: *const u8) -> *const u8 {
         return req_field(req, 4);
     }
     // Backward compat: plain string is the body
-    req
+    rt_alloc_string(s)
 }
 
 // ── Async runtime functions ─────────────────────────────────────────
@@ -2927,6 +2962,9 @@ pub(crate) extern "C" fn rt_retain(data_ptr: *mut u8) {
     }
     let header = unsafe { data_ptr.sub(8) as *mut std::sync::atomic::AtomicI64 };
     unsafe {
+        if (*header).load(std::sync::atomic::Ordering::Acquire) == RT_RC_IMMORTAL {
+            return;
+        }
         (*header).fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
@@ -2939,6 +2977,11 @@ pub(crate) extern "C" fn rt_release(data_ptr: *mut u8) {
         return;
     }
     let header = unsafe { data_ptr.sub(8) as *mut std::sync::atomic::AtomicI64 };
+    unsafe {
+        if (*header).load(std::sync::atomic::Ordering::Acquire) == RT_RC_IMMORTAL {
+            return;
+        }
+    }
     let prev = unsafe { (*header).fetch_sub(1, std::sync::atomic::Ordering::Release) };
     if prev == 1 {
         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);

@@ -157,6 +157,7 @@ fn register_runtime_symbols(jit_builder: &mut JITBuilder) {
     jit_builder.symbol("rt_div_by_zero", rt_div_by_zero as *const u8);
     jit_builder.symbol("rt_int_overflow", rt_int_overflow as *const u8);
     jit_builder.symbol("rt_str_concat", rt_str_concat as *const u8);
+    jit_builder.symbol("rt_str_copy", rt_str_copy as *const u8);
     jit_builder.symbol("rt_str_concat_inplace", rt_str_concat_inplace as *const u8);
     jit_builder.symbol("rt_str_eq", rt_str_eq as *const u8);
     jit_builder.symbol("rt_array_alloc", rt_array_alloc as *const u8);

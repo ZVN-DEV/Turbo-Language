@@ -1,0 +1,55 @@
+struct Box { name: str }
+
+fn escaped() -> str {
+    upper("escape")
+}
+
+fn echo(s: str) -> str {
+    s
+}
+
+fn main() {
+    let mut s = "ab" + ""
+    let alias = s
+    s = s + "x"
+    print(alias)
+    print(s)
+
+    let returned = escaped()
+    print(returned)
+    print(echo(returned))
+
+    let mut words: [str] = []
+    words = push(words, s)
+    words = push(words, "tail")
+    let alias_words = words
+    words = push(words, "copy")
+    print(alias_words[0])
+    print(words[0])
+    print(words[2])
+
+    let mut seed = "hold" + ""
+    let held_words = [seed]
+    {
+        let alias_held_words = held_words
+    }
+    seed = "changed"
+    print(held_words[0])
+
+    let b = Box { name: upper("box") }
+    let copied = b.name
+    print(copied)
+
+    let mut b2 = b
+    b2.name = copied + "-2"
+    print(b.name)
+    print(b2.name)
+
+    let mut label = upper("field")
+    let held_box = Box { name: label }
+    {
+        let alias_held_box = held_box
+    }
+    label = "changed"
+    print(held_box.name)
+}

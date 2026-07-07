@@ -55,7 +55,7 @@ turbolang build hello.tb      # AOT — produce a native binary
 
 ### Known Limitations (v0.10.x)
 
-> **Note — runtime string allocation:** HTTP servers reclaim per-request memory on every request — the JIT (`turbolang run`) resets its string arena to a per-request high-water mark and AOT (`turbolang build`) uses a per-request arena — so a long-running server stays bounded (designed to stay bounded — each backend resets/uses a per-request arena), and server state held in hashmaps persists correctly across requests. The remaining case that grows is a *non-server* program that loops forever while continuously allocating strings: arena allocations are freed when the program exits, not individually. Proper ARC-based string deallocation is planned for a future release.
+> **Note — runtime string allocation:** Strings, arrays, structs, results, and optionals use the runtime ARC header and are released at scope exit, reassignment, and typed container drops. HTTP servers still use per-request arenas for request-scoped allocations, so handler temporaries are reclaimed in bulk at the end of each request while server state held in hashmaps persists correctly across requests.
 >
 > **Warning — HTTP server is experimental:** The built-in HTTP server binds to `127.0.0.1` by default and is not hardened for direct exposure to untrusted networks. Put it behind a reverse proxy (nginx, Caddy) in production. See [`SECURITY.md`](SECURITY.md) for the full threat model.
 

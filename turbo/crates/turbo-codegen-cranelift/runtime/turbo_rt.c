@@ -41,6 +41,7 @@
 #include <stdatomic.h>
 #include <string.h>
 #include <strings.h>   /* strcasecmp, strncasecmp (BSD/POSIX) */
+#include <limits.h>
 #include <pthread.h>
 #include <math.h>
 #include <time.h>
@@ -55,6 +56,14 @@
 #include "turbo_rt_guards.h"
 
 #define TURBO_F64_FORMAT "%.15g"
+#define RT_RC_HEADER_BYTES 16
+#define RT_RC_IMMORTAL LLONG_MAX
+
+static void *rt_rc_alloc(size_t data_size, long long cap);
+static char *rt_str_alloc(size_t len);
+static char *rt_str_copy_len(const char *s, size_t len);
+static char *rt_str_empty(void);
+void rt_release(void *data_ptr);
 
 /* True when `s` is a bare integer literal ([-]?[0-9]+), i.e. a whole-valued
  * float that %g rendered with no fractional part. False for fractional /
@@ -242,14 +251,20 @@ static void turbo_free(void *ptr) {
     free(ptr);
 }
 
-/* Arena-aware strdup: routes the allocation through turbo_alloc so
- * string duplications participate in the arena when one is active. */
-static char *turbo_strdup(const char *s) {
+static char *turbo_raw_strdup(const char *s) {
     if (!s) return NULL;
     size_t len = strlen(s) + 1;
     char *dup = (char *)turbo_alloc(len);
     memcpy(dup, s, len);
     return dup;
+}
+
+/* Turbo-language string duplication. Returned pointers have the shared ARC
+ * header immediately before the C string bytes, so scope-exit release can free
+ * them just like arrays/structs. */
+static char *turbo_strdup(const char *s) {
+    if (!s) return NULL;
+    return rt_str_copy_len(s, strlen(s));
 }
 
 static void *turbo_realloc(void *ptr, size_t size) {
@@ -405,31 +420,32 @@ void rt_int_overflow(void) {
 const char* rt_str_concat(const char *a, const char *b) {
     size_t a_len = a ? strlen(a) : 0;
     size_t b_len = b ? strlen(b) : 0;
-    char *result = turbo_alloc(a_len + b_len + 1);
+    char *result = rt_str_alloc(a_len + b_len);
     if (a) memcpy(result, a, a_len);
     if (b) memcpy(result + a_len, b, b_len);
     result[a_len + b_len] = '\0';
     return result;
 }
 
+const char* rt_str_copy(const char *s) {
+    return turbo_strdup(s ? s : "");
+}
+
 const char* rt_str_concat_inplace(const char *old, const char *suffix) {
-    /* `s = s + x` lowers to this. The in-place fast path below used to mutate
-     * the most-recent arena buffer when it equalled `old`, but Turbo strings
-     * carry no refcount, so it could not tell whether that buffer was aliased
-     * by another live binding. `let alias = s; s = s + "z"` then silently
-     * corrupted `alias`. Strings are immutable values, so always allocate a
-     * fresh result — matching the JIT runtime, which made the same change. */
-    if (!suffix || !*suffix) return old ? old : "";
+    /* `s = s + x` lowers to this. Strings now carry a refcount, but this stays
+     * allocation-only for identical JIT/AOT semantics; the assignment site drops
+     * the overwritten string after observing whether the pointer changed. */
+    if (!suffix || !*suffix) return old ? old : rt_str_empty();
     if (!old || !*old) {
         size_t len = strlen(suffix);
-        char *r = turbo_alloc(len + 1);
+        char *r = rt_str_alloc(len);
         memcpy(r, suffix, len + 1);
         return r;
     }
     size_t old_len = strlen(old);
     size_t suffix_len = strlen(suffix);
     size_t new_len = old_len + suffix_len;
-    char *result = turbo_alloc(new_len + 1);
+    char *result = rt_str_alloc(new_len);
     memcpy(result, old, old_len);
     memcpy(result + old_len, suffix, suffix_len + 1);
     return result;
@@ -467,8 +483,6 @@ char rt_str_eq(const char *a, const char *b) {
  * The 16-byte header also keeps the user-data region 16-byte aligned
  * on 64-bit hosts, which matches the alignment the arena allocator
  * already rounds to (see turbo_arena_alloc). */
-#define RT_RC_HEADER_BYTES 16
-
 static inline long long *rt_rc_cap_ptr(void *data_ptr) {
     return (long long *)((char *)data_ptr - 16);
 }
@@ -481,11 +495,38 @@ static inline long long *rt_rc_refcount_ptr(void *data_ptr) {
  * and initial element capacity `cap` (only meaningful for arrays).
  * Returns the data pointer (not the raw allocation base). */
 static void *rt_rc_alloc(size_t data_size, long long cap) {
+    if (data_size > SIZE_MAX - RT_RC_HEADER_BYTES) {
+        fprintf(stderr, "rt_rc_alloc: overflow\n");
+        abort();
+    }
     size_t total = RT_RC_HEADER_BYTES + data_size;
     void *raw = turbo_calloc(1, total);
     *(long long *)raw = cap;              /* cap at raw + 0 */
     *(long long *)((char *)raw + 8) = 1;  /* refcount = 1 */
     return (char *)raw + RT_RC_HEADER_BYTES;
+}
+
+static char *rt_str_alloc(size_t len) {
+    if (len > SIZE_MAX - 1) {
+        fprintf(stderr, "runtime error: string allocation overflow\n");
+        exit(1);
+    }
+    char *result = (char *)rt_rc_alloc(len + 1, 0);
+    result[len] = '\0';
+    return result;
+}
+
+static char *rt_str_copy_len(const char *s, size_t len) {
+    char *result = rt_str_alloc(len);
+    if (len > 0 && s) {
+        memcpy(result, s, len);
+    }
+    result[len] = '\0';
+    return result;
+}
+
+static char *rt_str_empty(void) {
+    return rt_str_copy_len("", 0);
 }
 
 /* Array allocation: element capacity bound that guarantees the final
@@ -670,24 +711,24 @@ const char* rt_i64_to_str(long long n) {
     else { while (v) { *--p = '0' + (char)(v % 10); v /= 10; } }
     if (n < 0) *--p = '-';
     size_t len = (size_t)(tmp + 20 - p);
-    char *buf = turbo_alloc(len + 1);
+    char *buf = rt_str_alloc(len);
     memcpy(buf, p, len + 1);
     return buf;
 }
 
 const char* rt_f64_to_str(double n) {
-    char *buf = turbo_alloc(64);
+    char *buf = rt_str_alloc(63);
     rt_format_f64(buf, 64, n);
     return buf;
 }
 
 const char* rt_bool_to_str(char b) {
     if (b) {
-        char *buf = turbo_alloc(5);
+        char *buf = rt_str_alloc(4);
         memcpy(buf, "true", 5);
         return buf;
     } else {
-        char *buf = turbo_alloc(6);
+        char *buf = rt_str_alloc(5);
         memcpy(buf, "false", 6);
         return buf;
     }
@@ -770,12 +811,10 @@ void* rt_str_split(const char *s, const char *sep) {
         /* split each character */
         size_t slen = strlen(s);
         if (slen == 0) {
-            char *empty = turbo_alloc(1);
-            empty[0] = '\0';
-            arr[1] = (long long)(size_t)empty;
+            arr[1] = (long long)(size_t)rt_str_empty();
         } else {
             for (size_t i = 0; i < slen; i++) {
-                char *ch = turbo_alloc(2);
+                char *ch = rt_str_alloc(1);
                 ch[0] = s[i];
                 ch[1] = '\0';
                 arr[1 + i] = (long long)(size_t)ch;
@@ -787,7 +826,7 @@ void* rt_str_split(const char *s, const char *sep) {
         const char *next;
         while ((next = strstr(p, sep)) != NULL) {
             size_t len = (size_t)(next - p);
-            char *part = turbo_alloc(len + 1);
+            char *part = rt_str_alloc(len);
             memcpy(part, p, len);
             part[len] = '\0';
             arr[1 + idx] = (long long)(size_t)part;
@@ -796,7 +835,7 @@ void* rt_str_split(const char *s, const char *sep) {
         }
         /* last part */
         size_t len = strlen(p);
-        char *part = turbo_alloc(len + 1);
+        char *part = rt_str_alloc(len);
         memcpy(part, p, len);
         part[len] = '\0';
         arr[1 + idx] = (long long)(size_t)part;
@@ -805,22 +844,22 @@ void* rt_str_split(const char *s, const char *sep) {
 }
 
 const char* rt_str_trim(const char *s) {
-    if (!s) { char *e = turbo_alloc(1); e[0] = '\0'; return e; }
+    if (!s) return rt_str_empty();
     const char *start = s;
     while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r') start++;
     const char *end = s + strlen(s);
     while (end > start && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\n' || end[-1] == '\r')) end--;
     size_t len = (size_t)(end - start);
-    char *result = turbo_alloc(len + 1);
+    char *result = rt_str_alloc(len);
     memcpy(result, start, len);
     result[len] = '\0';
     return result;
 }
 
 const char* rt_str_upper(const char *s) {
-    if (!s) { char *e = turbo_alloc(1); e[0] = '\0'; return e; }
+    if (!s) return rt_str_empty();
     size_t len = strlen(s);
-    char *result = turbo_alloc(len + 1);
+    char *result = rt_str_alloc(len);
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)s[i];
         result[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : (char)c;
@@ -830,9 +869,9 @@ const char* rt_str_upper(const char *s) {
 }
 
 const char* rt_str_lower(const char *s) {
-    if (!s) { char *e = turbo_alloc(1); e[0] = '\0'; return e; }
+    if (!s) return rt_str_empty();
     size_t len = strlen(s);
-    char *result = turbo_alloc(len + 1);
+    char *result = rt_str_alloc(len);
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)s[i];
         result[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : (char)c;
@@ -857,14 +896,14 @@ char rt_str_ends_with(const char *s, const char *suffix) {
 
 const char* rt_str_replace(const char *s, const char *from, const char *to) {
     if (!s || !from || !to) {
-        char *e = turbo_alloc(1); e[0] = '\0'; return e;
+        return rt_str_empty();
     }
     size_t from_len = strlen(from);
     size_t to_len = strlen(to);
     if (from_len == 0) {
         /* No replacement for empty pattern; return copy */
         size_t len = strlen(s);
-        char *r = turbo_alloc(len + 1);
+        char *r = rt_str_alloc(len);
         memcpy(r, s, len + 1);
         return r;
     }
@@ -875,7 +914,7 @@ const char* rt_str_replace(const char *s, const char *from, const char *to) {
     /* C-2: Use signed arithmetic to avoid underflow when to_len < from_len */
     long long delta = (long long)to_len - (long long)from_len;
     size_t new_len = (size_t)((long long)strlen(s) + (long long)count * delta);
-    char *result = turbo_alloc(new_len + 1);
+    char *result = rt_str_alloc(new_len);
     char *w = result;
     p = s;
     const char *next;
@@ -898,7 +937,7 @@ const char* rt_str_char_at(const char *s, long long index) {
     if (index < 0 || (size_t)index >= len) {
         rt_str_index_oob(index, len);
     }
-    char *result = turbo_alloc(2);
+    char *result = rt_str_alloc(1);
     result[0] = s[(size_t)index];
     result[1] = '\0';
     return result;
@@ -911,9 +950,7 @@ char rt_str_contains(const char *s, const char *sub) {
 
 const char* rt_str_repeat(const char *s, long long count) {
     if (!s || count <= 0) {
-        char *empty = (char *)turbo_alloc(1);
-        empty[0] = '\0';
-        return empty;
+        return rt_str_empty();
     }
     size_t len = strlen(s);
     /* Overflow check: len * count must fit in size_t and leave room for
@@ -921,9 +958,7 @@ const char* rt_str_repeat(const char *s, long long count) {
      * would succeed with a much smaller size than the subsequent strcat
      * loop needed, producing a heap overflow. */
     if (len == 0) {
-        char *empty = (char *)turbo_alloc(1);
-        empty[0] = '\0';
-        return empty;
+        return rt_str_empty();
     }
     /* total = len * count (+1 for the trailing NUL) must fit in size_t.
      * Shared guard with the WASM runtime (turbo_rt_guards.h). */
@@ -931,9 +966,7 @@ const char* rt_str_repeat(const char *s, long long count) {
         fprintf(stderr,
                 "[rt_str_repeat] overflow: len=%zu * count=%lld exceeds SIZE_MAX\n",
                 len, count);
-        char *empty = (char *)turbo_alloc(1);
-        empty[0] = '\0';
-        return empty;
+        return rt_str_empty();
     }
     size_t total = len * (size_t)count;
     /* Practical cap: 256 MB. Larger totals usually indicate a bug or attack
@@ -942,11 +975,9 @@ const char* rt_str_repeat(const char *s, long long count) {
         fprintf(stderr,
                 "[rt_str_repeat] refusing allocation: total=%zu > cap %llu\n",
                 total, (unsigned long long)TURBO_RT_MAX_ALLOC_BYTES);
-        char *empty = (char *)turbo_alloc(1);
-        empty[0] = '\0';
-        return empty;
+        return rt_str_empty();
     }
-    char *result = (char *)turbo_alloc(total + 1);
+    char *result = rt_str_alloc(total);
     size_t off = 0;
     for (long long i = 0; i < count; i++) {
         memcpy(result + off, s, len);
@@ -965,9 +996,9 @@ long long rt_str_index_of(const char *s, const char *sub) {
 
 const char* rt_str_join(const char *arr_ptr, const char *sep) {
     /* arr_ptr is a Turbo array of strings. Layout: [len (8 bytes), elem0, elem1, ...] */
-    if (!arr_ptr) { char *e = turbo_alloc(1); *(char*)e = '\0'; return e; }
+    if (!arr_ptr) return rt_str_empty();
     long long len = *(long long *)arr_ptr;
-    if (len <= 0) { char *e = turbo_alloc(1); *(char*)e = '\0'; return e; }
+    if (len <= 0) return rt_str_empty();
     const char **elems = (const char **)(arr_ptr + 8);
     /* Calculate total length */
     size_t total = 0;
@@ -976,7 +1007,7 @@ const char* rt_str_join(const char *arr_ptr, const char *sep) {
         if (elems[i]) total += strlen(elems[i]);
         if (i < len - 1) total += sep_len;
     }
-    char *result = (char *)turbo_alloc(total + 1);
+    char *result = rt_str_alloc(total);
     /* Length-tracked memcpy instead of strcat. strcat re-scans the
      * growing prefix for its NUL terminator on every call — an O(n^2)
      * footgun on long joins — and any future miscalculation of `total`
@@ -1006,13 +1037,13 @@ const char* rt_read_line(void) {
     ssize_t nread = getline(&line, &cap, stdin);
     if (nread < 0) {
         free(line);
-        char *e = turbo_alloc(1); e[0] = '\0'; return e;
+        return rt_str_empty();
     }
     /* strip trailing \n / \r */
     while (nread > 0 && (line[nread-1] == '\n' || line[nread-1] == '\r')) {
         line[--nread] = '\0';
     }
-    char *result = turbo_alloc((size_t)nread + 1);
+    char *result = rt_str_alloc((size_t)nread);
     memcpy(result, line, (size_t)nread + 1);
     free(line);
     return result;
@@ -1028,7 +1059,7 @@ const char* rt_read_file(const char *path) {
     long size = ftell(f);
     if (size < 0) { fclose(f); fprintf(stderr, "runtime error: cannot read file size\n"); exit(1); }
     fseek(f, 0, SEEK_SET);
-    char *buf = turbo_alloc((size_t)size + 1);
+    char *buf = rt_str_alloc((size_t)size);
     fread(buf, 1, (size_t)size, f);
     buf[size] = '\0';
     fclose(f);
@@ -1154,7 +1185,7 @@ void *rt_args(void) {
 /* ── String parsing builtins ─────────────────────────────────────── */
 
 const char *rt_substring(const char *s, long long start, long long end) {
-    if (!s) { char *e = turbo_alloc(1); e[0] = '\0'; return e; }
+    if (!s) return rt_str_empty();
     // Character-indexed, UTF-8 aware — must match the Rust JIT `rt_substring`,
     // which slices by `char` count. Walk the string counting char starts (bytes
     // not of the form 0b10xxxxxx) and translate char indices to byte offsets.
@@ -1174,9 +1205,9 @@ const char *rt_substring(const char *s, long long start, long long end) {
         i++;
     }
     if (start_byte < 0) start_byte = nbytes; // start past end of string
-    if (start_byte >= end_byte) { char *e = turbo_alloc(1); e[0] = '\0'; return e; }
+    if (start_byte >= end_byte) return rt_str_empty();
     long long len = end_byte - start_byte;
-    char *result = turbo_alloc((size_t)len + 1);
+    char *result = rt_str_alloc((size_t)len);
     memcpy(result, s + start_byte, (size_t)len);
     result[len] = '\0';
     return result;
@@ -1189,7 +1220,7 @@ const char *rt_pad_left(const char *s, long long width, const char *pad_char) {
     long long slen = (long long)strlen(s);
     if (slen >= width) return turbo_strdup(s);
     long long pad_count = width - slen;
-    char *result = turbo_alloc((size_t)width + 1);
+    char *result = rt_str_alloc((size_t)width);
     char c = pad_char[0];
     for (long long i = 0; i < pad_count; i++) result[i] = c;
     memcpy(result + pad_count, s, (size_t)slen);
@@ -1204,7 +1235,7 @@ const char *rt_pad_right(const char *s, long long width, const char *pad_char) {
     long long slen = (long long)strlen(s);
     if (slen >= width) return turbo_strdup(s);
     long long pad_count = width - slen;
-    char *result = turbo_alloc((size_t)width + 1);
+    char *result = rt_str_alloc((size_t)width);
     memcpy(result, s, (size_t)slen);
     char c = pad_char[0];
     for (long long i = 0; i < pad_count; i++) result[slen + i] = c;
@@ -1215,7 +1246,7 @@ const char *rt_pad_right(const char *s, long long width, const char *pad_char) {
 void *rt_str_to_int(const char *s) {
     if (!s) {
         const char *msg = "cannot parse empty string as integer";
-        char *buf = turbo_alloc(strlen(msg) + 1);
+        char *buf = rt_str_alloc(strlen(msg));
         memcpy(buf, msg, strlen(msg) + 1);
         return rt_result_err((long long)(intptr_t)buf);
     }
@@ -1225,7 +1256,7 @@ void *rt_str_to_int(const char *s) {
         const char *prefix = "cannot parse '";
         const char *suffix = "' as integer";
         size_t len = strlen(prefix) + strlen(s) + strlen(suffix) + 1;
-        char *buf = turbo_alloc(len);
+        char *buf = rt_str_alloc(len - 1);
         snprintf(buf, len, "%s%s%s", prefix, s, suffix);
         return rt_result_err((long long)(intptr_t)buf);
     }
@@ -1235,7 +1266,7 @@ void *rt_str_to_int(const char *s) {
 void *rt_str_to_float(const char *s) {
     if (!s) {
         const char *msg = "cannot parse empty string as float";
-        char *buf = turbo_alloc(strlen(msg) + 1);
+        char *buf = rt_str_alloc(strlen(msg));
         memcpy(buf, msg, strlen(msg) + 1);
         return rt_result_err((long long)(intptr_t)buf);
     }
@@ -1245,7 +1276,7 @@ void *rt_str_to_float(const char *s) {
         const char *prefix = "cannot parse '";
         const char *suffix = "' as float";
         size_t len = strlen(prefix) + strlen(s) + strlen(suffix) + 1;
-        char *buf = turbo_alloc(len);
+        char *buf = rt_str_alloc(len - 1);
         snprintf(buf, len, "%s%s%s", prefix, s, suffix);
         return rt_result_err((long long)(intptr_t)buf);
     }
@@ -1349,7 +1380,7 @@ static char *read_fd_to_string(int fd) {
     tmp[len] = '\0';
     /* Copy the final payload into an arena-managed slot so the returned
      * pointer has the lifetime callers expect, then release the libc buffer. */
-    char *result = (char *)turbo_alloc(len + 1);
+    char *result = rt_str_alloc(len);
     memcpy(result, tmp, len + 1);
     free(tmp);
     return result;
@@ -1545,9 +1576,7 @@ static const char *rt_http_url_blocked_reason(const char *url) {
 }
 
 static const char *rt_http_empty_response(void) {
-    char *empty = (char *)turbo_alloc(1);
-    empty[0] = '\0';
-    return empty;
+    return rt_str_empty();
 }
 
 /* http_get(url) -> str — HTTP GET via fork+exec (no shell interpolation) */
@@ -1747,9 +1776,7 @@ const char *rt_http_post_with_headers(const char *url, const char *body,
  * interpret quotes, redirections, substitutions, or pipelines. Callers that
  * genuinely need a pipeline should compose one in Turbo code. */
 static const char *rt_exec_empty_response(void) {
-    char *empty = (char *)turbo_alloc(1);
-    empty[0] = '\0';
-    return empty;
+    return rt_str_empty();
 }
 
 #define RT_EXEC_MAX_ARGS 64
@@ -1834,27 +1861,21 @@ const char *rt_exec(const char *cmd) {
 /* env_get(name) -> str — get an environment variable, returns "" if not set */
 const char *rt_env_get(const char *name) {
     if (!name) {
-        const char *empty = (const char *)turbo_alloc(1);
-        ((char *)empty)[0] = '\0';
-        return empty;
+        return rt_str_empty();
     }
     const char *val = getenv(name);
     if (!val) {
-        const char *empty = (const char *)turbo_alloc(1);
-        ((char *)empty)[0] = '\0';
-        return empty;
+        return rt_str_empty();
     }
     return turbo_strdup(val);
 }
 
 static char *rt_json_escape_dup(const char *s) {
     if (!s) {
-        char *empty = (char *)turbo_alloc(1);
-        empty[0] = '\0';
-        return empty;
+        return rt_str_empty();
     }
     size_t len = strlen(s);
-    char *out = (char *)turbo_alloc(len * 2 + 1);
+    char *out = rt_str_alloc(len * 2);
     size_t j = 0;
     for (size_t i = 0; i < len; i++) {
         char c = s[i];
@@ -1967,7 +1988,7 @@ const char *rt_json_get(const char *json, const char *key) {
             pos++;
         }
         size_t vlen = pos - start;
-        char *val = (char *)turbo_alloc(vlen + 1);
+        char *val = rt_str_alloc(vlen);
         memcpy(val, start, vlen);
         val[vlen] = '\0';
         return val;
@@ -1977,7 +1998,7 @@ const char *rt_json_get(const char *json, const char *key) {
         while (*pos && *pos != ',' && *pos != '}' && *pos != ']' &&
                *pos != ' ' && *pos != '\n' && *pos != '\r' && *pos != '\t') pos++;
         size_t vlen = pos - start;
-        char *val = (char *)turbo_alloc(vlen + 1);
+        char *val = rt_str_alloc(vlen);
         memcpy(val, start, vlen);
         val[vlen] = '\0';
         return val;
@@ -1991,8 +2012,10 @@ const char *rt_json_stringify(const char *key, const char *value) {
     size_t eklen = strlen(esc_key);
     size_t evlen = strlen(esc_value);
     size_t cap = eklen + evlen + 8;
-    char *buf = (char *)turbo_alloc(cap);
+    char *buf = rt_str_alloc(cap - 1);
     snprintf(buf, cap, "{\"%s\":\"%s\"}", esc_key, esc_value);
+    rt_release((void *)esc_key);
+    rt_release((void *)esc_value);
     return buf;
 }
 
@@ -2054,7 +2077,7 @@ const char *rt_json_build(const char *pairs) {
     }
     total++; /* null terminator */
 
-    char *buf = (char *)turbo_alloc(total);
+    char *buf = rt_str_alloc(total - 1);
     size_t pos = 0;
     buf[pos++] = '{';
     for (size_t i = 0; i < num_pairs; i++) {
@@ -2070,8 +2093,11 @@ const char *rt_json_build(const char *pairs) {
     buf[pos++] = '}';
     buf[pos] = '\0';
 
-    /* Cleanup temporary allocations (escaped strings are arena-allocated,
-     * so they don't need free; copy and tokens are malloc'd) */
+    for (size_t i = 0; i < num_pairs; i++) {
+        rt_release((void *)esc_keys[i]);
+        rt_release((void *)esc_vals[i]);
+    }
+    /* Cleanup temporary allocations. */
     free(copy);
     free(tokens);
     free(esc_keys);
@@ -2090,7 +2116,7 @@ const char *rt_json_root(const char *json) {
     if (len >= 2 && json[0] == '"' && json[len - 1] == '"') {
         /* Escape sequences shrink (e.g. \\n -> \n), so output <= input size.
            len-2 chars of content + NUL = len-1 bytes is always sufficient. */
-        char *out = (char *)turbo_alloc(len - 1);
+        char *out = rt_str_alloc(len - 2);
         size_t j = 0;
         for (size_t i = 1; i + 1 < len; i++) {
             if (json[i] == '\\' && i + 1 < len - 1) {
@@ -2112,7 +2138,7 @@ const char *rt_json_root(const char *json) {
         out[j] = '\0';
         return out;
     }
-    char *out = (char *)turbo_alloc(len + 1);
+    char *out = rt_str_alloc(len);
     memcpy(out, json, len);
     out[len] = '\0';
     return out;
@@ -2142,7 +2168,7 @@ double rt_int_to_float(long long i) {
 }
 
 const char *rt_str_from_char(long long code) {
-    char *s = (char *)turbo_alloc(2);
+    char *s = rt_str_alloc(1);
     s[0] = (char)(code & 0xFF);
     s[1] = '\0';
     return s;
@@ -2355,7 +2381,7 @@ typedef struct {
 static char *hashmap_strdup(const turbo_hashmap *map, const char *s) {
     if (!s) return NULL;
     if (!map->persistent) {
-        return turbo_strdup(s);
+        return turbo_raw_strdup(s);
     }
     size_t len = strlen(s) + 1;
     char *dup = (char *)malloc(len);
@@ -3200,7 +3226,7 @@ const char* rt_respond_typed(long long status, const char *content_type, const c
     /* "STATUS<sep>CONTENT_TYPE<sep>BODY\0" */
     char digits[20];
     int dlen = snprintf(digits, sizeof(digits), "%lld", status);
-    char *result = turbo_alloc(dlen + 1 + clen + 1 + blen + 1);
+    char *result = rt_str_alloc((size_t)dlen + 1 + clen + 1 + blen);
     memcpy(result, digits, dlen);
     result[dlen] = RT_RESPONSE_SEP;
     memcpy(result + dlen + 1, content_type, clen);
@@ -3296,11 +3322,11 @@ static int rt_parse_response(
 /* ── Request field extraction (structured request: METHOD\x01PATH\x01QUERY\x01HEADERS\x01BODY) */
 
 static const char* req_field(const char *req, int field_index) {
-    if (!req) return "";
+    if (!req) return rt_str_empty();
     const char *start = req;
     for (int i = 0; i < field_index; i++) {
         const char *sep = strchr(start, '\x01');
-        if (!sep) return "";
+        if (!sep) return rt_str_empty();
         start = sep + 1;
     }
     /* Find end of this field */
@@ -3308,13 +3334,13 @@ static const char* req_field(const char *req, int field_index) {
     if (!end) {
         /* Last field — copy to end of string */
         size_t len = strlen(start);
-        char *result = turbo_alloc(len + 1);
+        char *result = rt_str_alloc(len);
         memcpy(result, start, len);
         result[len] = '\0';
         return result;
     }
     size_t len = end - start;
-    char *result = turbo_alloc(len + 1);
+    char *result = rt_str_alloc(len);
     memcpy(result, start, len);
     result[len] = '\0';
     return result;
@@ -3329,9 +3355,12 @@ const char* rt_request_path(const char *req) {
 }
 
 const char* rt_request_query(const char *req, const char *key) {
-    if (!req || !key) return "";
+    if (!req || !key) return rt_str_empty();
     const char *qs = req_field(req, 2);
-    if (!qs || !*qs) return "";
+    if (!qs || !*qs) {
+        rt_release((void *)qs);
+        return rt_str_empty();
+    }
     size_t klen = strlen(key);
     const char *p = qs;
     while (*p) {
@@ -3339,22 +3368,27 @@ const char* rt_request_query(const char *req, const char *key) {
             const char *val_start = p + klen + 1;
             const char *val_end = strchr(val_start, '&');
             size_t vlen = val_end ? (size_t)(val_end - val_start) : strlen(val_start);
-            char *result = turbo_alloc(vlen + 1);
+            char *result = rt_str_alloc(vlen);
             memcpy(result, val_start, vlen);
             result[vlen] = '\0';
+            rt_release((void *)qs);
             return result;
         }
         const char *amp = strchr(p, '&');
         if (!amp) break;
         p = amp + 1;
     }
-    return "";
+    rt_release((void *)qs);
+    return rt_str_empty();
 }
 
 const char* rt_request_header(const char *req, const char *name) {
-    if (!req || !name) return "";
+    if (!req || !name) return rt_str_empty();
     const char *headers = req_field(req, 3);
-    if (!headers || !*headers) return "";
+    if (!headers || !*headers) {
+        rt_release((void *)headers);
+        return rt_str_empty();
+    }
     size_t nlen = strlen(name);
     const char *p = headers;
     while (*p) {
@@ -3364,26 +3398,28 @@ const char* rt_request_header(const char *req, const char *name) {
             while (*val == ' ') val++; /* skip optional whitespace */
             const char *eol = strstr(val, "\r\n");
             size_t vlen = eol ? (size_t)(eol - val) : strlen(val);
-            char *result = turbo_alloc(vlen + 1);
+            char *result = rt_str_alloc(vlen);
             memcpy(result, val, vlen);
             result[vlen] = '\0';
+            rt_release((void *)headers);
             return result;
         }
         const char *next = strstr(p, "\r\n");
         if (!next) break;
         p = next + 2;
     }
-    return "";
+    rt_release((void *)headers);
+    return rt_str_empty();
 }
 
 const char* rt_request_body(const char *req) {
-    if (!req) return "";
+    if (!req) return rt_str_empty();
     /* If structured request (contains \x01), extract body field */
     if (strchr(req, '\x01')) {
         return req_field(req, 4);
     }
     /* Backward compat: plain string is the body */
-    return req;
+    return turbo_strdup(req);
 }
 
 /* ── ARC (Automatic Reference Counting) runtime ─────────────────────── */
@@ -3391,6 +3427,9 @@ const char* rt_request_body(const char *req) {
 void rt_retain(void *data_ptr) {
     if (!data_ptr) return;
     long long *rc = rt_rc_refcount_ptr(data_ptr);
+    if (__atomic_load_n(rc, __ATOMIC_ACQUIRE) == RT_RC_IMMORTAL) {
+        return;
+    }
     __sync_fetch_and_add(rc, 1);
 }
 
@@ -3402,6 +3441,9 @@ void rt_release(void *data_ptr) {
         return;
     }
     long long *rc = rt_rc_refcount_ptr(data_ptr);
+    if (__atomic_load_n(rc, __ATOMIC_ACQUIRE) == RT_RC_IMMORTAL) {
+        return;
+    }
     long long prev = __sync_fetch_and_sub(rc, 1);
     if (prev == 1) {
         /* Free from the raw allocation base, which sits RT_RC_HEADER_BYTES
@@ -3445,7 +3487,7 @@ void *rt_try_read_file(const char *path) {
     if (!path) {
         const char *msg = "null path";
         size_t n = strlen(msg);
-        char *buf = turbo_alloc(n + 1);
+        char *buf = rt_str_alloc(n);
         memcpy(buf, msg, n + 1);
         return rt_result_err((long long)(intptr_t)buf);
     }
@@ -3453,14 +3495,14 @@ void *rt_try_read_file(const char *path) {
     if (!f) {
         const char *err = strerror(errno);
         size_t n = strlen(err);
-        char *buf = turbo_alloc(n + 1);
+        char *buf = rt_str_alloc(n);
         memcpy(buf, err, n + 1);
         return rt_result_err((long long)(intptr_t)buf);
     }
     if (fseek(f, 0, SEEK_END) != 0) {
         const char *err = strerror(errno);
         size_t n = strlen(err);
-        char *buf = turbo_alloc(n + 1);
+        char *buf = rt_str_alloc(n);
         memcpy(buf, err, n + 1);
         fclose(f);
         return rt_result_err((long long)(intptr_t)buf);
@@ -3469,13 +3511,13 @@ void *rt_try_read_file(const char *path) {
     if (size < 0) {
         const char *err = strerror(errno);
         size_t n = strlen(err);
-        char *buf = turbo_alloc(n + 1);
+        char *buf = rt_str_alloc(n);
         memcpy(buf, err, n + 1);
         fclose(f);
         return rt_result_err((long long)(intptr_t)buf);
     }
     fseek(f, 0, SEEK_SET);
-    char *contents = turbo_alloc((size_t)size + 1);
+    char *contents = rt_str_alloc((size_t)size);
     size_t nread = fread(contents, 1, (size_t)size, f);
     contents[nread] = '\0';
     fclose(f);
@@ -3487,7 +3529,7 @@ void *rt_try_write_file(const char *path, const char *content) {
     if (!path) {
         const char *msg = "null path";
         size_t n = strlen(msg);
-        char *buf = turbo_alloc(n + 1);
+        char *buf = rt_str_alloc(n);
         memcpy(buf, msg, n + 1);
         return rt_result_err((long long)(intptr_t)buf);
     }
@@ -3495,7 +3537,7 @@ void *rt_try_write_file(const char *path, const char *content) {
     if (!f) {
         const char *err = strerror(errno);
         size_t n = strlen(err);
-        char *buf = turbo_alloc(n + 1);
+        char *buf = rt_str_alloc(n);
         memcpy(buf, err, n + 1);
         return rt_result_err((long long)(intptr_t)buf);
     }
@@ -3505,7 +3547,7 @@ void *rt_try_write_file(const char *path, const char *content) {
         if (written != len) {
             const char *err = strerror(errno);
             size_t n = strlen(err);
-            char *buf = turbo_alloc(n + 1);
+            char *buf = rt_str_alloc(n);
             memcpy(buf, err, n + 1);
             fclose(f);
             return rt_result_err((long long)(intptr_t)buf);
@@ -3596,7 +3638,7 @@ const char *rt_path_join(const char *a, const char *b) {
     size_t b_len = strlen(b);
     int need_sep = (a_len > 0 && a[a_len - 1] != '/') ? 1 : 0;
     size_t total = a_len + need_sep + b_len + 1;
-    char *buf = turbo_alloc(total);
+    char *buf = rt_str_alloc(total - 1);
     memcpy(buf, a, a_len);
     if (need_sep) buf[a_len] = '/';
     memcpy(buf + a_len + need_sep, b, b_len + 1);
@@ -3609,7 +3651,7 @@ const char *rt_path_dir(const char *path) {
     if (!last_sep) return turbo_strdup(".");
     if (last_sep == path) return turbo_strdup("/");
     size_t len = (size_t)(last_sep - path);
-    char *buf = turbo_alloc(len + 1);
+    char *buf = rt_str_alloc(len);
     memcpy(buf, path, len);
     buf[len] = '\0';
     return buf;

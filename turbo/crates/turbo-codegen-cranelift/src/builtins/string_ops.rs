@@ -5,19 +5,19 @@ use cranelift_module::Module;
 use turbo_ast::*;
 
 use crate::turbo_types::{CodegenError, MaybeTyped, TurboTy};
-use crate::{compile_expr, Ctx};
+use crate::{compile_expr, release_expr_temp_if_needed, Ctx};
 
 /// split(s, sep) -> [str] — calls rt_str_split, returns Array(Str)
 pub(crate) fn compile_stdlib_split<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_split: `&args[0]` produced no value during code generation"
             .to_string(),
     })?;
-    let (sep_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+    let (sep_val, sep_tty) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_split: `&args[1]` produced no value during code generation"
             .to_string(),
@@ -26,6 +26,8 @@ pub(crate) fn compile_stdlib_split<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, sep_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
+    release_expr_temp_if_needed(cx, sep_val, &sep_tty, &args[1]);
     Ok(Some((result, TurboTy::Array(Box::new(TurboTy::Str)))))
 }
 
@@ -35,7 +37,7 @@ pub(crate) fn compile_stdlib_str1<M: Module>(
     args: &[Spanned<Expr>],
     rt_name: &str,
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_str1: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -44,6 +46,7 @@ pub(crate) fn compile_stdlib_str1<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -53,12 +56,12 @@ pub(crate) fn compile_stdlib_str_bool2<M: Module>(
     args: &[Spanned<Expr>],
     rt_name: &str,
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_str_bool2: `&args[0]` produced no value during code generation"
             .to_string(),
     })?;
-    let (other_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+    let (other_val, other_tty) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_str_bool2: `&args[1]` produced no value during code generation"
             .to_string(),
@@ -67,6 +70,8 @@ pub(crate) fn compile_stdlib_str_bool2<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, other_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
+    release_expr_temp_if_needed(cx, other_val, &other_tty, &args[1]);
     Ok(Some((result, TurboTy::Bool)))
 }
 
@@ -75,17 +80,17 @@ pub(crate) fn compile_stdlib_replace<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_replace: `&args[0]` produced no value during code generation"
             .to_string(),
     })?;
-    let (from_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+    let (from_val, from_tty) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_replace: `&args[1]` produced no value during code generation"
             .to_string(),
     })?;
-    let (to_val, _) = compile_expr(cx, &args[2])?.ok_or_else(|| CodegenError {
+    let (to_val, to_tty) = compile_expr(cx, &args[2])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_replace: `&args[2]` produced no value during code generation"
             .to_string(),
@@ -94,6 +99,9 @@ pub(crate) fn compile_stdlib_replace<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, from_val, to_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
+    release_expr_temp_if_needed(cx, from_val, &from_tty, &args[1]);
+    release_expr_temp_if_needed(cx, to_val, &to_tty, &args[2]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -102,7 +110,7 @@ pub(crate) fn compile_stdlib_char_at<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_char_at: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -123,6 +131,7 @@ pub(crate) fn compile_stdlib_char_at<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, idx_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -131,12 +140,12 @@ pub(crate) fn compile_stdlib_index_of<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_index_of: `&args[0]` produced no value during code generation"
             .to_string(),
     })?;
-    let (sub_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+    let (sub_val, sub_tty) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_index_of: `&args[1]` produced no value during code generation"
             .to_string(),
@@ -145,6 +154,8 @@ pub(crate) fn compile_stdlib_index_of<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, sub_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
+    release_expr_temp_if_needed(cx, sub_val, &sub_tty, &args[1]);
     Ok(Some((result, TurboTy::Int)))
 }
 
@@ -153,12 +164,12 @@ pub(crate) fn compile_stdlib_join<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (arr_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (arr_val, arr_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_join: `&args[0]` produced no value during code generation"
             .to_string(),
     })?;
-    let (sep_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+    let (sep_val, sep_tty) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_join: `&args[1]` produced no value during code generation"
             .to_string(),
@@ -167,6 +178,8 @@ pub(crate) fn compile_stdlib_join<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[arr_val, sep_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, arr_val, &arr_tty, &args[0]);
+    release_expr_temp_if_needed(cx, sep_val, &sep_tty, &args[1]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -175,7 +188,7 @@ pub(crate) fn compile_stdlib_repeat<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_repeat: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -196,6 +209,7 @@ pub(crate) fn compile_stdlib_repeat<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, n_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -204,7 +218,7 @@ pub(crate) fn compile_substring<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_substring: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -223,6 +237,7 @@ pub(crate) fn compile_substring<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, start_val, end_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -231,7 +246,7 @@ pub(crate) fn compile_pad_left<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_pad_left: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -241,7 +256,7 @@ pub(crate) fn compile_pad_left<M: Module>(
         message: "compile_pad_left: `&args[1]` produced no value during code generation"
             .to_string(),
     })?;
-    let (char_val, _) = compile_expr(cx, &args[2])?.ok_or_else(|| CodegenError {
+    let (char_val, char_tty) = compile_expr(cx, &args[2])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_pad_left: `&args[2]` produced no value during code generation"
             .to_string(),
@@ -250,6 +265,8 @@ pub(crate) fn compile_pad_left<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, width_val, char_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
+    release_expr_temp_if_needed(cx, char_val, &char_tty, &args[2]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -258,7 +275,7 @@ pub(crate) fn compile_pad_right<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_pad_right: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -268,7 +285,7 @@ pub(crate) fn compile_pad_right<M: Module>(
         message: "compile_pad_right: `&args[1]` produced no value during code generation"
             .to_string(),
     })?;
-    let (char_val, _) = compile_expr(cx, &args[2])?.ok_or_else(|| CodegenError {
+    let (char_val, char_tty) = compile_expr(cx, &args[2])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_pad_right: `&args[2]` produced no value during code generation"
             .to_string(),
@@ -277,6 +294,8 @@ pub(crate) fn compile_pad_right<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, width_val, char_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
+    release_expr_temp_if_needed(cx, char_val, &char_tty, &args[2]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -285,7 +304,7 @@ pub(crate) fn compile_str_to_int<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_str_to_int: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -294,6 +313,7 @@ pub(crate) fn compile_str_to_int<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
     Ok(Some((
         result,
         TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Str)),
@@ -305,7 +325,7 @@ pub(crate) fn compile_str_to_float<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_str_to_float: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -314,6 +334,7 @@ pub(crate) fn compile_str_to_float<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
     Ok(Some((
         result,
         TurboTy::Result(Box::new(TurboTy::Float), Box::new(TurboTy::Str)),

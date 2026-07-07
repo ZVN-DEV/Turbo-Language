@@ -6,7 +6,10 @@ use cranelift_module::Module;
 use turbo_ast::*;
 
 use crate::turbo_types::{CodegenError, MaybeTyped, TurboTy};
-use crate::{compile_expr, turbo_ty_to_cl_type, Ctx};
+use crate::{
+    compile_expr, retain_array_elements_if_needed, retain_array_prefix_if_needed, retain_if_needed,
+    turbo_ty_to_cl_type, Ctx,
+};
 
 /// compile_builtin_map: map(arr, fn) -> [U]
 /// Allocates a new array of the same length, iterates the source array,
@@ -264,6 +267,7 @@ pub(crate) fn compile_builtin_filter<M: Module>(
     cx.builder
         .ins()
         .call(set_ref, &[result_ptr, out_idx, raw_elem]);
+    retain_if_needed(cx, raw_elem, &elem_tty);
 
     let one = cx.builder.ins().iconst(types::I64, 1);
     let next_out = cx.builder.ins().iadd(out_idx, one);
@@ -477,15 +481,43 @@ pub(crate) fn compile_builtin_push<M: Module>(
         message: "compile_builtin_push: `&args[0]` produced no value during code generation"
             .to_string(),
     })?;
-    let (elem_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+    let elem_tty = match &arr_tty {
+        TurboTy::Array(inner) => *inner.clone(),
+        _ => TurboTy::Int,
+    };
+    let old_len = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlags::new(), arr_val, 0);
+    let (elem_val, elem_val_tty) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_builtin_push: `&args[1]` produced no value during code generation"
             .to_string(),
     })?;
+    if matches!(
+        &args[1].node,
+        Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
+    ) {
+        retain_if_needed(cx, elem_val, &elem_val_tty);
+    }
     let push_fid = cx.rt_fns["rt_array_push"];
     let push_ref = cx.module.declare_func_in_func(push_fid, cx.builder.func);
     let call = cx.builder.ins().call(push_ref, &[arr_val, elem_val]);
     let result = cx.builder.inst_results(call)[0];
+    let same_ptr = cx.builder.ins().icmp(IntCC::Equal, arr_val, result);
+    let copied_block = cx.builder.create_block();
+    let done_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(same_ptr, done_block, &[], copied_block, &[]);
+
+    cx.builder.switch_to_block(copied_block);
+    cx.builder.seal_block(copied_block);
+    retain_array_prefix_if_needed(cx, result, &elem_tty, old_len);
+    cx.builder.ins().jump(done_block, &[]);
+
+    cx.builder.switch_to_block(done_block);
+    cx.builder.seal_block(done_block);
     // Preserve the array element type from the input array
     Ok(Some((result, arr_tty)))
 }
@@ -532,6 +564,7 @@ pub(crate) fn compile_sort<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[arr_val]);
     let result = cx.builder.inst_results(call)[0];
+    retain_array_elements_if_needed(cx, result, &elem_tty);
     Ok(Some((result, TurboTy::Array(Box::new(elem_tty)))))
 }
 
@@ -552,6 +585,7 @@ pub(crate) fn compile_reverse<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[arr_val]);
     let result = cx.builder.inst_results(call)[0];
+    retain_array_elements_if_needed(cx, result, &elem_tty);
     Ok(Some((result, TurboTy::Array(Box::new(elem_tty)))))
 }
 
@@ -624,6 +658,7 @@ pub(crate) fn compile_slice<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[arr_val, start_val, end_val]);
     let result = cx.builder.inst_results(call)[0];
+    retain_array_elements_if_needed(cx, result, &elem_tty);
     Ok(Some((result, TurboTy::Array(Box::new(elem_tty)))))
 }
 
