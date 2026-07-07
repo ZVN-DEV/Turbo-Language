@@ -769,6 +769,37 @@ static void test_string_arc_array_struct_slots(void) {
     check("test_string_arc_array_struct_slots keep stored strings alive", ok);
 }
 
+/* ── 36: arena-backed ARC releases are sentinel no-ops after arena end ─── */
+static void test_arena_arc_release_after_end_noop(void) {
+    rt_arena_begin();
+    const char *arena_s = rt_str_concat("arena", "-value");
+    long long rc_before = *((long long *)((char *)arena_s - 8));
+    int ok = arena_s && strcmp(arena_s, "arena-value") == 0
+        && rc_before == (LLONG_MAX - 1);
+    rt_arena_end();
+
+    /* This used to read a normal refcount from bulk-freed arena memory and
+     * call free() on it. ASan catches both the stale read and double-free class. */
+    rt_release((void *)arena_s);
+    check("test_arena_arc_release_after_end_noop", ok);
+}
+
+/* ── 37: heap ARC releases still run while an arena is active ──────────── */
+static void test_heap_arc_release_during_active_arena_decrements(void) {
+    const char *heap_s = rt_str_concat("heap", "-value");
+    rt_retain((void *)heap_s);
+    long long *rc = (long long *)((char *)heap_s - 8);
+
+    rt_arena_begin();
+    rt_release((void *)heap_s);
+    long long rc_during_arena = *rc;
+    rt_arena_end();
+
+    int ok = heap_s && strcmp(heap_s, "heap-value") == 0 && rc_during_arena == 1;
+    rt_release((void *)heap_s);
+    check("test_heap_arc_release_during_active_arena_decrements", ok);
+}
+
 int main(void) {
     printf("== turbo_rt C runtime tests ==\n");
 
@@ -808,6 +839,8 @@ int main(void) {
     test_string_arc_literal_never_freed();
     test_string_arc_return_escape();
     test_string_arc_array_struct_slots();
+    test_arena_arc_release_after_end_noop();
+    test_heap_arc_release_during_active_arena_decrements();
 
     if (g_failures == 0) {
         printf("\nAll tests passed.\n");

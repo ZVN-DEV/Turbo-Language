@@ -52,16 +52,9 @@ pub(crate) fn compile_stmt<M: Module>(
             //     Gated to refcounted element types so scalar indexing (e.g.
             //     `let x = ints[0]`) is left byte-for-byte unchanged.
             let rhs_retains = rhs_is_ident
-                || (matches!(&value.node, Expr::Index { .. })
-                    && matches!(
-                        &turbo_ty,
-                        TurboTy::Str | TurboTy::Struct(_) | TurboTy::Array(_)
-                    ))
+                || (matches!(&value.node, Expr::Index { .. }) && is_rc_managed_type(cx, &turbo_ty))
                 || (matches!(&value.node, Expr::FieldAccess { .. })
-                    && matches!(
-                        &turbo_ty,
-                        TurboTy::Str | TurboTy::Struct(_) | TurboTy::Array(_)
-                    ));
+                    && is_rc_managed_type(cx, &turbo_ty));
             if rhs_retains {
                 if let Some(v) = val {
                     retain_if_needed(cx, v, &turbo_ty);

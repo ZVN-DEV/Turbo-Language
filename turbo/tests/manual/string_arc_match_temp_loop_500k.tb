@@ -1,0 +1,51 @@
+type Msg {
+    Text(str),
+    Empty,
+}
+
+fn get_result(n: i64) -> str ! str {
+    if n == 0 {
+        ok("ok")
+    } else {
+        err(upper("bad"))
+    }
+}
+
+fn get_msg() -> Msg {
+    Msg.Text(upper("hi"))
+}
+
+fn main() {
+    let mut i = 0
+    let mut result_hits = 0
+    let mut enum_hits = 0
+    while i < 500000 {
+        match get_result(1) {
+            ok(v) => {
+                if len(v) == 2 {
+                    result_hits = result_hits + 100
+                }
+            }
+            err(e) => {
+                if len(e) == 3 {
+                    result_hits = result_hits + 1
+                }
+            }
+        }
+
+        match get_msg() {
+            Text(s) => {
+                if len(s) == 2 {
+                    enum_hits = enum_hits + 1
+                }
+            }
+            Empty => {
+                enum_hits = enum_hits + 100
+            }
+        }
+
+        i = i + 1
+    }
+    print(result_hits)
+    print(enum_hits)
+}

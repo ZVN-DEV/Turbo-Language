@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use turbo_ast::*;
 
 use crate::turbo_types::{CodegenError, MaybeTyped, TurboTy};
-use crate::{compile_expr, retain_if_needed, Ctx};
+use crate::{
+    compile_expr, expr_produces_owned_rc_temp, is_rc_managed_type, release_if_needed,
+    retain_if_needed, Ctx,
+};
 
 fn extract_single_assign(branch: &Spanned<Expr>) -> Option<(&str, &Spanned<Expr>)> {
     match &branch.node {
@@ -660,8 +663,13 @@ pub(crate) fn compile_match<M: Module>(
         code: ErrorCode::E0400,
         message: "compile_match: `subject` produced no value during code generation".to_string(),
     })?;
+    let release_owned_subject =
+        is_rc_managed_type(cx, &subj_tty) && expr_produces_owned_rc_temp(subject);
 
     if arms.is_empty() {
+        if release_owned_subject {
+            release_if_needed(cx, subj_val, &subj_tty);
+        }
         return Ok(None);
     }
 
@@ -682,6 +690,7 @@ pub(crate) fn compile_match<M: Module>(
         if is_catchall {
             // Unconditional arm -- bind variable if ident pattern, compile body
             let saved_vars = cx.vars.clone();
+            let mut pattern_bindings = Vec::new();
             if let Pattern::Ident(name) = &arm.pattern.node {
                 let cl_ty = cx.builder.func.dfg.value_type(subj_val);
                 let var = Variable::new(cx.next_var);
@@ -689,8 +698,15 @@ pub(crate) fn compile_match<M: Module>(
                 cx.builder.declare_var(var, cl_ty);
                 cx.builder.def_var(var, subj_val);
                 cx.vars.insert(name.clone(), (var, cl_ty, subj_tty.clone()));
+                pattern_bindings.push((var, subj_tty.clone()));
             }
             let body_result = compile_expr(cx, &arm.body)?;
+            retain_match_result_if_subject_binding(
+                cx,
+                release_owned_subject,
+                &body_result,
+                &pattern_bindings,
+            );
             cx.vars = saved_vars;
             emit_match_arm_jump(
                 cx,
@@ -812,6 +828,7 @@ pub(crate) fn compile_match<M: Module>(
 
         // Bind pattern variables in the match block
         let saved_vars = cx.vars.clone();
+        let mut pattern_bindings = Vec::new();
         match &arm.pattern.node {
             Pattern::Ok(binding) | Pattern::Err(binding) => {
                 let val_fid = cx.rt_fns["rt_result_value"];
@@ -846,7 +863,9 @@ pub(crate) fn compile_match<M: Module>(
                 cx.next_var += 1;
                 cx.builder.declare_var(var, cl_ty);
                 cx.builder.def_var(var, val);
-                cx.vars.insert(binding.clone(), (var, cl_ty, turbo_ty));
+                cx.vars
+                    .insert(binding.clone(), (var, cl_ty, turbo_ty.clone()));
+                pattern_bindings.push((var, turbo_ty));
             }
             Pattern::Some(binding) => {
                 let val_fid = cx.rt_fns["rt_option_value"];
@@ -877,7 +896,9 @@ pub(crate) fn compile_match<M: Module>(
                 cx.next_var += 1;
                 cx.builder.declare_var(var, cl_ty);
                 cx.builder.def_var(var, bind_val);
-                cx.vars.insert(binding.clone(), (var, cl_ty, turbo_ty));
+                cx.vars
+                    .insert(binding.clone(), (var, cl_ty, turbo_ty.clone()));
+                pattern_bindings.push((var, turbo_ty));
             }
             Pattern::VariantDestructure { variant, bindings } => {
                 let field_tys = if let TurboTy::Enum(ref enum_name) = subj_tty {
@@ -921,7 +942,9 @@ pub(crate) fn compile_match<M: Module>(
                     cx.next_var += 1;
                     cx.builder.declare_var(var, cl_ty);
                     cx.builder.def_var(var, val);
-                    cx.vars.insert(binding.clone(), (var, cl_ty, field_tty));
+                    cx.vars
+                        .insert(binding.clone(), (var, cl_ty, field_tty.clone()));
+                    pattern_bindings.push((var, field_tty));
                 }
             }
             Pattern::Ident(name) if is_catchall_pattern => {
@@ -932,6 +955,7 @@ pub(crate) fn compile_match<M: Module>(
                 cx.builder.declare_var(var, cl_ty);
                 cx.builder.def_var(var, subj_val);
                 cx.vars.insert(name.clone(), (var, cl_ty, subj_tty.clone()));
+                pattern_bindings.push((var, subj_tty.clone()));
             }
             _ => {}
         }
@@ -950,6 +974,12 @@ pub(crate) fn compile_match<M: Module>(
         }
 
         let body_result = compile_expr(cx, &arm.body)?;
+        retain_match_result_if_subject_binding(
+            cx,
+            release_owned_subject,
+            &body_result,
+            &pattern_bindings,
+        );
         cx.vars = saved_vars;
         emit_match_arm_jump(
             cx,
@@ -977,9 +1007,41 @@ pub(crate) fn compile_match<M: Module>(
 
     if has_result {
         let param = cx.builder.block_params(merge_block)[0];
+        if release_owned_subject {
+            release_if_needed(cx, subj_val, &subj_tty);
+        }
         Ok(Some((param, result_turbo_ty)))
     } else {
+        if release_owned_subject {
+            release_if_needed(cx, subj_val, &subj_tty);
+        }
         Ok(None)
+    }
+}
+
+fn retain_match_result_if_subject_binding<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    release_owned_subject: bool,
+    body_result: &MaybeTyped,
+    pattern_bindings: &[(Variable, TurboTy)],
+) {
+    if !release_owned_subject || cx.builder.is_unreachable() {
+        return;
+    }
+    let Some((result_val, result_tty)) = body_result else {
+        return;
+    };
+    if !is_rc_managed_type(cx, result_tty) {
+        return;
+    }
+    for (var, binding_tty) in pattern_bindings {
+        if !is_rc_managed_type(cx, binding_tty) {
+            continue;
+        }
+        if cx.builder.use_var(*var) == *result_val {
+            retain_if_needed(cx, *result_val, result_tty);
+            break;
+        }
     }
 }
 
