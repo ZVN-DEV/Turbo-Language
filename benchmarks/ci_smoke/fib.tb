@@ -1,5 +1,5 @@
 // CI smoke benchmark: recursive Fibonacci.
-// Sized for CI (fib 35, not fib 40) so best-of-3 stays well under the smoke
+// Sized for CI (fib 35, not fib 40) so best-of-N stays well under the smoke
 // budget while still exercising function-call + recursion overhead.
 // Expected output: 9227465
 fn fib(n: i64) -> i64 {

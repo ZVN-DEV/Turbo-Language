@@ -129,13 +129,10 @@ impl Parser {
     }
 
     fn advance(&mut self) -> &LexSpanned<Token> {
-        // Invariant: `advance()` is only ever called after `peek()` /
-        // `matches!(self.peek(), Some(..))` has confirmed a token exists at
-        // `self.pos`. Every caller guards on `peek` first, so this lookup is
-        // always in bounds. If it ever fails it means a caller advanced without
-        // a peek guard — an internal parser bug, never malformed user input
-        // (which is instead surfaced as a `ParseError`). The `.expect` keeps
-        // that guarantee explicit instead of a bare index panic.
+        // Invariant: every caller `peek()`s before `advance()`, so a token always
+        // exists at `self.pos`. A failure here is an internal parser bug (a caller
+        // advanced without a peek guard), never malformed user input — that is
+        // surfaced as a `ParseError`.
         let tok = self
             .tokens
             .get(self.pos)

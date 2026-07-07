@@ -45,6 +45,22 @@ export async function assertExecRejectedRun(fetcher, runUrl, options = {}) {
   assertExecRejected(response, body, label);
 }
 
+// A program that passes the source allowlist (only safe builtins) but abuses
+// runtime resources with an unbounded compute loop. On the deployed container it
+// must be contained — killed by the prlimit CPU cap or the wall-clock watchdog —
+// never returning a successful run. This is the first non-mock exercise of the
+// prlimit path, so it validates on the Fly deploy rather than in local/CI (which
+// have no prlimit and rely on the wall timeout alone).
+export async function assertResourceAbuseContained(fetcher, runUrl, options = {}) {
+  const label = options.label ?? "playground";
+  const source =
+    "fn main() { let mut x = 0\n while x >= 0 { x = x + 1 } print(x) }";
+  const { response, body } = await postRunSource(fetcher, runUrl, source, options);
+  if (body?.success === true) {
+    throw new Error(`${label} resource-limit smoke check failed: abusive program returned success`);
+  }
+}
+
 async function postRunSource(fetcher, runUrl, source, options) {
   const response = await fetcher(runUrl, {
     method: "POST",

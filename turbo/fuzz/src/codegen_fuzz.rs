@@ -250,7 +250,14 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}...[{} bytes total]", &s[..max], s.len())
+        // Floor to a char boundary: callers pass lossy-decoded program output, so
+        // `max` can land mid-codepoint. Slicing there would panic and abort the
+        // fuzz run before the divergence is recorded.
+        let mut cut = max;
+        while cut > 0 && !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        format!("{}...[{} bytes total]", &s[..cut], s.len())
     }
 }
 
@@ -515,7 +522,7 @@ fn run_execute_mode(iters: usize) {
                 ran += 1;
                 let detail = format!(
                     "execute-mode failure\nseed = {seed}\n{}\n\n--- program ---\n{src}\n",
-                    o.describe("jit-run")
+                    o.describe_with_stderr("jit-run")
                 );
                 let path = record_finding("execute_fail", seed, &src, &detail);
                 findings.push(seed);
@@ -656,10 +663,17 @@ fn classify_diff(
         Err(e) => return Some(format!("could not spawn AOT build: {e}")),
     };
 
+    // A JIT crash (signal or timeout) is always a finding: pairing it with a
+    // failed AOT build would otherwise mask it, since the build failure may be an
+    // ordinary compile error (or a missing `cc`) rather than the same rejection.
+    if jit.timed_out || jit.signal.is_some() {
+        return Some(format!("JIT crashed: {}", jit.describe_with_stderr("jit")));
+    }
+
     // A miscompile can present as one backend refusing to build/run what the
-    // other happily executes. Treat that asymmetry as a divergence.
+    // other happily executes. Treat that asymmetry as a divergence. Two ordinary
+    // non-zero exits, however, are the same rejection — not a divergence.
     if !jit.ok() && !build.ok() {
-        // Both backends reject it the same way — not a divergence.
         return None;
     }
     if !build.ok() {
@@ -678,8 +692,8 @@ fn classify_diff(
     if !jit.ok() || !aot.ok() {
         return Some(format!(
             "backend crash asymmetry: JIT {}, AOT {}",
-            jit.describe("jit"),
-            aot.describe("aot")
+            jit.describe_with_stderr("jit"),
+            aot.describe_with_stderr("aot")
         ));
     }
 
@@ -708,7 +722,6 @@ struct RunOutcome {
     /// True if the watchdog killed it for exceeding the deadline.
     timed_out: bool,
     stdout: Vec<u8>,
-    #[allow(dead_code)]
     stderr: Vec<u8>,
 }
 
@@ -725,6 +738,20 @@ impl RunOutcome {
             format!("{label} killed by signal {sig}")
         } else {
             format!("{label} exit {}", self.code.unwrap_or(-1))
+        }
+    }
+
+    /// `describe` plus a truncated stderr tail — where the compiler panic message
+    /// or runtime error lands, which is what you need to triage a finding.
+    fn describe_with_stderr(&self, label: &str) -> String {
+        let base = self.describe(label);
+        if self.stderr.is_empty() {
+            base
+        } else {
+            format!(
+                "{base}\n  {label} stderr: {}",
+                truncate(&String::from_utf8_lossy(&self.stderr), 500)
+            )
         }
     }
 }

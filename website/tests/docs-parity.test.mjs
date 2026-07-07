@@ -163,10 +163,13 @@ function parseCanonicalErrorCodes() {
     fromMdTable.add(m[1]);
   }
 
-  const errorsRs = stripRanges(readRepo("turbo/crates/turbo-ast/src/errors.rs"));
+  // Match only enum-variant declaration lines (`    E0123,`) — not doc-comment
+  // mentions or the rustdoc example. A code that was retired as a variant but left
+  // behind in a comment must NOT keep the union from flagging a phantom site entry.
+  const errorsRs = readRepo("turbo/crates/turbo-ast/src/errors.rs");
   const fromRs = new Set();
-  for (const m of errorsRs.matchAll(/\bE0\d{3}\b/g)) {
-    fromRs.add(m[0]);
+  for (const m of errorsRs.matchAll(/^\s*(E0\d{3})\s*,/gm)) {
+    fromRs.add(m[1]);
   }
 
   return { fromMdTable, union: new Set([...fromMdTable, ...fromRs]) };
