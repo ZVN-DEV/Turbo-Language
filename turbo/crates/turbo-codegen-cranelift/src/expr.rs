@@ -709,10 +709,18 @@ fn compile_expr_inner<M: Module>(
                             cx.module.declare_func_in_func(target_fid, cx.builder.func);
                         let target_fn_ptr = cx.builder.ins().func_addr(cx.ptr_type, target_fref);
 
-                        // Compile all arguments
+                        // Compile all arguments. Alongside each value we track
+                        // whether the argument is a heap string, building a
+                        // pointer mask so rt_spawn_with_args can deep-copy
+                        // arena-backed string args before they cross the thread
+                        // boundary (arena-escape fix, issue #56).
                         let mut arg_vals = Vec::new();
+                        let mut ptr_mask: i64 = 0;
                         for arg in args {
                             if let Some((val, tty)) = compile_expr(cx, arg)? {
+                                if matches!(tty, TurboTy::Str) && arg_vals.len() < 64 {
+                                    ptr_mask |= 1i64 << arg_vals.len();
+                                }
                                 let val = match tty {
                                     TurboTy::Bool => cx.builder.ins().sextend(types::I64, val),
                                     TurboTy::Float => {
@@ -755,10 +763,17 @@ fn compile_expr_inner<M: Module>(
                         let thunk_fref = cx.module.declare_func_in_func(thunk_fid, cx.builder.func);
                         let thunk_fn_ptr = cx.builder.ins().func_addr(cx.ptr_type, thunk_fref);
 
-                        // Call rt_spawn_with_args(thunk_ptr, args_ptr) -> handle
+                        // Call rt_spawn_with_args(thunk_ptr, args_ptr, ptr_mask,
+                        // num_args) -> handle
                         let spawn_fid = cx.rt_fns["rt_spawn_with_args"];
                         let spawn_fref = cx.module.declare_func_in_func(spawn_fid, cx.builder.func);
-                        let call = cx.builder.ins().call(spawn_fref, &[thunk_fn_ptr, args_ptr]);
+                        let ptr_mask_val = cx.builder.ins().iconst(types::I64, ptr_mask);
+                        let num_args_val =
+                            cx.builder.ins().iconst(types::I64, arg_vals.len() as i64);
+                        let call = cx.builder.ins().call(
+                            spawn_fref,
+                            &[thunk_fn_ptr, args_ptr, ptr_mask_val, num_args_val],
+                        );
                         let handle = cx.builder.inst_results(call)[0];
 
                         return Ok(Some((handle, TurboTy::Future(Box::new(inner_ret_tty)))));
@@ -2240,6 +2255,7 @@ fn compile_call<M: Module>(
         "http_server_public" => compile_builtin_http_server_public(cx, args),
         "route" => compile_builtin_route(cx, args),
         "http_listen" => compile_builtin_http_listen(cx, args),
+        "http_config" => compile_builtin_http_config(cx, args),
         "respond" | "respond_text" => compile_builtin_respond_text(cx, args),
         "respond_html" => compile_builtin_respond_html(cx, args),
         "respond_json" => compile_builtin_respond_json(cx, args),

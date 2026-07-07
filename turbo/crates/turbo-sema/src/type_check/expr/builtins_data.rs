@@ -719,6 +719,41 @@ impl Checker {
             }
             return Some(Ty::Unit);
         }
+        // http_config(key: str, value: i64) -> i64
+        // Sets an HTTP server tunable before http_listen; returns 1 on
+        // success, 0 on unknown key or bad value (validated at runtime).
+        if name == "http_config" {
+            if args.len() != 2 {
+                self.error(
+                    ErrorCode::E0513,
+                    format!(
+                        "http_config() takes exactly 2 arguments, got {}",
+                        args.len()
+                    ),
+                    callee.span.clone(),
+                );
+                return Some(Ty::Error);
+            }
+            let key_ty = self.check_expr(&args[0]);
+            if !key_ty.is_error() && key_ty != Ty::Str {
+                self.error(
+                    ErrorCode::E0133,
+                    format!("http_config() first argument must be str (key), found `{key_ty}`"),
+                    args[0].span.clone(),
+                );
+            }
+            let value_ty = self.check_expr(&args[1]);
+            if !value_ty.is_error() && !value_ty.is_integer() {
+                self.error(
+                    ErrorCode::E0133,
+                    format!(
+                        "http_config() second argument must be i64 (value), found `{value_ty}`"
+                    ),
+                    args[1].span.clone(),
+                );
+            }
+            return Some(Ty::I64);
+        }
         // respond*(status: i64, body: str) -> str
         if matches!(
             name,

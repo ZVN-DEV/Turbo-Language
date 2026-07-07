@@ -1319,24 +1319,78 @@ void rt_sleep_ms(long long ms) {
 
 typedef struct {
     long long (*thunk)(void *);
-    void *args_ptr;
+    void *args_ptr;    /* malloc'd copy of the args struct — owned by ctx */
     long long result;
 } spawn_ctx;
 
 static void *spawn_thread_fn(void *arg) {
     spawn_ctx *ctx = (spawn_ctx *)arg;
     ctx->result = ctx->thunk(ctx->args_ptr);
+    /* The args struct is a private malloc'd copy (see rt_spawn_with_args);
+     * free it now that the thunk has consumed it. Any heap string args it
+     * held were themselves copied to independent refcounted allocations that
+     * the callee ARC-manages, so we must not free those here. */
+    free(ctx->args_ptr);
+    ctx->args_ptr = NULL;
     return NULL;
 }
 
-void *rt_spawn_with_args(long long (*thunk)(void *), void *args_ptr) {
+/* Spawn a thunk on a new OS thread with a packed args struct
+ * `[fn_ptr, arg0, arg1, ...]` (num_args + 1 eight-byte slots).
+ *
+ * Arena-escape fix (issue #56): the args struct is allocated by the caller
+ * via rt_struct_alloc, which — when invoked inside an HTTP request handler —
+ * places it in the per-request bump arena (RT_RC_ARENA). The spawned thread
+ * outlives the request, so it would read freed memory once rt_arena_end()
+ * reclaims the arena. We therefore copy the struct into a plain malloc'd
+ * buffer that ctx owns, and for each string argument that is arena-backed we
+ * deep-copy the string bytes into an independent refcounted heap allocation
+ * before handing it to the thread. `ptr_mask` bit i marks arg slot i as a
+ * string pointer eligible for this copy; `num_args` is the argument count.
+ * The JIT twin in src/runtime.rs mirrors this behaviour. */
+void *rt_spawn_with_args(long long (*thunk)(void *), void *args_ptr,
+                         long long ptr_mask, long long num_args) {
     /* Use malloc directly — spawn context must outlive the current arena
      * since the spawned thread runs independently of the request lifecycle. */
     spawn_ctx *ctx = (spawn_ctx *)malloc(sizeof(spawn_ctx));
     if (!ctx) { fprintf(stderr, "runtime error: out of memory (spawn)\n"); exit(1); }
     ctx->thunk = thunk;
-    ctx->args_ptr = args_ptr;
     ctx->result = 0;
+
+    /* Copy the args struct out of any per-request arena into a private
+     * malloc'd buffer: slot 0 is the target fn_ptr, slots 1..num_args are the
+     * arguments. */
+    if (num_args < 0) num_args = 0;
+    size_t slots = (size_t)num_args + 1;
+    long long *src = (long long *)args_ptr;
+    long long *copy = (long long *)malloc(slots * sizeof(long long));
+    if (!copy) { fprintf(stderr, "runtime error: out of memory (spawn args)\n"); exit(1); }
+    if (src) {
+        memcpy(copy, src, slots * sizeof(long long));
+    } else {
+        memset(copy, 0, slots * sizeof(long long));
+    }
+
+    /* Deep-copy any arena-backed string arguments so they survive past the
+     * request arena. Detach the current arena while copying so the copy is
+     * made through malloc (refcount 1), not back into the arena we are
+     * escaping. rt_str_copy_len otherwise honours t_current_arena. */
+    if (ptr_mask != 0) {
+        turbo_arena *saved_arena = t_current_arena;
+        t_current_arena = NULL;
+        for (long long i = 0; i < num_args; i++) {
+            if (!((ptr_mask >> i) & 1)) continue;
+            char *s = (char *)(size_t)copy[i + 1];
+            if (!s) continue;
+            long long rc = *rt_rc_refcount_ptr(s);
+            if (rc == RT_RC_ARENA) {
+                copy[i + 1] = (long long)(size_t)rt_str_copy_len(s, strlen(s));
+            }
+        }
+        t_current_arena = saved_arena;
+    }
+
+    ctx->args_ptr = copy;
     pthread_t *handle = (pthread_t *)malloc(sizeof(pthread_t) + sizeof(spawn_ctx *));
     if (!handle) { fprintf(stderr, "runtime error: out of memory (spawn)\n"); exit(1); }
     /* Store ctx pointer right after the pthread_t */
@@ -2732,10 +2786,13 @@ long long rt_hashmap_inc(void *map_ptr, const char *key, long long delta) {
 #include <unistd.h>
 #include <errno.h>
 #include <limits.h>
+#include <signal.h>
 
-/* Hard cap on request body size. Anything larger gets 400 Bad Request.
+/* Default request body cap. Anything larger gets 413 Payload Too Large.
  * 32 MB is already generous for a language-level HTTP server primitive;
- * the user should front this with a real proxy for production. */
+ * the user should front this with a real proxy for production. This is the
+ * default value of `g_http_config.max_body_bytes`, overridable at startup
+ * via `http_config("max_body_bytes", N)` before `http_listen`. */
 #define RT_HTTP_MAX_BODY (32 * 1024 * 1024)
 
 typedef const char* (*route_handler_fn)(const void*, const char*);
@@ -2759,8 +2816,166 @@ typedef struct {
 
 static HttpServerC http_servers[16];
 static int http_server_count = 0;
-static const int RT_HTTP_MAX_ACTIVE_CONNECTIONS = 256;
 static const char RT_RESPONSE_SEP = '\x1f';
+
+/* ── HTTP server tunables (http_config) ──────────────────────────────────
+ *
+ * A single process-wide config, set at startup via `http_config(key, value)`
+ * BEFORE `http_listen`. It is written only during the single-threaded startup
+ * phase and read by the accept loop and per-connection worker threads once the
+ * server is listening, so plain reads require no synchronisation (there is no
+ * concurrent writer). The JIT twin lives in `src/runtime.rs` — keep the keys,
+ * defaults, and validation in lockstep. */
+typedef struct {
+    long long max_body_bytes;         /* request body cap; over => 413 */
+    long long max_header_bytes;       /* request header cap; over => 431 */
+    long long max_connections;        /* concurrent connection cap; over => 503 */
+    long long read_timeout_ms;        /* SO_RCVTIMEO while reading a request */
+    long long write_timeout_ms;       /* SO_SNDTIMEO while writing a response */
+    long long keepalive_max_requests; /* requests served per connection */
+    long long idle_timeout_ms;        /* wait for next keep-alive request */
+} HttpConfig;
+
+#define RT_HTTP_DEFAULT_MAX_BODY         RT_HTTP_MAX_BODY
+#define RT_HTTP_DEFAULT_MAX_HEADER       (16 * 1024)
+#define RT_HTTP_DEFAULT_MAX_CONN         256
+#define RT_HTTP_DEFAULT_READ_TIMEOUT_MS  10000
+#define RT_HTTP_DEFAULT_WRITE_TIMEOUT_MS 10000
+#define RT_HTTP_DEFAULT_KEEPALIVE_MAX    1000
+#define RT_HTTP_DEFAULT_IDLE_TIMEOUT_MS  10000
+
+/* Sanity upper bounds so a bad config value cannot itself become a DoS
+ * (e.g. a 1 GB header buffer per connection). Shared with the JIT twin. */
+#define RT_HTTP_CFG_MAX_HEADER_LIMIT (16 * 1024 * 1024)
+#define RT_HTTP_CFG_MAX_CONN_LIMIT   1000000
+#define RT_HTTP_CFG_MIN_HEADER       256
+
+static HttpConfig g_http_config = {
+    RT_HTTP_DEFAULT_MAX_BODY,
+    RT_HTTP_DEFAULT_MAX_HEADER,
+    RT_HTTP_DEFAULT_MAX_CONN,
+    RT_HTTP_DEFAULT_READ_TIMEOUT_MS,
+    RT_HTTP_DEFAULT_WRITE_TIMEOUT_MS,
+    RT_HTTP_DEFAULT_KEEPALIVE_MAX,
+    RT_HTTP_DEFAULT_IDLE_TIMEOUT_MS,
+};
+
+/* Graceful-shutdown flag. Set from the SIGTERM/SIGINT handler (which runs on
+ * the accept thread — worker threads block those signals via pthread_sigmask).
+ * `volatile sig_atomic_t` is the only type an async signal handler may touch. */
+static volatile sig_atomic_t g_http_shutdown = 0;
+
+static void rt_http_signal_handler(int sig) {
+    (void)sig;
+    g_http_shutdown = 1;
+}
+
+/* Install SIGTERM/SIGINT handlers on the calling (accept) thread and ignore
+ * SIGPIPE process-wide so a write to a dead peer returns EPIPE instead of
+ * killing the process. Handlers are installed WITHOUT SA_RESTART so a blocked
+ * accept() returns EINTR and the loop can observe g_http_shutdown. */
+static void rt_http_install_signal_handlers(void) {
+    signal(SIGPIPE, SIG_IGN);
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = rt_http_signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; /* no SA_RESTART: interrupt accept() on signal */
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
+}
+
+/* Write exactly `len` bytes to `fd`, looping over partial writes and retrying
+ * EINTR. A dead peer (EPIPE/ECONNRESET) or a write timeout (EAGAIN under
+ * SO_SNDTIMEO) returns -1 so the caller can tear the connection down instead
+ * of writing a truncated response or blocking a slow-reader forever. Returns
+ * 0 on success, -1 on any unrecoverable error. Exported (non-static) so the
+ * C-runtime test harness can exercise it directly. */
+int rt_write_all(int fd, const char *buf, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, buf + off, len - off);
+        if (n > 0) {
+            off += (size_t)n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        return -1; /* EPIPE / ECONNRESET / EAGAIN (SO_SNDTIMEO) / other */
+    }
+    return 0;
+}
+
+/* Set a millisecond timeout on `fd` for the given socket option
+ * (SO_RCVTIMEO or SO_SNDTIMEO). A value <= 0 leaves the socket blocking. */
+static void rt_set_sock_timeout_ms(int fd, int which, long long ms) {
+    if (ms <= 0) return;
+    struct timeval tv;
+    tv.tv_sec = (time_t)(ms / 1000);
+    tv.tv_usec = (suseconds_t)((ms % 1000) * 1000);
+    setsockopt(fd, SOL_SOCKET, which, &tv, sizeof(tv));
+}
+
+/* http_config(key, value) -> 1 on success, 0 on unknown key or bad value.
+ * Must be called before http_listen. Unknown keys and out-of-range values
+ * print a runtime error to stderr and return 0 — never panic/exit. */
+long long rt_http_config(const char *key, long long value) {
+    if (!key) {
+        fprintf(stderr, "runtime error: http_config: null key\n");
+        return 0;
+    }
+    if (value < 1) {
+        fprintf(stderr,
+                "runtime error: http_config: '%s' must be >= 1 (got %lld)\n",
+                key, value);
+        return 0;
+    }
+    if (strcmp(key, "max_body_bytes") == 0) {
+        g_http_config.max_body_bytes = value;
+        return 1;
+    }
+    if (strcmp(key, "max_header_bytes") == 0) {
+        if (value < RT_HTTP_CFG_MIN_HEADER || value > RT_HTTP_CFG_MAX_HEADER_LIMIT) {
+            fprintf(stderr,
+                    "runtime error: http_config: 'max_header_bytes' must be in "
+                    "[%d, %d] (got %lld)\n",
+                    RT_HTTP_CFG_MIN_HEADER, RT_HTTP_CFG_MAX_HEADER_LIMIT, value);
+            return 0;
+        }
+        g_http_config.max_header_bytes = value;
+        return 1;
+    }
+    if (strcmp(key, "max_connections") == 0) {
+        if (value > RT_HTTP_CFG_MAX_CONN_LIMIT) {
+            fprintf(stderr,
+                    "runtime error: http_config: 'max_connections' must be <= %d "
+                    "(got %lld)\n",
+                    RT_HTTP_CFG_MAX_CONN_LIMIT, value);
+            return 0;
+        }
+        g_http_config.max_connections = value;
+        return 1;
+    }
+    if (strcmp(key, "read_timeout_ms") == 0) {
+        g_http_config.read_timeout_ms = value;
+        return 1;
+    }
+    if (strcmp(key, "write_timeout_ms") == 0) {
+        g_http_config.write_timeout_ms = value;
+        return 1;
+    }
+    if (strcmp(key, "keepalive_max_requests") == 0) {
+        g_http_config.keepalive_max_requests = value;
+        return 1;
+    }
+    if (strcmp(key, "idle_timeout_ms") == 0) {
+        g_http_config.idle_timeout_ms = value;
+        return 1;
+    }
+    fprintf(stderr, "runtime error: http_config: unknown key '%s'\n", key);
+    return 0;
+}
 
 long long rt_http_server(long long port) {
     if (http_server_count >= 16) { fprintf(stderr, "error: max 16 HTTP servers\n"); exit(1); }
@@ -2836,23 +3051,58 @@ static void *handle_http_conn(void *arg) {
     HttpServerC *srv = data->srv;
     free(data);
 
-    /* Set read timeout (10 seconds) for keep-alive idle connections */
-    struct timeval tv;
-    tv.tv_sec = 10;
-    tv.tv_usec = 0;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    /* Worker threads must not handle SIGTERM/SIGINT — those are delivered to
+     * the accept thread, which flips g_http_shutdown. Block them here so a
+     * signal never interrupts a worker mid-response (and so process-directed
+     * signals are steered to the accept thread). */
+    sigset_t block_set;
+    sigemptyset(&block_set);
+    sigaddset(&block_set, SIGTERM);
+    sigaddset(&block_set, SIGINT);
+    pthread_sigmask(SIG_BLOCK, &block_set, NULL);
 
-    /* Persistent read buffer for keep-alive pipelining.
-     * The 16 KB buffer doubles as a hard cap on total request header
-     * size — if a client sends headers that do not fit, we reject with
-     * 431 Request Header Fields Too Large and close the connection.
-     * Individual header lines are also bounded by the buffer. */
-    char buf[16384];
+    /* Snapshot config once per connection (set before listen, never mutated
+     * afterwards). */
+    const long long max_body = g_http_config.max_body_bytes;
+    long long buf_cap = g_http_config.max_header_bytes;
+    if (buf_cap < RT_HTTP_CFG_MIN_HEADER) buf_cap = RT_HTTP_CFG_MIN_HEADER;
+    const long long read_timeout_ms = g_http_config.read_timeout_ms;
+    const long long idle_timeout_ms = g_http_config.idle_timeout_ms;
+    const long long keepalive_max = g_http_config.keepalive_max_requests;
+
+    /* Slowloris-on-write protection: bound how long a single response write
+     * may block on a slow-reading client. */
+    rt_set_sock_timeout_ms(fd, SO_SNDTIMEO, g_http_config.write_timeout_ms);
+
+    /* Persistent read buffer for keep-alive pipelining, sized to the
+     * configured header cap. It doubles as a hard cap on total request
+     * header size — a client whose headers do not fit gets 431 Request
+     * Header Fields Too Large and the connection is closed. */
+    char *buf = (char *)malloc((size_t)buf_cap + 1);
+    if (!buf) {
+        close(fd);
+        atomic_fetch_sub(&srv->active_connections, 1);
+        return NULL;
+    }
     int buf_len = 0;
+    long long requests_served = 0;
 
     while (1) {
+        /* During graceful shutdown, stop accepting new requests on an idle
+         * keep-alive connection promptly (there is no partial request in the
+         * buffer to finish). A request already mid-flight is allowed to
+         * complete below. */
+        if (g_http_shutdown && buf_len == 0) break;
+
+        /* Read timeout policy: while waiting for the first byte of the next
+         * keep-alive request use the (typically longer) idle timeout; once a
+         * request has started arriving switch to the active read timeout so a
+         * slow trickle cannot hold the worker forever. */
+        rt_set_sock_timeout_ms(fd, SO_RCVTIMEO,
+                               buf_len == 0 ? idle_timeout_ms : read_timeout_ms);
+
         /* Read more data into buffer */
-        int space = (int)sizeof(buf) - 1 - buf_len;
+        int space = (int)buf_cap - buf_len;
         if (space <= 0) {
             /* Buffer full and no complete header found yet — headers are
              * too large. Respond with 431 and close. */
@@ -2860,7 +3110,7 @@ static void *handle_http_conn(void *arg) {
                 "HTTP/1.1 431 Request Header Fields Too Large\r\n"
                 "Content-Length: 0\r\n"
                 "Connection: close\r\n\r\n";
-            write(fd, too_large, strlen(too_large));
+            rt_write_all(fd, too_large, strlen(too_large));
             break;
         }
         int n = read(fd, buf + buf_len, space);
@@ -2883,12 +3133,12 @@ static void *handle_http_conn(void *arg) {
             /* If the buffer is full and headers are still incomplete,
              * reject with 431. This guards against DoS via oversized
              * headers that never send the terminator. */
-            if (buf_len >= (int)sizeof(buf) - 1) {
+            if (buf_len >= (int)buf_cap) {
                 const char *too_large =
                     "HTTP/1.1 431 Request Header Fields Too Large\r\n"
                     "Content-Length: 0\r\n"
                     "Connection: close\r\n\r\n";
-                write(fd, too_large, strlen(too_large));
+                rt_write_all(fd, too_large, strlen(too_large));
                 goto conn_done;
             }
             continue;
@@ -2898,7 +3148,7 @@ static void *handle_http_conn(void *arg) {
         char method[16] = {0}, raw_path[1024] = {0};
         if (sscanf(buf, "%15s %1023s", method, raw_path) != 2) {
             const char *bad = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-            write(fd, bad, strlen(bad));
+            rt_write_all(fd, bad, strlen(bad));
             goto conn_done;
         }
 
@@ -2933,9 +3183,12 @@ static void *handle_http_conn(void *arg) {
          * parse failure and silently accepted negative numbers — a
          * negative value would then be interpreted as a huge size_t and
          * fed into memcpy(), crashing the server. We now use strtoll
-         * with ERANGE detection and reject anything out of [0, RT_HTTP_MAX_BODY]. */
+         * with ERANGE detection. A malformed/negative value is 400 Bad
+         * Request; a well-formed value above the configured cap is 413
+         * Payload Too Large. */
         long long content_length = 0;
         int content_length_invalid = 0;
+        int content_length_too_large = 0;
         {
             const char *cl = headers_raw;
             for (size_t i = 0; i + 15 < headers_len; i++) {
@@ -2946,9 +3199,10 @@ static void *handle_http_conn(void *arg) {
                     char *endptr = NULL;
                     errno = 0;
                     long long val = strtoll(vstart, &endptr, 10);
-                    if (errno == ERANGE || endptr == vstart || val < 0 ||
-                        val > (long long)RT_HTTP_MAX_BODY) {
+                    if (errno == ERANGE || endptr == vstart || val < 0) {
                         content_length_invalid = 1;
+                    } else if (val > max_body) {
+                        content_length_too_large = 1;
                     } else {
                         content_length = val;
                     }
@@ -2964,7 +3218,18 @@ static void *handle_http_conn(void *arg) {
                 "HTTP/1.1 400 Bad Request\r\n"
                 "Content-Length: 0\r\n"
                 "Connection: close\r\n\r\n";
-            write(fd, bad, strlen(bad));
+            rt_write_all(fd, bad, strlen(bad));
+            rt_arena_end();
+            break;
+        }
+
+        if (content_length_too_large) {
+            /* Body exceeds the configured cap — reject before reading it. */
+            const char *too_large =
+                "HTTP/1.1 413 Payload Too Large\r\n"
+                "Content-Length: 0\r\n"
+                "Connection: close\r\n\r\n";
+            rt_write_all(fd, too_large, strlen(too_large));
             rt_arena_end();
             break;
         }
@@ -2988,25 +3253,25 @@ static void *handle_http_conn(void *arg) {
         int body_available = buf_len - (int)(body_start - buf);
 
         /* Where the body bytes ultimately live, and how to clean up.
-         * For the common case the body sits inside the 16 KB stack
-         * buffer (`body_ptr == body_start`). For large bodies that do
-         * not fit, we read them into a heap allocation, mirroring the
-         * JIT's `read_exact(vec![0u8; content_length])` (src/runtime.rs)
-         * so AOT accepts the same up-to-32MB bodies the JIT does instead
-         * of spuriously rejecting them with 431. */
+         * For the common case the body sits inside the read buffer
+         * (`body_ptr == body_start`). For large bodies that do not fit,
+         * we read them into a heap allocation, mirroring the JIT's
+         * `read_exact(vec![0u8; content_length])` (src/runtime.rs) so AOT
+         * accepts the same bodies the JIT does instead of spuriously
+         * rejecting them with 431. */
         const char *body_ptr = body_start;
         char *heap_body = NULL;
 
         if ((long long)body_available < content_length) {
             /* The full body is not yet buffered. If the headers plus the
-             * full body still fit inside the stack buffer, keep reading
+             * full body still fit inside the read buffer, keep reading
              * into it (the original fast path). Otherwise the body is too
-             * large for the 16 KB buffer — read the remainder onto the
+             * large for the header buffer — read the remainder onto the
              * heap so we do NOT spuriously hit the `space <= 0` / 431
              * path. content_length was already bounded above by
-             * RT_HTTP_MAX_BODY, so the allocation size is capped. */
+             * max_body, so the allocation size is capped. */
             long long header_bytes = (long long)(body_start - buf);
-            if (header_bytes + content_length <= (long long)sizeof(buf) - 1) {
+            if (header_bytes + content_length <= buf_cap) {
                 /* Need more data — release the arena before looping back
                  * to read more bytes, otherwise it would accumulate
                  * across the read calls until the request is complete. */
@@ -3020,7 +3285,7 @@ static void *handle_http_conn(void *arg) {
                     "HTTP/1.1 500 Internal Server Error\r\n"
                     "Content-Length: 0\r\n"
                     "Connection: close\r\n\r\n";
-                write(fd, oom, strlen(oom));
+                rt_write_all(fd, oom, strlen(oom));
                 rt_arena_end();
                 break;
             }
@@ -3065,7 +3330,18 @@ static void *handle_http_conn(void *arg) {
         memcpy(p, headers_raw, headers_len); p += headers_len; *p++ = '\x01';
         memcpy(p, body_ptr, blen); p += blen; *p = '\0';
 
+        /* This is the last request on the connection if the client asked to
+         * close, we have hit the per-connection keep-alive request cap, or a
+         * graceful shutdown is in progress. Advertise `close` accordingly. */
+        requests_served++;
+        if (keepalive_max > 0 && requests_served >= keepalive_max) keep_alive = 0;
+        if (g_http_shutdown) keep_alive = 0;
         const char *conn_hdr = keep_alive ? "keep-alive" : "close";
+
+        /* A failed response write (dead peer / write timeout) marks the
+         * connection dead: we stop writing and tear it down rather than
+         * looping on a broken socket. */
+        int conn_dead = 0;
 
         /* Match route */
         int matched = 0;
@@ -3084,8 +3360,8 @@ static void *handle_http_conn(void *arg) {
                             "HTTP/1.1 %d OK\r\nContent-Type: %s\r\n"
                             "Connection: %s\r\nContent-Length: %d\r\n\r\n",
                             status, content_type, conn_hdr, resp_len);
-                        write(fd, hdr, strlen(hdr));
-                        write(fd, resp_body, resp_len);
+                        conn_dead = rt_write_all(fd, hdr, strlen(hdr)) != 0 ||
+                                    rt_write_all(fd, resp_body, resp_len) != 0;
                     } else {
                         int resp_len = strlen(resp);
                         char hdr[512];
@@ -3093,15 +3369,15 @@ static void *handle_http_conn(void *arg) {
                             "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
                             "Connection: %s\r\nContent-Length: %d\r\n\r\n",
                             conn_hdr, resp_len);
-                        write(fd, hdr, strlen(hdr));
-                        write(fd, resp, resp_len);
+                        conn_dead = rt_write_all(fd, hdr, strlen(hdr)) != 0 ||
+                                    rt_write_all(fd, resp, resp_len) != 0;
                     }
                 } else {
                     char hdr[256];
                     snprintf(hdr, sizeof(hdr),
                         "HTTP/1.1 200 OK\r\nConnection: %s\r\nContent-Length: 0\r\n\r\n",
                         conn_hdr);
-                    write(fd, hdr, strlen(hdr));
+                    conn_dead = rt_write_all(fd, hdr, strlen(hdr)) != 0;
                 }
                 matched = 1;
                 break;
@@ -3112,7 +3388,14 @@ static void *handle_http_conn(void *arg) {
             snprintf(hdr, sizeof(hdr),
                 "HTTP/1.1 404 Not Found\r\nConnection: %s\r\nContent-Length: 9\r\n\r\nNot Found",
                 conn_hdr);
-            write(fd, hdr, strlen(hdr));
+            conn_dead = rt_write_all(fd, hdr, strlen(hdr)) != 0;
+        }
+
+        /* If the write failed, drop the connection: free the heap body (if
+         * any) and break with the arena still installed — conn_done ends it. */
+        if (conn_dead) {
+            if (heap_body != NULL) free(heap_body);
+            break;
         }
 
         if (heap_body != NULL) {
@@ -3154,6 +3437,7 @@ conn_done:
      * make sure we don't leave the thread-local pointer dangling. */
     rt_arena_end();
 
+    free(buf);
     close(fd);
     atomic_fetch_sub(&srv->active_connections, 1);
     return NULL;
@@ -3188,19 +3472,32 @@ void rt_http_listen(long long server_id) {
         perror("listen"); close(server_fd); return;
     }
 
-    while (1) {
+    /* Install SIGTERM/SIGINT handlers on this (the accept) thread. Worker
+     * threads block those signals (see handle_http_conn), so shutdown signals
+     * land here and flip g_http_shutdown. Handlers use no SA_RESTART, so the
+     * blocking accept() below returns EINTR and the loop observes the flag. */
+    rt_http_install_signal_handlers();
+
+    const long long max_conn = g_http_config.max_connections;
+
+    while (!g_http_shutdown) {
         int client_fd = accept(server_fd, NULL, NULL);
-        if (client_fd < 0) continue;
+        if (client_fd < 0) {
+            /* EINTR: a shutdown signal (or any signal) interrupted accept();
+             * loop to re-check g_http_shutdown. Other errors: skip this
+             * iteration rather than spin-crash. */
+            continue;
+        }
 
         int prev = atomic_fetch_add(&srv->active_connections, 1);
-        if (prev >= RT_HTTP_MAX_ACTIVE_CONNECTIONS) {
+        if (prev >= max_conn) {
             atomic_fetch_sub(&srv->active_connections, 1);
             const char *busy =
                 "HTTP/1.1 503 Service Unavailable\r\n"
                 "Content-Type: text/plain\r\n"
                 "Connection: close\r\n"
                 "Content-Length: 17\r\n\r\nserver overloaded";
-            write(client_fd, busy, strlen(busy));
+            rt_write_all(client_fd, busy, strlen(busy));
             close(client_fd);
             continue;
         }
@@ -3225,6 +3522,23 @@ void rt_http_listen(long long server_id) {
         }
         pthread_attr_destroy(&attr);
     }
+
+    /* Graceful shutdown: stop accepting, then drain in-flight connections up
+     * to a bounded deadline before exiting. Detached workers observe
+     * g_http_shutdown and close after finishing their current request; idle
+     * keep-alive connections close on their next idle-timeout wakeup. */
+    close(server_fd);
+
+    const long long drain_deadline_ms = 10000; /* bounded drain window */
+    long long waited_ms = 0;
+    while (atomic_load(&srv->active_connections) > 0 && waited_ms < drain_deadline_ms) {
+        struct timespec ts = {0, 50 * 1000 * 1000}; /* 50 ms */
+        nanosleep(&ts, NULL);
+        waited_ms += 50;
+    }
+
+    /* Exit 0: a graceful shutdown is a clean, expected termination. */
+    exit(0);
 }
 
 const char* rt_respond_typed(long long status, const char *content_type, const char *body) {

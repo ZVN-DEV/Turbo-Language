@@ -77,16 +77,29 @@ playground to untrusted networks.
 
 ### 3. HTTP Server
 
-The built-in HTTP server (`http_server`, `route`, `http_listen`) is
-development-grade:
+The built-in HTTP server (`http_server`, `route`, `http_listen`) is a
+thread-per-connection server intended to run **behind a reverse proxy**:
 
 - `http_server(port)` binds to `127.0.0.1` (localhost only)
 - `http_server_public(port)` binds to `0.0.0.0` (all interfaces)
-- No TLS termination
-- Request headers are capped at 16 KiB
-- Request bodies are capped at 32 MiB via `Content-Length` validation
-- Connection cap with 503 backpressure (tuned for development loads)
+- No TLS termination and no HTTP/2 — the proxy provides those
+- Request headers are capped (default 16 KiB) — over-cap requests get `431`
+- Request bodies are capped (default 32 MiB) via `Content-Length`
+  validation — over-cap requests get `413`, malformed lengths get `400`
+- Read, write (`SO_SNDTIMEO`, closes slow-write / slowloris clients), and
+  idle-keep-alive timeouts, all default 10 s
+- Per-connection keep-alive request cap (default 1000) and idle timeout
+- Connection cap with `503` backpressure (default 256 concurrent)
+- Partial writes loop to completion; a dead peer (`EPIPE`) or write timeout
+  tears the connection down without leaking; `SIGPIPE` is ignored
+- Graceful shutdown on `SIGTERM`/`SIGINT`: stops accepting, drains in-flight
+  connections up to a 10 s deadline, exits `0`
 - Invalid server IDs are rejected
+
+All limits above are tunable at startup via `http_config(key, value)`
+(call it before `http_listen`). See
+[`docs/production-server.md`](docs/production-server.md) for the full knob
+table, defaults, and a sample nginx configuration.
 
 **For production deployment, run behind a reverse proxy** (nginx,
 Caddy, or similar) that provides TLS termination, rate limiting,

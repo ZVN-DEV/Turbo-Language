@@ -1,0 +1,11 @@
+// Parity: http_config return values agree across JIT and AOT. A valid key
+// returns 1; an unknown key or bad value returns 0 (the runtime error goes to
+// stderr, which the parity harness ignores). No server is started, so the
+// output is deterministic on both backends.
+fn main() {
+    print(http_config("max_body_bytes", 1024))       // 1
+    print(http_config("read_timeout_ms", 3000))      // 1
+    print(http_config("no_such_key", 1))             // 0
+    print(http_config("max_header_bytes", 10))       // 0 (below 256 min)
+    print("done")
+}
