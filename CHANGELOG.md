@@ -3,6 +3,53 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.0] - 2026-07-07
+
+The headline of this release is real string memory management: Turbo strings are
+now reference-counted and free during execution instead of only at program exit,
+so long-running programs stay memory-bounded. Also lands WASM match support for
+enum/Result/Optional, the first package-registry infrastructure, and an honesty
+pass over the design docs.
+
+### Added
+- **String memory is reference-counted and freed during execution.** Previously
+  every string a program allocated lived until the process exited — fine for a
+  short compile-and-run, a slow leak for anything long-lived. Strings now carry
+  an atomic refcount and are released at the point they're consumed (passed to
+  `print`, `len`, `type_of`, or used as a `match` scrutinee), so a loop that
+  churns strings no longer grows without bound. The numbers: a 1M-iteration
+  string-churn loop went from 252MB to 1.6MB peak RSS; a 2M-iteration
+  print-interpolation loop from 124MB to 1.5MB. String-heavy benchmarks got
+  slightly *faster* — freeing as you go reduces allocator pressure. String
+  literals are immortal (never freed), and the per-request server arenas are
+  unchanged (the `RT_RC_ARENA` sentinel opts them out). Verified across two
+  adversarial ASan review rounds. The old README caveat that "string memory
+  frees only at program exit" is gone because it's no longer true. (#53)
+- **WASM backend: `match` on enums, `Result`, and `Optional` in statement
+  position.** The WASM target now compiles statement-position matches with
+  payload destructuring, guard clauses, and wildcard arms, plus enum
+  construction — producing byte-identical output to the native backend
+  (confirmed by a host-compile parity test). The codegen crate's panic budget
+  was ratcheted 282 → 271 in the process. (#52)
+- **Package registry infrastructure.** A curated static index
+  (`registry/index.json`, published at `turbolang.dev/registry/index.json`)
+  now backs a `/packages` page, a `turbolang search <query>` command, and
+  index-aware resolution in `turbolang install`. First step toward a real
+  package ecosystem. (#51)
+
+### Changed
+- **Design docs honesty pass.** The `design/` documents now clearly mark
+  not-yet-implemented features — green threads, actors, the memory ladder, and
+  the LLVM backend references — as *Planned*, with status banners, so the spec
+  no longer reads as if everything already ships. (#50)
+
+### Known issues
+- Owned string temporaries passed as arguments to *user-defined* functions are
+  still not freed at the call site (pre-existing behavior; tracked in #54).
+- A string bound in a block-tail `match` arm can be over-retained (#55).
+- A string that escapes a per-request arena via `spawn` is constrained by the
+  arena lifetime (#56).
+
 ## [0.10.3] - 2026-07-07
 
 A follow-up patch that hardens the safety machinery introduced in 0.10.x. A
