@@ -7,6 +7,12 @@ RUN cd turbo && cargo build --release -p turbo-cli
 
 FROM node:22-bookworm-slim
 
+# util-linux provides prlimit(1); the runner wraps each execution in it to apply
+# OS-level CPU/memory/process/file-size caps (see buildChildInvocation).
+RUN apt-get update \
+  && apt-get install --no-install-recommends -y util-linux \
+  && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system turbo && useradd --system --gid turbo --home-dir /tmp turbo
 COPY --from=builder /build/turbo/target/release/turbolang /usr/local/bin/turbolang
 COPY website/playground-runner/runner.mjs /app/runner.mjs
@@ -14,6 +20,8 @@ COPY website/playground-runner/runner.mjs /app/runner.mjs
 ENV NODE_ENV=production
 ENV PORT=8787
 ENV TURBO_PLAYGROUND_RUNNER_BIN=/usr/local/bin/turbolang
+# Apply OS-level resource limits to each untrusted execution via prlimit.
+ENV TURBO_PLAYGROUND_RUNNER_RLIMIT=1
 
 USER turbo
 WORKDIR /tmp

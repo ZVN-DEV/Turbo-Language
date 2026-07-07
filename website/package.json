@@ -7,7 +7,7 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test tests/*.test.mjs",
+    "test": "node --test tests/*.test.mjs playground-runner/*.test.mjs",
     "smoke:playground": "node playground-smoke.mjs",
     "smoke:playground-runner": "node playground-runner/smoke.mjs"
   },
