@@ -1,0 +1,16 @@
+{
+  "_comment": "Baseline Turbo-AOT/C wall-clock ratios for the CI perf smoke (benchmarks/run_ci_smoke.sh). Ratios, not absolute ms, because they are far more stable across noisy shared runners. The gate fails only when a measured ratio exceeds baseline * (1 + tolerance_fraction).",
+  "_update_procedure": "Rebuild release, then run `TURBO_SMOKE_UPDATE_BASELINE=1 bash benchmarks/run_ci_smoke.sh` on a quiet machine (ideally a Linux GitHub runner, since that is what the nightly gate uses). Review the diff \u2014 ratios should stay near ~1x C \u2014 and commit. Bump only on an intentional, understood codegen change.",
+  "_seeding_note": "Ratios below are the conservative (max) values observed across several local best-of-5 runs on Darwin arm64, not a single sample \u2014 local fib ratios ranged ~0.95-1.09, primes ~0.95-1.07. Seeded high on purpose so the generous +30% gate has realistic headroom and runner jitter never opens a false tracking issue. STRONGLY recommend re-baselining once on a Linux GitHub runner (the nightly platform) via the update procedure above; Cranelift-vs-gcc may differ from Cranelift-vs-Apple-clang.",
+  "tolerance_fraction": 0.3,
+  "generated_on_platform": "Darwin arm64",
+  "generated_at": "2026-07-07T02:28:40Z",
+  "benchmarks": {
+    "fib": {
+      "turbo_over_c": 1.09
+    },
+    "primes": {
+      "turbo_over_c": 1.07
+    }
+  }
+}

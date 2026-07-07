@@ -1,0 +1,11 @@
+// CI smoke benchmark: recursive Fibonacci.
+// Sized for CI (fib 35, not fib 40) so best-of-3 stays well under the smoke
+// budget while still exercising function-call + recursion overhead.
+// Expected output: 9227465
+fn fib(n: i64) -> i64 {
+    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() {
+    print(fib(35))
+}
