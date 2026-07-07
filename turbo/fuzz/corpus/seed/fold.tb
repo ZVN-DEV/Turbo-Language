@@ -1,0 +1,8 @@
+fn sq(x: i64) -> i64 { return x * x }
+fn main() {
+    let arr = [3, 8, 1, 12, 5]
+    let mut acc = 0
+    for x in arr { acc = acc + sq(x) }
+    print(acc)
+    print(len(arr))
+}

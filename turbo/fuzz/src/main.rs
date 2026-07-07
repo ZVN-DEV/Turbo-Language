@@ -37,10 +37,7 @@ fn main() {
         }
     }
 
-    println!(
-        "Completed {} iterations, {} crashes",
-        iterations, crashes
-    );
+    println!("Completed {} iterations, {} crashes", iterations, crashes);
     if !crash_seeds.is_empty() {
         println!("Crash seeds: {:?}", crash_seeds);
     }
@@ -143,16 +140,14 @@ fn generate_input(seed: u64) -> String {
 // ---------------------------------------------------------------------------
 
 const TURBO_KEYWORDS: &[&str] = &[
-    "fn", "let", "mut", "const", "if", "else", "while", "for", "in", "return",
-    "true", "false", "match", "struct", "type", "impl", "trait", "pub", "import",
-    "from", "async", "await", "spawn", "defer", "none", "some",
-    "ok", "err", "break", "continue",
+    "fn", "let", "mut", "const", "if", "else", "while", "for", "in", "return", "true", "false",
+    "match", "struct", "type", "impl", "trait", "pub", "import", "from", "async", "await", "spawn",
+    "defer", "none", "some", "ok", "err", "break", "continue",
 ];
 
 const TURBO_OPERATORS: &[&str] = &[
-    "==", "!=", "<=", ">=", "&&", "||", "->", "=>", "|>", "..", "?.", "??",
-    "+=", "-=", "*=", "/=", "|", "+", "-", "*", "/", "%", "=", "<", ">",
-    "!", "?", ".",
+    "==", "!=", "<=", ">=", "&&", "||", "->", "=>", "|>", "..", "?.", "??", "+=", "-=", "*=", "/=",
+    "|", "+", "-", "*", "/", "%", "=", "<", ">", "!", "?", ".",
 ];
 
 const TURBO_DELIMITERS: &[&str] = &["(", ")", "{", "}", "[", "]", ",", ":", ";", "@"];
@@ -357,21 +352,21 @@ fn gen_mutated_valid_program(rng: &mut Rng) -> String {
 fn gen_unicode_stress(rng: &mut Rng) -> String {
     let mut out = String::new();
     let patterns: &[&str] = &[
-        "\u{200B}",         // zero-width space
-        "\u{200C}",         // zero-width non-joiner
-        "\u{200D}",         // zero-width joiner
-        "\u{FEFF}",         // BOM
-        "\u{202A}",         // LTR embedding
-        "\u{202B}",         // RTL embedding
-        "\u{202C}",         // pop directional
-        "\u{0000}",         // null byte
-        "\u{FFFD}",         // replacement char
-        "\u{0301}",         // combining acute accent
-        "\u{1F600}",        // emoji grinning face
-        "\u{1F4A9}",        // pile of poo
-        "\u{E0001}",        // tag latin small letter a
-        "\u{FE0F}",         // variation selector
-        "\u{D7FF}",         // just below surrogate range (valid)
+        "\u{200B}",  // zero-width space
+        "\u{200C}",  // zero-width non-joiner
+        "\u{200D}",  // zero-width joiner
+        "\u{FEFF}",  // BOM
+        "\u{202A}",  // LTR embedding
+        "\u{202B}",  // RTL embedding
+        "\u{202C}",  // pop directional
+        "\u{0000}",  // null byte
+        "\u{FFFD}",  // replacement char
+        "\u{0301}",  // combining acute accent
+        "\u{1F600}", // emoji grinning face
+        "\u{1F4A9}", // pile of poo
+        "\u{E0001}", // tag latin small letter a
+        "\u{FE0F}",  // variation selector
+        "\u{D7FF}",  // just below surrogate range (valid)
         "let",
         "fn",
         "42",
@@ -400,7 +395,7 @@ fn gen_unicode_stress(rng: &mut Rng) -> String {
 
 fn gen_boundary_string(rng: &mut Rng) -> String {
     match rng.next_usize(6) {
-        0 => String::new(), // empty input
+        0 => String::new(),   // empty input
         1 => "x".to_string(), // single character
         2 => {
             // Very long identifier
@@ -482,10 +477,7 @@ fn gen_random_function_defs(rng: &mut Rng) -> String {
         for _ in 0..stmts {
             let stmt_kind = rng.next_usize(4);
             match stmt_kind {
-                0 => out.push_str(&format!(
-                    "    let x = {}\n",
-                    rng.next_u64() % 1000
-                )),
+                0 => out.push_str(&format!("    let x = {}\n", rng.next_u64() % 1000)),
                 1 => out.push_str("    return 0\n"),
                 2 => out.push_str("    if true { let y = 1 }\n"),
                 _ => out.push_str("    let mut z = 0\n"),
@@ -515,7 +507,7 @@ fn gen_deep_expressions(rng: &mut Rng) -> String {
         out.push_str(rng.choose(ops));
         out.push(' ');
     }
-    out.push_str("1");
+    out.push('1');
     // Close some parens (intentionally may not match)
     for _ in 0..depth / 2 {
         out.push(')');
@@ -567,7 +559,12 @@ fn gen_string_stress(rng: &mut Rng) -> String {
             out.push('"');
             for _ in 0..rng.next_usize(100) {
                 out.push('\\');
-                out.push(rng.choose(&["n", "t", "r", "\\", "\"", "0", "x", "u"]).chars().next().unwrap());
+                out.push(
+                    rng.choose(&["n", "t", "r", "\\", "\"", "0", "x", "u"])
+                        .chars()
+                        .next()
+                        .unwrap(),
+                );
             }
             out.push('"');
         }
