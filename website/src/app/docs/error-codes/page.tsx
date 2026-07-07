@@ -43,11 +43,7 @@ E0100: Type mismatch
               ["E0001", "Unexpected token during parsing"],
               ["E0002", "Expected identifier"],
               ["E0003", "Maximum nesting depth exceeded"],
-              ["E0004", "Invalid import syntax"],
-              ["E0005", "Invalid string interpolation syntax"],
-              ["E0006", "Unexpected end of file"],
               ["E0007", "Invalid attribute"],
-              ["E0008", "Invalid expression"],
             ].map(([code, desc]) => (
               <tr key={code} className="border-b border-[#1a1a2e]">
                 <td className="px-4 py-2">
@@ -141,8 +137,6 @@ E0100: Type mismatch
               ["E0200", "Match expression is not exhaustive"],
               ["E0201", "Match expression has no arms"],
               ["E0202", "Match guard must be bool"],
-              ["E0203", "Variant destructure binding count does not match field count"],
-              ["E0204", "Enum variant requires arguments but none were provided"],
             ].map(([code, desc]) => (
               <tr key={code} className="border-b border-[#1a1a2e]">
                 <td className="px-4 py-2">
@@ -188,7 +182,6 @@ E0100: Type mismatch
               ["E0317", "No such method found on type"],
               ["E0318", "Missing field in struct literal"],
               ["E0319", "Unknown derive trait"],
-              ["E0320", "Impl block for undefined type"],
               ["E0323", "Unknown type in trait method signature"],
               ["E0324", "Unknown return type"],
             ].map(([code, desc]) => (
@@ -250,7 +243,6 @@ E0100: Type mismatch
           </thead>
           <tbody>
             {[
-              ["E0500", "Wrong number of arguments"],
               ["E0501", "Cannot assign to immutable variable"],
               ["E0502", "Cannot assign to field of immutable variable"],
               ["E0503", "Cannot assign to index of immutable variable"],
