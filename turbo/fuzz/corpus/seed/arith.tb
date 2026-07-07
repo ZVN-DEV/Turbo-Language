@@ -1,0 +1,9 @@
+fn main() {
+    let a = ((3 * 4) + (7 - 2))
+    let b = (5 * (6 + 1))
+    print(a)
+    print(b)
+    print(a + b)
+    print(a - b)
+    print(a * b)
+}

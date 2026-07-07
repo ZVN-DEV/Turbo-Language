@@ -131,6 +131,36 @@ jobs:
           test -x ./turbo/target/release/turbolang
           test -x ./turbo/target/release/turbo-lsp
 
+  bench-smoke:
+    name: Perf regression smoke (ubuntu-latest)
+    # Fast turbo-vs-C benchmark subset. Guards the published performance
+    # claims (README, benchmarks/) against a silent codegen regression — a
+    # dimension the rest of the gauntlet does not cover. Linux runner only;
+    # the stored baseline in benchmarks/ci_baseline.json is a Turbo/C *ratio*
+    # (stable across noisy shared runners) and the gate is deliberately
+    # generous (+30%) so runner jitter never opens a false tracking issue.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+
+      - name: Build release compiler
+        run: cargo build --release -p turbo-cli --manifest-path turbo/Cargo.toml
+
+      - name: Perf regression smoke (turbo vs C, ratio-gated)
+        run: bash benchmarks/run_ci_smoke.sh
+
+      - name: Upload benchmark results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-smoke-benchmark-results
+          path: benchmarks/ci_smoke/results/
+          if-no-files-found: warn
+
   canary-publish:
     name: Publish canary
     needs: [gauntlet, release-build]
@@ -189,7 +219,12 @@ jobs:
 
   notify-on-failure:
     name: Open tracking issue on failure
-    needs: [gauntlet, release-build]
+    # `failure()` fires if ANY needed job failed, so listing bench-smoke here
+    # is what makes a perf regression open/append the nightly-canary tracking
+    # issue. Note: bench-smoke is intentionally NOT a dependency of
+    # canary-publish — a perf regression is an early warning, not a reason to
+    # withhold the nightly binary.
+    needs: [gauntlet, release-build, bench-smoke]
     if: ${{ failure() && github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     permissions:

@@ -1,0 +1,43 @@
+# Dependabot configuration.
+# Keeps the Rust workspace, GitHub Actions, and the website's npm deps
+# up to date. Minor/patch bumps are grouped into a single PR per ecosystem
+# to keep review noise low; majors stay as individual PRs.
+version: 2
+updates:
+  # Rust workspace (turbo/Cargo.toml)
+  - package-ecosystem: cargo
+    directory: /turbo
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions used by the workflows in .github/workflows.
+  # Actions are SHA-pinned with version comments; Dependabot updates the
+  # pins and comments together, so no special config is needed here.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Website (website/package.json)
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch

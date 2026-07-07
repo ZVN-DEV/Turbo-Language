@@ -1,0 +1,20 @@
+// CI smoke benchmark: prime counting via trial division.
+// Exercises loops, conditionals, modulo, and early return — a different
+// hot path from fib. Expected output: 9592
+fn is_prime(n: i64) -> bool {
+    if n < 2 { return false }
+    let mut i = 2
+    while i * i <= n {
+        if n % i == 0 { return false }
+        i += 1
+    }
+    true
+}
+
+fn main() {
+    let mut count = 0
+    for n in 2..100000 {
+        if is_prime(n) { count += 1 }
+    }
+    print(count)
+}

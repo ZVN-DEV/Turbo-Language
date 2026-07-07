@@ -114,7 +114,8 @@ test("standalone playground runner artifacts exist and stay container-oriented",
   assert.match(dockerfile, /\/healthz/);
   assert.doesNotMatch(dockerfile, /\b(curl|wget)\b/);
   assert.match(flyConfig, /app = "turbolang-playground-runner"/);
-  assert.match(flyConfig, /dockerfile = "website\/playground-runner\/Dockerfile"/);
+  // Path is relative to fly.toml's own directory (fixed in 9a1195e for fly deploy)
+  assert.match(flyConfig, /dockerfile = "Dockerfile"/);
   assert.match(flyConfig, /TURBO_PLAYGROUND_RUNNER_ALLOW_UNSAFE_HOST = "1"/);
   assert.match(flyConfig, /internal_port = 8787/);
   assert.match(flyConfig, /auto_stop_machines = "off"/);

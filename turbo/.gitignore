@@ -9,7 +9,10 @@
 .idea/
 website/node_modules/
 website/.next/
-fuzz/corpus/
+# Fuzz corpus: keep the checked-in README + seed corpus, but ignore
+# runtime-written findings (crash/divergence repros) except the .gitkeep.
+fuzz/corpus/findings/*
+!fuzz/corpus/findings/.gitkeep
 fuzz/artifacts/
 .playwright-mcp/
 benchmarks/c/*

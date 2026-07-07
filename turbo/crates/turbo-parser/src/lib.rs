@@ -129,7 +129,17 @@ impl Parser {
     }
 
     fn advance(&mut self) -> &LexSpanned<Token> {
-        let tok = &self.tokens[self.pos];
+        // Invariant: `advance()` is only ever called after `peek()` /
+        // `matches!(self.peek(), Some(..))` has confirmed a token exists at
+        // `self.pos`. Every caller guards on `peek` first, so this lookup is
+        // always in bounds. If it ever fails it means a caller advanced without
+        // a peek guard — an internal parser bug, never malformed user input
+        // (which is instead surfaced as a `ParseError`). The `.expect` keeps
+        // that guarantee explicit instead of a bare index panic.
+        let tok = self
+            .tokens
+            .get(self.pos)
+            .expect("invariant: advance() called only after peek() confirmed a token at self.pos");
         self.pos += 1;
         tok
     }
@@ -300,7 +310,14 @@ impl Parser {
             }
             Some(Token::TypeKw) => {
                 let e = self.parse_enum_def()?;
-                let end = self.tokens[self.pos - 1].span.end;
+                // Mirror the panic-free span-end recovery used by the struct
+                // arm above: index through `.get()` so a degenerate cursor
+                // position can never panic on malformed input.
+                let end = self
+                    .tokens
+                    .get(self.pos.saturating_sub(1))
+                    .map(|t| t.span.end)
+                    .unwrap_or(start);
                 Ok(Spanned::new(Item::Enum(e), start..end))
             }
             Some(Token::Impl) => {
@@ -678,7 +695,7 @@ impl Parser {
                 if let Token::String(s) = &tok.value {
                     s.clone()
                 } else {
-                    unreachable!()
+                    unreachable!("invariant: outer match already confirmed Token::String")
                 }
             }
             _ => {
@@ -1589,7 +1606,7 @@ impl Parser {
                     let span = tok.span.clone();
                     Ok(Spanned::new(Expr::IntLit(n), span))
                 } else {
-                    unreachable!()
+                    unreachable!("invariant: outer match already confirmed Token::Int")
                 }
             }
             Some(Token::Float(_)) => {
@@ -1599,7 +1616,7 @@ impl Parser {
                     let span = tok.span.clone();
                     Ok(Spanned::new(Expr::FloatLit(f), span))
                 } else {
-                    unreachable!()
+                    unreachable!("invariant: outer match already confirmed Token::Float")
                 }
             }
             Some(Token::String(_)) => {
@@ -1616,7 +1633,7 @@ impl Parser {
                         Ok(Spanned::new(Expr::StringLit(s), span))
                     }
                 } else {
-                    unreachable!()
+                    unreachable!("invariant: outer match already confirmed Token::String")
                 }
             }
             Some(Token::True) => {
@@ -1634,14 +1651,18 @@ impl Parser {
                     let span = tok.span.clone();
                     Ok(Spanned::new(Expr::Ident(name), span))
                 } else {
-                    unreachable!()
+                    unreachable!("invariant: outer match already confirmed Token::Ident")
                 }
             }
             // Soft-keyword tokens are usable as bare identifiers in expression
             // position. Top-level declarations are still matched by
             // `parse_item` before we ever reach here.
             Some(t) if Self::soft_keyword_ident(t).is_some() => {
-                let name = Self::soft_keyword_ident(t).unwrap().to_string();
+                let name = Self::soft_keyword_ident(t)
+                    .expect(
+                        "invariant: match guard already checked soft_keyword_ident(t).is_some()",
+                    )
+                    .to_string();
                 let tok = self.advance();
                 Ok(Spanned::new(Expr::Ident(name), tok.span.clone()))
             }
@@ -2221,7 +2242,7 @@ impl Parser {
                     let span = tok.span.clone();
                     Ok(Spanned::new(Pattern::IntLit(n), span))
                 } else {
-                    unreachable!()
+                    unreachable!("invariant: outer match already confirmed Token::Int")
                 }
             }
             Some(Token::True) => {
@@ -2239,7 +2260,7 @@ impl Parser {
                     let span = tok.span.clone();
                     Ok(Spanned::new(Pattern::StringLit(s), span))
                 } else {
-                    unreachable!()
+                    unreachable!("invariant: outer match already confirmed Token::String")
                 }
             }
             _ => {

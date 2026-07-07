@@ -13,3 +13,7 @@ homepage.workspace = true
 turbo-lexer = { version = "0.10.2", path = "../turbo-lexer" }
 turbo-parser = { version = "0.10.2", path = "../turbo-parser" }
 turbo-ast = { version = "0.10.2", path = "../turbo-ast" }
+
+[dev-dependencies]
+# Matches the version pinned by turbo-parser's proptest suite.
+proptest = "1.4"

@@ -544,6 +544,9 @@ dependencies = [
  "serde_json",
  "target-lexicon",
  "turbo-ast",
+ "turbo-lexer",
+ "turbo-parser",
+ "turbo-sema",
 ]
 
 [[package]]
