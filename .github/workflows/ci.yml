@@ -580,17 +580,31 @@ jobs:
           set -euo pipefail
           cd turbo/crates/turbo-codegen-cranelift/runtime
           mkdir -p "$RUNNER_TEMP/rt"
+          # Vendored SQLite is compiled separately (relaxed warnings, no
+          # sanitizer — upstream code) and linked in, mirroring tests.sh.
+          # Keep the -D flags in sync with tests.sh / build.rs SQLITE_CFLAGS.
+          clang -O2 -fPIC \
+            -DSQLITE_THREADSAFE=1 \
+            -DSQLITE_OMIT_LOAD_EXTENSION \
+            -DSQLITE_OMIT_DEPRECATED \
+            -DSQLITE_DQS=0 \
+            -DSQLITE_DEFAULT_MEMSTATUS=0 \
+            -DSQLITE_OMIT_SHARED_CACHE \
+            -c vendor/sqlite3.c -o "$RUNNER_TEMP/rt/sqlite3.o"
           clang \
             -std=c11 \
             -Wall -Wextra \
             -Wno-unused-function -Wno-unused-parameter \
             -DRT_TEST_BUILD \
+            -DTURBO_WITH_SQLITE \
+            -Ivendor \
             -fsanitize=address,undefined \
             -fno-omit-frame-pointer \
             -O1 -g \
             -o "$RUNNER_TEMP/rt/test_rt" \
             tests/test_rt.c \
             turbo_rt.c \
+            "$RUNNER_TEMP/rt/sqlite3.o" \
             -lpthread -lm
 
       - name: Run runtime tests under ASAN+UBSAN
