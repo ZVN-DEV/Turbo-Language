@@ -63,10 +63,12 @@ pub(crate) fn report_error(
         builder = builder.with_help(block);
     }
 
+    // A failure to write the diagnostic (e.g. closed stderr) must not panic —
+    // panicking while reporting an error would replace the diagnostic entirely.
     builder
         .finish()
         .eprint((filename, Source::from(source)))
-        .unwrap();
+        .ok();
 
     if let Some(footer) = standalone_footer {
         eprintln!("{footer}");
@@ -218,8 +220,9 @@ pub(crate) fn report_warning(
                 .with_color(Color::Yellow),
         );
 
+    // See render_error: never panic while emitting a diagnostic.
     builder
         .finish()
         .eprint((filename, Source::from(source)))
-        .unwrap();
+        .ok();
 }

@@ -96,6 +96,33 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --manifest-path turbo/Cargo.toml
 
+  test-windows:
+    name: test-windows (experimental, advisory)
+    runs-on: windows-latest
+    # Windows has never been exercised: AOT linking and the C runtime are
+    # OS-sensitive, so this leg is advisory only while we learn what breaks.
+    # It must NOT block CI. Only the Rust unit tests run here — the JIT/AOT
+    # integration tests and the C-runtime tests.sh are bash-based and are
+    # deliberately not run on Windows this cycle.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            turbo/target
+          key: ${{ runner.os }}-cargo-test-windows-${{ hashFiles('turbo/Cargo.lock') }}
+
+      - name: cargo test
+        run: cargo test --workspace --manifest-path turbo/Cargo.toml
+
   integration:
     name: Integration tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -363,6 +390,20 @@ jobs:
 
       - name: Run check_error_codes.sh
         run: ./scripts/check_error_codes.sh
+
+  panic-budget:
+    name: Panic budget
+    # A compiler must never panic on user input. This gate counts the
+    # production panic-sites per crate and fails if any crate exceeds its
+    # budget. Budgets ratchet down only — see docs/DEPANIC-BACKLOG.md. Pure
+    # grep/awk, no build needed, so it runs fast. This is a real gate, not
+    # advisory: it is deliberately NOT continue-on-error.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Run check_panic_budget.sh
+        run: bash scripts/check_panic_budget.sh
 
   release-consistency:
     name: Release consistency

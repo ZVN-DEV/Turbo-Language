@@ -423,8 +423,7 @@ pub(crate) fn doc_file(path: &std::path::Path) {
             .any(|item| matches!(&item.node, turbo_ast::Item::Struct(_)))
     });
 
-    if has_ast_structs {
-        let module = ast_functions.as_ref().unwrap();
+    if let Some(module) = ast_functions.as_ref().filter(|_| has_ast_structs) {
         out.push_str("\n## Structs\n");
         for item in &module.items {
             if let turbo_ast::Item::Struct(s) = &item.node {

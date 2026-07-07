@@ -67,7 +67,7 @@ pass in this branch.
 | `turbo-sema`              |    34 |      34 | next cycle                                |
 | `turbo-codegen-cranelift` |   282 |     282 | next cycle (largest surface)              |
 | `turbo-formatter`         |     1 |       1 | next cycle                                |
-| `turbo-cli`               |     4 |       4 | next cycle                                |
+| `turbo-cli`               |     4 |       4 | **hardened this cycle** — the module split exposed 3 extra sites hidden after main.rs's mid-file test module (diagnostics eprint unwraps, doc.rs guarded unwrap); all converted. Remaining 4 are startup environment-failure invariants (repl editor, watch ctrl-c/watcher, playground OS RNG). |
 | `turbo-lsp`               |     0 |       0 | clean                                     |
 
 > The headline "~170 parser panic-sites / 378 unwrap / 154 expect repo-wide"
