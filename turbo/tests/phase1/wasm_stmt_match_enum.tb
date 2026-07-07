@@ -1,0 +1,22 @@
+// Statement-context match over a data-carrying enum (WASM backend parity).
+// Each arm is side-effecting (prints), so the match sits in statement
+// position rather than as a returned value.
+type Shape {
+    Circle(i64),
+    Rect(i64, i64),
+    Dot,
+}
+
+fn describe(s: Shape) {
+    match s {
+        Circle(r) => print(r)
+        Rect(w, h) => print(w + h)
+        Dot => print(0)
+    }
+}
+
+fn main() {
+    describe(Shape.Circle(5))
+    describe(Shape.Rect(3, 4))
+    describe(Shape.Dot)
+}

@@ -1,0 +1,23 @@
+// Statement-context match over an Optional (T?) via a let-bound local, so
+// the payload type is recovered from the local's binding (WASM parity).
+fn lookup(n: i64) -> i64? {
+    if n > 0 {
+        some(n * 10)
+    } else {
+        none
+    }
+}
+
+fn report(n: i64) {
+    let r = lookup(n)
+    match r {
+        some(v) => print(v)
+        none => print(-1)
+    }
+}
+
+fn main() {
+    report(3)
+    report(0)
+    report(5)
+}

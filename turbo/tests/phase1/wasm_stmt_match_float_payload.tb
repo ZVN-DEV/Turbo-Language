@@ -1,0 +1,20 @@
+// Statement-context match binding a float payload out of an enum variant.
+// The payload must round-trip through its bit pattern (not a truncating
+// int cast) so 3.0 + 0.5 renders as 3.5 (WASM parity).
+type Box {
+    Val(f64),
+    Empty,
+}
+
+fn show(b: Box) {
+    match b {
+        Val(x) => print(x + 0.5)
+        Empty => print(0.0)
+    }
+}
+
+fn main() {
+    show(Box.Val(3.0))
+    show(Box.Val(1.25))
+    show(Box.Empty)
+}

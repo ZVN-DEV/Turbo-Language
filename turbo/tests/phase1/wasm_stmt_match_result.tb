@@ -1,0 +1,23 @@
+// Statement-context match over a Result (T ! E) with payload bindings.
+// The `ok` arm binds an int, the `err` arm binds a string; each is printed
+// with the right runtime formatter (WASM backend parity).
+fn divide(a: i64, b: i64) -> i64 ! str {
+    if b == 0 {
+        err("divide by zero")
+    } else {
+        ok(a / b)
+    }
+}
+
+fn run(a: i64, b: i64) {
+    match divide(a, b) {
+        ok(v) => print(v)
+        err(e) => print(e)
+    }
+}
+
+fn main() {
+    run(10, 2)
+    run(7, 0)
+    run(20, 5)
+}
