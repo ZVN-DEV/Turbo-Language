@@ -381,15 +381,15 @@ impl Checker {
         args: &[Spanned<Expr>],
         callee: &Spanned<Expr>,
     ) -> Option<Ty> {
-        // A key/value is accepted against the map's declared K/V when the types
-        // are equal or belong to the same numeric family (so an untyped int
-        // literal — typed `int` — fits a `HashMap<i32, ..>`, and a float
-        // literal fits an `f32` value). Errors are swallowed (already reported).
-        fn kv_matches(got: &Ty, want: &Ty) -> bool {
-            got.is_error()
-                || got == want
-                || (got.is_integer() && want.is_integer())
-                || (got.is_float() && want.is_float())
+        // A key/value argument is accepted against the map's declared K/V when
+        // the types match exactly, or when it is a numeric *literal* that fits
+        // the declared type — the same annotated-literal rule as a `let x: u8 =
+        // 30` binding, applied via `literal_coerces_to`. This rejects an
+        // out-of-range literal (`HashMap<int, u8>` value `300`) instead of
+        // silently truncating it, and still requires an explicit `as` cast for a
+        // differently-sized *variable*. Errors are swallowed (already reported).
+        fn kv_matches(got: &Ty, want: &Ty, expr: &Spanned<Expr>) -> bool {
+            got.is_error() || got == want || crate::literal_coerces_to(&expr.node, want)
         }
         if name == "hashmap" {
             if !args.is_empty() {
@@ -420,14 +420,14 @@ impl Checker {
             let val_ty = self.check_expr(&args[2]);
             if let Some((k, v)) = map_ty.hashmap_kv() {
                 let (k, v) = (k.clone(), v.clone());
-                if !kv_matches(&key_ty, &k) {
+                if !kv_matches(&key_ty, &k, &args[1]) {
                     self.error(
                         ErrorCode::E0133,
                         format!("hashmap_set() key must be `{k}`, found `{key_ty}`"),
                         args[1].span.clone(),
                     );
                 }
-                if !kv_matches(&val_ty, &v) {
+                if !kv_matches(&val_ty, &v, &args[2]) {
                     self.error(
                         ErrorCode::E0133,
                         format!("hashmap_set() value must be `{v}`, found `{val_ty}`"),
@@ -472,7 +472,7 @@ impl Checker {
             let key_ty = self.check_expr(&args[1]);
             if let Some((k, v)) = map_ty.hashmap_kv() {
                 let (k, v) = (k.clone(), v.clone());
-                if !kv_matches(&key_ty, &k) {
+                if !kv_matches(&key_ty, &k, &args[1]) {
                     self.error(
                         ErrorCode::E0133,
                         format!("hashmap_get() key must be `{k}`, found `{key_ty}`"),
@@ -511,7 +511,7 @@ impl Checker {
             let key_ty = self.check_expr(&args[1]);
             if let Some((k, _v)) = map_ty.hashmap_kv() {
                 let k = k.clone();
-                if !kv_matches(&key_ty, &k) {
+                if !kv_matches(&key_ty, &k, &args[1]) {
                     self.error(
                         ErrorCode::E0133,
                         format!("hashmap_has() key must be `{k}`, found `{key_ty}`"),
@@ -597,7 +597,7 @@ impl Checker {
             let key_ty = self.check_expr(&args[1]);
             if let Some((k, _v)) = map_ty.hashmap_kv() {
                 let k = k.clone();
-                if !kv_matches(&key_ty, &k) {
+                if !kv_matches(&key_ty, &k, &args[1]) {
                     self.error(
                         ErrorCode::E0133,
                         format!("hashmap_remove() key must be `{k}`, found `{key_ty}`"),

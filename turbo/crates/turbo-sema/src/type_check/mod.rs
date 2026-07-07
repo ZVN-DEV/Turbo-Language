@@ -278,6 +278,13 @@ impl Checker {
             );
         }
 
+        // Pass 0b2: validate that every `HashMap<K, V>` annotation anywhere in
+        // a signature (fn params/returns, struct fields, enum variant payloads,
+        // trait methods, const types) uses a valid key type (int or str). Runs
+        // after structs/enums are registered so struct/enum key types resolve.
+        // Let-binding annotations are validated separately in `check_stmt`.
+        self.validate_hashmap_key_annotations(module);
+
         // Pass 0c: register all trait definitions
         for item in &module.items {
             let Item::Trait(t) = &item.node else { continue };

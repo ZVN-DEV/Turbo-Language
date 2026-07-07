@@ -46,6 +46,68 @@ impl Checker {
         }
     }
 
+    /// Resolve a type annotation and flag any invalid `HashMap` key inside it.
+    /// A key that cannot be resolved (an unknown/generic type parameter) is left
+    /// alone — it is caught, if wrong, when the generic is instantiated.
+    fn validate_type_expr_hashmap_keys(&mut self, te: &Spanned<TypeExpr>) {
+        if let Some(ty) = resolve_type_expr(&te.node, Some(&self.structs), Some(&self.enums)) {
+            self.report_bad_hashmap_keys(&ty, &te.span);
+        }
+    }
+
+    fn validate_fn_hashmap_annotations(&mut self, f: &FnDef) {
+        for p in &f.params {
+            self.validate_type_expr_hashmap_keys(&p.ty);
+        }
+        if let Some(rt) = &f.return_type {
+            self.validate_type_expr_hashmap_keys(rt);
+        }
+    }
+
+    /// Enforce the `HashMap` key restriction (E0525) across every signature-level
+    /// type annotation in the module: fn params/returns, struct fields, enum
+    /// variant payloads, trait method signatures, impl methods, and const types.
+    pub(crate) fn validate_hashmap_key_annotations(&mut self, module: &Module) {
+        for item in &module.items {
+            match &item.node {
+                Item::Function(f) => self.validate_fn_hashmap_annotations(f),
+                Item::Struct(s) => {
+                    for field in &s.fields {
+                        self.validate_type_expr_hashmap_keys(&field.ty);
+                    }
+                }
+                Item::Enum(e) => {
+                    for variant in &e.variants {
+                        for field_ty in &variant.fields {
+                            self.validate_type_expr_hashmap_keys(field_ty);
+                        }
+                    }
+                }
+                Item::Trait(t) => {
+                    for m in &t.methods {
+                        for p in &m.params {
+                            self.validate_type_expr_hashmap_keys(&p.ty);
+                        }
+                        if let Some(rt) = &m.return_type {
+                            self.validate_type_expr_hashmap_keys(rt);
+                        }
+                    }
+                }
+                Item::Impl(imp) => {
+                    for m in &imp.methods {
+                        self.validate_fn_hashmap_annotations(&m.node);
+                    }
+                }
+                Item::Const(c) => {
+                    if let Some(ty) = &c.ty {
+                        self.validate_type_expr_hashmap_keys(ty);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub(crate) fn check_stmt(&mut self, stmt: &Spanned<Stmt>) {
         match &stmt.node {
             Stmt::Let {
@@ -78,7 +140,26 @@ impl Checker {
                     match resolve_type_expr(&ty_expr.node, Some(&self.structs), Some(&self.enums)) {
                         Some(t) => {
                             self.report_bad_hashmap_keys(&t, &ty_expr.span);
-                            if !val_ty.contains_error()
+                            if let Ty::HashMap(_, _) = &t {
+                                // A typed map can ONLY be born from `hashmap()`
+                                // bound directly to a `HashMap<K,V>` annotation
+                                // (the one path codegen builds a typed descriptor
+                                // for). Any other value — a legacy handle, an
+                                // int, a differently-typed map — is rejected: the
+                                // generic runtime would misread it and segfault.
+                                let ok = crate::is_bare_hashmap_call(&value.node)
+                                    || val_ty.contains_error()
+                                    || val_ty == t;
+                                if !ok {
+                                    self.error(
+                                        ErrorCode::E0110,
+                                        format!(
+                                            "a typed `{t}` can only be created by `hashmap()` bound to a `HashMap` annotation; `{val_ty}` is not assignable to it"
+                                        ),
+                                        ty_expr.span.clone(),
+                                    );
+                                }
+                            } else if !val_ty.contains_error()
                                 && !types_compatible(&t, &val_ty)
                                 && t != val_ty
                             {

@@ -4,7 +4,7 @@ use cranelift::prelude::*;
 use cranelift_module::Module;
 use turbo_ast::*;
 
-use crate::expr::is_rc_managed_type;
+use crate::expr::{expr_produces_owned_rc_temp, is_rc_managed_type};
 use crate::turbo_types::{CodegenError, MaybeTyped, TurboTy};
 use crate::{compile_expr, Ctx};
 
@@ -17,19 +17,44 @@ fn no_value(what: &str) -> CodegenError {
     }
 }
 
-/// Widen a compiled value into the uniform i64 map slot, mirroring how `Some(x)`
-/// boxes a value: narrow ints sign-extend, floats move through the integer
-/// register via bitcast, pointers pass through unchanged. The reverse
-/// reconstruction happens when the `get` Optional is unwrapped against its
-/// statically known inner type.
-fn value_to_slot<M: Module>(cx: &mut Ctx<'_, M>, val: Value) -> Value {
+/// Widen a compiled value into the uniform i64 map slot. The extension must
+/// match the value's declared type so it round-trips through `get`: **unsigned**
+/// narrow types (`u8`/`u16`/`u32`) zero-extend, **signed** narrow types
+/// (`i8`/`i16`) sign-extend, floats move through the integer register via
+/// bitcast, and pointers pass through unchanged. Getting this wrong makes a key
+/// like `u8` 255 store as the i64 `-1` and never match a later lookup.
+fn value_to_slot<M: Module>(cx: &mut Ctx<'_, M>, val: Value, tty: &TurboTy) -> Value {
     let vt = cx.builder.func.dfg.value_type(val);
     if vt.is_int() && vt.bits() < 64 {
-        cx.builder.ins().sextend(types::I64, val)
+        if matches!(tty, TurboTy::U8 | TurboTy::U16 | TurboTy::Bool) {
+            cx.builder.ins().uextend(types::I64, val)
+        } else {
+            cx.builder.ins().sextend(types::I64, val)
+        }
     } else if vt.is_float() {
         cx.builder.ins().bitcast(types::I64, MemFlags::new(), val)
     } else {
         val
+    }
+}
+
+/// Release an owned rc temporary passed as a hashmap key/value argument, at the
+/// **top level only** (a single `rt_release` on the container pointer). This
+/// balances the runtime's top-level retain (values) / strdup (str keys) so a
+/// temporary like `"a" + b` or `["x"]` doesn't leak. It deliberately does NOT
+/// deep-release: freeing an aggregate value's nested rc children here would
+/// dangle the copy the map still holds. Aggregate map values are therefore
+/// reference-counted one level deep — see the scope-cut note in docs/stdlib.md.
+fn release_owned_rc_temp_top_level<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    value: Value,
+    tty: &TurboTy,
+    expr: &Spanned<Expr>,
+) {
+    if is_rc_managed_type(cx, tty) && expr_produces_owned_rc_temp(expr) {
+        let fid = cx.rt_fns["rt_release"];
+        let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+        cx.builder.ins().call(fref, &[value]);
     }
 }
 
@@ -92,15 +117,20 @@ pub(crate) fn compile_builtin_hashmap_set<M: Module>(
     let (map_val, map_tty) =
         compile_expr(cx, &args[0])?.ok_or_else(|| no_value("hashmap_set map"))?;
     if matches!(map_tty, TurboTy::HashMap(_, _)) {
-        let (key_val, _) =
+        let (key_val, key_tty) =
             compile_expr(cx, &args[1])?.ok_or_else(|| no_value("hashmap_set key"))?;
-        let key_slot = value_to_slot(cx, key_val);
-        let (val_val, _) =
+        let key_slot = value_to_slot(cx, key_val, &key_tty);
+        let (val_val, val_tty) =
             compile_expr(cx, &args[2])?.ok_or_else(|| no_value("hashmap_set value"))?;
-        let val_slot = value_to_slot(cx, val_val);
+        let val_slot = value_to_slot(cx, val_val, &val_tty);
         let fid = cx.rt_fns["rt_hashmap_gset"];
         let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
         cx.builder.ins().call(fref, &[map_val, key_slot, val_slot]);
+        // The runtime strdup's str keys and retains rc values, so any owned
+        // temporary passed here (e.g. an interpolation or array literal) must be
+        // released or it leaks. Top-level only — see the helper's note.
+        release_owned_rc_temp_top_level(cx, key_val, &key_tty, &args[1]);
+        release_owned_rc_temp_top_level(cx, val_val, &val_tty, &args[2]);
         return Ok(None);
     }
     let (key_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| no_value("hashmap_set key"))?;
@@ -125,13 +155,16 @@ pub(crate) fn compile_builtin_hashmap_get<M: Module>(
         compile_expr(cx, &args[0])?.ok_or_else(|| no_value("hashmap_get map"))?;
     if let TurboTy::HashMap(_, v) = &map_tty {
         let val_tty = (**v).clone();
-        let (key_val, _) =
+        let (key_val, key_tty) =
             compile_expr(cx, &args[1])?.ok_or_else(|| no_value("hashmap_get key"))?;
-        let key_slot = value_to_slot(cx, key_val);
+        let key_slot = value_to_slot(cx, key_val, &key_tty);
         let fid = cx.rt_fns["rt_hashmap_gget"];
         let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
         let call = cx.builder.ins().call(fref, &[map_val, key_slot]);
         let result = cx.builder.inst_results(call)[0];
+        // A lookup only borrows the key (no strdup), so release an owned str-key
+        // temporary after the probe.
+        release_owned_rc_temp_top_level(cx, key_val, &key_tty, &args[1]);
         return Ok(Some((result, TurboTy::Optional(Box::new(val_tty)))));
     }
     let (key_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| no_value("hashmap_get key"))?;
@@ -150,9 +183,10 @@ pub(crate) fn compile_builtin_hashmap_has<M: Module>(
     let (map_val, map_tty) =
         compile_expr(cx, &args[0])?.ok_or_else(|| no_value("hashmap_has map"))?;
     let generic = matches!(map_tty, TurboTy::HashMap(_, _));
-    let (key_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| no_value("hashmap_has key"))?;
+    let (key_val, key_tty) =
+        compile_expr(cx, &args[1])?.ok_or_else(|| no_value("hashmap_has key"))?;
     let (fname, key_arg) = if generic {
-        ("rt_hashmap_ghas", value_to_slot(cx, key_val))
+        ("rt_hashmap_ghas", value_to_slot(cx, key_val, &key_tty))
     } else {
         ("rt_hashmap_has", key_val)
     };
@@ -160,6 +194,9 @@ pub(crate) fn compile_builtin_hashmap_has<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[map_val, key_arg]);
     let result = cx.builder.inst_results(call)[0];
+    if generic {
+        release_owned_rc_temp_top_level(cx, key_val, &key_tty, &args[1]);
+    }
     Ok(Some((result, TurboTy::Bool)))
 }
 
@@ -211,15 +248,19 @@ pub(crate) fn compile_builtin_hashmap_remove<M: Module>(
     let (map_val, map_tty) =
         compile_expr(cx, &args[0])?.ok_or_else(|| no_value("hashmap_remove map"))?;
     let generic = matches!(map_tty, TurboTy::HashMap(_, _));
-    let (key_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| no_value("hashmap_remove key"))?;
+    let (key_val, key_tty) =
+        compile_expr(cx, &args[1])?.ok_or_else(|| no_value("hashmap_remove key"))?;
     let (fname, key_arg) = if generic {
-        ("rt_hashmap_gremove", value_to_slot(cx, key_val))
+        ("rt_hashmap_gremove", value_to_slot(cx, key_val, &key_tty))
     } else {
         ("rt_hashmap_remove", key_val)
     };
     let fid = cx.rt_fns[fname];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     cx.builder.ins().call(fref, &[map_val, key_arg]);
+    if generic {
+        release_owned_rc_temp_top_level(cx, key_val, &key_tty, &args[1]);
+    }
     Ok(None)
 }
 

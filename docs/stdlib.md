@@ -611,12 +611,21 @@ a compound value if you need to key by it.
 **Lifetime / scope cut.** As with the legacy maps, the typed map *object*
 itself is not reference-counted — it lives in the request arena (inside an HTTP
 handler) or for the process (server-scoped), and is not eagerly freed at scope
-exit. Its **values** are reference-counted correctly (retained on insert,
-released on overwrite/remove). Concretely: overwriting or removing an rc-heap
-value frees the old one, but dropping a whole map does not walk-and-free its
-remaining entries. This keeps the persistent server-config use case sound and
-matches the legacy maps' behavior; a future change may make map objects
-themselves rc-managed.
+exit. Dropping a whole map does not walk-and-free its remaining entries. This
+keeps the persistent server-config use case sound and matches the legacy maps'
+behavior; a future change may make map objects themselves rc-managed.
+
+Map **values are reference-counted one level deep.** For a flat value
+(`str`, or a scalar) this is complete: inserting retains it and
+overwriting/removing frees it, with no leak. For an **aggregate** value —
+`[str]`, a struct with rc-heap fields, a data enum, an `Optional`/`Result`
+carrying rc data — the map manages the *container* pointer but not its nested
+rc children: overwriting or removing such a value frees the container and leaks
+its inner elements/fields (a bounded leak proportional to churn of aggregate
+values, not a crash). Reading such values back is safe. If you need to store
+many short-lived aggregate values under churn, prefer flat values (e.g. store a
+joined `str` instead of a `[str]`). Full deep reference-counting of aggregate
+map values is tracked as a follow-up.
 
 **WASM.** The WASM backend supports only the legacy `str → str` map subset;
 generic `HashMap<K, V>` operations are rejected there (fail-loud), not silently

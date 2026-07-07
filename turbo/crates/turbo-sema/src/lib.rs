@@ -344,6 +344,17 @@ pub(crate) fn array_literal_coerces(expr: &Expr, target: &Ty) -> bool {
 }
 
 /// Check if two types are compatible (allowing partial Result types where Error = unknown).
+/// Whether `e` is a bare, zero-argument `hashmap()` call — the only expression
+/// form that a `HashMap<K, V>` annotation is allowed to construct a typed map
+/// from. Mirrors the codegen-side check in `turbo-codegen-cranelift::stmt`.
+pub(crate) fn is_bare_hashmap_call(e: &Expr) -> bool {
+    if let Expr::Call { callee, args } = e {
+        args.is_empty() && matches!(&callee.node, Expr::Ident(n) if n == "hashmap")
+    } else {
+        false
+    }
+}
+
 pub(crate) fn types_compatible(expected: &Ty, actual: &Ty) -> bool {
     if expected == actual {
         return true;
@@ -366,12 +377,12 @@ pub(crate) fn types_compatible(expected: &Ty, actual: &Ty) -> bool {
         // incompatible, so clobbering a handle variable with an int is a clean
         // type error rather than a runtime segfault (BL-26).
         (expected, Ty::Handle(_)) if expected.is_integer() => true,
-        // A `hashmap()` call is typed as an opaque HashMap handle; binding it to
-        // a `HashMap<K, V>` annotation (or passing it where one is expected)
-        // upgrades it to the typed map. The empty handle carries no entries yet,
-        // so this is sound in either direction.
-        (Ty::HashMap(_, _), Ty::Handle(HandleKind::HashMap))
-        | (Ty::Handle(HandleKind::HashMap), Ty::HashMap(_, _)) => true,
+        // NOTE: a legacy `Handle(HashMap)` is deliberately NOT compatible with a
+        // typed `HashMap<K, V>`. Only the special-cased `let m: HashMap<K,V> =
+        // hashmap()` form creates a typed descriptor map; letting a bare handle
+        // flow into any other typed-map slot would have the generic runtime read
+        // a legacy map as typed and segfault. Typed maps flow as `HashMap` types
+        // (equal-compatible); the ctor exception lives in the let checker.
         _ => false,
     }
 }

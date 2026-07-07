@@ -930,6 +930,18 @@ impl Parser {
 
         // `HashMap<K, V>` is a first-class typed collection; capture its type
         // arguments (other generics still lower to `Named`, discarding args).
+        // A `HashMap` with any arity other than 2 is a hard parse error rather
+        // than being silently truncated to the first two arguments.
+        if name == "HashMap" && type_args.len() != 2 {
+            return Err(ParseError {
+                code: ErrorCode::E0001,
+                message: format!(
+                    "`HashMap` takes exactly 2 type arguments (a key and a value), found {}",
+                    type_args.len()
+                ),
+                span: start..end,
+            });
+        }
         let mut ty = {
             let mut it = type_args.into_iter();
             match (name.as_str(), it.next(), it.next()) {
