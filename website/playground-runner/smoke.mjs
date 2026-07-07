@@ -1,5 +1,6 @@
 import {
   assertExecRejectedRun,
+  assertResourceAbuseContained,
   assertSafeRun,
   endpointUrl,
   isMainModule,
@@ -34,6 +35,11 @@ export async function runSmoke(options = {}) {
     jsonLabel: "runner execution",
   });
   await assertExecRejectedRun(fetcher, runnerUrl, {
+    headers: runnerHeaders(token),
+    label: "runner",
+    jsonLabel: "runner execution",
+  });
+  await assertResourceAbuseContained(fetcher, runnerUrl, {
     headers: runnerHeaders(token),
     label: "runner",
     jsonLabel: "runner execution",

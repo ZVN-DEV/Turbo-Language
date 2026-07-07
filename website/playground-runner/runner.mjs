@@ -256,7 +256,7 @@ function identifiersOutsideStringsAndComments(source) {
       const name = source.slice(start, i);
       const isDef =
         (prevName !== null && DEFINER_KEYWORDS.has(prevName)) ||
-        peekIsColon(source, i);
+        peekIsFnTypedColon(source, i);
       idents.push({ name, isCall: peekIsCall(source, i), isDef });
       prevName = name;
       continue;
@@ -270,17 +270,26 @@ function identifiersOutsideStringsAndComments(source) {
   return idents;
 }
 
-// Peek past inline spaces/tabs for the next significant character. Newlines are
-// not skipped: a call's `(` sits on the same logical line as its callee, and a
-// statement that merely starts with `(` on the next line is not a call.
+// Peek past inline spaces/tabs AND newlines for the next significant character.
+// Turbo's parser filters newlines, so `foo\n(x)` still calls `foo`; the peek must
+// cross the newline or a split call slips past the fail-closed check. The rare
+// cost is a false positive when the next statement legitimately begins with `(`,
+// which only makes the check stricter — acceptable for a security allowlist.
 function peekIsCall(source, i) {
-  while (i < source.length && (source[i] === " " || source[i] === "\t")) i += 1;
+  while (i < source.length && isInlineOrLineSpace(source[i])) i += 1;
   return source[i] === "(";
 }
 
-function peekIsColon(source, i) {
+// A `name:` annotation only makes `name` call-able when its type is a function
+// type (`f: fn(i64) -> i64`), the closure-parameter case. A plain `name: int`
+// struct field or scalar parameter is not callable, so treating it as a defined
+// name would wrongly whitelist a same-named builtin call elsewhere in the source.
+function peekIsFnTypedColon(source, i) {
   while (i < source.length && (source[i] === " " || source[i] === "\t")) i += 1;
-  return source[i] === ":";
+  if (source[i] !== ":") return false;
+  i += 1;
+  while (i < source.length && isInlineOrLineSpace(source[i])) i += 1;
+  return source.startsWith("fn", i) && !isIdentChar(source[i + 2]);
 }
 
 function isInlineOrLineSpace(char) {
@@ -576,6 +585,9 @@ function childEnvironment() {
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
     NO_COLOR: "1",
+    // /usr/bin is where Debian's `prlimit` lives; it must stay on PATH or the
+    // bare-command `prlimit` wrapper (buildChildInvocation) silently fails to
+    // resolve and the resource limits stop applying.
     PATH: "/usr/local/bin:/usr/bin:/bin",
     TMPDIR: "/tmp",
   };

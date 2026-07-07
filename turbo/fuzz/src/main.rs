@@ -51,7 +51,12 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}...[{} bytes total]", &s[..max], s.len())
+        // Floor to a char boundary so a mid-codepoint `max` can't panic the slice.
+        let mut cut = max;
+        while cut > 0 && !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        format!("{}...[{} bytes total]", &s[..cut], s.len())
     }
 }
 

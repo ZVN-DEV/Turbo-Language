@@ -76,7 +76,13 @@ time_ms() {
     local out_file="$1"; shift
     local start end
     start=$(now_ms)
-    "$@" > "$out_file" 2>"$out_file.err"
+    # Name a crashing/non-zero binary explicitly. Without this the failure trips
+    # `set -e` inside the `$(...)` capture and aborts mid-table with only bash's
+    # terse message, never reaching the OUTPUT-MISMATCH reporting path.
+    if ! "$@" > "$out_file" 2>"$out_file.err"; then
+        echo "error: benchmark command '$*' exited non-zero (see $out_file.err)" >&2
+        exit 1
+    fi
     end=$(now_ms)
     echo $(( end - start ))
 }
@@ -121,8 +127,13 @@ for bench in $BENCHMARKS; do
     aot_out="$BUILD_DIR/out/$bench.turbo-aot"
     c_out="$BUILD_DIR/out/$bench.c"
 
-    # Build both.
-    "$TURBO" build "$tb_file" -o "$aot_bin" >/dev/null 2>&1
+    # Build both. Capture compiler output so a failure lands in the CI log with a
+    # diagnostic instead of aborting silently under `set -e`.
+    if ! "$TURBO" build "$tb_file" -o "$aot_bin" >"$BUILD_DIR/build-$bench.log" 2>&1; then
+        echo "error: turbolang build failed for '$bench':" >&2
+        cat "$BUILD_DIR/build-$bench.log" >&2
+        exit 1
+    fi
     cc -O2 -o "$c_bin" "$c_file"
 
     # Best-of-N timings.
@@ -217,6 +228,12 @@ echo "[info]  results: $RESULTS_DIR/results.json + results.csv" >&2
 # Baseline update mode: rewrite ci_baseline.json from this run and exit.
 # --------------------------------------------------------------------------
 if [ "$UPDATE_BASELINE" = "1" ]; then
+    # Never seed a baseline from a miscompiling run: a wrong-output benchmark would
+    # bake its (meaningless) ratio into the gate everyone else is measured against.
+    if [ "$CORRECTNESS_FAILURES" -ne 0 ]; then
+        echo "refusing to update baseline: $CORRECTNESS_FAILURES benchmark(s) produced output that differs from C." >&2
+        exit 1
+    fi
     python3 - "$ROWS_TSV" "$BASELINE_FILE" "$PLATFORM" "$TOLERANCE" <<'PY'
 import csv, json, sys
 from datetime import datetime, timezone

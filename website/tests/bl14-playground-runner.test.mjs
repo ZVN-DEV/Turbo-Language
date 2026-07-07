@@ -160,6 +160,20 @@ test("standalone playground runner smoke probe covers deploy contract", async ()
       };
     }
 
+    // The resource-abuse probe (an unbounded loop) must be contained — the real
+    // runner kills it via prlimit/wall-clock and returns a non-success run.
+    if (source.includes("while ")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          stdout: "",
+          stderr: "execution timed out",
+          success: false,
+        }),
+      };
+    }
+
     return {
       ok: true,
       status: 200,
@@ -185,6 +199,7 @@ test("standalone playground runner smoke probe covers deploy contract", async ()
     requests.map(({ url }) => url),
     [
       "https://runner.example/healthz",
+      "https://runner.example/run",
       "https://runner.example/run",
       "https://runner.example/run",
     ]

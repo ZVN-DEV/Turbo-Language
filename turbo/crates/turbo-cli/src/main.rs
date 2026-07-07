@@ -289,84 +289,11 @@ fn resolve_entry_file(file: Option<PathBuf>) -> PathBuf {
 
 #[cfg(test)]
 mod cli_tests {
-    use super::*;
     use turbo_ast::ErrorCode;
 
     use crate::diagnostics::{compose_diagnostic_footer, error_code_url};
     use crate::doc::extract_doc_comments;
     use crate::explain::{detailed_explanation, normalize_error_code, parse_help, sema_help};
-
-    // ── Init command scaffolding ───────────────────────────────────────
-
-    #[test]
-    fn init_turbo_toml_content() {
-        // The init command generates a turbo.toml with [package] and [dependencies]
-        let pkg_name = "my-app";
-        let expected = format!(
-            "[package]\nname = \"{pkg_name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n"
-        );
-        assert!(expected.contains("[package]"));
-        assert!(expected.contains(&format!("name = \"{}\"", pkg_name)));
-        assert!(expected.contains("version = \"0.1.0\""));
-        assert!(expected.contains("[dependencies]"));
-    }
-
-    #[test]
-    fn init_main_tb_content() {
-        // The scaffolded src/main.tb should contain fn main(), Counter struct, and Shape enum
-        let pkg_name = "test-proj";
-        let main_tb = format!(
-            r#"/// A counter that tracks a value
-struct Counter {{
-    count: i64,
-}}
-
-impl Counter {{
-    fn increment(self) -> Counter {{
-        Counter {{ count: self.count + 1 }}
-    }}
-
-    fn value(self) -> i64 {{
-        self.count
-    }}
-}}
-
-/// Shapes with area calculation
-type Shape {{
-    Circle(f64),
-    Rectangle(f64, f64),
-}}
-
-fn area(shape: Shape) -> f64 {{
-    match shape {{
-        Circle(r) => 3.14159 * r * r
-        Rectangle(w, h) => w * h
-    }}
-}}
-
-fn main() {{
-    print("Hello from {pkg_name}!")
-
-    // Struct with methods
-    let mut c = Counter {{ count: 0 }}
-    c = c.increment()
-    c = c.increment()
-    c = c.increment()
-    print("Counter: " + to_str(c.value()))
-
-    // Enum + pattern matching
-    let circle = Shape.Circle(5.0)
-    let rect = Shape.Rectangle(4.0, 6.0)
-    print("Circle area: " + to_str(area(circle)))
-    print("Rectangle area: " + to_str(area(rect)))
-}}
-"#
-        );
-        assert!(main_tb.contains("fn main()"));
-        assert!(main_tb.contains("struct Counter"));
-        assert!(main_tb.contains(&format!("Hello from {pkg_name}!")));
-        assert!(main_tb.contains("type Shape"));
-    }
 
     // ── Error code explain ────────────────────────────────────────────
 
@@ -466,32 +393,6 @@ fn main() {{
         let (help_block, footer) = compose_diagnostic_footer(None, None);
         assert!(help_block.is_none());
         assert!(footer.is_none());
-    }
-
-    // ── File extension validation ─────────────────────────────────────
-
-    #[test]
-    fn tb_file_extension_check() {
-        let tb_path = Path::new("test.tb");
-        assert_eq!(
-            tb_path.extension().and_then(|e| e.to_str()),
-            Some("tb"),
-            ".tb extension should be recognized"
-        );
-
-        let non_tb_path = Path::new("test.rs");
-        assert_ne!(
-            non_tb_path.extension().and_then(|e| e.to_str()),
-            Some("tb"),
-            ".rs extension should not be .tb"
-        );
-
-        let no_ext_path = Path::new("test");
-        assert_eq!(
-            no_ext_path.extension().and_then(|e| e.to_str()),
-            None,
-            "no extension should return None"
-        );
     }
 
     // ── Doc comment extraction ────────────────────────────────────────

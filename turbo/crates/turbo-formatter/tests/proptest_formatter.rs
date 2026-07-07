@@ -148,10 +148,10 @@ fn arb_let_fn() -> impl Strategy<Value = String> {
 
 /// `fn <name>(a: int, b: int) -> int { a + b }`
 fn arb_binop_fn() -> impl Strategy<Value = String> {
-    (arb_ident(), arb_prim_type()).prop_map(|(fname, _ty)| {
-        // Keep the body int-typed so it always type-checks-shaped for the parser;
-        // sema isn't run here, only parse stability matters.
-        format!("fn {fname}(a: int, b: int) -> int {{ a + b }}")
+    (arb_ident(), arb_prim_type()).prop_map(|(fname, ty)| {
+        // Vary the param/return type; the `a + b` body parses for any of them
+        // (sema isn't run here, only parse stability matters).
+        format!("fn {fname}(a: {ty}, b: {ty}) -> {ty} {{ a + b }}")
     })
 }
 
@@ -177,7 +177,7 @@ fn arb_struct_item() -> impl Strategy<Value = String> {
     })
 }
 
-/// `const <NAME> = <int>`
+/// `const <name> = <int>`
 fn arb_const_item() -> impl Strategy<Value = String> {
     (arb_ident(), 0i64..10_000).prop_map(|(name, val)| format!("const {name} = {val}"))
 }
@@ -333,12 +333,13 @@ proptest! {
 
     #[test]
     fn format_preserves_top_level_items(source in arb_valid_program()) {
-        let before = match parse_clean(&source) {
-            Some(m) => m,
-            // Skip inputs the generator produced that don't parse cleanly; the
-            // parse-stability property covers formatter-introduced breakage.
-            None => return Ok(()),
-        };
+        // Skip inputs the generator produced that don't parse cleanly; the
+        // parse-stability property covers formatter-introduced breakage.
+        // `prop_assume!` (not a silent `Ok(())`) so proptest's rejection
+        // accounting fails loudly if a generator regression makes this vacuous.
+        let before = parse_clean(&source);
+        prop_assume!(before.is_some());
+        let before = before.unwrap();
 
         let formatted = format_source(&source);
         let after = match parse_clean(&formatted) {

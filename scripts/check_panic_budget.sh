@@ -22,7 +22,8 @@
 #     unreachable!   the unreachable! macro (with or without a message)
 #
 # Test code is excluded approximately: for each file we count only the lines
-# BEFORE the first `#[cfg(test)]` attribute, and we skip any `tests/` dir.
+# BEFORE the first `#[cfg(test)]` attribute. Integration `tests/` dirs live
+# outside `src/`, so the src-only scan never reaches them in the first place.
 #
 # NOTE: `.expect("` deliberately does NOT match turbo-parser's own
 # `self.expect(&Token::..)` cursor method (that takes a Token, not a string

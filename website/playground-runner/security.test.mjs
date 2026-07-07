@@ -2,7 +2,6 @@
 // prlimit resource-limit wrapper. Run with `node --test website/playground-runner/`.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
 
 async function loadRunner() {
   const url = new URL("./runner.mjs", import.meta.url);
@@ -62,6 +61,43 @@ test("unknown/future builtin calls are rejected fail-closed", async () => {
   assert.equal(validated.status, 400);
   assert.match(validated.message, /only allows Turbo's safe standard library/);
   assert.match(validated.message, /`socket_open`/);
+});
+
+test("unknown builtin calls cannot evade the allowlist by lexical tricks", async () => {
+  const { findForbiddenPlaygroundApi } = await loadRunner();
+
+  // Newline between callee and `(`: the parser filters newlines, so this still
+  // calls socket_open. peekIsCall must cross the newline to catch it.
+  assert.deepEqual(
+    findForbiddenPlaygroundApi(
+      ["fn main() {", "    socket_open", "    (\"1.2.3.4\")", "}"].join("\n")
+    ),
+    { name: "socket_open", category: "unavailable builtin" }
+  );
+
+  // A struct field named like a builtin must not whitelist a later global call:
+  // `socket_open: int` is a non-callable field, so the call still hits the builtin.
+  assert.deepEqual(
+    findForbiddenPlaygroundApi(
+      [
+        "struct C { socket_open: int }",
+        "fn main() { socket_open(1) }",
+      ].join("\n")
+    ),
+    { name: "socket_open", category: "unavailable builtin" }
+  );
+
+  // Same for a scalar (non-fn-typed) parameter — not callable, so it grants no
+  // license to a same-named global call.
+  assert.deepEqual(
+    findForbiddenPlaygroundApi(
+      [
+        "fn f(socket_open: int) -> int { 0 }",
+        "fn main() { socket_open(1) }",
+      ].join("\n")
+    ),
+    { name: "socket_open", category: "unavailable builtin" }
+  );
 });
 
 test("user-defined names that look builtin-ish are allowed", async () => {
@@ -174,9 +210,4 @@ test("buildChildInvocation wraps in prlimit only when enabled", async () => {
     "run",
     "/tmp/run/main.tb",
   ]);
-});
-
-// Sanity: the module resolves from its own directory regardless of cwd.
-test("runner module path resolves from the test file location", () => {
-  assert.ok(fileURLToPath(new URL("./runner.mjs", import.meta.url)).endsWith("runner.mjs"));
 });
