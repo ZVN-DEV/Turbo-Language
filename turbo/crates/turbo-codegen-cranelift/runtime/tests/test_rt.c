@@ -769,19 +769,25 @@ static void test_string_arc_array_struct_slots(void) {
     check("test_string_arc_array_struct_slots keep stored strings alive", ok);
 }
 
-/* ── 36: arena-backed ARC releases are sentinel no-ops after arena end ─── */
-static void test_arena_arc_release_after_end_noop(void) {
+/* ── 36: arena-backed ARC ops are sentinel no-ops inside the window ────── */
+static void test_arena_arc_sentinel_noop_in_window(void) {
     rt_arena_begin();
     const char *arena_s = rt_str_concat("arena", "-value");
-    long long rc_before = *((long long *)((char *)arena_s - 8));
-    int ok = arena_s && strcmp(arena_s, "arena-value") == 0
-        && rc_before == (LLONG_MAX - 1);
-    rt_arena_end();
-
-    /* This used to read a normal refcount from bulk-freed arena memory and
-     * call free() on it. ASan catches both the stale read and double-free class. */
+    long long *rc = (long long *)((char *)arena_s - 8);
+    long long rc_before = *rc;
+    /* retain/release must leave the RT_RC_ARENA sentinel untouched and
+     * must not free arena memory. */
+    rt_retain((void *)arena_s);
     rt_release((void *)arena_s);
-    check("test_arena_arc_release_after_end_noop", ok);
+    long long rc_after = *rc;
+    int ok = arena_s && strcmp(arena_s, "arena-value") == 0
+        && rc_before == (LLONG_MAX - 1)
+        && rc_after == rc_before;
+    rt_arena_end();
+    /* INVARIANT (documented in turbo_rt.c): arena pointers must never be
+     * retained or released after rt_arena_end() — the memory is gone.
+     * Every persistent escape route copies, so no post-end release exists. */
+    check("test_arena_arc_sentinel_noop_in_window", ok);
 }
 
 /* ── 37: heap ARC releases still run while an arena is active ──────────── */
@@ -839,7 +845,7 @@ int main(void) {
     test_string_arc_literal_never_freed();
     test_string_arc_return_escape();
     test_string_arc_array_struct_slots();
-    test_arena_arc_release_after_end_noop();
+    test_arena_arc_sentinel_noop_in_window();
     test_heap_arc_release_during_active_arena_decrements();
 
     if (g_failures == 0) {

@@ -128,12 +128,6 @@ typedef struct turbo_arena {
     size_t total_capacity;  /* bytes ever malloced into this arena */
 } turbo_arena;
 
-typedef struct turbo_arena_retired_range {
-    struct turbo_arena_retired_range *next;
-    char *base;
-    char *end;
-} turbo_arena_retired_range;
-
 /* Default first-block size. Subsequent blocks double up to a cap. */
 #define TURBO_ARENA_BLOCK_MIN  (16 * 1024)
 #define TURBO_ARENA_BLOCK_MAX  (1 * 1024 * 1024)
@@ -141,40 +135,18 @@ typedef struct turbo_arena_retired_range {
 #define TURBO_ARENA_HARD_CAP   (64 * 1024 * 1024)
 
 static _Thread_local turbo_arena *t_current_arena = NULL;
-static _Thread_local turbo_arena_retired_range *t_retired_arena_ranges = NULL;
 
-static void turbo_arena_clear_retired_ranges(void) {
-    turbo_arena_retired_range *range = t_retired_arena_ranges;
-    while (range) {
-        turbo_arena_retired_range *next = range->next;
-        free(range);
-        range = next;
-    }
-    t_retired_arena_ranges = NULL;
-}
-
-static void turbo_arena_remember_retired_range(char *base, char *end) {
-    turbo_arena_retired_range *range =
-        (turbo_arena_retired_range *)malloc(sizeof(turbo_arena_retired_range));
-    if (!range) {
-        fprintf(stderr, "runtime error: out of memory (arena retired range)\n");
-        exit(1);
-    }
-    range->base = base;
-    range->end = end;
-    range->next = t_retired_arena_ranges;
-    t_retired_arena_ranges = range;
-}
-
-static int turbo_arena_was_retired_ptr(const void *ptr) {
-    const char *p = (const char *)ptr;
-    turbo_arena_retired_range *range = t_retired_arena_ranges;
-    while (range) {
-        if (p >= range->base && p < range->end) return 1;
-        range = range->next;
-    }
-    return 0;
-}
+/* INVARIANT: an arena-backed pointer must never be retained or released
+ * after its arena window ends. Arena allocations carry the RT_RC_ARENA
+ * header sentinel, so retain/release are no-ops while the memory is
+ * alive; once rt_arena_end() bulk-frees the blocks, any surviving
+ * pointer is dangling. Every persistent escape route out of a request
+ * arena copies (e.g. hashmap_strdup for persistent maps), and values
+ * crossing thread boundaries must be heap copies. We deliberately do
+ * NOT track freed block address ranges to launder stale releases: a
+ * recycled malloc block would make fresh heap allocations at the same
+ * address silently skip refcounting (undercount -> double free), which
+ * trades an unreachable-path crash for corruption of normal code. */
 
 static void *turbo_arena_alloc(turbo_arena *a, size_t size) {
     /* Round up to 16-byte alignment so refcount headers stay aligned. */
@@ -214,8 +186,6 @@ static void turbo_arena_free_all(turbo_arena *a) {
     turbo_arena_block *blk = a->head;
     while (blk) {
         turbo_arena_block *next = blk->next;
-        char *base = (char *)(blk + 1);
-        turbo_arena_remember_retired_range(base, base + blk->size);
         free(blk);
         blk = next;
     }
@@ -228,7 +198,6 @@ static void turbo_arena_free_all(turbo_arena *a) {
  * `rt_arena_begin` / `rt_arena_end` symbols are exported so the JIT
  * runtime can call them too if it ever wants per-request scoping. */
 void rt_arena_begin(void) {
-    turbo_arena_clear_retired_ranges();
     if (t_current_arena != NULL) {
         /* Reuse the existing arena rather than nesting; the previous
          * caller forgot to end. Reset and continue. */
@@ -3475,7 +3444,6 @@ const char* rt_request_body(const char *req) {
 
 void rt_retain(void *data_ptr) {
     if (!data_ptr) return;
-    if (turbo_arena_was_retired_ptr(data_ptr)) return;
     long long *rc = rt_rc_refcount_ptr(data_ptr);
     long long current = __atomic_load_n(rc, __ATOMIC_ACQUIRE);
     if (current == RT_RC_IMMORTAL || current == RT_RC_ARENA) {
@@ -3486,7 +3454,6 @@ void rt_retain(void *data_ptr) {
 
 void rt_release(void *data_ptr) {
     if (!data_ptr) return;
-    if (turbo_arena_was_retired_ptr(data_ptr)) return;
     long long *rc = rt_rc_refcount_ptr(data_ptr);
     long long current = __atomic_load_n(rc, __ATOMIC_ACQUIRE);
     if (current == RT_RC_IMMORTAL || current == RT_RC_ARENA) {
