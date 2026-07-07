@@ -3,6 +3,37 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.3] - 2026-07-07
+
+A follow-up patch that hardens the safety machinery introduced in 0.10.x. A
+multi-agent review of the hardening release caught real gaps in the new gates
+themselves; this closes them. No language or API changes.
+
+### Security
+- **Playground sandbox: two allowlist-evasion holes closed.** The hosted
+  playground refuses any builtin outside a known-safe allowlist. Two lexical
+  tricks could sneak an *unknown* (potentially future-dangerous) builtin call
+  past that check: splitting the call across a newline (`socket_open\n(...)` —
+  the parser ignores newlines, so it still calls), and shadowing the check with
+  a same-named struct field or scalar parameter (`socket_open: int`). Both are
+  now rejected; a call is only permitted when the name is genuinely user-defined
+  (a function, a `let`/`const` binding, or a function-typed parameter).
+
+### Fixed
+- **Differential fuzzer could abort before recording a finding.** Its output
+  truncation sliced UTF-8 at an arbitrary byte offset and could panic on
+  multi-byte program output — losing the very divergence it had just caught. It
+  now truncates on a character boundary, includes captured stderr in finding
+  reports, and no longer masks a JIT crash when the AOT build also fails.
+- **CI perf-smoke gate could seed a bogus baseline.** The `--update-baseline`
+  path wrote a new baseline before the correctness check, so a miscompile could
+  bake a meaningless ratio into the gate; it now refuses to update on any output
+  mismatch. Build failures and crashing benchmarks are also reported clearly
+  instead of aborting the run silently.
+- **Docs-vs-compiler parity check tightened.** It now compares against
+  error-code *enum declarations* only, so a code left behind in a comment can no
+  longer mask a genuinely undocumented one.
+
 ## [0.10.2] - 2026-06-29
 
 A trust-and-polish patch from a full public smoke audit. Fixes one real
