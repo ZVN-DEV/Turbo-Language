@@ -60,7 +60,7 @@ CRATE_BUDGETS=(
   0    # turbo-ast
   10   # turbo-parser   (all documented internal invariants — see backlog doc)
   34   # turbo-sema     (next cycle)
-  282  # turbo-codegen-cranelift (next cycle — largest surface)
+  271  # turbo-codegen-cranelift (next cycle — largest surface)
   1    # turbo-formatter
   4    # turbo-cli
   0    # turbo-lsp

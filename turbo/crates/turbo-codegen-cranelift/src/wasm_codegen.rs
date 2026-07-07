@@ -1245,36 +1245,35 @@ impl CEmitter {
             .unwrap_or_default();
         let tmp = self.fresh_tmp();
         let mut inner = String::new();
-        write!(
+        // Writing into a String is infallible, so discard the fmt::Result
+        // rather than `.unwrap()` (keeps these off the panic-site budget).
+        let _ = write!(
             &mut inner,
             "long long *{tmp} = (long long*)rt_struct_alloc({}LL); {tmp}[0] = {idx}LL;",
             1 + slots
-        )
-        .unwrap();
+        );
         for (i, arg) in data.iter().enumerate() {
             let v = self.emit_expr(&arg.node);
             let tag = field_tags.get(i).map(String::as_str).unwrap_or("int");
             if tag == "float" {
-                write!(
+                let _ = write!(
                     &mut inner,
                     " {tmp}[{slot}] = ({{ union {{ double d; long long l; }} _u; \
                      _u.d = ({v}); _u.l; }});",
                     slot = i + 1
-                )
-                .unwrap();
+                );
             } else {
-                write!(
+                let _ = write!(
                     &mut inner,
                     " {tmp}[{slot}] = (long long)({v});",
                     slot = i + 1
-                )
-                .unwrap();
+                );
             }
         }
         // Yield the boxed value as `long long` (the C type used for enum/struct
         // values everywhere in this backend) so it round-trips through
         // function parameters and locals without an int/pointer mismatch.
-        write!(&mut inner, " (long long){tmp};").unwrap();
+        let _ = write!(&mut inner, " (long long){tmp};");
         format!("({{ {inner} }})")
     }
 
@@ -1498,18 +1497,20 @@ impl CEmitter {
     /// Emit a statement-context `match` as a `__matched`-flag fallthrough
     /// chain (see the module comment above for the value representation).
     fn emit_stmt_match(&mut self, buf: &mut String, subject: &Spanned<Expr>, arms: &[MatchArm]) {
+        // Writing into a String never fails, so every `write!`/`writeln!`
+        // below discards its `fmt::Result` (`let _ =`) instead of `.unwrap()`
+        // — semantically identical here and keeps these off the panic budget.
         let subj = self.emit_expr(&subject.node);
         let subj_tmp = self.fresh_tmp();
         let matched = self.fresh_tmp();
-        writeln!(buf, "{}{{", self.indent_str()).unwrap();
+        let _ = writeln!(buf, "{}{{", self.indent_str());
         self.indent += 1;
-        writeln!(
+        let _ = writeln!(
             buf,
             "{}long long {subj_tmp} = (long long)({subj});",
             self.indent_str()
-        )
-        .unwrap();
-        writeln!(buf, "{}int {matched} = 0;", self.indent_str()).unwrap();
+        );
+        let _ = writeln!(buf, "{}int {matched} = 0;", self.indent_str());
 
         for arm in arms {
             let saved_var_types = self.var_types.clone();
@@ -1526,11 +1527,11 @@ impl CEmitter {
                 continue;
             };
 
-            writeln!(buf, "{}if (!{matched}) {{", self.indent_str()).unwrap();
+            let _ = writeln!(buf, "{}if (!{matched}) {{", self.indent_str());
             self.indent += 1;
 
             let close_cond = if let Some(c) = &cond {
-                writeln!(buf, "{}if ({c}) {{", self.indent_str()).unwrap();
+                let _ = writeln!(buf, "{}if ({c}) {{", self.indent_str());
                 self.indent += 1;
                 true
             } else {
@@ -1538,37 +1539,37 @@ impl CEmitter {
             };
 
             for decl in &bindings {
-                writeln!(buf, "{}{decl}", self.indent_str()).unwrap();
+                let _ = writeln!(buf, "{}{decl}", self.indent_str());
             }
 
             let close_guard = if let Some(guard) = &arm.guard {
                 let g = self.emit_expr(&guard.node);
-                writeln!(buf, "{}if ({g}) {{", self.indent_str()).unwrap();
+                let _ = writeln!(buf, "{}if ({g}) {{", self.indent_str());
                 self.indent += 1;
                 true
             } else {
                 false
             };
 
-            writeln!(buf, "{}{matched} = 1;", self.indent_str()).unwrap();
+            let _ = writeln!(buf, "{}{matched} = 1;", self.indent_str());
             self.emit_block_body(&arm.body.node, buf, true);
 
             if close_guard {
                 self.indent -= 1;
-                writeln!(buf, "{}}}", self.indent_str()).unwrap();
+                let _ = writeln!(buf, "{}}}", self.indent_str());
             }
             if close_cond {
                 self.indent -= 1;
-                writeln!(buf, "{}}}", self.indent_str()).unwrap();
+                let _ = writeln!(buf, "{}}}", self.indent_str());
             }
 
             self.indent -= 1;
-            writeln!(buf, "{}}}", self.indent_str()).unwrap();
+            let _ = writeln!(buf, "{}}}", self.indent_str());
             self.var_types = saved_var_types;
         }
 
         self.indent -= 1;
-        writeln!(buf, "{}}}", self.indent_str()).unwrap();
+        let _ = writeln!(buf, "{}}}", self.indent_str());
     }
 
     fn get_field_index_str(&mut self, _obj_expr: &str, field: &str) -> String {
