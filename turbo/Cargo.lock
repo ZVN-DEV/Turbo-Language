@@ -1295,6 +1295,7 @@ dependencies = [
  "notify",
  "notify-debouncer-mini",
  "rustyline",
+ "serde_json",
  "tempfile",
  "turbo-ast",
  "turbo-codegen-cranelift",

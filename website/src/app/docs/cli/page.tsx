@@ -35,6 +35,7 @@ export default function CliPage() {
               ["turbolang init <name>", "Create a new project"],
               ["turbolang install", "Install dependencies from turbo.toml"],
               ["turbolang update", "Update GitHub dependencies"],
+              ["turbolang search <query>", "Search the package registry index"],
               ["turbolang fmt <file.tb>", "Format source code"],
               ["turbolang doc <file.tb>", "Generate documentation"],
               ["turbolang repl", "Interactive REPL"],

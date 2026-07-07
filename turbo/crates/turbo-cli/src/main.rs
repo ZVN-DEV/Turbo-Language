@@ -35,6 +35,7 @@ mod imports;
 mod pipeline;
 mod playground;
 mod project;
+mod registry;
 mod repl;
 mod watch;
 
@@ -127,6 +128,13 @@ enum Commands {
     Install,
     /// Update GitHub dependencies to latest
     Update,
+    /// Search the Turbo package registry index
+    Search {
+        /// Text to match against package names, descriptions, and categories
+        /// (case-insensitive). Omit to list every published package.
+        #[arg(default_value = "")]
+        query: String,
+    },
     /// Start the Language Server Protocol server
     Lsp,
     /// Type-check a Turbo source file without compiling or running
@@ -212,6 +220,7 @@ fn main() {
         }
         Commands::Install => install_deps(),
         Commands::Update => update_deps(),
+        Commands::Search { query } => registry::search_packages(&query),
         Commands::Check { file } => {
             let path = resolve_entry_file(file);
             check_file(&path);

@@ -29,6 +29,7 @@ const sections = [
     title: "Toolchain",
     links: [
       { href: "/docs/cli", label: "CLI Reference" },
+      { href: "/docs/packages", label: "Packages" },
       { href: "/docs/testing", label: "Testing" },
       { href: "/docs/cli#formatting", label: "Formatting" },
       { href: "/docs/cli#repl", label: "REPL" },
