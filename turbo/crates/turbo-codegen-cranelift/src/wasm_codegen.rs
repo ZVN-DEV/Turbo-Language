@@ -9,7 +9,7 @@
 
 use crate::closures::find_captures;
 use crate::CodegenError;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use turbo_ast::*;
 
@@ -67,6 +67,10 @@ struct CEmitter {
     /// `match` on the local (rather than directly on the producing call) can
     /// still recover payload types.
     var_type_exprs: HashMap<String, TypeExpr>,
+    /// Names of all top-level user functions (including unit-returning ones,
+    /// which `fn_return_types` omits). Lets a value-position identifier detect a
+    /// named function used as a first-class value — unsupported on this backend.
+    user_fn_names: HashSet<String>,
     /// Per-scope stack of deferred expressions. Each entry is a scope;
     /// the inner `Vec<Expr>` holds the deferred expressions in the order
     /// they were encountered (they will be emitted in LIFO order at scope
@@ -101,6 +105,7 @@ impl CEmitter {
             fn_return_types: HashMap::new(),
             fn_return_type_exprs: HashMap::new(),
             var_type_exprs: HashMap::new(),
+            user_fn_names: HashSet::new(),
             defer_stack: Vec::new(),
             errors: Vec::new(),
             closure_counter: 0,
@@ -393,6 +398,20 @@ impl CEmitter {
             }
             Expr::Unit => "0".to_string(),
             Expr::Ident(name) => {
+                // A bare function name in value position is a first-class
+                // function value. The Cranelift backend lowers this to an
+                // env-first adapter pair; the WASM (C-transpile) backend has no
+                // such lowering, so emitting `name` here would produce
+                // `long long g = dbl;` and later `((g)(...))` — invalid C.
+                // Fail loud instead, matching the backend's other unsupported
+                // constructs. (A shadowing local of the same name wins.)
+                if !self.var_types.contains_key(name)
+                    && !self.closure_sigs.contains_key(name)
+                    && self.user_fn_names.contains(name)
+                {
+                    self.record_unsupported("using a named function as a first-class value", None);
+                    return "0 /* unsupported fn value */".to_string();
+                }
                 // Map Turbo identifiers to C, handling reserved words
                 match name.as_str() {
                     "true" => "1".to_string(),
@@ -1078,9 +1097,19 @@ impl CEmitter {
                 return format!("{obj_name}_{field}");
             }
             _ => {
-                let c = self.emit_expr(&callee.node);
-                let arg_strs: Vec<String> = args.iter().map(|a| self.emit_expr(&a.node)).collect();
-                return format!("(({c})({}))", arg_strs.join(", "));
+                // A call whose callee is a computed value (e.g. `make_adder(3)(4)`
+                // or `handlers[i](x)`) needs an indirect call through a function
+                // value. The Cranelift backend supports this; the WASM
+                // (C-transpile) backend does not, so fail loud rather than
+                // emitting `((<long long>)(...))` — invalid C.
+                for arg in args {
+                    let _ = self.emit_expr(&arg.node);
+                }
+                self.record_unsupported(
+                    "indirect calls through computed function values",
+                    Some(&callee.span),
+                );
+                return "0 /* unsupported indirect call */".to_string();
             }
         };
 
@@ -1108,6 +1137,17 @@ impl CEmitter {
         // C function call by name.
         if let Some(sig) = self.closure_sigs.get(&fn_name).cloned() {
             return self.emit_closure_call(&fn_name, &sig, &arg_strs);
+        }
+
+        // A local variable being called that is not a tracked closure holds a
+        // function value from some other source (e.g. `let g = named_fn; g(x)`).
+        // The WASM backend can't lower a call through such a value — fail loud.
+        if self.var_types.contains_key(&fn_name) && !self.user_fn_names.contains(&fn_name) {
+            self.record_unsupported(
+                "calling a first-class function value held in a variable",
+                Some(&callee.span),
+            );
+            return "0 /* unsupported fn-value call */".to_string();
         }
 
         // Map built-in functions to runtime calls
@@ -2191,6 +2231,7 @@ impl CEmitter {
         // Pre-pass: collect function return types so call sites can infer types
         for item in &module.items {
             if let Item::Function(fndef) = &item.node {
+                self.user_fn_names.insert(fndef.name.clone());
                 if let Some(ret_ty) = &fndef.return_type {
                     let ret_tag = Self::type_expr_to_tag(&ret_ty.node);
                     self.fn_return_types.insert(fndef.name.clone(), ret_tag);
@@ -3084,5 +3125,57 @@ fn main() {
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn named_fn_as_value_fails_loud() {
+        // The Cranelift backend lowers a named function used as a first-class
+        // value (via an env-first adapter), but the WASM (C-transpile) backend
+        // has no such lowering. It must fail loud rather than emit invalid C
+        // (`long long g = dbl; ((g)(...));`).
+        let err = try_compile_to_c(
+            r#"
+fn dbl(x: i64) -> i64 { x * 2 }
+
+fn main() {
+    let g = dbl
+    print(g(9))
+}
+"#,
+        )
+        .expect_err("named function used as a value must be unsupported on WASM");
+        assert_eq!(err.code, ErrorCode::E0403);
+        assert!(
+            err.message
+                .contains("named function as a first-class value"),
+            "diagnostic should name the unsupported construct: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn immediate_invoke_of_returned_fn_fails_loud() {
+        // `make_adder(3)(4)` is a call through a computed function value —
+        // unsupported on the WASM backend (must not emit `((<expr>)(...))`).
+        let err = try_compile_to_c(
+            r#"
+fn make_adder(n: i64) -> fn(i64) -> i64 {
+    |x: i64| -> i64 { x + n }
+}
+
+fn main() {
+    print(make_adder(3)(4))
+}
+"#,
+        )
+        .expect_err("indirect call through a computed value must be unsupported on WASM");
+        assert_eq!(err.code, ErrorCode::E0403);
+        assert!(
+            err.message
+                .contains("indirect calls through computed function values")
+                || err.message.contains("closure"),
+            "diagnostic should name the unsupported construct: {}",
+            err.message
+        );
     }
 }

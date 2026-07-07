@@ -1347,6 +1347,67 @@ pub(crate) fn compile_module<M: Module>(
         spawn_thunk_map.insert(site.span_start, site.thunk_name.clone());
     }
 
+    // Declare env-first adapters for first-class function values.
+    //
+    // A named function is compiled with a plain `(params...) -> ret` signature,
+    // but every function value must be callable through the uniform env-first
+    // closure ABI (`(env_ptr, params...) -> ret`, `CallConv::Fast`). For each
+    // eligible top-level function we declare an adapter `__fnval$<name>` that
+    // takes (and ignores) a leading env pointer and forwards to the real
+    // function. `Expr::Ident(name)` in value position then produces the pair
+    // `[addr(__fnval$<name>), null]`. Generation is eager (one thin adapter per
+    // eligible function) — simple and robust; unused adapters are dead code.
+    // Eligibility must match turbo-sema's `named_fn_value_ty`: non-`main`,
+    // non-generic, non-async, non-`@unsafe`, non-FFI. `@unsafe` functions are
+    // excluded so an unsafe call can't escape the unsafe-context check by
+    // hiding behind a value (turbo-sema rejects the value form with E0530).
+    let fnval_adapter_targets: Vec<&FnDef> = ast_module
+        .items
+        .iter()
+        .filter_map(|item| match &item.node {
+            Item::Function(f)
+                if f.name != "main"
+                    && f.type_param_names().is_empty()
+                    && !f.is_async
+                    && !f.is_unsafe
+                    && !extern_fn_names.contains(&f.name) =>
+            {
+                Some(f)
+            }
+            _ => None,
+        })
+        .collect();
+
+    for f in &fnval_adapter_targets {
+        let adapter_name = format!("__fnval${}", f.name);
+        let mut sig = module.make_signature();
+        sig.call_conv = CallConv::Fast;
+        sig.params.push(AbiParam::new(ptr_type)); // hidden env pointer (ignored)
+        for param in &f.params {
+            sig.params.push(AbiParam::new(resolve_cl_type(
+                &param.ty.node,
+                ptr_type,
+                &enum_variants,
+                &[],
+            )?));
+        }
+        if let Some(ret_ty) = &f.return_type {
+            sig.returns.push(AbiParam::new(resolve_cl_type(
+                &ret_ty.node,
+                ptr_type,
+                &enum_variants,
+                &[],
+            )?));
+        }
+        let id = module
+            .declare_function(&adapter_name, Linkage::Local, &sig)
+            .map_err(|e| CodegenError {
+                code: ErrorCode::E0405,
+                message: e.to_string(),
+            })?;
+        user_fns.insert(adapter_name, id);
+    }
+
     // Define all user functions (and closures)
     let mut cl_ctx = module.make_context();
     let mut data_desc = DataDescription::new();
@@ -2165,6 +2226,74 @@ pub(crate) fn compile_module<M: Module>(
 
         module
             .define_function(func_id, &mut cl_ctx)
+            .map_err(|e| CodegenError {
+                code: ErrorCode::E0405,
+                message: e.to_string(),
+            })?;
+        module.clear_context(&mut cl_ctx);
+    }
+
+    // Compile env-first adapter bodies for first-class function values. Each
+    // adapter drops its leading env pointer and directly calls the real
+    // function with the remaining arguments, returning its result unchanged.
+    for f in &fnval_adapter_targets {
+        let adapter_name = format!("__fnval${}", f.name);
+        let adapter_fid = user_fns[&adapter_name];
+        let target_fid = user_fns[&f.name];
+
+        cl_ctx.func.signature = module.make_signature();
+        cl_ctx.func.signature.call_conv = CallConv::Fast;
+        cl_ctx.func.signature.params.push(AbiParam::new(ptr_type)); // env (ignored)
+        for param in &f.params {
+            cl_ctx
+                .func
+                .signature
+                .params
+                .push(AbiParam::new(resolve_cl_type(
+                    &param.ty.node,
+                    ptr_type,
+                    &enum_variants,
+                    &[],
+                )?));
+        }
+        let has_return = f.return_type.is_some();
+        if let Some(ret_ty) = &f.return_type {
+            cl_ctx
+                .func
+                .signature
+                .returns
+                .push(AbiParam::new(resolve_cl_type(
+                    &ret_ty.node,
+                    ptr_type,
+                    &enum_variants,
+                    &[],
+                )?));
+        }
+
+        let mut fn_ctx = FunctionBuilderContext::new();
+        {
+            let mut builder = FunctionBuilder::new(&mut cl_ctx.func, &mut fn_ctx);
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            builder.ensure_inserted_block();
+
+            // Forward every user parameter (skip block_params[0], the env ptr).
+            let forwarded: Vec<Value> = builder.block_params(entry)[1..].to_vec();
+            let target_ref = module.declare_func_in_func(target_fid, builder.func);
+            let call = builder.ins().call(target_ref, &forwarded);
+            if has_return {
+                let results = builder.inst_results(call).to_vec();
+                builder.ins().return_(&results);
+            } else {
+                builder.ins().return_(&[]);
+            }
+            builder.finalize();
+        }
+
+        module
+            .define_function(adapter_fid, &mut cl_ctx)
             .map_err(|e| CodegenError {
                 code: ErrorCode::E0405,
                 message: e.to_string(),

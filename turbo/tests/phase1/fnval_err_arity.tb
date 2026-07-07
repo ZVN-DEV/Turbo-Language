@@ -1,0 +1,7 @@
+fn make_adder(n: i64) -> fn(i64) -> i64 {
+    |x: i64| -> i64 { x + n }
+}
+
+fn main() {
+    print(make_adder(3)(4, 5))
+}

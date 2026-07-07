@@ -1,0 +1,11 @@
+fn inc(x: i64) -> i64 { x + 1 }
+
+fn __fnval_inc() -> i64 { 999 }
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 { f(x) }
+
+fn main() {
+    let g = inc
+    print(apply(g, 10))
+    print(__fnval_inc())
+}

@@ -388,6 +388,43 @@ fn extract_closures_from_expr<'a>(
                 extract_closures_from_expr(v, out, counter);
             }
         }
+        // First-class function values can live in these composite expressions
+        // (e.g. an array of closures, a struct field initialized with a
+        // closure, or a closure in a match arm), so their sub-expressions must
+        // be scanned for closures too.
+        Expr::ArrayLit(elements) => {
+            for elem in elements {
+                extract_closures_from_expr(elem, out, counter);
+            }
+        }
+        Expr::StructLit { fields, .. } => {
+            for (_, value) in fields {
+                extract_closures_from_expr(value, out, counter);
+            }
+        }
+        Expr::Index { object, index } => {
+            extract_closures_from_expr(object, out, counter);
+            extract_closures_from_expr(index, out, counter);
+        }
+        Expr::FieldAccess { object, .. } => {
+            extract_closures_from_expr(object, out, counter);
+        }
+        Expr::Match { subject, arms } => {
+            extract_closures_from_expr(subject, out, counter);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    extract_closures_from_expr(guard, out, counter);
+                }
+                extract_closures_from_expr(&arm.body, out, counter);
+            }
+        }
+        Expr::Interpolation(parts) => {
+            for part in parts {
+                if let InterpolPart::Expr(e) = part {
+                    extract_closures_from_expr(e, out, counter);
+                }
+            }
+        }
         _ => {} // Literals, Ident, Unit, NoneExpr, etc. -- no sub-expressions with closures
     }
 }

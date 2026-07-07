@@ -1,0 +1,6 @@
+struct Handler { f: fn(i64) -> i64 }
+
+fn main() {
+    let h = Handler { f: |x: i64| -> i64 { x * 2 } }
+    print(h.f(21))
+}

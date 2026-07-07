@@ -298,6 +298,7 @@ pub(crate) fn detailed_explanation(code: ErrorCode) -> Option<&'static str> {
         ErrorCode::E0514 => Some(include_str!("errors/E0514.md")),
         ErrorCode::E0515 => Some(include_str!("errors/E0515.md")),
         ErrorCode::E0516 => Some(include_str!("errors/E0516.md")),
+        ErrorCode::E0530 => Some(include_str!("errors/E0530.md")),
         // Runtime & operational errors (E0600-E0699)
         ErrorCode::E0601 => Some(include_str!("errors/E0601.md")),
         ErrorCode::E0602 => Some(include_str!("errors/E0602.md")),

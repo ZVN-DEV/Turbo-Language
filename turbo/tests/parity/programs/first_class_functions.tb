@@ -1,0 +1,37 @@
+// First-class function values: closures and named functions stored in
+// struct fields / arrays, invoked immediately and through values. JIT and
+// AOT must agree on every result.
+fn inc(x: i64) -> i64 { x + 1 }
+fn dec(x: i64) -> i64 { x - 1 }
+
+struct Handler { f: fn(i64) -> i64 }
+
+fn make_adder(n: i64) -> fn(i64) -> i64 {
+    |x: i64| -> i64 { x + n }
+}
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 { f(x) }
+
+fn main() {
+    // Immediate invocation of a returned closure.
+    print(make_adder(10)(5))
+
+    // Named function as a value: assigned, passed, called.
+    let g = inc
+    print(apply(g, 41))
+    print(g(7))
+
+    // Array dispatch table (closures and named functions).
+    let ops = [inc, dec]
+    print(ops[0](100))
+    print(ops[1](100))
+    let handlers = [|x: i64| -> i64 { x * 2 }, |x: i64| -> i64 { x * 3 }]
+    let i = 1
+    print(handlers[i](4))
+
+    // Closure capturing a local, stored in a struct field, called after the
+    // defining scope has returned.
+    let h = Handler { f: make_adder(1000) }
+    print(h.f(1))
+    print(h.f(23))
+}
