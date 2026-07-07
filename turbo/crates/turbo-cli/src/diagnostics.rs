@@ -185,7 +185,7 @@ pub(crate) fn report_file_error(path: &std::path::Path, err: &std::io::Error) ->
 }
 
 /// Render an import-resolution failure (E0610) and exit. `message` is the
-/// human-readable reason produced by [`resolve_imports`].
+/// human-readable reason produced by [`crate::imports::resolve_imports`].
 pub(crate) fn report_import_error(message: &str) -> ! {
     report_codeful_error(
         message,
