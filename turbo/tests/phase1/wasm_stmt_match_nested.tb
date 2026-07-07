@@ -1,0 +1,30 @@
+// Nested statement-context match: an inner match inside a match arm body.
+// Exercises fresh subject temporaries and independent payload bindings.
+type Tree {
+    Leaf(i64),
+    Pair(i64, i64),
+}
+
+fn show(t: Tree) {
+    match t {
+        Leaf(v) => {
+            match v {
+                0 => print("leaf zero")
+                _ => print(v)
+            }
+        }
+        Pair(a, b) => {
+            match a {
+                0 => print(b)
+                _ => print(a + b)
+            }
+        }
+    }
+}
+
+fn main() {
+    show(Tree.Leaf(0))
+    show(Tree.Leaf(7))
+    show(Tree.Pair(0, 9))
+    show(Tree.Pair(2, 3))
+}

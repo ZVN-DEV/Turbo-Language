@@ -1,0 +1,17 @@
+// Statement-context match with `where`-style guards on binding patterns.
+// A guard that fails must fall through to the next arm (WASM parity).
+fn classify(n: i64) {
+    match n {
+        n if n > 100 => print("huge")
+        n if n > 0 => print("positive")
+        0 => print("zero")
+        _ => print("negative")
+    }
+}
+
+fn main() {
+    classify(500)
+    classify(5)
+    classify(0)
+    classify(-3)
+}

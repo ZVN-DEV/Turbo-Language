@@ -41,11 +41,32 @@ struct CEmitter {
     impl_methods: HashMap<String, Vec<(String, FnDef)>>,
     /// Enum variant info: enum_name -> vec of variant names
     enum_variants: HashMap<String, Vec<String>>,
+    /// Data-carrying enums: enum_name -> max number of payload slots across
+    /// its variants. Present only for enums that have at least one variant
+    /// with data fields. Mirrors the native backend's `enum_max_slots` so a
+    /// data-carrying variant is boxed as `[tag][slot0]..[slotN]` (via
+    /// `rt_struct_alloc(1 + max_slots)`) and a unit variant of the same enum
+    /// is boxed the same way. Enums absent from this map are unit-only and are
+    /// represented by their integer variant index.
+    enum_max_slots: HashMap<String, usize>,
+    /// Per-variant payload field type tags: (enum, variant) -> field tags.
+    /// Used to give each destructured binding the right C type / print
+    /// dispatch (and to bit-preserve `float` payloads). Only populated for
+    /// variants that carry data.
+    enum_variant_fields: HashMap<(String, String), Vec<String>>,
     /// Variable type tracking: variable name -> simplified type tag
     /// ("str", "int", "float", "bool", "array", "struct", "void*")
     var_types: HashMap<String, String>,
     /// Function return type tracking: function name -> simplified type tag
     fn_return_types: HashMap<String, String>,
+    /// Full return `TypeExpr` per function/method, so a `match` subject that
+    /// is a call can recover the `ok`/`err`/`some` payload types (the coarse
+    /// `fn_return_types` tag collapses `T ! E` and `T?` to `void*`).
+    fn_return_type_exprs: HashMap<String, TypeExpr>,
+    /// Rich `TypeExpr` for locals bound to a `Result`/`Optional` value, so a
+    /// `match` on the local (rather than directly on the producing call) can
+    /// still recover payload types.
+    var_type_exprs: HashMap<String, TypeExpr>,
     /// Per-scope stack of deferred expressions. Each entry is a scope;
     /// the inner `Vec<Expr>` holds the deferred expressions in the order
     /// they were encountered (they will be emitted in LIFO order at scope
@@ -74,8 +95,12 @@ impl CEmitter {
             fn_defs: Vec::new(),
             impl_methods: HashMap::new(),
             enum_variants: HashMap::new(),
+            enum_max_slots: HashMap::new(),
+            enum_variant_fields: HashMap::new(),
             var_types: HashMap::new(),
             fn_return_types: HashMap::new(),
+            fn_return_type_exprs: HashMap::new(),
+            var_type_exprs: HashMap::new(),
             defer_stack: Vec::new(),
             errors: Vec::new(),
             closure_counter: 0,
@@ -532,6 +557,18 @@ impl CEmitter {
                 format!("rt_array_get({obj}, {idx})")
             }
             Expr::FieldAccess { object, field } => {
+                // `Enum.Variant` unit-variant references parse as a field
+                // access (`FieldAccess { object: Ident("Enum"), field }`).
+                // Recognize them before falling back to struct field access.
+                if let Expr::Ident(enum_name) = &object.node {
+                    if self
+                        .enum_variants
+                        .get(enum_name)
+                        .is_some_and(|vs| vs.iter().any(|v| v == field))
+                    {
+                        return self.emit_enum_unit_variant(enum_name, field);
+                    }
+                }
                 let obj = self.emit_expr(&object.node);
                 // Determine field index from struct layout
                 // For now, use a generic field access via slot offset
@@ -621,6 +658,9 @@ impl CEmitter {
                 format!("rt_option_some((long long)({v}))")
             }
             Expr::NoneExpr => "rt_option_none()".to_string(),
+            Expr::EnumVariant { enum_name, variant } => {
+                self.emit_enum_unit_variant(enum_name, variant)
+            }
             Expr::MapLit(pairs) => {
                 let tmp = self.fresh_tmp();
                 let mut inner = String::new();
@@ -790,6 +830,22 @@ impl CEmitter {
     /// If `value` binds a closure to `name`, record its signature so later
     /// `name(args)` call sites lower to an indirect closure call. Handles both
     /// closure literals and aliasing another closure variable (`let g = f`).
+    /// Remember the rich `Result`/`Optional` `TypeExpr` for a local so a later
+    /// `match` on that local can recover its `ok`/`err`/`some` payload types.
+    /// Uses the explicit `let` annotation when present, otherwise the value's
+    /// producing expression (a call's declared return type).
+    fn record_result_binding(&mut self, name: &str, ty: &Option<Spanned<TypeExpr>>, value: &Expr) {
+        let te = match ty {
+            Some(t) => Some(t.node.clone()),
+            None => self.subject_type_expr(value),
+        };
+        if let Some(te) = te {
+            if matches!(te, TypeExpr::Result { .. } | TypeExpr::Optional(_)) {
+                self.var_type_exprs.insert(name.to_string(), te);
+            }
+        }
+    }
+
     fn record_closure_binding(&mut self, name: &str, value: &Expr) {
         match value {
             Expr::Closure {
@@ -1028,6 +1084,22 @@ impl CEmitter {
             }
         };
 
+        // Data-carrying enum variant construction. The parser rewrites
+        // `Shape.Circle(5)` into `Call { callee: Ident("Circle"),
+        // args: [Ident("Shape"), 5] }`, so a leading ident arg naming a known
+        // enum whose variant list contains `fn_name` is a boxed-variant ctor,
+        // not a function call. Box it as `[tag][slot0]..[slotN]` to match the
+        // representation the statement-context `match` destructures.
+        if let Some(first) = args.first() {
+            if let Expr::Ident(enum_name) = &first.node {
+                if let Some(variants) = self.enum_variants.get(enum_name).cloned() {
+                    if let Some(idx) = variants.iter().position(|v| v == &fn_name) {
+                        return self.emit_enum_ctor(enum_name, &fn_name, idx, &args[1..]);
+                    }
+                }
+            }
+        }
+
         let arg_strs: Vec<String> = args.iter().map(|a| self.emit_expr(&a.node)).collect();
         let args_joined = arg_strs.join(", ");
 
@@ -1149,6 +1221,356 @@ impl CEmitter {
         }
     }
 
+    /// Emit a data-carrying enum variant value as a boxed tagged union:
+    /// `[tag][slot0]..[slotN]` allocated via `rt_struct_alloc(1 + max_slots)`,
+    /// with the variant index at slot 0 and each payload at slot `i+1`. Float
+    /// payloads are stored by bit pattern (union pun) so no precision is lost,
+    /// matching the native backend's `bitcast`-based storage.
+    fn emit_enum_ctor(
+        &mut self,
+        enum_name: &str,
+        variant: &str,
+        idx: usize,
+        data: &[Spanned<Expr>],
+    ) -> String {
+        let slots = self
+            .enum_max_slots
+            .get(enum_name)
+            .copied()
+            .unwrap_or(data.len());
+        let field_tags = self
+            .enum_variant_fields
+            .get(&(enum_name.to_string(), variant.to_string()))
+            .cloned()
+            .unwrap_or_default();
+        let tmp = self.fresh_tmp();
+        let mut inner = String::new();
+        write!(
+            &mut inner,
+            "long long *{tmp} = (long long*)rt_struct_alloc({}LL); {tmp}[0] = {idx}LL;",
+            1 + slots
+        )
+        .unwrap();
+        for (i, arg) in data.iter().enumerate() {
+            let v = self.emit_expr(&arg.node);
+            let tag = field_tags.get(i).map(String::as_str).unwrap_or("int");
+            if tag == "float" {
+                write!(
+                    &mut inner,
+                    " {tmp}[{slot}] = ({{ union {{ double d; long long l; }} _u; \
+                     _u.d = ({v}); _u.l; }});",
+                    slot = i + 1
+                )
+                .unwrap();
+            } else {
+                write!(
+                    &mut inner,
+                    " {tmp}[{slot}] = (long long)({v});",
+                    slot = i + 1
+                )
+                .unwrap();
+            }
+        }
+        // Yield the boxed value as `long long` (the C type used for enum/struct
+        // values everywhere in this backend) so it round-trips through
+        // function parameters and locals without an int/pointer mismatch.
+        write!(&mut inner, " (long long){tmp};").unwrap();
+        format!("({{ {inner} }})")
+    }
+
+    /// Emit a unit (no-data) enum variant reference. For a data-carrying enum
+    /// it must still be boxed (`[tag]`) so a `match` that loads the tag from
+    /// slot 0 works uniformly; for a unit-only enum it is just the integer
+    /// variant index.
+    fn emit_enum_unit_variant(&mut self, enum_name: &str, variant: &str) -> String {
+        let idx = self
+            .enum_variants
+            .get(enum_name)
+            .and_then(|vs| vs.iter().position(|v| v == variant))
+            .unwrap_or(0);
+        if let Some(&slots) = self.enum_max_slots.get(enum_name) {
+            let tmp = self.fresh_tmp();
+            format!(
+                "({{ long long *{tmp} = (long long*)rt_struct_alloc({}LL); \
+                 {tmp}[0] = {idx}LL; (long long){tmp}; }})",
+                1 + slots
+            )
+        } else {
+            format!("{idx}LL")
+        }
+    }
+
+    // ── Statement-context match ─────────────────────────────────────────
+    //
+    // A statement-position `match` lowers to a chain of arms guarded by a
+    // `__matched` flag rather than an `if/else if` chain. The flag form is
+    // what makes payload-binding patterns and `where` guards correct: an arm
+    // can match on its tag, bind its payload, evaluate a guard, and — if the
+    // guard fails — fall through to the next arm. An `else if` chain cannot
+    // express that fallthrough once a guard has bound variables.
+    //
+    // Value representation (identical to the native Cranelift backend so the
+    // two backends produce the same results):
+    //   * `Result`  — pointer to `[tag][value]`; tag 0 = ok, 1 = err.
+    //   * `Optional`— pointer to `[tag][value]`; tag 1 = some, 0 = none.
+    //   * data enum — pointer to `[tag][slot0]..[slotN]`; tag = variant index.
+    //   * unit enum — the bare integer variant index.
+
+    /// Find the `(enum_name, variant_index)` for a variant name, searching all
+    /// known enums. Mirrors the native backend's `lookup_variant_tag_static`.
+    fn lookup_variant(&self, name: &str) -> Option<(String, usize)> {
+        for (enum_name, variants) in &self.enum_variants {
+            if let Some(i) = variants.iter().position(|v| v == name) {
+                return Some((enum_name.clone(), i));
+            }
+        }
+        None
+    }
+
+    /// Best-effort recovery of a subject's declared `TypeExpr`, used to type
+    /// the `ok`/`err`/`some` payload binding for print dispatch. Resolves a
+    /// direct call (via the function's declared return type) or a local bound
+    /// to a `Result`/`Optional` value.
+    fn subject_type_expr(&self, subject: &Expr) -> Option<TypeExpr> {
+        match subject {
+            Expr::Call { callee, .. } => {
+                if let Expr::Ident(fname) = &callee.node {
+                    return self.fn_return_type_exprs.get(fname).cloned();
+                }
+                None
+            }
+            Expr::Ident(name) => self.var_type_exprs.get(name).cloned(),
+            _ => None,
+        }
+    }
+
+    fn result_ok_tag(&self, subject: &Expr) -> String {
+        if let Expr::OkExpr(inner) = subject {
+            return self.infer_type_tag(&inner.node);
+        }
+        if let Some(TypeExpr::Result { ok_type, .. }) = self.subject_type_expr(subject) {
+            return Self::type_expr_to_tag(&ok_type.node);
+        }
+        "int".to_string()
+    }
+
+    fn result_err_tag(&self, subject: &Expr) -> String {
+        if let Expr::ErrExpr(inner) = subject {
+            return self.infer_type_tag(&inner.node);
+        }
+        if let Some(TypeExpr::Result { err_type, .. }) = self.subject_type_expr(subject) {
+            return Self::type_expr_to_tag(&err_type.node);
+        }
+        "int".to_string()
+    }
+
+    fn option_some_tag(&self, subject: &Expr) -> String {
+        if let Expr::SomeExpr(inner) = subject {
+            return self.infer_type_tag(&inner.node);
+        }
+        if let Some(TypeExpr::Optional(inner)) = self.subject_type_expr(subject) {
+            return Self::type_expr_to_tag(&inner.node);
+        }
+        "int".to_string()
+    }
+
+    /// Emit a C declaration binding `name` to a payload read (`raw` is a
+    /// long-long-valued C expression), giving it the C type that matches its
+    /// tag and registering that tag so `print(name)` dispatches correctly.
+    /// Float payloads are recovered from their stored bit pattern.
+    fn payload_binding_decl(&mut self, name: &str, tag: &str, raw: &str) -> String {
+        self.var_types.insert(name.to_string(), tag.to_string());
+        match tag {
+            "float" | "f64" | "f32" => format!(
+                "double {name} = ({{ union {{ double d; long long l; }} _u; \
+                 _u.l = (long long)({raw}); _u.d; }});"
+            ),
+            "str" => format!("const char* {name} = (const char*)({raw});"),
+            "bool" => format!("char {name} = (char)({raw});"),
+            "array" | "struct" | "void*" | "closure" => {
+                format!("void* {name} = (void*)({raw});")
+            }
+            _ => format!("long long {name} = (long long)({raw});"),
+        }
+    }
+
+    /// Compute a match arm's condition and payload bindings.
+    /// Returns `(cond, bindings)` where `cond == None` means the arm always
+    /// matches (wildcard / binding). Returns `None` for an unsupported
+    /// pattern so the caller can fail loud instead of silently dropping it.
+    /// Registers binding type tags in `var_types` as a side effect.
+    fn match_arm_plan(
+        &mut self,
+        pattern: &Pattern,
+        subj: &str,
+        subject: &Expr,
+    ) -> Option<(Option<String>, Vec<String>)> {
+        match pattern {
+            Pattern::Wildcard => Some((None, Vec::new())),
+            Pattern::Ident(name) => {
+                if let Some((enum_name, idx)) = self.lookup_variant(name) {
+                    // Unit-variant tag pattern.
+                    let cond = if self.enum_max_slots.contains_key(&enum_name) {
+                        format!("((long long*){subj})[0] == {idx}LL")
+                    } else {
+                        format!("{subj} == {idx}LL")
+                    };
+                    Some((Some(cond), Vec::new()))
+                } else {
+                    // Catch-all binding: bind the subject to `name`.
+                    let tag = self.infer_type_tag(subject);
+                    let ctype = Self::tag_to_c_type(&tag);
+                    let decl = format!("{ctype} {name} = ({ctype})({subj});");
+                    self.var_types.insert(name.clone(), tag);
+                    Some((None, vec![decl]))
+                }
+            }
+            Pattern::IntLit(n) => Some((Some(format!("{subj} == {n}LL")), Vec::new())),
+            Pattern::BoolLit(b) => Some((Some(format!("{subj} == {}", i32::from(*b))), Vec::new())),
+            Pattern::StringLit(s) => {
+                let esc = Self::escape_c_string(s);
+                Some((
+                    Some(format!("rt_str_eq((const char*){subj}, {esc})")),
+                    Vec::new(),
+                ))
+            }
+            Pattern::Ok(binding) => {
+                let tag = self.result_ok_tag(subject);
+                let decl = self.payload_binding_decl(
+                    binding,
+                    &tag,
+                    &format!("rt_result_value((void*){subj})"),
+                );
+                Some((
+                    Some(format!("rt_result_tag((void*){subj}) == 0")),
+                    vec![decl],
+                ))
+            }
+            Pattern::Err(binding) => {
+                let tag = self.result_err_tag(subject);
+                let decl = self.payload_binding_decl(
+                    binding,
+                    &tag,
+                    &format!("rt_result_value((void*){subj})"),
+                );
+                Some((
+                    Some(format!("rt_result_tag((void*){subj}) == 1")),
+                    vec![decl],
+                ))
+            }
+            Pattern::Some(binding) => {
+                let tag = self.option_some_tag(subject);
+                let decl = self.payload_binding_decl(
+                    binding,
+                    &tag,
+                    &format!("rt_option_value((void*){subj})"),
+                );
+                Some((
+                    Some(format!("rt_option_tag((void*){subj}) == 1")),
+                    vec![decl],
+                ))
+            }
+            Pattern::None => Some((
+                Some(format!("rt_option_tag((void*){subj}) == 0")),
+                Vec::new(),
+            )),
+            Pattern::VariantDestructure { variant, bindings } => {
+                let (enum_name, idx) = self.lookup_variant(variant)?;
+                let field_tags = self
+                    .enum_variant_fields
+                    .get(&(enum_name, variant.clone()))
+                    .cloned()
+                    .unwrap_or_default();
+                let mut decls = Vec::with_capacity(bindings.len());
+                for (i, b) in bindings.iter().enumerate() {
+                    let tag = field_tags
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_else(|| "int".to_string());
+                    let raw = format!("((long long*){subj})[{}]", i + 1);
+                    decls.push(self.payload_binding_decl(b, &tag, &raw));
+                }
+                Some((Some(format!("((long long*){subj})[0] == {idx}LL")), decls))
+            }
+        }
+    }
+
+    /// Emit a statement-context `match` as a `__matched`-flag fallthrough
+    /// chain (see the module comment above for the value representation).
+    fn emit_stmt_match(&mut self, buf: &mut String, subject: &Spanned<Expr>, arms: &[MatchArm]) {
+        let subj = self.emit_expr(&subject.node);
+        let subj_tmp = self.fresh_tmp();
+        let matched = self.fresh_tmp();
+        writeln!(buf, "{}{{", self.indent_str()).unwrap();
+        self.indent += 1;
+        writeln!(
+            buf,
+            "{}long long {subj_tmp} = (long long)({subj});",
+            self.indent_str()
+        )
+        .unwrap();
+        writeln!(buf, "{}int {matched} = 0;", self.indent_str()).unwrap();
+
+        for arm in arms {
+            let saved_var_types = self.var_types.clone();
+            let Some((cond, bindings)) =
+                self.match_arm_plan(&arm.pattern.node, &subj_tmp, &subject.node)
+            else {
+                // Fail loud: an unsupported pattern must not be silently
+                // dropped (that would change program behavior).
+                self.record_unsupported(
+                    "this match pattern in statement position",
+                    Some(&arm.pattern.span),
+                );
+                self.var_types = saved_var_types;
+                continue;
+            };
+
+            writeln!(buf, "{}if (!{matched}) {{", self.indent_str()).unwrap();
+            self.indent += 1;
+
+            let close_cond = if let Some(c) = &cond {
+                writeln!(buf, "{}if ({c}) {{", self.indent_str()).unwrap();
+                self.indent += 1;
+                true
+            } else {
+                false
+            };
+
+            for decl in &bindings {
+                writeln!(buf, "{}{decl}", self.indent_str()).unwrap();
+            }
+
+            let close_guard = if let Some(guard) = &arm.guard {
+                let g = self.emit_expr(&guard.node);
+                writeln!(buf, "{}if ({g}) {{", self.indent_str()).unwrap();
+                self.indent += 1;
+                true
+            } else {
+                false
+            };
+
+            writeln!(buf, "{}{matched} = 1;", self.indent_str()).unwrap();
+            self.emit_block_body(&arm.body.node, buf, true);
+
+            if close_guard {
+                self.indent -= 1;
+                writeln!(buf, "{}}}", self.indent_str()).unwrap();
+            }
+            if close_cond {
+                self.indent -= 1;
+                writeln!(buf, "{}}}", self.indent_str()).unwrap();
+            }
+
+            self.indent -= 1;
+            writeln!(buf, "{}}}", self.indent_str()).unwrap();
+            self.var_types = saved_var_types;
+        }
+
+        self.indent -= 1;
+        writeln!(buf, "{}}}", self.indent_str()).unwrap();
+    }
+
     fn get_field_index_str(&mut self, _obj_expr: &str, field: &str) -> String {
         // Try to find the field index from known struct layouts
         // For now, we can't always determine the struct type at this point,
@@ -1248,6 +1670,7 @@ impl CEmitter {
                     self.infer_type_tag(&value.node)
                 };
                 self.var_types.insert(name.clone(), type_tag);
+                self.record_result_binding(name, ty, &value.node);
                 self.record_closure_binding(name, &value.node);
 
                 let v = self.emit_expr(&value.node);
@@ -1447,6 +1870,7 @@ impl CEmitter {
                     self.infer_type_tag(&value.node)
                 };
                 self.var_types.insert(name.clone(), type_tag);
+                self.record_result_binding(name, ty, &value.node);
                 self.record_closure_binding(name, &value.node);
 
                 let v = self.emit_expr(&value.node);
@@ -1530,88 +1954,7 @@ impl CEmitter {
                         }
                     }
                     Expr::Match { subject, arms } => {
-                        // In statement context, compile match as if/else if chain
-                        let subj = self.emit_expr(&subject.node);
-                        let subj_tmp = self.fresh_tmp();
-                        writeln!(buf, "{}{{", self.indent_str()).unwrap();
-                        writeln!(
-                            buf,
-                            "{}    long long {subj_tmp} = (long long)({subj});",
-                            self.indent_str()
-                        )
-                        .unwrap();
-                        let mut first = true;
-                        for arm in arms {
-                            match &arm.pattern.node {
-                                Pattern::Wildcard | Pattern::Ident(_) => {
-                                    if first {
-                                        writeln!(buf, "{}    {{", self.indent_str()).unwrap();
-                                    } else {
-                                        writeln!(buf, "{}    else {{", self.indent_str()).unwrap();
-                                    }
-                                    self.indent += 2;
-                                    self.emit_block_body(&arm.body.node, buf, true);
-                                    self.indent -= 2;
-                                    writeln!(buf, "{}    }}", self.indent_str()).unwrap();
-                                    break; // wildcard is always last
-                                }
-                                Pattern::IntLit(n) => {
-                                    let keyword = if first { "if" } else { "else if" };
-                                    writeln!(
-                                        buf,
-                                        "{}    {keyword} ({subj_tmp} == {n}LL) {{",
-                                        self.indent_str()
-                                    )
-                                    .unwrap();
-                                    self.indent += 2;
-                                    self.emit_block_body(&arm.body.node, buf, true);
-                                    self.indent -= 2;
-                                    writeln!(buf, "{}    }}", self.indent_str()).unwrap();
-                                }
-                                Pattern::BoolLit(b) => {
-                                    let keyword = if first { "if" } else { "else if" };
-                                    let cond_val = if *b { "1" } else { "0" };
-                                    writeln!(
-                                        buf,
-                                        "{}    {keyword} ({subj_tmp} == {cond_val}) {{",
-                                        self.indent_str()
-                                    )
-                                    .unwrap();
-                                    self.indent += 2;
-                                    self.emit_block_body(&arm.body.node, buf, true);
-                                    self.indent -= 2;
-                                    writeln!(buf, "{}    }}", self.indent_str()).unwrap();
-                                }
-                                Pattern::StringLit(s) => {
-                                    let keyword = if first { "if" } else { "else if" };
-                                    let escaped = Self::escape_c_string(s);
-                                    writeln!(buf, "{}    {keyword} (rt_str_eq((const char*){subj_tmp}, {escaped})) {{",
-                                        self.indent_str()).unwrap();
-                                    self.indent += 2;
-                                    self.emit_block_body(&arm.body.node, buf, true);
-                                    self.indent -= 2;
-                                    writeln!(buf, "{}    }}", self.indent_str()).unwrap();
-                                }
-                                _ => {
-                                    // Fail loud: an enum/Ok/Err/Some/None
-                                    // destructure in statement-context match is
-                                    // not lowered here, so emitting just a
-                                    // comment would silently drop the arm.
-                                    self.record_unsupported(
-                                        "this match pattern (enum/Ok/Err/Some/None destructure)",
-                                        Some(&arm.pattern.span),
-                                    );
-                                    writeln!(
-                                        buf,
-                                        "{}    /* unsupported match pattern */",
-                                        self.indent_str()
-                                    )
-                                    .unwrap();
-                                }
-                            }
-                            first = false;
-                        }
-                        writeln!(buf, "{}}}", self.indent_str()).unwrap();
+                        self.emit_stmt_match(buf, subject, arms);
                     }
                     Expr::FieldAssign {
                         object,
@@ -1812,6 +2155,25 @@ impl CEmitter {
                 }
                 Item::Enum(e) => {
                     let variants: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
+                    // Record payload field type tags per data-carrying variant
+                    // and the enum's max payload width, mirroring the native
+                    // backend's `enum_variant_fields` / `enum_max_slots`.
+                    let mut max_slots = 0usize;
+                    for v in &e.variants {
+                        if !v.fields.is_empty() {
+                            max_slots = max_slots.max(v.fields.len());
+                            let field_tags: Vec<String> = v
+                                .fields
+                                .iter()
+                                .map(|f| Self::type_expr_to_tag(&f.node))
+                                .collect();
+                            self.enum_variant_fields
+                                .insert((e.name.clone(), v.name.clone()), field_tags);
+                        }
+                    }
+                    if max_slots > 0 {
+                        self.enum_max_slots.insert(e.name.clone(), max_slots);
+                    }
                     self.enum_variants.insert(e.name.clone(), variants);
                 }
                 Item::Impl(imp) => {
@@ -1831,6 +2193,8 @@ impl CEmitter {
                 if let Some(ret_ty) = &fndef.return_type {
                     let ret_tag = Self::type_expr_to_tag(&ret_ty.node);
                     self.fn_return_types.insert(fndef.name.clone(), ret_tag);
+                    self.fn_return_type_exprs
+                        .insert(fndef.name.clone(), ret_ty.node.clone());
                 }
             }
         }
@@ -1839,6 +2203,8 @@ impl CEmitter {
                 if let Some(ret_ty) = &method.return_type {
                     let ret_tag = Self::type_expr_to_tag(&ret_ty.node);
                     self.fn_return_types.insert(method.name.clone(), ret_tag);
+                    self.fn_return_type_exprs
+                        .insert(method.name.clone(), ret_ty.node.clone());
                 }
             }
         }
@@ -2448,5 +2814,274 @@ fn main() {
             "diagnostic should name the unsupported construct: {}",
             err.message
         );
+    }
+
+    // ── Statement-context enum / Result / Optional match ────────────────
+
+    /// Source programs whose statement-context `match` exercises the new
+    /// enum / `Result` / `Optional` lowering, paired with the exact stdout the
+    /// native JIT produces for them. Reused by both the C-emission checks and
+    /// the host-compile parity test so the two never drift.
+    const STMT_MATCH_CASES: &[(&str, &str)] = &[
+        (
+            r#"
+type Shape { Circle(i64), Rect(i64, i64), Dot }
+fn describe(s: Shape) {
+    match s {
+        Circle(r) => print(r)
+        Rect(w, h) => print(w + h)
+        Dot => print(0)
+    }
+}
+fn main() {
+    describe(Shape.Circle(5))
+    describe(Shape.Rect(3, 4))
+    describe(Shape.Dot)
+}
+"#,
+            "5\n7\n0\n",
+        ),
+        (
+            r#"
+fn divide(a: i64, b: i64) -> i64 ! str {
+    if b == 0 { err("divide by zero") } else { ok(a / b) }
+}
+fn run(a: i64, b: i64) {
+    match divide(a, b) {
+        ok(v) => print(v)
+        err(e) => print(e)
+    }
+}
+fn main() {
+    run(10, 2)
+    run(7, 0)
+    run(20, 5)
+}
+"#,
+            "5\ndivide by zero\n4\n",
+        ),
+        (
+            r#"
+fn lookup(n: i64) -> i64? {
+    if n > 0 { some(n * 10) } else { none }
+}
+fn report(n: i64) {
+    let r = lookup(n)
+    match r {
+        some(v) => print(v)
+        none => print(-1)
+    }
+}
+fn main() {
+    report(3)
+    report(0)
+    report(5)
+}
+"#,
+            "30\n-1\n50\n",
+        ),
+        (
+            r#"
+fn classify(n: i64) {
+    match n {
+        n if n > 100 => print("huge")
+        n if n > 0 => print("positive")
+        0 => print("zero")
+        _ => print("negative")
+    }
+}
+fn main() {
+    classify(500)
+    classify(5)
+    classify(0)
+    classify(-3)
+}
+"#,
+            "huge\npositive\nzero\nnegative\n",
+        ),
+        (
+            r#"
+type Box { Val(f64), Empty }
+fn show(b: Box) {
+    match b {
+        Val(x) => print(x + 0.5)
+        Empty => print(0.0)
+    }
+}
+fn main() {
+    show(Box.Val(3.0))
+    show(Box.Val(1.25))
+    show(Box.Empty)
+}
+"#,
+            "3.5\n1.75\n0.0\n",
+        ),
+    ];
+
+    #[test]
+    fn stmt_match_enum_lowers_tag_dispatch_and_payloads() {
+        // A data-carrying enum destructure must (1) box the ctor as a tagged
+        // struct, (2) dispatch on the tag at slot 0, and (3) read each payload
+        // from slot i+1 — with no unsupported-construct error.
+        let c = compile_to_c(STMT_MATCH_CASES[0].0);
+        assert!(c.contains("rt_struct_alloc"), "enum ctor must box a struct");
+        assert!(
+            c.contains("[0] == 0LL") && c.contains("[0] == 1LL"),
+            "must dispatch on the variant tag at slot 0:\n{c}"
+        );
+        assert!(
+            c.contains("[1])") && c.contains("[2])"),
+            "must read payloads from slots 1 and 2:\n{c}"
+        );
+        // Fail-loud placeholder from the old path must be gone.
+        assert!(!c.contains("unsupported match pattern"));
+    }
+
+    #[test]
+    fn stmt_match_result_lowers_ok_err_with_typed_payloads() {
+        let c = compile_to_c(STMT_MATCH_CASES[1].0);
+        assert!(
+            c.contains("rt_result_tag((void*)") && c.contains("rt_result_value((void*)"),
+            "Result match must use the tag/value runtime helpers:\n{c}"
+        );
+        assert!(c.contains("== 0") && c.contains("== 1"), "ok=0, err=1 tags");
+        // The `err` binding is a string, so it must be typed `const char*`
+        // (not `long long`) for correct print dispatch.
+        assert!(
+            c.contains("const char* e = "),
+            "err payload must bind as a string:\n{c}"
+        );
+        assert!(
+            c.contains("long long v = "),
+            "ok payload must bind as an int:\n{c}"
+        );
+    }
+
+    #[test]
+    fn stmt_match_optional_recovers_payload_type_through_local() {
+        let c = compile_to_c(STMT_MATCH_CASES[2].0);
+        assert!(
+            c.contains("rt_option_tag((void*)") && c.contains("rt_option_value((void*)"),
+            "Optional match must use the option tag/value helpers:\n{c}"
+        );
+    }
+
+    #[test]
+    fn stmt_match_guard_falls_through_on_failure() {
+        // A guarded binding arm must bind first, then test the guard; a failing
+        // guard must not set the `matched` flag, so control reaches later arms.
+        let c = compile_to_c(STMT_MATCH_CASES[3].0);
+        assert!(
+            c.contains("> 100") && c.contains("> 0"),
+            "both guards must be emitted:\n{c}"
+        );
+        // The `matched` flag is the fallthrough mechanism.
+        assert!(
+            c.contains(" = 0;\n") || c.contains("= 0;"),
+            "matched flag init"
+        );
+    }
+
+    #[test]
+    fn stmt_match_float_payload_round_trips_by_bits() {
+        // A float payload must be stored/loaded via a union pun, never a
+        // truncating `(long long)` cast, or 3.0 would arrive as 3.
+        let c = compile_to_c(STMT_MATCH_CASES[4].0);
+        assert!(
+            c.contains("union { double d; long long l; }"),
+            "float payload must round-trip through its bit pattern:\n{c}"
+        );
+        assert!(
+            c.contains("double x = "),
+            "float binding must be a double:\n{c}"
+        );
+    }
+
+    /// Every statement-match case must lower to C with no unsupported-construct
+    /// error (the whole point of this feature).
+    #[test]
+    fn stmt_match_cases_all_lower_without_unsupported() {
+        for (src, _) in STMT_MATCH_CASES {
+            let r = try_compile_to_c(src);
+            assert!(
+                r.is_ok(),
+                "expected clean lowering, got: {:?}",
+                r.err().map(|e| e.message)
+            );
+        }
+    }
+
+    /// End-to-end parity: compile the emitted WASM C for the *host* (the C is
+    /// portable — the only wasm-specific part is the codegen target, not the
+    /// C semantics), run it, and require byte-identical stdout to the native
+    /// JIT. Skips cleanly when no host C compiler is available (mirrors how
+    /// the wasm integration tests skip without the wasm toolchain).
+    #[test]
+    fn stmt_match_host_compile_parity() {
+        use std::process::Command;
+
+        // Find a host C compiler.
+        let cc = ["clang", "cc", "gcc"].into_iter().find(|c| {
+            Command::new(c)
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        });
+        let Some(cc) = cc else {
+            eprintln!("skipping host parity: no C compiler (clang/cc/gcc) found");
+            return;
+        };
+
+        // Unique scratch dir under the system temp.
+        let dir = std::env::temp_dir().join(format!("turbo_wasm_parity_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("turbo_rt_guards.h"), crate::RUNTIME_GUARDS_H).unwrap();
+        std::fs::write(dir.join("turbo_rt_wasm.c"), crate::RUNTIME_WASM_C).unwrap();
+
+        for (i, (src, expected)) in STMT_MATCH_CASES.iter().enumerate() {
+            let c = compile_to_c(src);
+            let prog = dir.join(format!("prog_{i}.c"));
+            let bin = dir.join(format!("prog_{i}.bin"));
+            std::fs::write(&prog, &c).unwrap();
+
+            let build = Command::new(cc)
+                // The backend deliberately round-trips values through
+                // `long long`/pointer casts (the wasm32 clang treats these as
+                // warnings, not errors); keep them non-fatal here so the test
+                // models the production toolchain rather than Apple clang's
+                // stricter default.
+                .arg("-w")
+                .arg("-Wno-error=int-conversion")
+                .arg("-Wno-error=int-to-pointer-cast")
+                .arg("-Wno-error=pointer-to-int-cast")
+                .arg("-O0")
+                .arg(&prog)
+                .arg(dir.join("turbo_rt_wasm.c"))
+                .arg("-I")
+                .arg(&dir)
+                .arg("-lm")
+                .arg("-o")
+                .arg(&bin)
+                .output()
+                .expect("failed to spawn C compiler");
+            assert!(
+                build.status.success(),
+                "case {i} failed to host-compile:\n{}\n--- generated C ---\n{c}",
+                String::from_utf8_lossy(&build.stderr)
+            );
+
+            let run = Command::new(&bin)
+                .output()
+                .expect("failed to run compiled binary");
+            let got = String::from_utf8_lossy(&run.stdout);
+            assert_eq!(
+                got.as_ref(),
+                *expected,
+                "case {i}: host-compiled WASM C output must match the native JIT output"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
