@@ -1,0 +1,14 @@
+fn double(x: int) -> int { x * 2 }
+fn triple(x: int) -> int { x * 3 }
+fn main() {
+    let d: HashMap<str, fn(int) -> int> = hashmap()
+    hashmap_set(d, "double", double)
+    hashmap_set(d, "triple", triple)
+    hashmap_set(d, "inc", |x: int| -> int { x + 1 })
+    let f = hashmap_get(d, "double") ?? double
+    print(f(21))
+    let g = hashmap_get(d, "triple") ?? double
+    print(g(10))
+    let h = hashmap_get(d, "inc") ?? double
+    print(h(41))
+}

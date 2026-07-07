@@ -1,0 +1,10 @@
+fn main() {
+    let m: HashMap<str, [int]> = hashmap()
+    hashmap_set(m, "evens", [2, 4, 6])
+    hashmap_set(m, "odds", [1, 3, 5])
+    let e = hashmap_get(m, "evens") ?? [0]
+    print(e)
+    print(len(e))
+    let o = hashmap_get(m, "odds") ?? [0]
+    print(o[1])
+}

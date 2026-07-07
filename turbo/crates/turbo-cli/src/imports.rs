@@ -263,6 +263,10 @@ pub(crate) fn collect_names_in_type(t: &TypeExpr, out: &mut HashSet<String>) {
         }
         TypeExpr::Optional(inner) => collect_names_in_type(&inner.node, out),
         TypeExpr::Future(inner) => collect_names_in_type(&inner.node, out),
+        TypeExpr::HashMap(k, v) => {
+            collect_names_in_type(&k.node, out);
+            collect_names_in_type(&v.node, out);
+        }
         TypeExpr::Unit | TypeExpr::Inferred => {}
     }
 }

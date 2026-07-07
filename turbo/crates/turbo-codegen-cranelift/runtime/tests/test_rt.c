@@ -71,6 +71,18 @@ extern long long rt_http_config(const char *key, long long value);
 extern void *rt_spawn_with_args(long long (*thunk)(void *), void *args_ptr,
                                 long long ptr_mask, long long num_args);
 extern long long rt_await_handle(void *handle_ptr);
+/* Generic HashMap<K,V> descriptor-based core (Tier 1.2). */
+extern void *rt_hashmap_new_typed(long long key_kind, long long val_is_rc);
+extern void rt_hashmap_gset(void *map, long long key, long long value);
+extern void *rt_hashmap_gget(void *map, long long key);
+extern char rt_hashmap_ghas(const void *map, long long key);
+extern long long rt_hashmap_glen(const void *map);
+extern void rt_hashmap_gremove(void *map, long long key);
+extern void *rt_hashmap_gkeys(const void *map);
+extern long long rt_option_tag(const void *opt);
+
+/* Refcount of an rc-heap pointer (header sits 8 bytes below the data). */
+#define RT_RC(p) (((const long long *)(p))[-1])
 
 static int g_failures = 0;
 
@@ -910,6 +922,88 @@ static void test_http_config_validation(void) {
     check("test_http_config_validation accepts valid, rejects bad", ok);
 }
 
+/* ── Generic HashMap<K,V> (Tier 1.2): value retain/release discipline ── */
+static void test_hashmap_generic_value_refcounts(void) {
+    void *m = rt_hashmap_new_typed(1, 1); /* int keys, rc-heap values */
+    const char *a = rt_str_concat("val", "-a"); /* fresh rc string, rc 1 */
+    long long base_a = RT_RC(a);
+    rt_hashmap_gset(m, 7, (long long)a); /* map retains -> base_a + 1 */
+    int ok = RT_RC(a) == base_a + 1;
+    ok = ok && rt_hashmap_ghas(m, 7) == 1 && rt_hashmap_glen(m) == 1;
+
+    /* Overwrite releases the previous value and retains the new one. */
+    const char *b = rt_str_concat("val", "-b");
+    long long base_b = RT_RC(b);
+    rt_hashmap_gset(m, 7, (long long)b);
+    ok = ok && RT_RC(a) == base_a;     /* a released by the map */
+    ok = ok && RT_RC(b) == base_b + 1; /* b retained by the map */
+    ok = ok && rt_hashmap_glen(m) == 1;
+
+    /* Remove releases the stored value. */
+    rt_hashmap_gremove(m, 7);
+    ok = ok && RT_RC(b) == base_b && rt_hashmap_glen(m) == 0
+        && rt_hashmap_ghas(m, 7) == 0;
+
+    rt_release((void *)a);
+    rt_release((void *)b);
+    check("test_hashmap_generic_value_refcounts set/overwrite/remove retain-release",
+          ok);
+}
+
+static void test_hashmap_generic_resize_and_drop(void) {
+    void *m = rt_hashmap_new_typed(1, 1); /* int keys, rc-heap values */
+    enum { N = 100 };
+    const char *vals[N];
+    int ok = 1;
+    for (int i = 0; i < N; i++) {
+        char vbuf[16];
+        snprintf(vbuf, sizeof(vbuf), "v%d", i);
+        const char *v = rt_str_concat("k", vbuf); /* fresh rc string, rc 1 */
+        vals[i] = v;
+        rt_hashmap_gset(m, i, (long long)v); /* retained through resizes -> rc 2 */
+    }
+    ok = ok && rt_hashmap_glen(m) == N;
+    for (int i = 0; i < N; i++) {
+        ok = ok && rt_hashmap_ghas(m, i) == 1 && RT_RC(vals[i]) == 2;
+    }
+    /* Removing every key releases each stored value back to the caller's ref. */
+    for (int i = 0; i < N; i++) {
+        rt_hashmap_gremove(m, i);
+    }
+    ok = ok && rt_hashmap_glen(m) == 0;
+    for (int i = 0; i < N; i++) {
+        ok = ok && RT_RC(vals[i]) == 1;
+        rt_release((void *)vals[i]); /* frees, ASan verifies no double-free */
+    }
+    check("test_hashmap_generic_resize_and_drop retains through resize, frees on remove",
+          ok);
+}
+
+static void test_hashmap_generic_str_keys_get(void) {
+    void *m = rt_hashmap_new_typed(0, 0); /* str keys, non-rc int values */
+    rt_hashmap_gset(m, (long long)"alpha", 11);
+    rt_hashmap_gset(m, (long long)"beta", 22);
+    rt_hashmap_gset(m, (long long)"alpha", 111); /* overwrite */
+
+    void *hit = rt_hashmap_gget(m, (long long)"alpha");
+    void *miss = rt_hashmap_gget(m, (long long)"gamma");
+    int ok = rt_option_tag(hit) == 1 && ((const long long *)hit)[1] == 111;
+    ok = ok && rt_option_tag(miss) == 0;
+    ok = ok && rt_hashmap_ghas(m, (long long)"beta") == 1;
+    ok = ok && rt_hashmap_ghas(m, (long long)"zeta") == 0;
+    ok = ok && rt_hashmap_glen(m) == 2;
+
+    void *keys = rt_hashmap_gkeys(m); /* sorted [str] */
+    long long klen = ((const long long *)keys)[0];
+    ok = ok && klen == 2;
+
+    rt_release(hit);
+    rt_release(miss);
+    rt_release(keys);
+    check("test_hashmap_generic_str_keys_get get/has/keys/overwrite with string keys",
+          ok);
+}
+
 int main(void) {
     printf("== turbo_rt C runtime tests ==\n");
 
@@ -944,6 +1038,9 @@ int main(void) {
     test_typed_http_response_no_default_cors();
     test_hashmap_persists_across_request_arenas();
     test_hashmap_request_local_in_arena();
+    test_hashmap_generic_value_refcounts();
+    test_hashmap_generic_resize_and_drop();
+    test_hashmap_generic_str_keys_get();
     test_string_arc_loop_releases();
     test_string_arc_alias_then_reassign();
     test_string_arc_literal_never_freed();

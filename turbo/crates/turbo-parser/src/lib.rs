@@ -913,10 +913,11 @@ impl Parser {
         let mut end = span.end;
 
         // Parse generic type arguments: Pair<A, B>, Result<T, E>, etc.
+        let mut type_args: Vec<Spanned<TypeExpr>> = Vec::new();
         if matches!(self.peek(), Some(Token::Less)) {
             self.advance(); // <
             loop {
-                let _type_arg = self.parse_type()?;
+                type_args.push(self.parse_type()?);
                 if matches!(self.peek(), Some(Token::Comma)) {
                     self.advance();
                 } else {
@@ -927,7 +928,17 @@ impl Parser {
             self.expect(&Token::Greater)?;
         }
 
-        let mut ty = Spanned::new(TypeExpr::Named(name), start..end);
+        // `HashMap<K, V>` is a first-class typed collection; capture its type
+        // arguments (other generics still lower to `Named`, discarding args).
+        let mut ty = {
+            let mut it = type_args.into_iter();
+            match (name.as_str(), it.next(), it.next()) {
+                ("HashMap", Some(k), Some(v)) => {
+                    Spanned::new(TypeExpr::HashMap(Box::new(k), Box::new(v)), start..end)
+                }
+                _ => Spanned::new(TypeExpr::Named(name), start..end),
+            }
+        };
 
         // Check for result type: T ! E
         if matches!(self.peek(), Some(Token::Bang)) {

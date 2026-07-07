@@ -79,6 +79,11 @@ pub(crate) fn format_type_expr(ty: &turbo_ast::TypeExpr) -> String {
         }
         turbo_ast::TypeExpr::Optional(inner) => format!("{}?", format_type_expr(&inner.node)),
         turbo_ast::TypeExpr::Future(inner) => format!("Future<{}>", format_type_expr(&inner.node)),
+        turbo_ast::TypeExpr::HashMap(k, v) => format!(
+            "HashMap<{}, {}>",
+            format_type_expr(&k.node),
+            format_type_expr(&v.node)
+        ),
         turbo_ast::TypeExpr::Inferred => "_".to_string(),
     }
 }

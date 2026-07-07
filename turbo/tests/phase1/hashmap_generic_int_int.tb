@@ -1,0 +1,9 @@
+fn main() {
+    let m: HashMap<int, int> = hashmap()
+    hashmap_set(m, 10, 100)
+    hashmap_set(m, 20, 200)
+    print(hashmap_get(m, 10) ?? -1)
+    print(hashmap_get(m, 20) ?? -1)
+    print(hashmap_get(m, 30) ?? -1)
+    print(hashmap_len(m))
+}

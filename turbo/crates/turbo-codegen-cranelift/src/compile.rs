@@ -806,6 +806,57 @@ pub(crate) fn compile_module<M: Module>(
         &[ptr_type, ptr_type, types::I64],
         Some(types::I64),
     )?;
+    // Generic HashMap<K,V> descriptor-based core (Tier 1.2). Keys and values
+    // travel as a uniform i64 slot (int value, float bits, bool, or pointer).
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_new_typed",
+        &[types::I64, types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_gset",
+        &[ptr_type, types::I64, types::I64],
+        None,
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_gget",
+        &[ptr_type, types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_ghas",
+        &[ptr_type, types::I64],
+        Some(types::I8),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_glen",
+        &[ptr_type],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_gremove",
+        &[ptr_type, types::I64],
+        None,
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_gkeys",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
     // ARC runtime declarations
     declare_rt_fn(module, &mut rt_fns, "rt_retain", &[ptr_type], None)?;
     declare_rt_fn(module, &mut rt_fns, "rt_release", &[ptr_type], None)?;

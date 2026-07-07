@@ -114,6 +114,9 @@ pub enum Ty {
     Optional(Box<Ty>),
     /// `Future<T>` — result of spawn / async function call
     Future(Box<Ty>),
+    /// `HashMap<K, V>` — a typed generic hash map. Backed by an opaque runtime
+    /// handle (`i64`) but kept distinct so key/value types are checked.
+    HashMap(Box<Ty>, Box<Ty>),
     /// A generic type parameter (e.g., `T`)
     TypeParam(String),
     /// An opaque runtime handle (hashmap / mutex / http server). Backed by an
@@ -155,6 +158,7 @@ impl std::fmt::Display for Ty {
             Ty::Result(ok, err) => write!(f, "Result<{}, {}>", ok, err),
             Ty::Optional(inner) => write!(f, "{}?", inner),
             Ty::Future(inner) => write!(f, "Future<{inner}>"),
+            Ty::HashMap(k, v) => write!(f, "HashMap<{k}, {v}>"),
             Ty::TypeParam(name) => write!(f, "{name}"),
             Ty::Handle(kind) => write!(f, "{}", kind.label()),
             Ty::Error => write!(f, "<error>"),
@@ -191,6 +195,26 @@ impl Ty {
         self.is_integer() || *self == Ty::Handle(kind)
     }
 
+    /// Whether this type may stand in for a hashmap in a builtin argument
+    /// position: a legacy opaque handle, a plain integer (handles cross fn
+    /// boundaries as `i64`), or a typed `HashMap<K, V>`.
+    pub(crate) fn is_hashmap_arg(&self) -> bool {
+        self.is_handle_or_int(HandleKind::HashMap) || matches!(self, Ty::HashMap(_, _))
+    }
+
+    /// If this is a typed `HashMap<K, V>`, return `(K, V)`.
+    pub(crate) fn hashmap_kv(&self) -> Option<(&Ty, &Ty)> {
+        match self {
+            Ty::HashMap(k, v) => Some((k, v)),
+            _ => None,
+        }
+    }
+
+    /// Valid hashmap key types (v1): any integer, or `str`.
+    pub(crate) fn is_valid_hashmap_key(&self) -> bool {
+        self.is_integer() || matches!(self, Ty::Str)
+    }
+
     /// Check if this type contains `Ty::Error` anywhere in its structure
     /// (e.g., `Optional(Error)`, `Result(Error, Error)`, `Array(Error)`).
     /// Used to suppress cascading diagnostics when the inner error was already reported.
@@ -199,6 +223,7 @@ impl Ty {
             Ty::Error => true,
             Ty::Optional(inner) | Ty::Future(inner) | Ty::Array(inner) => inner.contains_error(),
             Ty::Result(ok, err) => ok.contains_error() || err.contains_error(),
+            Ty::HashMap(k, v) => k.contains_error() || v.contains_error(),
             Ty::Fn(params, ret) => {
                 ret.contains_error() || params.iter().any(|p| p.contains_error())
             }
@@ -341,6 +366,12 @@ pub(crate) fn types_compatible(expected: &Ty, actual: &Ty) -> bool {
         // incompatible, so clobbering a handle variable with an int is a clean
         // type error rather than a runtime segfault (BL-26).
         (expected, Ty::Handle(_)) if expected.is_integer() => true,
+        // A `hashmap()` call is typed as an opaque HashMap handle; binding it to
+        // a `HashMap<K, V>` annotation (or passing it where one is expected)
+        // upgrades it to the typed map. The empty handle carries no entries yet,
+        // so this is sound in either direction.
+        (Ty::HashMap(_, _), Ty::Handle(HandleKind::HashMap))
+        | (Ty::Handle(HandleKind::HashMap), Ty::HashMap(_, _)) => true,
         _ => false,
     }
 }
@@ -466,6 +497,11 @@ pub(crate) fn resolve_type_expr_with_params(
         }
         TypeExpr::Future(inner) => {
             resolve_type_expr(&inner.node, structs, enums).map(|t| Ty::Future(Box::new(t)))
+        }
+        TypeExpr::HashMap(k, v) => {
+            let key_ty = resolve_type_expr_with_params(&k.node, structs, enums, type_params)?;
+            let val_ty = resolve_type_expr_with_params(&v.node, structs, enums, type_params)?;
+            Some(Ty::HashMap(Box::new(key_ty), Box::new(val_ty)))
         }
         #[allow(unreachable_patterns)]
         _ => None,

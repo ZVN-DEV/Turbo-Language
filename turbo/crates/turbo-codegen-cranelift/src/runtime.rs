@@ -3204,6 +3204,167 @@ pub(crate) extern "C" fn rt_hashmap_inc(map_ptr: *mut u8, key: *const u8, delta:
     new_val
 }
 
+// ── Generic HashMap<K,V> runtime (Tier 1.2) ─────────────────────────
+//
+// JIT twin of the AOT descriptor-based map in turbo_rt.c. A typed map stores
+// raw i64 value slots keyed by an i64 or a String, guarded by a Mutex so
+// concurrent `spawn` access is data-race-free (BL-26). rc-heap values are
+// retained on insert and released on overwrite / remove, mirroring
+// rt_hashmap_gset / rt_hashmap_gremove. The handle box is leaked (never
+// freed), matching the legacy JIT map: the map object itself is leak-but-safe;
+// only its rc values are refcounted. `key_kind`: 0 = str, 1 = int.
+
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum GKey {
+    Int(i64),
+    Str(String),
+}
+
+struct GMap {
+    key_kind: u8,
+    val_is_rc: bool,
+    entries: HashMap<GKey, i64>,
+}
+
+type GMapHandle = Mutex<GMap>;
+
+fn lock_gmap(map_ptr: *const u8) -> std::sync::MutexGuard<'static, GMap> {
+    let handle: &'static GMapHandle = unsafe { &*(map_ptr as *const GMapHandle) };
+    handle
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Build a `GKey` from the raw ABI key: a bare `i64` for int-keyed maps, or a
+/// C-string pointer (copied into an owned `String`) for str-keyed maps.
+fn gkey_from(key_kind: u8, key: i64) -> GKey {
+    if key_kind == 1 {
+        GKey::Int(key)
+    } else {
+        let s = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }
+            .to_str()
+            .unwrap_or("")
+            .to_string();
+        GKey::Str(s)
+    }
+}
+
+/// Create a typed map. `key_kind`: 0 = str, 1 = int; `val_is_rc`: values are
+/// rc-heap pointers needing retain/release.
+pub(crate) extern "C" fn rt_hashmap_new_typed(key_kind: i64, val_is_rc: i64) -> *mut u8 {
+    let gmap = GMap {
+        key_kind: key_kind as u8,
+        val_is_rc: val_is_rc != 0,
+        entries: HashMap::new(),
+    };
+    let boxed: Box<GMapHandle> = Box::new(Mutex::new(gmap));
+    Box::into_raw(boxed) as *mut u8
+}
+
+/// Insert or overwrite. `value` is the raw 8-byte slot. rc-heap values are
+/// retained here and released when they are overwritten.
+pub(crate) extern "C" fn rt_hashmap_gset(map_ptr: *mut u8, key: i64, value: i64) {
+    let mut map = lock_gmap(map_ptr);
+    let is_rc = map.val_is_rc;
+    let k = gkey_from(map.key_kind, key);
+    if is_rc {
+        // Retain the new value before releasing any old one so a self-overwrite
+        // (value aliases the stored pointer) never transiently hits zero.
+        rt_retain(value as *mut u8);
+    }
+    if let Some(old) = map.entries.insert(k, value) {
+        if is_rc {
+            rt_release(old as *mut u8);
+        }
+    }
+}
+
+/// Look up `key`, returning an Optional: some(value) on hit (rc values are
+/// retained into the returned Optional), none on miss.
+pub(crate) extern "C" fn rt_hashmap_gget(map_ptr: *mut u8, key: i64) -> *mut u8 {
+    let map = lock_gmap(map_ptr);
+    let k = gkey_from(map.key_kind, key);
+    match map.entries.get(&k) {
+        Some(&v) => {
+            if map.val_is_rc {
+                rt_retain(v as *mut u8);
+            }
+            rt_option_some(v)
+        }
+        None => rt_option_none(),
+    }
+}
+
+/// Number of entries in a typed map.
+pub(crate) extern "C" fn rt_hashmap_glen(map_ptr: *const u8) -> i64 {
+    lock_gmap(map_ptr).entries.len() as i64
+}
+
+/// Whether `key` is present. Returns 1 or 0.
+pub(crate) extern "C" fn rt_hashmap_ghas(map_ptr: *const u8, key: i64) -> i8 {
+    let map = lock_gmap(map_ptr);
+    let k = gkey_from(map.key_kind, key);
+    if map.entries.contains_key(&k) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Remove `key`, releasing its rc-heap value if present.
+pub(crate) extern "C" fn rt_hashmap_gremove(map_ptr: *mut u8, key: i64) {
+    let mut map = lock_gmap(map_ptr);
+    let is_rc = map.val_is_rc;
+    let k = gkey_from(map.key_kind, key);
+    if let Some(old) = map.entries.remove(&k) {
+        if is_rc {
+            rt_release(old as *mut u8);
+        }
+    }
+}
+
+/// Return all keys as an array: `[str]` for str keys (arena copies), `[int]`
+/// for int keys. Sorted for deterministic output, matching rt_hashmap_gkeys.
+pub(crate) extern "C" fn rt_hashmap_gkeys(map_ptr: *const u8) -> *mut u8 {
+    let mut keys: Vec<GKey> = {
+        let map = lock_gmap(map_ptr);
+        map.entries.keys().cloned().collect()
+    };
+    keys.sort();
+    let len = keys.len() as i64;
+    let layout = match checked_array_layout(len as usize) {
+        Some(l) => l,
+        None => {
+            eprintln!("runtime error: hashmap keys overflow");
+            std::process::exit(1);
+        }
+    };
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        eprintln!("turbo: fatal: memory allocation failed");
+        std::process::exit(1);
+    }
+    register_alloc(ptr, layout);
+    unsafe {
+        *(ptr as *mut i64) = len; // cap
+        *(ptr.add(8) as *mut i64) = 1; // refcount
+    }
+    let data_ptr = unsafe { ptr.add(16) };
+    unsafe {
+        *(data_ptr as *mut i64) = len;
+    }
+    for (i, key) in keys.iter().enumerate() {
+        let slot = match key {
+            GKey::Int(n) => *n,
+            GKey::Str(s) => arena_str(cstring_or_empty(s.as_str())) as i64,
+        };
+        unsafe {
+            *((data_ptr as *mut i64).add(1 + i)) = slot;
+        }
+    }
+    data_ptr
+}
+
 // ── ARC (Automatic Reference Counting) runtime functions ────────────
 
 /// Increment the reference count of a heap-allocated object.

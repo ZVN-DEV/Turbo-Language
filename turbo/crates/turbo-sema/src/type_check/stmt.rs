@@ -12,6 +12,40 @@ use crate::{
 };
 
 impl Checker {
+    /// Report E0525 for any `HashMap<K, V>` reachable from `ty` whose key type
+    /// `K` is not a valid hashmap key (int or str). Recurses through arrays,
+    /// optionals, results, functions, and nested maps so the restriction holds
+    /// wherever a map type appears in an annotation.
+    pub(crate) fn report_bad_hashmap_keys(&mut self, ty: &Ty, span: &Span) {
+        match ty {
+            Ty::HashMap(k, v) => {
+                if !k.is_valid_hashmap_key() && !k.contains_error() {
+                    self.error(
+                        ErrorCode::E0525,
+                        format!("hashmap key type must be int or str, found `{k}`"),
+                        span.clone(),
+                    );
+                }
+                self.report_bad_hashmap_keys(k, span);
+                self.report_bad_hashmap_keys(v, span);
+            }
+            Ty::Array(inner) | Ty::Optional(inner) | Ty::Future(inner) => {
+                self.report_bad_hashmap_keys(inner, span)
+            }
+            Ty::Result(a, b) => {
+                self.report_bad_hashmap_keys(a, span);
+                self.report_bad_hashmap_keys(b, span);
+            }
+            Ty::Fn(params, ret) => {
+                for p in params {
+                    self.report_bad_hashmap_keys(p, span);
+                }
+                self.report_bad_hashmap_keys(ret, span);
+            }
+            _ => {}
+        }
+    }
+
     pub(crate) fn check_stmt(&mut self, stmt: &Spanned<Stmt>) {
         match &stmt.node {
             Stmt::Let {
@@ -43,6 +77,7 @@ impl Checker {
                 let declared_ty = if let Some(ty_expr) = ty {
                     match resolve_type_expr(&ty_expr.node, Some(&self.structs), Some(&self.enums)) {
                         Some(t) => {
+                            self.report_bad_hashmap_keys(&t, &ty_expr.span);
                             if !val_ty.contains_error()
                                 && !types_compatible(&t, &val_ty)
                                 && t != val_ty

@@ -108,6 +108,10 @@ pub(crate) fn compile_print<M: Module>(
                 let ptr = cx.create_string("[future]")?;
                 cx.rt_call("rt_print_str", &[ptr]);
             }
+            TurboTy::HashMap(_, _) => {
+                let ptr = cx.create_string("[hashmap]")?;
+                cx.rt_call("rt_print_str", &[ptr]);
+            }
         }
         release_expr_temp_if_needed(cx, v, &tty, &args[0]);
     } else {
@@ -561,6 +565,7 @@ pub(crate) fn compile_type_of<M: Module>(
             TurboTy::Result(_, _) => "result",
             TurboTy::Optional(_) => "optional",
             TurboTy::Future(_) => "future",
+            TurboTy::HashMap(_, _) => "hashmap",
         };
         release_expr_temp_if_needed(cx, value, tty, &args[0]);
         name.to_string()

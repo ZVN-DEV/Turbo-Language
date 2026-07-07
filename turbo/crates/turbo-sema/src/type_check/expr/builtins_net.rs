@@ -381,6 +381,16 @@ impl Checker {
         args: &[Spanned<Expr>],
         callee: &Spanned<Expr>,
     ) -> Option<Ty> {
+        // A key/value is accepted against the map's declared K/V when the types
+        // are equal or belong to the same numeric family (so an untyped int
+        // literal — typed `int` — fits a `HashMap<i32, ..>`, and a float
+        // literal fits an `f32` value). Errors are swallowed (already reported).
+        fn kv_matches(got: &Ty, want: &Ty) -> bool {
+            got.is_error()
+                || got == want
+                || (got.is_integer() && want.is_integer())
+                || (got.is_float() && want.is_float())
+        }
         if name == "hashmap" {
             if !args.is_empty() {
                 self.error(
@@ -408,6 +418,24 @@ impl Checker {
             let map_ty = self.check_expr(&args[0]);
             let key_ty = self.check_expr(&args[1]);
             let val_ty = self.check_expr(&args[2]);
+            if let Some((k, v)) = map_ty.hashmap_kv() {
+                let (k, v) = (k.clone(), v.clone());
+                if !kv_matches(&key_ty, &k) {
+                    self.error(
+                        ErrorCode::E0133,
+                        format!("hashmap_set() key must be `{k}`, found `{key_ty}`"),
+                        args[1].span.clone(),
+                    );
+                }
+                if !kv_matches(&val_ty, &v) {
+                    self.error(
+                        ErrorCode::E0133,
+                        format!("hashmap_set() value must be `{v}`, found `{val_ty}`"),
+                        args[2].span.clone(),
+                    );
+                }
+                return Some(Ty::Unit);
+            }
             if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
                 self.error(ErrorCode::E0133, format!("hashmap_set() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
             }
@@ -442,6 +470,18 @@ impl Checker {
             }
             let map_ty = self.check_expr(&args[0]);
             let key_ty = self.check_expr(&args[1]);
+            if let Some((k, v)) = map_ty.hashmap_kv() {
+                let (k, v) = (k.clone(), v.clone());
+                if !kv_matches(&key_ty, &k) {
+                    self.error(
+                        ErrorCode::E0133,
+                        format!("hashmap_get() key must be `{k}`, found `{key_ty}`"),
+                        args[1].span.clone(),
+                    );
+                }
+                // A typed get returns Optional<V> — `none` for a missing key.
+                return Some(Ty::Optional(Box::new(v)));
+            }
             if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
                 self.error(ErrorCode::E0133, format!("hashmap_get() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
             }
@@ -469,6 +509,17 @@ impl Checker {
             }
             let map_ty = self.check_expr(&args[0]);
             let key_ty = self.check_expr(&args[1]);
+            if let Some((k, _v)) = map_ty.hashmap_kv() {
+                let k = k.clone();
+                if !kv_matches(&key_ty, &k) {
+                    self.error(
+                        ErrorCode::E0133,
+                        format!("hashmap_has() key must be `{k}`, found `{key_ty}`"),
+                        args[1].span.clone(),
+                    );
+                }
+                return Some(Ty::Bool);
+            }
             if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
                 self.error(ErrorCode::E0133, format!("hashmap_has() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
             }
@@ -492,7 +543,7 @@ impl Checker {
                 return Some(Ty::Error);
             }
             let map_ty = self.check_expr(&args[0]);
-            if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
+            if !map_ty.is_error() && !map_ty.is_hashmap_arg() {
                 self.error(
                     ErrorCode::E0133,
                     format!("hashmap_len() argument must be a hashmap (integer), found `{map_ty}`"),
@@ -515,7 +566,10 @@ impl Checker {
                 return Some(Ty::Error);
             }
             let map_ty = self.check_expr(&args[0]);
-            if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
+            if let Some((k, _v)) = map_ty.hashmap_kv() {
+                return Some(Ty::Array(Box::new(k.clone())));
+            }
+            if !map_ty.is_error() && !map_ty.is_hashmap_arg() {
                 self.error(
                     ErrorCode::E0133,
                     format!(
@@ -541,6 +595,17 @@ impl Checker {
             }
             let map_ty = self.check_expr(&args[0]);
             let key_ty = self.check_expr(&args[1]);
+            if let Some((k, _v)) = map_ty.hashmap_kv() {
+                let k = k.clone();
+                if !kv_matches(&key_ty, &k) {
+                    self.error(
+                        ErrorCode::E0133,
+                        format!("hashmap_remove() key must be `{k}`, found `{key_ty}`"),
+                        args[1].span.clone(),
+                    );
+                }
+                return Some(Ty::Unit);
+            }
             if !map_ty.is_error() && !map_ty.is_handle_or_int(HandleKind::HashMap) {
                 self.error(ErrorCode::E0133, format!("hashmap_remove() first argument must be a hashmap (integer), found `{map_ty}`"), args[0].span.clone());
             }

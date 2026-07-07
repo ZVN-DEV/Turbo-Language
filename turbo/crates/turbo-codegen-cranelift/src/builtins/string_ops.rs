@@ -739,6 +739,7 @@ pub(crate) fn convert_to_str<M: Module>(
             Ok(cx.builder.block_params(merge_block)[0])
         }
         TurboTy::Future(_) => cx.create_string("[future]"),
+        TurboTy::HashMap(_, _) => cx.create_string("[hashmap]"),
     }
 }
 

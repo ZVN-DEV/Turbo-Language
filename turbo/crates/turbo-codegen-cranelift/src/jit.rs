@@ -273,6 +273,13 @@ fn register_runtime_symbols(jit_builder: &mut JITBuilder) {
     jit_builder.symbol("rt_hashmap_set_int", rt_hashmap_set_int as *const u8);
     jit_builder.symbol("rt_hashmap_get_int", rt_hashmap_get_int as *const u8);
     jit_builder.symbol("rt_hashmap_inc", rt_hashmap_inc as *const u8);
+    jit_builder.symbol("rt_hashmap_new_typed", rt_hashmap_new_typed as *const u8);
+    jit_builder.symbol("rt_hashmap_gset", rt_hashmap_gset as *const u8);
+    jit_builder.symbol("rt_hashmap_gget", rt_hashmap_gget as *const u8);
+    jit_builder.symbol("rt_hashmap_ghas", rt_hashmap_ghas as *const u8);
+    jit_builder.symbol("rt_hashmap_glen", rt_hashmap_glen as *const u8);
+    jit_builder.symbol("rt_hashmap_gremove", rt_hashmap_gremove as *const u8);
+    jit_builder.symbol("rt_hashmap_gkeys", rt_hashmap_gkeys as *const u8);
     jit_builder.symbol("rt_retain", rt_retain as *const u8);
     jit_builder.symbol("rt_release", rt_release as *const u8);
     jit_builder.symbol("rt_file_exists", rt_file_exists as *const u8);
