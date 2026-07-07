@@ -36,6 +36,14 @@ pass over the design docs.
   now backs a `/packages` page, a `turbolang search <query>` command, and
   index-aware resolution in `turbolang install`. First step toward a real
   package ecosystem. (#51)
+- **First-class function values.** Functions — named or closures — can now be
+  stored and called from anywhere: struct fields, array dispatch tables
+  (`handlers[i](x)`), immediately-invoked results (`make_adder(3)(4)`), and
+  plain bindings (`let g = my_fn`). Named functions and closures share one
+  calling ABI, so a field typed `fn(i64) -> i64` accepts either. `@unsafe`
+  functions cannot be used as values (new diagnostic `E0530` — the value path
+  would have bypassed the unsafe-call check). The WASM backend rejects
+  function values loudly rather than emitting invalid C. (#57)
 
 ### Changed
 - **Design docs honesty pass.** The `design/` documents now clearly mark
