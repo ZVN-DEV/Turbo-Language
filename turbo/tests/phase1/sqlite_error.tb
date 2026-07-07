@@ -1,0 +1,14 @@
+// SQLite: the error path — invalid SQL surfaces as an err() carrying the
+// SQLite error message (no panic).
+fn run() -> i64 ! str {
+    let db = sqlite_open(":memory:")?
+    sqlite_exec(db, "THIS IS NOT SQL")?
+    ok(0)
+}
+
+fn main() {
+    match run() {
+        ok(v) => print("unexpected ok")
+        err(e) => print("caught: {e}")
+    }
+}

@@ -971,6 +971,108 @@ pub(crate) fn compile_module<M: Module>(
         Some(ptr_type),
     )?;
 
+    // SQLite builtins. Handles (db/stmt) are passed as i64; strings as ptr.
+    // open/exec/prepare return a heap Result object (ptr); the rest return
+    // scalars. See src/builtins/sqlite.rs and runtime.rs / turbo_rt_sqlite.c.
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_open",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_close",
+        &[types::I64],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_exec",
+        &[types::I64, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_error",
+        &[types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_prepare",
+        &[types::I64, ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_bind_int",
+        &[types::I64, types::I64, types::I64],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_bind_str",
+        &[types::I64, types::I64, ptr_type],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_bind_float",
+        &[types::I64, types::I64, types::F64],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_step",
+        &[types::I64],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_column_int",
+        &[types::I64, types::I64],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_column_str",
+        &[types::I64, types::I64],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_column_float",
+        &[types::I64, types::I64],
+        Some(types::F64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_column_count",
+        &[types::I64],
+        Some(types::I64),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_sqlite_finalize",
+        &[types::I64],
+        Some(types::I64),
+    )?;
+
     // Build enum variants map
     let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();
     let mut enum_variant_fields: HashMap<(String, String), Vec<TurboTy>> = HashMap::new();

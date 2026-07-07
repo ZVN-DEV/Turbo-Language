@@ -83,6 +83,140 @@ const RUNTIME_WASM_C: &str = include_str!("../runtime/turbo_rt_wasm.c");
 /// be written alongside them or the `#include "turbo_rt_guards.h"` fails.
 const RUNTIME_GUARDS_H: &str = include_str!("../runtime/turbo_rt_guards.h");
 
+// ── Vendored SQLite (AOT linking) ───────────────────────────────────
+//
+// `turbo_rt.c` pulls in `turbo_rt_sqlite.c` only under `-DTURBO_WITH_SQLITE`,
+// which `aot.rs` sets when the program uses SQLite builtins. The shim's
+// `#include "sqlite3.h"` is satisfied by writing the vendored header next to
+// the runtime in the temp build dir.
+
+/// The SQLite AOT/C shim source (twin of the JIT `rt_sqlite_*` in runtime.rs).
+const RUNTIME_SQLITE_C: &str = include_str!("../runtime/turbo_rt_sqlite.c");
+/// The vendored SQLite public-domain header. Embedded because the AOT shim
+/// `#include`s it at compile time (needed for the common native path).
+const SQLITE3_H: &str = include_str!("../runtime/vendor/sqlite3.h");
+/// Prebuilt native SQLite object produced by `build.rs` (host target). Used to
+/// avoid recompiling the ~9 MB amalgamation on every native `turbolang build`.
+const SQLITE3_AOT_OBJECT: &[u8] = include_bytes!(env!("TURBO_SQLITE_AOT_OBJECT"));
+/// Path to the vendored amalgamation source, baked in at build time. Only read
+/// when *cross-compiling* a SQLite program (the prebuilt object above is
+/// host-arch). We do NOT `include_str!` the 9 MB source — that would bloat
+/// every `turbolang` install for a rarely-used path — so cross-compiling a
+/// SQLite program requires this repo/source tree to be present.
+const SQLITE3_C_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/vendor/sqlite3.c");
+
+/// SQLite compile flags. MUST stay in sync with the `cflags` list in
+/// `build.rs` and the C ASan harness (`runtime/tests.sh`).
+const SQLITE_CFLAGS: &[&str] = &[
+    "-DSQLITE_THREADSAFE=1",
+    "-DSQLITE_OMIT_LOAD_EXTENSION",
+    "-DSQLITE_OMIT_DEPRECATED",
+    "-DSQLITE_DQS=0",
+    "-DSQLITE_DEFAULT_MEMSTATUS=0",
+    "-DSQLITE_OMIT_SHARED_CACHE",
+];
+
+/// True when the module calls any `sqlite_*` builtin, so AOT should link the
+/// SQLite engine. Walks the whole AST — every expression and statement — so a
+/// call nested anywhere (loops, closures, match arms, interpolations) is
+/// detected. Being complete matters: a missed call site would leave AOT
+/// without the engine and fail at link with an undefined `rt_sqlite_*`.
+pub(crate) fn module_uses_sqlite(module: &turbo_ast::Module) -> bool {
+    module.items.iter().any(|item| match &item.node {
+        turbo_ast::Item::Function(f) => sqlite_walk_expr(&f.body),
+        _ => false,
+    })
+}
+
+fn sqlite_walk_stmt(stmt: &turbo_ast::Spanned<turbo_ast::Stmt>) -> bool {
+    use turbo_ast::Stmt;
+    match &stmt.node {
+        Stmt::Let { value, .. } | Stmt::LetDestructure { value, .. } => sqlite_walk_expr(value),
+        Stmt::Expr(e) | Stmt::Defer(e) => sqlite_walk_expr(e),
+        Stmt::Return(e) => e.as_ref().is_some_and(sqlite_walk_expr),
+    }
+}
+
+fn sqlite_walk_expr(e: &turbo_ast::Spanned<turbo_ast::Expr>) -> bool {
+    use turbo_ast::{Expr, InterpolPart};
+    let w = sqlite_walk_expr;
+    match &e.node {
+        // Leaves.
+        Expr::IntLit(_)
+        | Expr::FloatLit(_)
+        | Expr::StringLit(_)
+        | Expr::BoolLit(_)
+        | Expr::Unit
+        | Expr::Ident(_)
+        | Expr::EnumVariant { .. }
+        | Expr::NoneExpr
+        | Expr::Break
+        | Expr::Continue => false,
+        // Single-child.
+        Expr::UnaryOp { expr, .. }
+        | Expr::Cast { expr, .. }
+        | Expr::Await(expr)
+        | Expr::Spawn(expr)
+        | Expr::Try(expr)
+        | Expr::OkExpr(expr)
+        | Expr::ErrExpr(expr)
+        | Expr::SomeExpr(expr) => w(expr),
+        Expr::Assign { value, .. } | Expr::CompoundAssign { value, .. } => w(value),
+        Expr::FieldAccess { object, .. } | Expr::OptionalChain { object, .. } => w(object),
+        // Two-child.
+        Expr::BinaryOp { left, right, .. } => w(left) || w(right),
+        Expr::Range { start, end } => w(start) || w(end),
+        Expr::Index { object, index } => w(object) || w(index),
+        Expr::While { condition, body } => w(condition) || w(body),
+        Expr::ForIn { iterable, body, .. } => w(iterable) || w(body),
+        Expr::NullCoalesce { value, default } => w(value) || w(default),
+        Expr::FieldAssign { object, value, .. } => w(object) || w(value),
+        // Three-child.
+        Expr::IndexAssign {
+            object,
+            index,
+            value,
+        } => w(object) || w(index) || w(value),
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => w(condition) || w(then_branch) || else_branch.as_deref().is_some_and(w),
+        Expr::IfLet {
+            value,
+            then_branch,
+            else_branch,
+            ..
+        } => w(value) || w(then_branch) || else_branch.as_deref().is_some_and(w),
+        // Calls — the site we actually care about, plus recursion.
+        Expr::Call { callee, args } => {
+            if let Expr::Ident(name) = &callee.node {
+                if name.starts_with("sqlite_") {
+                    return true;
+                }
+            }
+            w(callee) || args.iter().any(w)
+        }
+        Expr::Block { stmts, tail_expr } => {
+            stmts.iter().any(sqlite_walk_stmt) || tail_expr.as_deref().is_some_and(w)
+        }
+        Expr::ArrayLit(items) => items.iter().any(w),
+        Expr::StructLit { fields, .. } => fields.iter().any(|(_, v)| w(v)),
+        Expr::MapLit(entries) => entries.iter().any(|(k, v)| w(k) || w(v)),
+        Expr::Match { subject, arms } => {
+            w(subject)
+                || arms
+                    .iter()
+                    .any(|arm| arm.guard.as_ref().is_some_and(w) || w(&arm.body))
+        }
+        Expr::Interpolation(parts) => parts.iter().any(|p| match p {
+            InterpolPart::Lit(_) => false,
+            InterpolPart::Expr(inner) => w(inner),
+        }),
+        Expr::Closure { body, .. } => w(body),
+    }
+}
+
 // ── Codegen context (generic over Module type) ──────────────────────
 
 /// Max depth for inlining recursive functions at call sites.

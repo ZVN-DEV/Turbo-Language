@@ -150,6 +150,21 @@ pub(crate) const BUILTIN_FNS: &[&str] = &[
     "time_now",
     "time_ms",
     "format_time",
+    // SQLite builtins
+    "sqlite_open",
+    "sqlite_close",
+    "sqlite_exec",
+    "sqlite_error",
+    "sqlite_prepare",
+    "sqlite_bind_int",
+    "sqlite_bind_str",
+    "sqlite_bind_float",
+    "sqlite_step",
+    "sqlite_column_int",
+    "sqlite_column_str",
+    "sqlite_column_float",
+    "sqlite_column_count",
+    "sqlite_finalize",
 ];
 
 impl Checker {

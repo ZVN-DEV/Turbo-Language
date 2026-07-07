@@ -148,19 +148,96 @@ pub fn aot_compile(
     })?;
 
     let (cc_cmd, cc_args) = resolve_cross_compiler(target)?;
+
+    // SQLite: only link the vendored engine when the program actually uses a
+    // `sqlite_*` builtin, so plain programs stay small. `turbo_rt.c` pulls in
+    // `turbo_rt_sqlite.c` under `-DTURBO_WITH_SQLITE`; that shim `#include`s
+    // `sqlite3.h`, which we drop next to the runtime in the temp dir.
+    let sqlite_obj_path = if crate::module_uses_sqlite(ast_module) {
+        let shim_path = tmp_dir.path().join("turbo_rt_sqlite.c");
+        let header_path = tmp_dir.path().join("sqlite3.h");
+        std::fs::write(&shim_path, RUNTIME_SQLITE_C).map_err(|e| CodegenError {
+            code: ErrorCode::E0400,
+            message: format!("failed to write sqlite shim: {e}"),
+        })?;
+        std::fs::write(&header_path, SQLITE3_H).map_err(|e| CodegenError {
+            code: ErrorCode::E0400,
+            message: format!("failed to write sqlite header: {e}"),
+        })?;
+
+        let obj = tmp_dir.path().join("sqlite3.o");
+        if target.is_none() {
+            // Native build: reuse the prebuilt host object from build.rs so we
+            // never recompile the ~9 MB amalgamation on `turbolang build`.
+            std::fs::write(&obj, SQLITE3_AOT_OBJECT).map_err(|e| CodegenError {
+                code: ErrorCode::E0400,
+                message: format!("failed to write prebuilt sqlite object: {e}"),
+            })?;
+        } else {
+            // Cross build: the prebuilt object is host-arch, so recompile the
+            // amalgamation from source with the cross compiler. The source is
+            // not embedded in the binary (it is 9 MB), so read it from the
+            // vendored tree; if that isn't present (e.g. a distributed binary
+            // moved off its build machine), fail with a clear message.
+            let src = tmp_dir.path().join("sqlite3.c");
+            let sqlite_src = std::fs::read(SQLITE3_C_PATH).map_err(|e| CodegenError {
+                code: ErrorCode::E0404,
+                message: format!(
+                    "cross-compiling a SQLite program needs the vendored \
+                     amalgamation at {SQLITE3_C_PATH}, which could not be read \
+                     ({e}). Build natively, or run from a TurboLang source tree."
+                ),
+            })?;
+            std::fs::write(&src, &sqlite_src).map_err(|e| CodegenError {
+                code: ErrorCode::E0400,
+                message: format!("failed to write sqlite source: {e}"),
+            })?;
+            let mut c = std::process::Command::new(&cc_cmd);
+            for arg in &cc_args {
+                c.arg(arg);
+            }
+            c.arg("-O2").arg("-fPIC");
+            for flag in SQLITE_CFLAGS {
+                c.arg(flag);
+            }
+            c.arg("-c").arg(&src).arg("-o").arg(&obj);
+            let out = c.output().map_err(|e| CodegenError {
+                code: ErrorCode::E0404,
+                message: format!("failed to run '{cc_cmd}' to compile sqlite3.c: {e}"),
+            })?;
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return Err(CodegenError {
+                    code: ErrorCode::E0404,
+                    message: format!("compiling vendored sqlite3.c failed: {stderr}"),
+                });
+            }
+        }
+        Some(obj)
+    } else {
+        None
+    };
+
     let mut cmd = std::process::Command::new(&cc_cmd);
     for arg in &cc_args {
         cmd.arg(arg);
     }
-    cmd.arg(&rt_path)
-        .arg(&obj_path)
-        .arg("-lm")
-        .arg("-o")
-        .arg(output_path);
+    if sqlite_obj_path.is_some() {
+        cmd.arg("-DTURBO_WITH_SQLITE")
+            .arg(format!("-I{}", tmp_dir.path().display()));
+    }
+    cmd.arg(&rt_path).arg(&obj_path);
+    if let Some(ref obj) = sqlite_obj_path {
+        cmd.arg(obj);
+    }
+    cmd.arg("-lm").arg("-o").arg(output_path);
 
-    // Linux targets need explicit -lpthread
+    // Linux targets need explicit -lpthread; SQLite also wants -ldl there.
     if target.is_some_and(|t| t.contains("linux")) {
         cmd.arg("-lpthread");
+        if sqlite_obj_path.is_some() {
+            cmd.arg("-ldl");
+        }
     }
 
     // Additional user-specified link libraries (e.g. --link m --link pthread).

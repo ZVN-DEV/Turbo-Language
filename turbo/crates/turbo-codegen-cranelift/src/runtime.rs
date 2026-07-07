@@ -3826,6 +3826,243 @@ fn chrono_like_format(epoch_secs: i64, fmt: &str) -> String {
     }
 }
 
+// ── SQLite builtins (JIT twins) ──────────────────────────────────────
+//
+// These are the JIT-side implementations of the `rt_sqlite_*` functions.
+// Their AOT twins live in `runtime/turbo_rt_sqlite.c` and MUST behave
+// identically (JIT ≡ AOT), which the parity harness enforces. Both sides call
+// the same vendored SQLite C API — here via the FFI block below, whose symbols
+// are linked in by `build.rs` (which compiles `runtime/vendor/sqlite3.c` into
+// the host binary).
+//
+// String producers (`rt_sqlite_column_str`, `rt_sqlite_error`) return their
+// result through `arena_str`, exactly like `rt_str_upper` and friends, so the
+// arena/refcount ownership matches every other runtime string. We never hand
+// back sqlite's internal pointers — they are always copied. Fallible functions
+// build a `Result` with `rt_result_ok` / `rt_result_err`, mirroring
+// `rt_try_read_file`.
+
+mod sqlite_ffi {
+    use std::ffi::{c_char, c_double, c_int, c_void};
+
+    // SQLite result / open constants (see sqlite3.h).
+    pub const SQLITE_OK: c_int = 0;
+    pub const SQLITE_ROW: c_int = 100;
+    pub const SQLITE_DONE: c_int = 101;
+    pub const SQLITE_OPEN_READWRITE: c_int = 0x00000002;
+    pub const SQLITE_OPEN_CREATE: c_int = 0x00000004;
+
+    // SQLITE_TRANSIENT == ((sqlite3_destructor_type)-1): tells sqlite to make
+    // its own copy of bound text immediately.
+    pub const SQLITE_TRANSIENT: isize = -1;
+
+    unsafe extern "C" {
+        pub fn sqlite3_open_v2(
+            filename: *const c_char,
+            pp_db: *mut *mut c_void,
+            flags: c_int,
+            z_vfs: *const c_char,
+        ) -> c_int;
+        pub fn sqlite3_close(db: *mut c_void) -> c_int;
+        pub fn sqlite3_exec(
+            db: *mut c_void,
+            sql: *const c_char,
+            callback: *const c_void,
+            arg: *mut c_void,
+            errmsg: *mut *mut c_char,
+        ) -> c_int;
+        pub fn sqlite3_errmsg(db: *mut c_void) -> *const c_char;
+        pub fn sqlite3_free(p: *mut c_void);
+        pub fn sqlite3_prepare_v2(
+            db: *mut c_void,
+            z_sql: *const c_char,
+            n_byte: c_int,
+            pp_stmt: *mut *mut c_void,
+            pz_tail: *mut *const c_char,
+        ) -> c_int;
+        pub fn sqlite3_bind_int64(stmt: *mut c_void, idx: c_int, v: i64) -> c_int;
+        pub fn sqlite3_bind_text(
+            stmt: *mut c_void,
+            idx: c_int,
+            text: *const c_char,
+            n: c_int,
+            destructor: isize,
+        ) -> c_int;
+        pub fn sqlite3_bind_double(stmt: *mut c_void, idx: c_int, v: c_double) -> c_int;
+        pub fn sqlite3_step(stmt: *mut c_void) -> c_int;
+        pub fn sqlite3_column_int64(stmt: *mut c_void, i: c_int) -> i64;
+        pub fn sqlite3_column_double(stmt: *mut c_void, i: c_int) -> c_double;
+        pub fn sqlite3_column_text(stmt: *mut c_void, i: c_int) -> *const u8;
+        pub fn sqlite3_column_count(stmt: *mut c_void) -> c_int;
+        pub fn sqlite3_finalize(stmt: *mut c_void) -> c_int;
+    }
+}
+
+/// Copy a possibly-NULL sqlite C string into a fresh arena string. NULL (an
+/// SQL NULL column) becomes the empty string. Mirrors `rt_sqlite_dup` in the C
+/// twin.
+fn sqlite_dup(ptr: *const std::ffi::c_char) -> *const u8 {
+    if ptr.is_null() {
+        return arena_str(cstring_or_empty(""));
+    }
+    let bytes = unsafe { std::ffi::CStr::from_ptr(ptr) }.to_bytes().to_vec();
+    arena_str(cstring_or_empty(bytes))
+}
+
+/// `sqlite_open(path: str) -> i64 ! str`
+pub(crate) extern "C" fn rt_sqlite_open(path: *const u8) -> *mut u8 {
+    use sqlite_ffi::*;
+    let path_c = if path.is_null() {
+        c":memory:".as_ptr()
+    } else {
+        path as *const std::ffi::c_char
+    };
+    let mut db: *mut std::ffi::c_void = std::ptr::null_mut();
+    let rc = unsafe {
+        sqlite3_open_v2(
+            path_c,
+            &mut db,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+            std::ptr::null(),
+        )
+    };
+    if rc != SQLITE_OK {
+        let msg = if db.is_null() {
+            arena_str(cstring_or_empty("unable to open database"))
+        } else {
+            sqlite_dup(unsafe { sqlite3_errmsg(db) })
+        };
+        if !db.is_null() {
+            unsafe { sqlite3_close(db) };
+        }
+        return rt_result_err(msg as i64);
+    }
+    rt_result_ok(db as i64)
+}
+
+/// `sqlite_exec(h: i64, sql: str) -> unit ! str`
+pub(crate) extern "C" fn rt_sqlite_exec(h: i64, sql: *const u8) -> *mut u8 {
+    use sqlite_ffi::*;
+    let db = h as *mut std::ffi::c_void;
+    let sql_c = if sql.is_null() {
+        c"".as_ptr()
+    } else {
+        sql as *const std::ffi::c_char
+    };
+    let mut errmsg: *mut std::ffi::c_char = std::ptr::null_mut();
+    let rc = unsafe {
+        sqlite3_exec(
+            db,
+            sql_c,
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            &mut errmsg,
+        )
+    };
+    if rc != SQLITE_OK {
+        let msg = if errmsg.is_null() {
+            sqlite_dup(unsafe { sqlite3_errmsg(db) })
+        } else {
+            sqlite_dup(errmsg)
+        };
+        if !errmsg.is_null() {
+            unsafe { sqlite3_free(errmsg as *mut std::ffi::c_void) };
+        }
+        return rt_result_err(msg as i64);
+    }
+    rt_result_ok(0)
+}
+
+/// `sqlite_prepare(h: i64, sql: str) -> i64 ! str`
+pub(crate) extern "C" fn rt_sqlite_prepare(h: i64, sql: *const u8) -> *mut u8 {
+    use sqlite_ffi::*;
+    let db = h as *mut std::ffi::c_void;
+    let sql_c = if sql.is_null() {
+        c"".as_ptr()
+    } else {
+        sql as *const std::ffi::c_char
+    };
+    let mut stmt: *mut std::ffi::c_void = std::ptr::null_mut();
+    let rc = unsafe { sqlite3_prepare_v2(db, sql_c, -1, &mut stmt, std::ptr::null_mut()) };
+    if rc != SQLITE_OK {
+        let msg = sqlite_dup(unsafe { sqlite3_errmsg(db) });
+        return rt_result_err(msg as i64);
+    }
+    rt_result_ok(stmt as i64)
+}
+
+/// `sqlite_bind_int(stmt, idx, v) -> i64` (sqlite rc; idx is 1-based)
+pub(crate) extern "C" fn rt_sqlite_bind_int(stmt: i64, idx: i64, v: i64) -> i64 {
+    unsafe { sqlite_ffi::sqlite3_bind_int64(stmt as *mut _, idx as i32, v) as i64 }
+}
+
+/// `sqlite_bind_str(stmt, idx, s) -> i64`
+pub(crate) extern "C" fn rt_sqlite_bind_str(stmt: i64, idx: i64, s: *const u8) -> i64 {
+    use sqlite_ffi::*;
+    let s_c = if s.is_null() {
+        c"".as_ptr()
+    } else {
+        s as *const std::ffi::c_char
+    };
+    unsafe { sqlite3_bind_text(stmt as *mut _, idx as i32, s_c, -1, SQLITE_TRANSIENT) as i64 }
+}
+
+/// `sqlite_bind_float(stmt, idx, f) -> i64`
+pub(crate) extern "C" fn rt_sqlite_bind_float(stmt: i64, idx: i64, f: f64) -> i64 {
+    unsafe { sqlite_ffi::sqlite3_bind_double(stmt as *mut _, idx as i32, f) as i64 }
+}
+
+/// `sqlite_step(stmt) -> 1 row / 0 done / -1 error`
+pub(crate) extern "C" fn rt_sqlite_step(stmt: i64) -> i64 {
+    let rc = unsafe { sqlite_ffi::sqlite3_step(stmt as *mut _) };
+    if rc == sqlite_ffi::SQLITE_ROW {
+        1
+    } else if rc == sqlite_ffi::SQLITE_DONE {
+        0
+    } else {
+        -1
+    }
+}
+
+/// `sqlite_column_int(stmt, i) -> i64` (0-based column index)
+pub(crate) extern "C" fn rt_sqlite_column_int(stmt: i64, i: i64) -> i64 {
+    unsafe { sqlite_ffi::sqlite3_column_int64(stmt as *mut _, i as i32) }
+}
+
+/// `sqlite_column_str(stmt, i) -> str`
+pub(crate) extern "C" fn rt_sqlite_column_str(stmt: i64, i: i64) -> *const u8 {
+    let text = unsafe { sqlite_ffi::sqlite3_column_text(stmt as *mut _, i as i32) };
+    sqlite_dup(text as *const std::ffi::c_char)
+}
+
+/// `sqlite_column_float(stmt, i) -> f64`
+pub(crate) extern "C" fn rt_sqlite_column_float(stmt: i64, i: i64) -> f64 {
+    unsafe { sqlite_ffi::sqlite3_column_double(stmt as *mut _, i as i32) }
+}
+
+/// `sqlite_column_count(stmt) -> i64`
+pub(crate) extern "C" fn rt_sqlite_column_count(stmt: i64) -> i64 {
+    unsafe { sqlite_ffi::sqlite3_column_count(stmt as *mut _) as i64 }
+}
+
+/// `sqlite_finalize(stmt) -> i64` (sqlite rc)
+pub(crate) extern "C" fn rt_sqlite_finalize(stmt: i64) -> i64 {
+    unsafe { sqlite_ffi::sqlite3_finalize(stmt as *mut _) as i64 }
+}
+
+/// `sqlite_error(h) -> str` (last error message for the connection)
+pub(crate) extern "C" fn rt_sqlite_error(h: i64) -> *const u8 {
+    if h == 0 {
+        return arena_str(cstring_or_empty("invalid database handle"));
+    }
+    sqlite_dup(unsafe { sqlite_ffi::sqlite3_errmsg(h as *mut _) })
+}
+
+/// `sqlite_close(h) -> i64` (sqlite rc)
+pub(crate) extern "C" fn rt_sqlite_close(h: i64) -> i64 {
+    unsafe { sqlite_ffi::sqlite3_close(h as *mut _) as i64 }
+}
+
 #[cfg(test)]
 mod ssrf_tests {
     use super::{

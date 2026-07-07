@@ -1,0 +1,32 @@
+// SQLite: in-memory create/insert/select roundtrip with int + str + float
+// columns, plus multi-row iteration via `while sqlite_step`.
+fn setup(db: i64) -> i64 ! str {
+    sqlite_exec(db, "CREATE TABLE items (id INTEGER, name TEXT, price REAL)")?
+    sqlite_exec(db, "INSERT INTO items VALUES (1, 'apple', 0.50)")?
+    sqlite_exec(db, "INSERT INTO items VALUES (2, 'banana', 1.25)")?
+    sqlite_exec(db, "INSERT INTO items VALUES (3, 'cherry', 2.00)")?
+    ok(0)
+}
+
+fn run() -> i64 ! str {
+    let db = sqlite_open(":memory:")?
+    setup(db)?
+    let stmt = sqlite_prepare(db, "SELECT id, name, price FROM items ORDER BY id")?
+    print("columns: {sqlite_column_count(stmt)}")
+    while sqlite_step(stmt) == 1 {
+        let id = sqlite_column_int(stmt, 0)
+        let name = sqlite_column_str(stmt, 1)
+        let price = sqlite_column_float(stmt, 2)
+        print("{id} {name} {price}")
+    }
+    sqlite_finalize(stmt)
+    sqlite_close(db)
+    ok(0)
+}
+
+fn main() {
+    match run() {
+        ok(v) => print("ok")
+        err(e) => print("error: {e}")
+    }
+}
