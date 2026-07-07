@@ -1,5 +1,7 @@
 # Type System
 
+> **Status: Mostly implemented.** The core ships today: `T?` optionals, `T ! E` errors with `?` propagation, algebraic data types with exhaustive pattern matching, monomorphized generics, traits, and closures. **Planned / not yet implemented:** the **effect system** (`async`/`io`/`throws`/`unsafe`/`diverges` tracking in signatures), `&str` borrowed slices and any borrowing model, and the automatic small-string/interning optimizations noted below. Unbuilt subsections are marked **Planned** inline.
+
 ## Core Design Decisions
 
 | Decision | Choice | Rationale |
@@ -591,6 +593,8 @@ fn load_and_validate(path: str) -> Config ! ConfigError {
 - **No checked exceptions.** Callers can always see `! E` in the signature, but they choose how to handle it — `?` to propagate, `match` to handle, or `.unwrap()` to crash.
 
 ## Effect System (Lightweight)
+
+> **Planned — not yet implemented.** Turbo does not track effects in the type system today. `async fn` is parsed, but there is no `io`/`throws`/`unsafe`/`diverges` effect tracking, no purity guarantee, and no effect-driven optimization. This section is design intent.
 
 ### Tracked Effects
 ```

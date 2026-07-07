@@ -1,6 +1,8 @@
 # Developer Experience (DevX) Improvement Plan
 
 > **Historical note (2026-04):** This document was written against an earlier version of the Turbo vision that included `agent` / `tool fn` as core-language keywords. That direction has since been retired — those features will ship as a separate `turbo-agent` library on top of the stable core, not as compiler keywords. References below to `agent`, `tool fn`, and `Agent.*` APIs reflect that older plan and are kept here for historical context only. For the current language surface, see **VISION.md**, **SYNTAX.md**, and **COMPATIBILITY.md**.
+>
+> **Status: design review of proposed syntax — many features here are Planned, not implemented.** This is a naming/ergonomics critique of the *design*, not a catalog of shipping features. In particular, `let ref` / `borrow`, `scope`-based structured concurrency, `region` blocks, `Shared<T>` / `WeakRef<T>`, `actor`, and the async runtime (`async`/`await` beyond OS-thread `spawn`) are **not implemented**. Read the equivalence tables as "how these *would* map to JS," not as a feature list.
 
 ## Executive Summary
 

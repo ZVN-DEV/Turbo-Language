@@ -4,6 +4,8 @@
 
 **One-liner**: Turbo is a systems-capable, type-safe, developer-loved language with JavaScript's spirit and Rust's performance — a small, honest core that ships as a compiled general-purpose language.
 
+> **Status: Vision document.** This is the north-star framing, not a feature list of the current release. Some pillars below describe targets, not shipping behavior: the simplified ownership/borrow memory model and the effect system (`async`/`throws`/`io`/`unsafe`/`diverges`) are **Planned** (today's memory model is runtime ARC + copy-on-write — see [MEMORY-MODEL.md](MEMORY-MODEL.md)), and the async/await runtime, actors, and structured concurrency are **Planned** (today only `spawn`/`await` on OS threads, integer channels, and an integer mutex ship — see [CONCURRENCY.md](CONCURRENCY.md)). **Backend fact:** Cranelift is the *only* code-generation backend for both JIT and AOT; the LLVM backend was removed in 0.9.1. Mentions of "LLVM" below are stale and should be read as "an optimizing native backend (a future goal)."
+
 ---
 
 ## Why Turbo Exists
@@ -27,7 +29,7 @@ This is not incremental improvement. This is a new foundation.
 Performance is not a feature you add later. It is an architectural decision that permeates every layer of Turbo. We commit to:
 
 - **No garbage collector by default.** Memory is managed through a simplified ownership model that learns from Rust's borrow checker but dramatically reduces the annotation burden. Regions, arenas, and deterministic destruction give developers precise control without the cognitive overhead.
-- **Compiles to native code and WebAssembly.** LLVM backend for optimized native builds targeting x86-64, AArch64, and RISC-V. A dedicated WASM compilation pipeline for web and edge deployment. The same source code, multiple high-performance targets.
+- **Compiles to native code and WebAssembly.** Today, native builds (JIT and AOT) go through the **Cranelift** backend on x86-64 and AArch64, with cross-compilation to Linux x86_64; an optimizing native backend (once RISC-V and heavier optimization) is a future goal. The WASM path compiles AST → C → `clang --target=wasm32-wasi`. The same source code, multiple targets.
 - **Zero-cost abstractions.** Generics are monomorphized for zero-cost performance, with optional runtime type metadata available via `@derive(TypeInfo)` for scenarios requiring reflection. Traits are statically dispatched by default (with opt-in dynamic dispatch via `dyn`). Iterators fuse and inline. The abstractions you use to write clear code should generate the same machine code you would write by hand.
 - **Predictable performance.** No hidden allocations. No surprise GC pauses. No implicit copies of large data. Turbo makes the cost of operations visible and controllable. When you need deterministic latency -- for games, trading systems, audio, or real-time AI inference -- Turbo delivers.
 - **Compile-time computation.** A powerful `const fn` system (inspired by Zig, adapted with familiar naming) lets you move work from runtime to compile time. Constant evaluation, compile-time code generation, and static reflection reduce runtime overhead to the absolute minimum.
@@ -54,7 +56,7 @@ Type safety is the foundation of reliable software. But too many type systems fe
 
 A language is only as good as the experience of using it. We refuse to ship Turbo and tell developers to wait for the ecosystem to catch up. From the first public release, developers will have:
 
-- **Sub-second incremental compilation.** In dev mode, the compiler uses a cranelift-style fast backend, incremental compilation, and fine-grained dependency tracking to rebuild only what changed. Edit, save, see results -- in under a second for most projects. Full LLVM optimization is reserved for release builds.
+- **Sub-second incremental compilation.** In dev mode, the compiler uses the Cranelift fast backend to compile and run quickly. Edit, save, see results -- in under a second for most projects. (A heavier optimizing backend for release builds is a future goal; today both `run` and `build` use Cranelift.)
 - **Error messages that teach.** Every error message includes: what went wrong, where it went wrong, why it went wrong, and how to fix it. Inspired by Elm and Rust, Turbo's error messages are mini-tutorials. They show the relevant code with color-coded annotations, suggest fixes (with `--fix` to auto-apply), and link to detailed explanations. A new developer should be able to learn Turbo primarily through compiler feedback.
 - **A complete toolchain, shipped together:**
   - **Package manager** -- Dependency resolution, lockfiles, workspaces, publishing, semantic versioning enforcement. Think Cargo, but with lessons learned.
@@ -93,7 +95,7 @@ This is a trust move. A small core that actually ships and stays stable is worth
 
 **Target**: Write once, deploy to native, web, server, embedded, and edge -- without compromise.
 
-- **Native compilation via LLVM.** Target x86-64, AArch64, and RISC-V with full optimization. Produce standalone binaries with no runtime dependencies. Cross-compilation is a first-class workflow.
+- **Native compilation via Cranelift.** Today: x86-64 and AArch64, producing standalone binaries with no runtime dependencies, with cross-compilation to Linux x86_64. RISC-V and a full optimizing backend are future goals (the LLVM backend was removed in 0.9.1).
 - **WebAssembly as a first-class target.** WASM is not an afterthought -- it is a primary compilation target with its own optimization pipeline. Build web frontends, edge functions, and browser-based tools in the same language as your backend.
 - **JavaScript interop bridge.** For WASM targets, a seamless interop layer lets you call JavaScript APIs, manipulate the DOM, and integrate with existing JS ecosystems. TypeScript type definitions are generated automatically.
 - **C FFI for ecosystem access.** Call into C libraries with zero overhead. Bind to system APIs, graphics libraries, database drivers, and the vast ecosystem of C code. FFI declarations are type-checked and memory-safe at the boundary.
@@ -209,10 +211,10 @@ Turbo ships as a focused core and grows through progressive disclosure -- every 
 
 | Version | Milestone | Key Addition |
 |---------|-----------|-------------|
-| **v1.0** | Core | Syntax, types, CTRC memory, async, full toolchain, LLVM + WASM |
+| **v1.0** | Core | Syntax, types, memory model, async, full toolchain, native (Cranelift) + WASM |
 | **v1.1** | Script Mode | `turbolang run file.tb` with zero config, shebang, REPL, full inference |
 | **v1.2+** | GPU & Compute | SIMD intrinsics and ML/GPU kernels delivered as sidecar libraries on top of stable core primitives, not new compiler keywords |
-| **v1.3+** | Mobile | iOS + Android targets via LLVM. UI frameworks ship as libraries, not language built-ins |
+| **v1.3+** | Mobile | iOS + Android native targets (backend TBD). UI frameworks ship as libraries, not language built-ins |
 | **v1.4+** | Distributed | Distributed-actor and consensus crates built on v1.0's `actor` + `spawn`; no new syntax |
 
 > **Sidecar, not syntax.** The 2026-04-09 retirement of `agent` / `tool fn` taught us that domain features tied to fast-moving ecosystems (AI frameworks, GPU APIs, UI toolkits, cluster runtimes) belong in companion libraries whose cadence can diverge from the compiler's stability contract. The v1.2+ rows above are framework-shaped, not keyword-shaped.

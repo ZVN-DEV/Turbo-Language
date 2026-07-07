@@ -1,5 +1,7 @@
 # Turbo Roadmap -- Progressive Disclosure by Design
 
+> **Status: Planned (roadmap).** This is a forward-looking plan, not a description of the current release. The "v1.0 -- Core (Current Design)" list below is the *design target*; several of its items are **not yet implemented** — notably the CTRC/auto-clone memory ladder (`let ref`, `region`, `@manual`) and much of the concurrency model (the async/await runtime, `all()`, actors, structured concurrency, supervision trees). See [MEMORY-MODEL.md](MEMORY-MODEL.md) and [CONCURRENCY.md](CONCURRENCY.md) for what actually ships today. **Backend reality:** Cranelift is the *only* code-generation backend; the LLVM backend was removed (see the v1.0 Compilation note). Any mention of LLVM in the v1.2+ GPU/mobile sections is speculative and predates that removal.
+
 Turbo grows from a focused core into a universal language through **progressive disclosure**: every new capability is opt-in and does not complicate the base language. A developer who never needs GPU compute will never see GPU syntax. A developer who never targets mobile will never encounter mobile tooling. The language you learn on day one remains clean and simple no matter how many capabilities are added later.
 
 > **Status note (2026-04-14).** The v1.2+ sections below predate the 2026-04-09 "sidecar, not syntax" decision (see VISION.md and [`design/agents-sidecar.md`](agents-sidecar.md) equivalents). Where those sections show keyword-shaped features (`@gpu fn`, `turbo/ui` DSL, actor-spanning-machines syntax), treat the shape as illustrative only. The actual v1.x deliverables in these domains will be sidecar libraries built on v1.0's stable core primitives -- the same way `turbo-agent` replaced the retired `agent` / `tool fn` keywords. The core language contract in [COMPATIBILITY.md](../COMPATIBILITY.md) is the binding artifact; these sketches are not.
@@ -13,9 +15,9 @@ Everything in the current design documents. What ships on day one.
 ### Language
 - Complete syntax: `let`, `fn`, `type`, `struct`, `match`, `if let`, `guard`, `for`, `while`
 - Type system: generics, `T?` optionals, `T ! E` errors, algebraic data types, traits, structural interfaces
-- Memory: CTRC ownership + auto-clone (Level 0), explicit refs (Level 1), regions/arenas (Level 2), `@manual` escape hatch (Level 3)
-- Concurrency: `async`/`await`, `spawn`, `all()`, actors, channels, structured concurrency, supervision trees
-- Effects: `async`, `throws`, `io`, `unsafe`, `diverges` tracked in function signatures
+- Memory: CTRC ownership + auto-clone (Level 0), explicit refs (Level 1), regions/arenas (Level 2), `@manual` escape hatch (Level 3) — **Planned; not yet implemented.** Today: runtime ARC + COW + per-request arenas (see [MEMORY-MODEL.md](MEMORY-MODEL.md)).
+- Concurrency: `async`/`await`, `spawn`, `all()`, actors, channels, structured concurrency, supervision trees — **partly Planned.** Today only `spawn`/`await` (OS threads), integer channels, and an integer mutex ship; the rest is unbuilt (see [CONCURRENCY.md](CONCURRENCY.md)).
+- Effects: `async`, `throws`, `io`, `unsafe`, `diverges` tracked in function signatures — **Planned; no effect system today.**
 
 ### Compilation
 - Cranelift backend for both fast JIT (`run`) and AOT (`build`) — the single

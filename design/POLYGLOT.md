@@ -1,5 +1,7 @@
 # The Polyglot / Meta-Language Strategy
 
+> **Status: Planned (strategy doc).** This is a feasibility/strategy sketch, not shipped functionality. Basic **C FFI** exists in some form (calling C, linking the C runtime); the higher-level pieces here — auto-generating bindings from C headers, Python interop, and the JS/WASM interop bridge (including the `async fn` examples) — are **Planned**. Read the tiers below as intent.
+
 ## Assessment
 The full polyglot meta-language (convert any language to/from Turbo) is NOT feasible as a primary goal. Here's what IS feasible, organized into tiers.
 

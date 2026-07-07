@@ -10,6 +10,14 @@
 > auto-wrapping (`let x: str? = "hi"`), `loop { break v }` as an expression,
 > `.enumerate()`, default/named parameters, and struct spread. Derive currently
 > supports `Eq`, `Clone`, and `Display` only (not `Debug`/`Hash`/`Serialize`/`Schema`).
+>
+> **Concurrency & memory syntax, specifically:** `async fn` / `await` *parse*, but
+> there is no async runtime — real concurrency today is `spawn`/`await` on **OS
+> threads** (see [CONCURRENCY.md](CONCURRENCY.md) and `docs/stdlib.md`). `Stream<T>`,
+> `for await`, `scope`-based **structured concurrency**, `Shared<T>` / `WeakRef<T>`,
+> `let ref` borrows, and `region` blocks are **Planned — not implemented** wherever
+> they appear below (including the "Real-World Patterns" examples), regardless of any
+> `[Implemented]` tag.
 
 ## Elegant by Design
 
@@ -528,9 +536,15 @@ Because `{}` is used for blocks, maps, and sets, the parser uses the following r
 
 **Parser rule:** If the first non-whitespace token inside `{` is followed by `:` and a value, it is a map. If items are comma-separated without colons, it is a set. Otherwise it is a block expression. The empty-literal forms `{:}` and `{,}` resolve the ambiguity for zero-element maps and sets.
 
-### Async / Streaming `[Implemented]`
+### Async / Streaming `[Partial]`
+
+> `async fn` and `await` parse, but there is **no async runtime**. The example below
+> won't run as written (no `http.get`, no future scheduling). Working concurrency
+> today is `spawn`/`await` on OS threads — see `docs/stdlib.md`. Streaming and
+> structured concurrency are `[Planned]` as tagged.
+
 ```
-// Async function
+// Async function [syntax parses; no async runtime]
 async fn fetch_user(id: u64) -> User ! Error {
   let resp = await http.get("/users/{id}")?
   resp.json<User>()?
@@ -746,13 +760,13 @@ let ids: {u64} = {1, 2, 3}               // set of u64
 | Array type | `[T]` | Swift | Implemented |
 | Map type | `{K: V}` | Novel | Implemented |
 | Set type | `{T}` | Novel | Planned |
-| Async | `async fn / await` | JS/Rust | Implemented |
+| Async | `async fn / await` | JS/Rust | Partial (syntax parses; no async runtime — real concurrency is `spawn`/`await` on OS threads) |
 | Compile-time | `const fn` | Zig (adapted) | Planned |
 | Defer | `defer { cleanup() }` | Go | Implemented |
 
 ## Real-World Patterns
 
-Complete mini-programs showing how Turbo feels in practice. These use the canonical syntax: `@` decorators, `T?`, `T ! E`, `Shared<T>`, `WeakRef<T>`, `const fn`, and arrow functions.
+> **Planned — illustrative, not runnable today.** These mini-programs show the *intended* feel of Turbo and lean on unbuilt features: the async runtime + `await http.get(...)`, structured concurrency (`await (a, b, c)`), and `Shared<T>`. They will not compile/run as written on the current release. They use the canonical *design* syntax: `@` decorators, `T?`, `T ! E`, `Shared<T>` / `WeakRef<T>` *(Planned)*, `const fn` *(Planned)*, and arrow functions.
 
 ### Web API Server
 
@@ -918,7 +932,9 @@ fn load_config(path: str) -> AppConfig ! IoError | ParseError {
 }
 ```
 
-### Shared State with `Shared<T>`
+### Shared State with `Shared<T>` `[Planned]`
+
+> **Planned — not yet implemented.** `Shared<T>` and `turbo/sync` do not exist. For shared state across `spawn`-ed OS threads today, use the integer `mutex` builtins (see `docs/stdlib.md`).
 
 Thread-safe shared state using `Shared<T>` instead of raw reference counting.
 
