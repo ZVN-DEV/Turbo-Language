@@ -64,6 +64,25 @@ extern void *rt_hashmap_new(void);
 extern void rt_hashmap_set(void *map, const char *key, const char *value);
 extern const char *rt_hashmap_get(const void *map, const char *key);
 extern void *rt_hashmap_set_int(void *map, const char *key, long long value);
+/* SQLite shim (turbo_rt_sqlite.c, pulled into turbo_rt.c under
+ * -DTURBO_WITH_SQLITE). Fallible functions return a Result object we inspect
+ * with rt_result_tag / rt_result_value. */
+extern void *rt_sqlite_open(const char *path);
+extern void *rt_sqlite_exec(long long h, const char *sql);
+extern void *rt_sqlite_prepare(long long h, const char *sql);
+extern long long rt_sqlite_bind_int(long long stmt, long long idx, long long v);
+extern long long rt_sqlite_bind_str(long long stmt, long long idx, const char *s);
+extern long long rt_sqlite_bind_float(long long stmt, long long idx, double f);
+extern long long rt_sqlite_step(long long stmt);
+extern long long rt_sqlite_column_int(long long stmt, long long i);
+extern const char *rt_sqlite_column_str(long long stmt, long long i);
+extern double rt_sqlite_column_float(long long stmt, long long i);
+extern long long rt_sqlite_column_count(long long stmt);
+extern long long rt_sqlite_finalize(long long stmt);
+extern const char *rt_sqlite_error(long long h);
+extern long long rt_sqlite_close(long long h);
+extern long long rt_result_tag(const void *res);
+extern long long rt_result_value(const void *res);
 extern long long rt_hashmap_get_int(const void *map, const char *key);
 extern long long rt_hashmap_inc(void *map, const char *key, long long delta);
 extern int rt_write_all(int fd, const char *buf, size_t len);
@@ -1004,6 +1023,116 @@ static void test_hashmap_generic_str_keys_get(void) {
           ok);
 }
 
+/* ── SQLite shim: full open/exec/prepare/step/finalize/close cycle ──── */
+static void test_sqlite_cycle(void) {
+    void *ro = rt_sqlite_open(":memory:");
+    check("sqlite_open :memory: -> ok", rt_result_tag(ro) == 0);
+    long long db = rt_result_value(ro);
+
+    check("sqlite_exec create -> ok",
+          rt_result_tag(rt_sqlite_exec(
+              db, "CREATE TABLE t (id INTEGER, name TEXT, price REAL)")) == 0);
+    check("sqlite_exec insert1 -> ok",
+          rt_result_tag(rt_sqlite_exec(
+              db, "INSERT INTO t VALUES (1, 'alpha', 1.5)")) == 0);
+    check("sqlite_exec insert2 -> ok",
+          rt_result_tag(rt_sqlite_exec(
+              db, "INSERT INTO t VALUES (2, 'beta', 2.5)")) == 0);
+
+    void *rp = rt_sqlite_prepare(db, "SELECT id, name, price FROM t ORDER BY id");
+    check("sqlite_prepare -> ok", rt_result_tag(rp) == 0);
+    long long stmt = rt_result_value(rp);
+    check("sqlite_column_count == 3", rt_sqlite_column_count(stmt) == 3);
+
+    /* Row 1. Capture the string, then advance to row 2 and confirm the
+     * captured pointer still reads "alpha" — this proves rt_sqlite_column_str
+     * returned a private copy rather than sqlite's internal buffer (which the
+     * next step() invalidates). Under ASan this catches use-after-free. */
+    check("row1 step -> 1", rt_sqlite_step(stmt) == 1);
+    check("row1 col_int == 1", rt_sqlite_column_int(stmt, 0) == 1);
+    const char *name0 = rt_sqlite_column_str(stmt, 1);
+    check("row1 col_str == alpha", strcmp(name0, "alpha") == 0);
+    check("row1 col_float == 1.5", rt_sqlite_column_float(stmt, 2) == 1.5);
+
+    check("row2 step -> 1", rt_sqlite_step(stmt) == 1);
+    check("row1 col_str copy survives next step", strcmp(name0, "alpha") == 0);
+    check("row2 col_int == 2", rt_sqlite_column_int(stmt, 0) == 2);
+    check("row2 col_str == beta",
+          strcmp(rt_sqlite_column_str(stmt, 1), "beta") == 0);
+
+    check("step -> done (0)", rt_sqlite_step(stmt) == 0);
+    check("finalize -> 0", rt_sqlite_finalize(stmt) == 0);
+    check("close -> 0", rt_sqlite_close(db) == 0);
+}
+
+/* ── SQLite shim: bound int/str/float parameters roundtrip ──────────── */
+static void test_sqlite_bind_params(void) {
+    long long db = rt_result_value(rt_sqlite_open(":memory:"));
+    rt_sqlite_exec(db, "CREATE TABLE b (n INTEGER, s TEXT, f REAL)");
+    long long ins = rt_result_value(rt_sqlite_prepare(db, "INSERT INTO b VALUES (?, ?, ?)"));
+    rt_sqlite_bind_int(ins, 1, 99);
+    rt_sqlite_bind_str(ins, 2, "bound");
+    rt_sqlite_bind_float(ins, 3, 4.25);
+    check("bound insert step -> done", rt_sqlite_step(ins) == 0);
+    rt_sqlite_finalize(ins);
+
+    long long sel = rt_result_value(rt_sqlite_prepare(db, "SELECT n, s, f FROM b"));
+    check("bound select step -> row", rt_sqlite_step(sel) == 1);
+    check("bound n == 99", rt_sqlite_column_int(sel, 0) == 99);
+    check("bound s == bound", strcmp(rt_sqlite_column_str(sel, 1), "bound") == 0);
+    check("bound f == 4.25", rt_sqlite_column_float(sel, 2) == 4.25);
+    rt_sqlite_finalize(sel);
+    rt_sqlite_close(db);
+}
+
+/* ── SQLite shim: error path returns err() with a non-empty message ─── */
+static void test_sqlite_error_path(void) {
+    long long db = rt_result_value(rt_sqlite_open(":memory:"));
+    void *bad = rt_sqlite_exec(db, "THIS IS NOT SQL");
+    check("bad SQL -> err", rt_result_tag(bad) == 1);
+    const char *msg = (const char *)(intptr_t)rt_result_value(bad);
+    check("err message non-empty", msg != NULL && strlen(msg) > 0);
+    const char *live = rt_sqlite_error(db);
+    check("sqlite_error(handle) non-null", live != NULL);
+    const char *invalid = rt_sqlite_error(0);
+    check("sqlite_error(0) is a copy", invalid != NULL && strlen(invalid) > 0);
+    rt_sqlite_close(db);
+}
+
+/* ── SQLite shim: column_str strings are rc-headed and safely releasable ──
+ * Post-ARC, codegen releases owned string temporaries at their consumption
+ * site. rt_sqlite_column_str must therefore return an rc-headed string (via
+ * turbo_strdup), NOT a bare malloc'd buffer — otherwise rt_release corrupts
+ * the heap. Simulate codegen: query the column many times and rt_release each
+ * result. Under ASan a bare-malloc'd (non-rc) string would trip here, and a
+ * leak would show flat only if release truly frees. */
+static void test_sqlite_column_str_release_loop(void) {
+    long long db = rt_result_value(rt_sqlite_open(":memory:"));
+    rt_sqlite_exec(db, "CREATE TABLE t (label TEXT)");
+    rt_sqlite_exec(db, "INSERT INTO t VALUES ('a moderately sized label value')");
+    long long stmt = rt_result_value(rt_sqlite_prepare(db, "SELECT label FROM t"));
+    rt_sqlite_step(stmt);
+
+    int ok = 1;
+    long long total = 0;
+    for (int i = 0; i < 100000; i++) {
+        const char *s = rt_sqlite_column_str(stmt, 0);
+        if (!s || strcmp(s, "a moderately sized label value") != 0) {
+            ok = 0;
+            break;
+        }
+        total += (long long)strlen(s);
+        /* Release the owned temporary exactly as codegen would. If `s` were a
+         * bare malloc (no rc header), this decrements a bogus refcount and
+         * frees the wrong base pointer — ASan catches it immediately. */
+        rt_release((void *)(size_t)s);
+    }
+    rt_sqlite_finalize(stmt);
+    rt_sqlite_close(db);
+    check("test_sqlite_column_str_release_loop: 100k rc strings alloc+release",
+          ok && total == 100000LL * 30);
+}
+
 int main(void) {
     printf("== turbo_rt C runtime tests ==\n");
 
@@ -1051,6 +1180,10 @@ int main(void) {
     test_write_all_partial_and_epipe();
     test_spawn_copies_arena_string();
     test_http_config_validation();
+    test_sqlite_cycle();
+    test_sqlite_bind_params();
+    test_sqlite_error_path();
+    test_sqlite_column_str_release_loop();
 
     if (g_failures == 0) {
         printf("\nAll tests passed.\n");

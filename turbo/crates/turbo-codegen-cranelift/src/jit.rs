@@ -299,6 +299,28 @@ fn register_runtime_symbols(jit_builder: &mut JITBuilder) {
     jit_builder.symbol("rt_time_now", rt_time_now as *const u8);
     jit_builder.symbol("rt_time_ms", rt_time_ms as *const u8);
     jit_builder.symbol("rt_format_time", rt_format_time as *const u8);
+    // SQLite builtins (JIT twins in runtime.rs; the vendored engine is linked
+    // into this binary by build.rs).
+    jit_builder.symbol("rt_sqlite_open", rt_sqlite_open as *const u8);
+    jit_builder.symbol("rt_sqlite_close", rt_sqlite_close as *const u8);
+    jit_builder.symbol("rt_sqlite_exec", rt_sqlite_exec as *const u8);
+    jit_builder.symbol("rt_sqlite_error", rt_sqlite_error as *const u8);
+    jit_builder.symbol("rt_sqlite_prepare", rt_sqlite_prepare as *const u8);
+    jit_builder.symbol("rt_sqlite_bind_int", rt_sqlite_bind_int as *const u8);
+    jit_builder.symbol("rt_sqlite_bind_str", rt_sqlite_bind_str as *const u8);
+    jit_builder.symbol("rt_sqlite_bind_float", rt_sqlite_bind_float as *const u8);
+    jit_builder.symbol("rt_sqlite_step", rt_sqlite_step as *const u8);
+    jit_builder.symbol("rt_sqlite_column_int", rt_sqlite_column_int as *const u8);
+    jit_builder.symbol("rt_sqlite_column_str", rt_sqlite_column_str as *const u8);
+    jit_builder.symbol(
+        "rt_sqlite_column_float",
+        rt_sqlite_column_float as *const u8,
+    );
+    jit_builder.symbol(
+        "rt_sqlite_column_count",
+        rt_sqlite_column_count as *const u8,
+    );
+    jit_builder.symbol("rt_sqlite_finalize", rt_sqlite_finalize as *const u8);
     register_libm_symbols(jit_builder);
 }
 

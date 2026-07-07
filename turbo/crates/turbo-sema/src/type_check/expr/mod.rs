@@ -20,6 +20,7 @@
 mod builtins_core;
 mod builtins_data;
 mod builtins_net;
+mod builtins_sqlite;
 mod collections_control;
 
 use std::collections::HashMap;

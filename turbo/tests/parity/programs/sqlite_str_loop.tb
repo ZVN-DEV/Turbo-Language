@@ -1,0 +1,29 @@
+// Regression: querying a str column in a hot loop. Post-ARC, codegen releases
+// each rc-headed column string at its consumption site — if sqlite_column_str
+// returned a non-rc buffer this would corrupt the heap. Running to completion
+// with the right sum proves the alloc/release cycle is sound; RSS also stays
+// flat (verified out of band).
+fn run(n: i64) -> i64 ! str {
+    let db = sqlite_open(":memory:")?
+    sqlite_exec(db, "CREATE TABLE t (label TEXT)")?
+    sqlite_exec(db, "INSERT INTO t VALUES ('turbo-sqlite')")?
+    let stmt = sqlite_prepare(db, "SELECT label FROM t")?
+    sqlite_step(stmt)
+    let mut i = 0
+    let mut total = 0
+    while i < n {
+        let s = sqlite_column_str(stmt, 0)
+        total = total + len(s)
+        i = i + 1
+    }
+    sqlite_finalize(stmt)
+    sqlite_close(db)
+    ok(total)
+}
+
+fn main() {
+    match run(100000) {
+        ok(v) => print("total={v}")
+        err(e) => print("error: {e}")
+    }
+}

@@ -52,6 +52,9 @@ impl Checker {
         if let Some(t) = self.check_builtin_refs(name, args, callee) {
             return Some(t);
         }
+        if let Some(t) = self.check_builtin_sqlite(name, args, callee) {
+            return Some(t);
+        }
         None
     }
 

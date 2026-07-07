@@ -4361,3 +4361,12 @@ const char *rt_format_time(double timestamp, const char *fmt) {
     if (n == 0) return turbo_strdup("");
     return turbo_strdup(buf);
 }
+
+/* ── SQLite builtins ─────────────────────────────────────────────────
+ * The SQLite shim lives in its own file to keep this runtime lean. It is
+ * pulled into this translation unit (so it can share turbo_alloc /
+ * rt_result_ok / rt_result_err) only when the AOT/link path opts in with
+ * -DTURBO_WITH_SQLITE. The JIT twins live in src/runtime.rs. */
+#ifdef TURBO_WITH_SQLITE
+#include "turbo_rt_sqlite.c"
+#endif

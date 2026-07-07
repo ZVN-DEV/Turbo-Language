@@ -1,0 +1,104 @@
+// http-sqlite-api — "HTTP in, SQLite under, JSON out, one binary."
+//
+// A tiny todo API backed by a real SQLite database, served entirely from
+// Turbo. Build it to a single self-contained native binary with:
+//
+//     turbolang build examples/http-sqlite-api/main.tb -o todo-api
+//     ./todo-api
+//
+// or run straight from source with the JIT:
+//
+//     turbolang run examples/http-sqlite-api/main.tb
+//
+// Routes:
+//     GET  /todos        -> JSON array of todos
+//     POST /todos        -> body is the todo title (plain text); inserts it
+//
+// See README.md for curl commands.
+
+// Escape a string for embedding inside a JSON string literal. Handles the two
+// characters that would otherwise break the JSON: backslash and double-quote.
+fn json_escape(s: str) -> str {
+    replace(replace(s, "\\", "\\\\"), "\"", "\\\"")
+}
+
+// Build the JSON array of all todos, ordered by id.
+fn list_todos(db: i64) -> str {
+    match sqlite_prepare(db, "SELECT id, title, done FROM todos ORDER BY id") {
+        ok(stmt) => {
+            let mut out = "["
+            let mut first = true
+            while sqlite_step(stmt) == 1 {
+                let id = sqlite_column_int(stmt, 0)
+                let title = sqlite_column_str(stmt, 1)
+                let done = sqlite_column_int(stmt, 2)
+                if !first {
+                    out = out + ","
+                }
+                out = out + "\{\"id\":" + to_str(id) + ",\"title\":\"" + json_escape(title) + "\",\"done\":" + to_str(done) + "\}"
+                first = false
+            }
+            sqlite_finalize(stmt)
+            out + "]"
+        }
+        err(e) => "\{\"error\":\"" + json_escape(e) + "\"\}"
+    }
+}
+
+// Insert a new todo with the given title. Returns the created row as JSON.
+fn add_todo(db: i64, title: str) -> str {
+    match sqlite_prepare(db, "INSERT INTO todos (title, done) VALUES (?, 0)") {
+        ok(stmt) => {
+            sqlite_bind_str(stmt, 1, title)
+            let rc = sqlite_step(stmt)
+            sqlite_finalize(stmt)
+            if rc == 0 {
+                "\{\"ok\":true,\"title\":\"" + json_escape(title) + "\"\}"
+            } else {
+                "\{\"error\":\"insert failed\"\}"
+            }
+        }
+        err(e) => "\{\"error\":\"" + json_escape(e) + "\"\}"
+    }
+}
+
+fn seed(db: i64) -> i64 ! str {
+    sqlite_exec(db, "CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0)")?
+    sqlite_exec(db, "INSERT INTO todos (title, done) VALUES ('learn turbo', 1)")?
+    sqlite_exec(db, "INSERT INTO todos (title, done) VALUES ('ship sqlite builtin', 0)")?
+    ok(0)
+}
+
+// Wire up the routes and start serving. Kept as its own function so the route
+// handler closures sit at a function's top level (the codegen pre-compiles
+// route closures per function body).
+fn serve(db: i64) {
+    let app = http_server(8080)
+
+    route(app, "GET", "/todos", |req: str| -> str {
+        respond_json(200, list_todos(db))
+    })
+
+    route(app, "POST", "/todos", |req: str| -> str {
+        let title = request_body(req)
+        respond_json(201, add_todo(db, title))
+    })
+
+    print("listening on http://127.0.0.1:8080")
+    print("  GET  /todos")
+    print("  POST /todos   (body = todo title)")
+    http_listen(app)
+}
+
+fn main() {
+    match sqlite_open("todos.db") {
+        ok(db) => {
+            match seed(db) {
+                ok(v) => print("database ready")
+                err(e) => print("seed error: {e}")
+            }
+            serve(db)
+        }
+        err(e) => print("failed to open database: {e}")
+    }
+}

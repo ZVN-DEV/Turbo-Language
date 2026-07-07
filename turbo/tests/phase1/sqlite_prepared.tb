@@ -1,0 +1,25 @@
+// SQLite: prepared statement with bound int/str/float parameters.
+fn run() -> i64 ! str {
+    let db = sqlite_open(":memory:")?
+    sqlite_exec(db, "CREATE TABLE t (n INTEGER, label TEXT, ratio REAL)")?
+    let ins = sqlite_prepare(db, "INSERT INTO t VALUES (?, ?, ?)")?
+    sqlite_bind_int(ins, 1, 7)
+    sqlite_bind_str(ins, 2, "seven")
+    sqlite_bind_float(ins, 3, 3.5)
+    sqlite_step(ins)
+    sqlite_finalize(ins)
+    let q = sqlite_prepare(db, "SELECT n, label, ratio FROM t")?
+    while sqlite_step(q) == 1 {
+        print("{sqlite_column_int(q, 0)} {sqlite_column_str(q, 1)} {sqlite_column_float(q, 2)}")
+    }
+    sqlite_finalize(q)
+    sqlite_close(db)
+    ok(0)
+}
+
+fn main() {
+    match run() {
+        ok(v) => print("done")
+        err(e) => print("error: {e}")
+    }
+}
