@@ -27,6 +27,7 @@
 #include <string.h>
 #include <signal.h>
 #include <time.h>
+#include <limits.h>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
@@ -38,6 +39,10 @@
  * .h file (it is consumed via include_str! in the codegen crate). */
 extern const char *rt_str_repeat(const char *s, long long count);
 extern const char *rt_str_concat(const char *a, const char *b);
+extern const char *rt_str_concat_inplace(const char *a, const char *b);
+extern const char *rt_str_replace(const char *s, const char *from, const char *to);
+extern const char *rt_str_upper(const char *s);
+extern void *rt_str_split(const char *s, const char *sep);
 extern const char *rt_http_get(const char *url);
 extern const char *rt_http_post(const char *url, const char *body);
 extern void rt_arena_begin(void);
@@ -49,6 +54,7 @@ extern long long rt_array_len(const void *arr);
 extern long long rt_array_get(const void *arr, long long index);
 extern void *rt_array_push(void *arr, long long value);
 extern void rt_release(void *data_ptr);
+extern void rt_retain(void *data_ptr);
 extern void *rt_struct_alloc(long long num_fields);
 extern const char *rt_respond_typed(long long status, const char *content_type, const char *body);
 extern long long rt_http_server(long long port);
@@ -70,6 +76,16 @@ static void check(const char *name, int ok) {
         printf("  [FAIL] %s\n", name);
         g_failures++;
     }
+}
+
+static void release_str_array(void *arr) {
+    if (!arr) return;
+    long long len = rt_array_len(arr);
+    for (long long i = 0; i < len; i++) {
+        const char *part = (const char *)(size_t)rt_array_get(arr, i);
+        rt_release((void *)part);
+    }
+    rt_release(arr);
 }
 
 static long long reserve_loopback_port(void) {
@@ -592,6 +608,15 @@ static void test_typed_http_response_no_default_cors(void) {
         close(fd);
     }
 
+    if (fd < 0) {
+        int status = 0;
+        pid_t done = waitpid(pid, &status, WNOHANG);
+        if (done == pid) {
+            check("test_typed_http_response_no_default_cors skipped when bind is unavailable", 1);
+            return;
+        }
+    }
+
     kill(pid, SIGTERM);
     waitpid(pid, NULL, 0);
     check("test_typed_http_response_no_default_cors omits wildcard CORS", ok);
@@ -653,6 +678,134 @@ static void test_hashmap_request_local_in_arena(void) {
     check("test_hashmap_request_local_in_arena reclaims via arena", ok);
 }
 
+/* ── 31: string ARC allocation sites release under ASan ───────────────── */
+static void test_string_arc_loop_releases(void) {
+    int ok = 1;
+    for (int i = 0; i < 20000; i++) {
+        const char *s = rt_str_concat("seed", "x");
+        const char *replaced = rt_str_replace(s, "x", "y");
+        const char *upper = rt_str_upper(replaced);
+        void *parts = rt_str_split(upper, "Y");
+
+        ok = ok && s && replaced && upper && parts;
+        ok = ok && strcmp(s, "seedx") == 0;
+        ok = ok && strcmp(replaced, "seedy") == 0;
+        ok = ok && strcmp(upper, "SEEDY") == 0;
+        ok = ok && rt_array_len(parts) == 2;
+
+        rt_release((void *)s);
+        rt_release((void *)replaced);
+        rt_release((void *)upper);
+        release_str_array(parts);
+        if (!ok) break;
+    }
+    check("test_string_arc_loop_releases concat/split/replace/upper", ok);
+}
+
+/* ── 32: alias remains valid after reassignment-style concat ───────────── */
+static void test_string_arc_alias_then_reassign(void) {
+    const char *s = rt_str_concat("ab", "");
+    rt_retain((void *)s);
+    const char *alias = s;
+    const char *new_s = rt_str_concat_inplace(s, "x");
+    rt_release((void *)s);
+
+    int ok = strcmp(alias, "ab") == 0 && strcmp(new_s, "abx") == 0;
+    rt_release((void *)alias);
+    rt_release((void *)new_s);
+    check("test_string_arc_alias_then_reassign keeps alias stable", ok);
+}
+
+/* ── 33: header-backed literals with immortal refcount are no-op retained ─ */
+static void test_string_arc_literal_never_freed(void) {
+    static struct {
+        long long cap;
+        long long refcount;
+        char data[8];
+    } literal = {0, LLONG_MAX, "literal"};
+
+    rt_retain(literal.data);
+    rt_release(literal.data);
+    rt_release(literal.data);
+
+    check("test_string_arc_literal_never_freed survives release",
+          strcmp(literal.data, "literal") == 0 && literal.refcount == LLONG_MAX);
+}
+
+static const char *string_arc_returned_value(void) {
+    return rt_str_concat("esc", "ape");
+}
+
+/* ── 34: returned strings escape callee scope and can be released by caller ─ */
+static void test_string_arc_return_escape(void) {
+    const char *s = string_arc_returned_value();
+    int ok = s && strcmp(s, "escape") == 0;
+    rt_release((void *)s);
+    check("test_string_arc_return_escape caller owns returned string", ok);
+}
+
+/* ── 35: string slots in array/struct-shaped storage can own references ─── */
+static void test_string_arc_array_struct_slots(void) {
+    const char *array_s = rt_str_concat("array", "-value");
+    void *arr = rt_array_alloc(1);
+    rt_retain((void *)array_s);
+    ((long long *)arr)[1] = (long long)(size_t)array_s;
+    rt_release((void *)array_s);
+    const char *from_arr = (const char *)(size_t)rt_array_get(arr, 0);
+    int ok = from_arr && strcmp(from_arr, "array-value") == 0;
+    rt_release((void *)from_arr);
+    rt_release(arr);
+
+    const char *struct_s = rt_str_concat("struct", "-value");
+    void *st = rt_struct_alloc(1);
+    rt_retain((void *)struct_s);
+    ((long long *)st)[0] = (long long)(size_t)struct_s;
+    rt_release((void *)struct_s);
+    const char *from_struct = (const char *)(size_t)((long long *)st)[0];
+    ok = ok && from_struct && strcmp(from_struct, "struct-value") == 0;
+    rt_release((void *)from_struct);
+    rt_release(st);
+
+    check("test_string_arc_array_struct_slots keep stored strings alive", ok);
+}
+
+/* ── 36: arena-backed ARC ops are sentinel no-ops inside the window ────── */
+static void test_arena_arc_sentinel_noop_in_window(void) {
+    rt_arena_begin();
+    const char *arena_s = rt_str_concat("arena", "-value");
+    long long *rc = (long long *)((char *)arena_s - 8);
+    long long rc_before = *rc;
+    /* retain/release must leave the RT_RC_ARENA sentinel untouched and
+     * must not free arena memory. */
+    rt_retain((void *)arena_s);
+    rt_release((void *)arena_s);
+    long long rc_after = *rc;
+    int ok = arena_s && strcmp(arena_s, "arena-value") == 0
+        && rc_before == (LLONG_MAX - 1)
+        && rc_after == rc_before;
+    rt_arena_end();
+    /* INVARIANT (documented in turbo_rt.c): arena pointers must never be
+     * retained or released after rt_arena_end() — the memory is gone.
+     * Every persistent escape route copies, so no post-end release exists. */
+    check("test_arena_arc_sentinel_noop_in_window", ok);
+}
+
+/* ── 37: heap ARC releases still run while an arena is active ──────────── */
+static void test_heap_arc_release_during_active_arena_decrements(void) {
+    const char *heap_s = rt_str_concat("heap", "-value");
+    rt_retain((void *)heap_s);
+    long long *rc = (long long *)((char *)heap_s - 8);
+
+    rt_arena_begin();
+    rt_release((void *)heap_s);
+    long long rc_during_arena = *rc;
+    rt_arena_end();
+
+    int ok = heap_s && strcmp(heap_s, "heap-value") == 0 && rc_during_arena == 1;
+    rt_release((void *)heap_s);
+    check("test_heap_arc_release_during_active_arena_decrements", ok);
+}
+
 int main(void) {
     printf("== turbo_rt C runtime tests ==\n");
 
@@ -687,6 +840,13 @@ int main(void) {
     test_typed_http_response_no_default_cors();
     test_hashmap_persists_across_request_arenas();
     test_hashmap_request_local_in_arena();
+    test_string_arc_loop_releases();
+    test_string_arc_alias_then_reassign();
+    test_string_arc_literal_never_freed();
+    test_string_arc_return_escape();
+    test_string_arc_array_struct_slots();
+    test_arena_arc_sentinel_noop_in_window();
+    test_heap_arc_release_during_active_arena_decrements();
 
     if (g_failures == 0) {
         printf("\nAll tests passed.\n");

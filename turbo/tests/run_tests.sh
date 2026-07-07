@@ -38,6 +38,27 @@ make_tmp() {
     mktemp "${TMPDIR:-/tmp}/turbo-test.XXXXXX"
 }
 
+loopback_bind_denied() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 - <<'PY'
+import errno
+import socket
+import sys
+
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    s.bind(("127.0.0.1", 0))
+except PermissionError:
+    sys.exit(0)
+except OSError as exc:
+    sys.exit(0 if exc.errno == errno.EPERM else 1)
+else:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+}
+
 print_diff() {
     local label="$1"
     local expected="$2"
@@ -59,6 +80,12 @@ run_test() {
 
     if [ ! -f "$expected_file" ]; then
         printf "  SKIP  %s (no .expected file)\n" "$test_name"
+        SKIP=$((SKIP + 1))
+        return
+    fi
+
+    if [ "$test_name" = "http_server" ] && loopback_bind_denied; then
+        printf "  SKIP  %s (loopback bind denied by sandbox)\n" "$test_name"
         SKIP=$((SKIP + 1))
         return
     fi

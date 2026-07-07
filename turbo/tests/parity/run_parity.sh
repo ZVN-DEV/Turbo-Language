@@ -87,12 +87,34 @@ print_diff() {
     echo "---------------"
 }
 
+loopback_bind_denied() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 - <<'PY'
+import errno
+import socket
+import sys
+
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    s.bind(("127.0.0.1", 0))
+except PermissionError:
+    sys.exit(0)
+except OSError as exc:
+    sys.exit(0 if exc.errno == errno.EPERM else 1)
+else:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+}
+
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 PASSED=0
 FAILED=0
 XFAIL=0
+SKIPPED=0
 FAILED_NAMES=()
 XFAIL_NAMES=()
 
@@ -108,6 +130,12 @@ fi
 
 for src in "${programs[@]}"; do
     name=$(basename "$src" .tb)
+    if [[ "$name" == http_* ]] && loopback_bind_denied; then
+        echo "SKIP $name (loopback bind denied by sandbox)"
+        SKIPPED=$((SKIPPED + 1))
+        continue
+    fi
+
     jit_out="$WORK_DIR/$name.jit.out"
     jit_err="$WORK_DIR/$name.jit.err"
     aot_out="$WORK_DIR/$name.aot.out"
@@ -276,11 +304,11 @@ for src in "${programs[@]}"; do
 done
 
 echo
-TOTAL=$((PASSED + FAILED + XFAIL))
+TOTAL=$((PASSED + FAILED + XFAIL + SKIPPED))
 if [[ $XFAIL -gt 0 ]]; then
-    echo "parity: $PASSED passed, $XFAIL xfail, $FAILED failed (of $TOTAL)"
+    echo "parity: $PASSED passed, $XFAIL xfail, $FAILED failed, $SKIPPED skipped (of $TOTAL)"
 else
-    echo "parity: $PASSED passed, $FAILED failed (of $TOTAL)"
+    echo "parity: $PASSED passed, $FAILED failed, $SKIPPED skipped (of $TOTAL)"
 fi
 
 if [[ $XFAIL -gt 0 ]]; then

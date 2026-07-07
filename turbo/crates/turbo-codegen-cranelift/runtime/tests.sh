@@ -19,8 +19,9 @@ TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 OUT="$TMPDIR/test_rt"
+SANITIZE_FLAGS=(-fsanitize=address -fno-omit-frame-pointer)
 
-echo "== compiling turbo_rt + tests with $CC =="
+echo "== compiling turbo_rt + tests with $CC + ASan =="
 
 # -std=c11    : portable C11
 # -Wall -Wextra : warnings on
@@ -34,6 +35,7 @@ echo "== compiling turbo_rt + tests with $CC =="
     -std=c11 \
     -Wall -Wextra -Werror \
     -Wno-unused-function -Wno-unused-parameter \
+    "${SANITIZE_FLAGS[@]}" \
     -DRT_TEST_BUILD \
     -o "$OUT" \
     tests/test_rt.c \
@@ -41,5 +43,5 @@ echo "== compiling turbo_rt + tests with $CC =="
     -lpthread -lm
 
 echo "== running $OUT =="
-"$OUT"
+ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0:halt_on_error=1}" "$OUT"
 echo "== c-runtime-tests OK =="

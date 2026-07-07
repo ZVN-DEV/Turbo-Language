@@ -5,19 +5,52 @@ use cranelift_module::Module;
 use turbo_ast::*;
 
 use crate::turbo_types::{CodegenError, MaybeTyped, TurboTy};
-use crate::{compile_expr, Ctx};
+use crate::{
+    compile_expr, expr_produces_owned_rc_temp, release_expr_temp_if_needed, release_if_needed,
+    retain_if_needed, Ctx,
+};
+
+enum StringCleanup<'a> {
+    None,
+    Owned,
+    ExprTemp(&'a Spanned<Expr>),
+}
+
+fn release_string_cleanup<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    value: Value,
+    cleanup: StringCleanup<'_>,
+) {
+    match cleanup {
+        StringCleanup::None => {}
+        StringCleanup::Owned => release_if_needed(cx, value, &TurboTy::Str),
+        StringCleanup::ExprTemp(expr) => {
+            release_expr_temp_if_needed(cx, value, &TurboTy::Str, expr)
+        }
+    }
+}
+
+fn release_rendered_str_if_fresh<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    value: Value,
+    source_tty: &TurboTy,
+) {
+    if !matches!(source_tty, TurboTy::Str) {
+        release_if_needed(cx, value, &TurboTy::Str);
+    }
+}
 
 /// split(s, sep) -> [str] — calls rt_str_split, returns Array(Str)
 pub(crate) fn compile_stdlib_split<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_split: `&args[0]` produced no value during code generation"
             .to_string(),
     })?;
-    let (sep_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+    let (sep_val, sep_tty) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_split: `&args[1]` produced no value during code generation"
             .to_string(),
@@ -26,6 +59,8 @@ pub(crate) fn compile_stdlib_split<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, sep_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
+    release_expr_temp_if_needed(cx, sep_val, &sep_tty, &args[1]);
     Ok(Some((result, TurboTy::Array(Box::new(TurboTy::Str)))))
 }
 
@@ -35,7 +70,7 @@ pub(crate) fn compile_stdlib_str1<M: Module>(
     args: &[Spanned<Expr>],
     rt_name: &str,
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_str1: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -44,6 +79,7 @@ pub(crate) fn compile_stdlib_str1<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -53,12 +89,12 @@ pub(crate) fn compile_stdlib_str_bool2<M: Module>(
     args: &[Spanned<Expr>],
     rt_name: &str,
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_str_bool2: `&args[0]` produced no value during code generation"
             .to_string(),
     })?;
-    let (other_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+    let (other_val, other_tty) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_str_bool2: `&args[1]` produced no value during code generation"
             .to_string(),
@@ -67,6 +103,8 @@ pub(crate) fn compile_stdlib_str_bool2<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, other_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
+    release_expr_temp_if_needed(cx, other_val, &other_tty, &args[1]);
     Ok(Some((result, TurboTy::Bool)))
 }
 
@@ -75,17 +113,17 @@ pub(crate) fn compile_stdlib_replace<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_replace: `&args[0]` produced no value during code generation"
             .to_string(),
     })?;
-    let (from_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+    let (from_val, from_tty) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_replace: `&args[1]` produced no value during code generation"
             .to_string(),
     })?;
-    let (to_val, _) = compile_expr(cx, &args[2])?.ok_or_else(|| CodegenError {
+    let (to_val, to_tty) = compile_expr(cx, &args[2])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_replace: `&args[2]` produced no value during code generation"
             .to_string(),
@@ -94,6 +132,9 @@ pub(crate) fn compile_stdlib_replace<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, from_val, to_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
+    release_expr_temp_if_needed(cx, from_val, &from_tty, &args[1]);
+    release_expr_temp_if_needed(cx, to_val, &to_tty, &args[2]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -102,7 +143,7 @@ pub(crate) fn compile_stdlib_char_at<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_char_at: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -123,6 +164,7 @@ pub(crate) fn compile_stdlib_char_at<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, idx_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -131,12 +173,12 @@ pub(crate) fn compile_stdlib_index_of<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_index_of: `&args[0]` produced no value during code generation"
             .to_string(),
     })?;
-    let (sub_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+    let (sub_val, sub_tty) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_index_of: `&args[1]` produced no value during code generation"
             .to_string(),
@@ -145,6 +187,8 @@ pub(crate) fn compile_stdlib_index_of<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, sub_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
+    release_expr_temp_if_needed(cx, sub_val, &sub_tty, &args[1]);
     Ok(Some((result, TurboTy::Int)))
 }
 
@@ -153,12 +197,12 @@ pub(crate) fn compile_stdlib_join<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (arr_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (arr_val, arr_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_join: `&args[0]` produced no value during code generation"
             .to_string(),
     })?;
-    let (sep_val, _) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
+    let (sep_val, sep_tty) = compile_expr(cx, &args[1])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_join: `&args[1]` produced no value during code generation"
             .to_string(),
@@ -167,6 +211,8 @@ pub(crate) fn compile_stdlib_join<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[arr_val, sep_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, arr_val, &arr_tty, &args[0]);
+    release_expr_temp_if_needed(cx, sep_val, &sep_tty, &args[1]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -175,7 +221,7 @@ pub(crate) fn compile_stdlib_repeat<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_stdlib_repeat: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -196,6 +242,7 @@ pub(crate) fn compile_stdlib_repeat<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, n_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -204,7 +251,7 @@ pub(crate) fn compile_substring<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_substring: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -223,6 +270,7 @@ pub(crate) fn compile_substring<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, start_val, end_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -231,7 +279,7 @@ pub(crate) fn compile_pad_left<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_pad_left: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -241,7 +289,7 @@ pub(crate) fn compile_pad_left<M: Module>(
         message: "compile_pad_left: `&args[1]` produced no value during code generation"
             .to_string(),
     })?;
-    let (char_val, _) = compile_expr(cx, &args[2])?.ok_or_else(|| CodegenError {
+    let (char_val, char_tty) = compile_expr(cx, &args[2])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_pad_left: `&args[2]` produced no value during code generation"
             .to_string(),
@@ -250,6 +298,8 @@ pub(crate) fn compile_pad_left<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, width_val, char_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
+    release_expr_temp_if_needed(cx, char_val, &char_tty, &args[2]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -258,7 +308,7 @@ pub(crate) fn compile_pad_right<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_pad_right: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -268,7 +318,7 @@ pub(crate) fn compile_pad_right<M: Module>(
         message: "compile_pad_right: `&args[1]` produced no value during code generation"
             .to_string(),
     })?;
-    let (char_val, _) = compile_expr(cx, &args[2])?.ok_or_else(|| CodegenError {
+    let (char_val, char_tty) = compile_expr(cx, &args[2])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_pad_right: `&args[2]` produced no value during code generation"
             .to_string(),
@@ -277,6 +327,8 @@ pub(crate) fn compile_pad_right<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val, width_val, char_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
+    release_expr_temp_if_needed(cx, char_val, &char_tty, &args[2]);
     Ok(Some((result, TurboTy::Str)))
 }
 
@@ -285,7 +337,7 @@ pub(crate) fn compile_str_to_int<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_str_to_int: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -294,6 +346,7 @@ pub(crate) fn compile_str_to_int<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
     Ok(Some((
         result,
         TurboTy::Result(Box::new(TurboTy::Int), Box::new(TurboTy::Str)),
@@ -305,7 +358,7 @@ pub(crate) fn compile_str_to_float<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
 ) -> Result<MaybeTyped, CodegenError> {
-    let (s_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+    let (s_val, s_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
         code: ErrorCode::E0400,
         message: "compile_str_to_float: `&args[0]` produced no value during code generation"
             .to_string(),
@@ -314,6 +367,7 @@ pub(crate) fn compile_str_to_float<M: Module>(
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
     let call = cx.builder.ins().call(fref, &[s_val]);
     let result = cx.builder.inst_results(call)[0];
+    release_expr_temp_if_needed(cx, s_val, &s_tty, &args[0]);
     Ok(Some((
         result,
         TurboTy::Result(Box::new(TurboTy::Float), Box::new(TurboTy::Str)),
@@ -514,34 +568,49 @@ pub(crate) fn compile_interpolation<M: Module>(
     cx: &mut Ctx<'_, M>,
     parts: &[turbo_ast::InterpolPart],
 ) -> Result<MaybeTyped, CodegenError> {
-    let mut result: Option<Value> = None;
+    let mut result: Option<(Value, StringCleanup<'_>)> = None;
 
     for part in parts {
-        let part_str = match part {
-            turbo_ast::InterpolPart::Lit(s) => cx.create_string(s)?,
+        let (part_str, part_cleanup) = match part {
+            turbo_ast::InterpolPart::Lit(s) => (cx.create_string(s)?, StringCleanup::None),
             turbo_ast::InterpolPart::Expr(expr) => {
                 let (val, tty) = compile_expr(cx, expr)?.ok_or_else(|| CodegenError {
                     code: ErrorCode::E0400,
                     message: "cannot interpolate a unit value: expression produces no value"
                         .to_string(),
                 })?;
-                convert_to_str(cx, val, &tty)?
+                let rendered = convert_to_str(cx, val, &tty)?;
+                if matches!(tty, TurboTy::Str) {
+                    (rendered, StringCleanup::ExprTemp(expr))
+                } else {
+                    release_expr_temp_if_needed(cx, val, &tty, expr);
+                    (rendered, StringCleanup::Owned)
+                }
             }
         };
 
         result = Some(match result {
-            None => part_str,
-            Some(acc) => {
+            None => (part_str, part_cleanup),
+            Some((acc, acc_cleanup)) => {
                 let fid = cx.rt_fns["rt_str_concat"];
                 let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
                 let call = cx.builder.ins().call(fref, &[acc, part_str]);
-                cx.builder.inst_results(call)[0]
+                let next = cx.builder.inst_results(call)[0];
+                release_string_cleanup(cx, acc, acc_cleanup);
+                release_string_cleanup(cx, part_str, part_cleanup);
+                (next, StringCleanup::Owned)
             }
         });
     }
 
     match result {
-        Some(val) => Ok(Some((val, TurboTy::Str))),
+        Some((val, StringCleanup::ExprTemp(expr))) => {
+            if !expr_produces_owned_rc_temp(expr) {
+                retain_if_needed(cx, val, &TurboTy::Str);
+            }
+            Ok(Some((val, TurboTy::Str)))
+        }
+        Some((val, _cleanup)) => Ok(Some((val, TurboTy::Str))),
         None => {
             let ptr = cx.create_string("")?;
             Ok(Some((ptr, TurboTy::Str)))
@@ -651,8 +720,10 @@ pub(crate) fn convert_to_str<M: Module>(
             let concat_fref = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
             let call1 = cx.builder.ins().call(concat_fref, &[prefix, inner_str]);
             let partial = cx.builder.inst_results(call1)[0];
+            release_rendered_str_if_fresh(cx, inner_str, inner);
             let call2 = cx.builder.ins().call(concat_fref, &[partial, suffix]);
             let some_str = cx.builder.inst_results(call2)[0];
+            release_if_needed(cx, partial, &TurboTy::Str);
             cx.builder.ins().jump(merge_block, &[some_str]);
 
             // None path
@@ -768,8 +839,9 @@ fn render_array<M: Module>(
     cx.builder.seal_block(sep_block);
     let acc = cx.builder.use_var(acc_var);
     let sep = cx.create_string(", ")?;
-    let acc = str_concat(cx, acc, sep);
-    cx.builder.def_var(acc_var, acc);
+    let next_acc = str_concat(cx, acc, sep);
+    release_if_needed(cx, acc, &TurboTy::Str);
+    cx.builder.def_var(acc_var, next_acc);
     cx.builder.ins().jump(elem_block, &[]);
 
     // Element path: load slot, render, append.
@@ -787,8 +859,10 @@ fn render_array<M: Module>(
     // `render_slot` may have created and switched blocks (nested compounds);
     // re-read the accumulator through its variable and continue here.
     let acc = cx.builder.use_var(acc_var);
-    let acc = str_concat(cx, acc, elem_str);
-    cx.builder.def_var(acc_var, acc);
+    let next_acc = str_concat(cx, acc, elem_str);
+    release_if_needed(cx, acc, &TurboTy::Str);
+    release_rendered_str_if_fresh(cx, elem_str, elem_tty);
+    cx.builder.def_var(acc_var, next_acc);
     cx.builder.ins().jump(cont, &[]);
 
     // Continue: idx += 1, back to header.
@@ -808,7 +882,9 @@ fn render_array<M: Module>(
     cx.builder.seal_block(exit);
     let acc = cx.builder.use_var(acc_var);
     let close = cx.create_string("]")?;
-    Ok(str_concat(cx, acc, close))
+    let final_str = str_concat(cx, acc, close);
+    release_if_needed(cx, acc, &TurboTy::Str);
+    Ok(final_str)
 }
 
 /// Render a struct value as `Name { field0: v0, field1: v1 }`
@@ -853,20 +929,29 @@ fn render_struct<M: Module>(
     for (i, (field_name, field_tty)) in fields.iter().enumerate() {
         if i > 0 {
             let sep = cx.create_string(", ")?;
-            acc = str_concat(cx, acc, sep);
+            let next = str_concat(cx, acc, sep);
+            release_if_needed(cx, acc, &TurboTy::Str);
+            acc = next;
         }
         let label = cx.create_string(&format!("{field_name}: "))?;
-        acc = str_concat(cx, acc, label);
+        let next = str_concat(cx, acc, label);
+        release_if_needed(cx, acc, &TurboTy::Str);
+        acc = next;
         let offset = (i * 8) as i32;
         let raw = cx
             .builder
             .ins()
             .load(types::I64, MemFlags::new(), ptr, offset);
         let field_str = render_slot(cx, raw, field_tty)?;
-        acc = str_concat(cx, acc, field_str);
+        let next = str_concat(cx, acc, field_str);
+        release_if_needed(cx, acc, &TurboTy::Str);
+        release_rendered_str_if_fresh(cx, field_str, field_tty);
+        acc = next;
     }
     let close = cx.create_string(" }")?;
-    Ok(str_concat(cx, acc, close))
+    let final_str = str_concat(cx, acc, close);
+    release_if_needed(cx, acc, &TurboTy::Str);
+    Ok(final_str)
 }
 
 /// Render a result value as `ok(<value>)` or `err(<value>)`, mirroring the
@@ -903,8 +988,10 @@ fn render_result<M: Module>(
     let prefix = cx.create_string("ok(")?;
     let suffix = cx.create_string(")")?;
     let ok_str = str_concat(cx, prefix, ok_inner);
-    let ok_str = str_concat(cx, ok_str, suffix);
-    cx.builder.ins().jump(merge_block, &[ok_str]);
+    release_rendered_str_if_fresh(cx, ok_inner, ok_ty);
+    let ok_final = str_concat(cx, ok_str, suffix);
+    release_if_needed(cx, ok_str, &TurboTy::Str);
+    cx.builder.ins().jump(merge_block, &[ok_final]);
 
     // err path: err(<payload>)
     cx.builder.switch_to_block(err_block);
@@ -916,8 +1003,10 @@ fn render_result<M: Module>(
     let prefix = cx.create_string("err(")?;
     let suffix = cx.create_string(")")?;
     let err_str = str_concat(cx, prefix, err_inner);
-    let err_str = str_concat(cx, err_str, suffix);
-    cx.builder.ins().jump(merge_block, &[err_str]);
+    release_rendered_str_if_fresh(cx, err_inner, err_ty);
+    let err_final = str_concat(cx, err_str, suffix);
+    release_if_needed(cx, err_str, &TurboTy::Str);
+    cx.builder.ins().jump(merge_block, &[err_final]);
 
     // merge
     cx.builder.append_block_param(merge_block, cx.ptr_type);

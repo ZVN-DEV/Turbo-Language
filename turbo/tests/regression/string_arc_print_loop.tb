@@ -1,0 +1,7 @@
+fn main() {
+    let mut i = 0
+    while i < 16 {
+        print("v {i}")
+        i = i + 1
+    }
+}

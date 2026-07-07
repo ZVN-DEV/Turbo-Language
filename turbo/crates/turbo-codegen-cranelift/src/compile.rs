@@ -81,6 +81,13 @@ pub(crate) fn compile_module<M: Module>(
     declare_rt_fn(
         module,
         &mut rt_fns,
+        "rt_str_copy",
+        &[ptr_type],
+        Some(ptr_type),
+    )?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
         "rt_str_concat_inplace",
         &[ptr_type, ptr_type],
         Some(ptr_type),

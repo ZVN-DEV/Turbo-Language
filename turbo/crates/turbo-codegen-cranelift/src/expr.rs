@@ -88,10 +88,16 @@ fn compile_expr_inner<M: Module>(
             if lhs_tty == TurboTy::Str && rhs_tty == TurboTy::Str {
                 match op {
                     BinOp::Add => {
-                        return compile_str_concat(cx, lhs, rhs);
+                        let result = compile_str_concat(cx, lhs, rhs)?;
+                        release_expr_temp_if_needed(cx, lhs, &lhs_tty, left);
+                        release_expr_temp_if_needed(cx, rhs, &rhs_tty, right);
+                        return Ok(result);
                     }
                     BinOp::Eq | BinOp::NotEq => {
-                        return compile_str_compare(cx, lhs, rhs, *op);
+                        let result = compile_str_compare(cx, lhs, rhs, *op)?;
+                        release_expr_temp_if_needed(cx, lhs, &lhs_tty, left);
+                        release_expr_temp_if_needed(cx, rhs, &rhs_tty, right);
+                        return Ok(result);
                     }
                     _ => {}
                 }
@@ -228,7 +234,9 @@ fn compile_expr_inner<M: Module>(
             } else if let Some(tail) = tail_expr {
                 let result = compile_expr(cx, tail)?;
                 if let Some((value, tty)) = result.as_ref() {
-                    retain_if_needed(cx, *value, tty);
+                    if !expr_produces_owned_rc_temp(tail) {
+                        retain_if_needed(cx, *value, tty);
+                    }
                 }
                 Ok(result)
             } else {
@@ -248,7 +256,7 @@ fn compile_expr_inner<M: Module>(
                     .iter()
                     .filter_map(|(name, (var, _, tty))| match saved_vars.get(name) {
                         Some((saved_var, _, _)) if saved_var == var => None,
-                        _ if is_rc_heap_type(tty) => Some((*var, tty.clone())),
+                        _ if is_rc_managed_type(cx, tty) => Some((*var, tty.clone())),
                         _ => None,
                     })
                     .collect();
@@ -280,7 +288,7 @@ fn compile_expr_inner<M: Module>(
                         if let Some((var, _, TurboTy::Str)) = cx.vars.get(target) {
                             let var = *var;
                             let current = cx.builder.use_var(var);
-                            let (rhs, _) =
+                            let (rhs, rhs_tty) =
                                 compile_expr(cx, right)?.ok_or_else(|| CodegenError {
                                     code: ErrorCode::E0400,
                                     message: "expected a value, but sub-expression has unit type"
@@ -290,6 +298,21 @@ fn compile_expr_inner<M: Module>(
                             let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
                             let call = cx.builder.ins().call(fref, &[current, rhs]);
                             let result = cx.builder.inst_results(call)[0];
+                            release_expr_temp_if_needed(cx, rhs, &rhs_tty, right);
+                            let same_ptr = cx.builder.ins().icmp(IntCC::Equal, current, result);
+                            let release_block = cx.builder.create_block();
+                            let done_block = cx.builder.create_block();
+                            cx.builder
+                                .ins()
+                                .brif(same_ptr, done_block, &[], release_block, &[]);
+
+                            cx.builder.switch_to_block(release_block);
+                            cx.builder.seal_block(release_block);
+                            release_if_needed(cx, current, &TurboTy::Str);
+                            cx.builder.ins().jump(done_block, &[]);
+
+                            cx.builder.switch_to_block(done_block);
+                            cx.builder.seal_block(done_block);
                             cx.builder.def_var(var, result);
                             return Ok(None);
                         }
@@ -311,7 +334,7 @@ fn compile_expr_inner<M: Module>(
             let var = *var;
             let prev_tty = prev_tty.clone();
 
-            if is_rc_heap_type(&prev_tty) && is_rc_heap_type(&tty) {
+            if is_rc_managed_type(cx, &prev_tty) && is_rc_managed_type(cx, &tty) {
                 // Assignment to refcounted values must handle aliasing as:
                 //
                 //   if old != new {
@@ -345,7 +368,7 @@ fn compile_expr_inner<M: Module>(
                 if rhs_ident.is_some() {
                     retain_if_needed(cx, val, &tty);
                 }
-                if is_rc_heap_type(&prev_tty) {
+                if is_rc_managed_type(cx, &prev_tty) {
                     let prev_val = cx.builder.use_var(var);
                     release_if_needed(cx, prev_val, &prev_tty);
                 }
@@ -433,6 +456,30 @@ fn compile_expr_inner<M: Module>(
             let cow_ref = cx.module.declare_func_in_func(cow_fid, cx.builder.func);
             let cow_call = cx.builder.ins().call(cow_ref, &[obj_ptr, num_fields]);
             let target = cx.builder.inst_results(cow_call)[0];
+            let same_struct = cx.builder.ins().icmp(IntCC::Equal, obj_ptr, target);
+            let copied_block = cx.builder.create_block();
+            let cow_done_block = cx.builder.create_block();
+            cx.builder
+                .ins()
+                .brif(same_struct, cow_done_block, &[], copied_block, &[]);
+
+            cx.builder.switch_to_block(copied_block);
+            cx.builder.seal_block(copied_block);
+            for (index, (_name, copied_field_ty)) in struct_layout.iter().enumerate() {
+                if is_rc_managed_type(cx, copied_field_ty) {
+                    let copied_field = cx.builder.ins().load(
+                        cx.ptr_type,
+                        MemFlags::new(),
+                        target,
+                        (index * 8) as i32,
+                    );
+                    retain_if_needed(cx, copied_field, copied_field_ty);
+                }
+            }
+            cx.builder.ins().jump(cow_done_block, &[]);
+
+            cx.builder.switch_to_block(cow_done_block);
+            cx.builder.seal_block(cow_done_block);
 
             // If we mutated through a named binding, repoint it at the (possibly
             // new) copy so subsequent reads see the mutation. Mirrors the
@@ -459,8 +506,13 @@ fn compile_expr_inner<M: Module>(
                 val
             };
 
-            if is_rc_heap_type(&field_tty) {
-                retain_if_needed(cx, val, &field_tty);
+            if is_rc_managed_type(cx, &field_tty) {
+                if matches!(
+                    &value.node,
+                    Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
+                ) {
+                    retain_if_needed(cx, val, &field_tty);
+                }
                 let old_val = cx
                     .builder
                     .ins()
@@ -805,6 +857,14 @@ fn compile_expr_inner<M: Module>(
                 if i == 0 {
                     elem_tty = tty;
                 }
+                if is_rc_managed_type(cx, &elem_tty)
+                    && matches!(
+                        &elem.node,
+                        Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
+                    )
+                {
+                    retain_if_needed(cx, val, &elem_tty);
+                }
                 let offset = cx.builder.ins().iconst(cx.ptr_type, (8 + i * 8) as i64);
                 let elem_ptr = cx.builder.ins().iadd(arr_ptr, offset);
                 cx.builder.ins().store(MemFlags::new(), val, elem_ptr, 0);
@@ -931,7 +991,12 @@ fn compile_expr_inner<M: Module>(
                     code: ErrorCode::E0400,
                     message: "expected a value, but sub-expression has unit type".to_string(),
                 })?;
-                retain_if_needed(cx, val, &tty);
+                if matches!(
+                    &field_value.node,
+                    Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
+                ) {
+                    retain_if_needed(cx, val, &tty);
+                }
                 concrete_fields.push((field_name.clone(), tty));
                 let offset = (field_index * 8) as i32;
 
@@ -1221,7 +1286,12 @@ fn compile_expr_inner<M: Module>(
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
-            retain_if_needed(cx, val, &tty);
+            if matches!(
+                &value.node,
+                Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
+            ) {
+                retain_if_needed(cx, val, &tty);
+            }
             // Widen to i64 if needed (bools, etc.)
             let val_ty = cx.builder.func.dfg.value_type(val);
             let val = if val_ty.is_int() && val_ty.bits() < 64 {
@@ -1246,7 +1316,12 @@ fn compile_expr_inner<M: Module>(
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
-            retain_if_needed(cx, val, &tty);
+            if matches!(
+                &value.node,
+                Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
+            ) {
+                retain_if_needed(cx, val, &tty);
+            }
             // Widen to i64 if needed
             let val_ty = cx.builder.func.dfg.value_type(val);
             let val = if val_ty.is_int() && val_ty.bits() < 64 {
@@ -1271,7 +1346,12 @@ fn compile_expr_inner<M: Module>(
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
-            retain_if_needed(cx, val, &tty);
+            if matches!(
+                &value.node,
+                Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
+            ) {
+                retain_if_needed(cx, val, &tty);
+            }
             // Widen to i64 if needed (bools, etc.)
             let val_ty = cx.builder.func.dfg.value_type(val);
             let val = if val_ty.is_int() && val_ty.bits() < 64 {
@@ -1382,12 +1462,21 @@ fn compile_expr_inner<M: Module>(
 pub(crate) fn is_rc_heap_type(ty: &TurboTy) -> bool {
     matches!(
         ty,
-        TurboTy::Array(_) | TurboTy::Struct(_) | TurboTy::Result(_, _) | TurboTy::Optional(_)
+        TurboTy::Str
+            | TurboTy::Array(_)
+            | TurboTy::Struct(_)
+            | TurboTy::Result(_, _)
+            | TurboTy::Optional(_)
     )
 }
 
+pub(crate) fn is_rc_managed_type<M: Module>(cx: &Ctx<'_, M>, ty: &TurboTy) -> bool {
+    is_rc_heap_type(ty)
+        || matches!(ty, TurboTy::Enum(name) if cx.enum_max_slots.contains_key(name.as_str()))
+}
+
 pub(crate) fn retain_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty: &TurboTy) {
-    if !is_rc_heap_type(ty) {
+    if !is_rc_managed_type(cx, ty) {
         return;
     }
     let retain_fid = cx.rt_fns["rt_retain"];
@@ -1395,15 +1484,207 @@ pub(crate) fn retain_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty:
     cx.builder.ins().call(retain_ref, &[value]);
 }
 
-pub(crate) fn release_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty: &TurboTy) {
-    if !is_rc_heap_type(ty) {
+pub(crate) fn retain_array_prefix_if_needed<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    array: Value,
+    elem_ty: &TurboTy,
+    len: Value,
+) {
+    if !is_rc_managed_type(cx, elem_ty) {
         return;
     }
+    let idx_var = cx.fresh_var(types::I64, TurboTy::Int);
+    let zero = cx.builder.ins().iconst(types::I64, 0);
+    cx.builder.def_var(idx_var, zero);
+
+    let header_block = cx.builder.create_block();
+    let body_block = cx.builder.create_block();
+    let done_block = cx.builder.create_block();
+
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.switch_to_block(header_block);
+    let idx = cx.builder.use_var(idx_var);
+    let keep_going = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, len);
+    cx.builder
+        .ins()
+        .brif(keep_going, body_block, &[], done_block, &[]);
+
+    cx.builder.switch_to_block(body_block);
+    cx.builder.seal_block(body_block);
+    let idx = cx.builder.use_var(idx_var);
+    let data_base = cx.builder.ins().iadd_imm(array, 8);
+    let byte_offset = cx.builder.ins().ishl_imm(idx, 3);
+    let elem_ptr = cx.builder.ins().iadd(data_base, byte_offset);
+    let elem_val = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), elem_ptr, 0);
+    retain_if_needed(cx, elem_val, elem_ty);
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let next_idx = cx.builder.ins().iadd(idx, one);
+    cx.builder.def_var(idx_var, next_idx);
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.seal_block(header_block);
+    cx.builder.switch_to_block(done_block);
+    cx.builder.seal_block(done_block);
+}
+
+pub(crate) fn retain_array_elements_if_needed<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    array: Value,
+    elem_ty: &TurboTy,
+) {
+    if !is_rc_managed_type(cx, elem_ty) {
+        return;
+    }
+    let len = cx.builder.ins().load(types::I64, MemFlags::new(), array, 0);
+    retain_array_prefix_if_needed(cx, array, elem_ty, len);
+}
+
+pub(crate) fn expr_produces_owned_rc_temp(expr: &Spanned<Expr>) -> bool {
+    match &expr.node {
+        Expr::Call { .. }
+        | Expr::BinaryOp { .. }
+        | Expr::Interpolation(_)
+        | Expr::Block { .. }
+        | Expr::ArrayLit(_)
+        | Expr::StructLit { .. }
+        | Expr::EnumVariant { .. }
+        | Expr::OkExpr(_)
+        | Expr::ErrExpr(_)
+        | Expr::SomeExpr(_)
+        | Expr::NoneExpr
+        | Expr::OptionalChain { .. } => true,
+        Expr::If {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        } => expr_produces_owned_rc_temp(then_branch) && expr_produces_owned_rc_temp(else_branch),
+        Expr::IfLet {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        } => expr_produces_owned_rc_temp(then_branch) && expr_produces_owned_rc_temp(else_branch),
+        Expr::Match { arms, .. } => {
+            !arms.is_empty()
+                && arms
+                    .iter()
+                    .all(|arm| expr_produces_owned_rc_temp(&arm.body))
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn release_expr_temp_if_needed<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    value: Value,
+    ty: &TurboTy,
+    expr: &Spanned<Expr>,
+) {
+    if is_rc_managed_type(cx, ty) && expr_produces_owned_rc_temp(expr) {
+        release_if_needed(cx, value, ty);
+    }
+}
+
+fn has_nested_rc_children<M: Module>(cx: &Ctx<'_, M>, ty: &TurboTy) -> bool {
     match ty {
+        TurboTy::Array(inner) => is_rc_managed_type(cx, inner),
+        TurboTy::Struct(name) => cx.struct_fields.get(name).is_some_and(|layout| {
+            layout
+                .iter()
+                .any(|(_, field_ty)| is_rc_managed_type(cx, field_ty))
+        }),
+        TurboTy::Enum(name) => cx
+            .enum_variant_fields
+            .iter()
+            .filter(|((enum_name, _), _)| enum_name == name)
+            .any(|(_, field_tys)| {
+                field_tys
+                    .iter()
+                    .any(|field_ty| is_rc_managed_type(cx, field_ty))
+            }),
+        TurboTy::Optional(inner) => is_rc_managed_type(cx, inner),
+        TurboTy::Result(ok_tty, err_tty) => {
+            is_rc_managed_type(cx, ok_tty) || is_rc_managed_type(cx, err_tty)
+        }
+        _ => false,
+    }
+}
+
+fn release_nested_children_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty: &TurboTy) {
+    if !has_nested_rc_children(cx, ty) {
+        return;
+    }
+
+    let refcount_ptr = cx.builder.ins().iadd_imm(value, -8);
+    let refcount = cx
+        .builder
+        .ins()
+        .atomic_load(types::I64, MemFlags::new(), refcount_ptr);
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let is_last_ref = cx.builder.ins().icmp(IntCC::Equal, refcount, one);
+    let release_children_block = cx.builder.create_block();
+    let done_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(is_last_ref, release_children_block, &[], done_block, &[]);
+
+    cx.builder.switch_to_block(release_children_block);
+    cx.builder.seal_block(release_children_block);
+    release_nested_children(cx, value, ty);
+    cx.builder.ins().jump(done_block, &[]);
+
+    cx.builder.switch_to_block(done_block);
+    cx.builder.seal_block(done_block);
+}
+
+fn release_nested_children<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty: &TurboTy) {
+    match ty {
+        TurboTy::Array(inner) if is_rc_managed_type(cx, inner) => {
+            let len = cx.builder.ins().load(types::I64, MemFlags::new(), value, 0);
+            let idx_var = cx.fresh_var(types::I64, TurboTy::Int);
+            let zero = cx.builder.ins().iconst(types::I64, 0);
+            cx.builder.def_var(idx_var, zero);
+
+            let header_block = cx.builder.create_block();
+            let body_block = cx.builder.create_block();
+            let done_block = cx.builder.create_block();
+
+            cx.builder.ins().jump(header_block, &[]);
+
+            cx.builder.switch_to_block(header_block);
+            let idx = cx.builder.use_var(idx_var);
+            let keep_going = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, len);
+            cx.builder
+                .ins()
+                .brif(keep_going, body_block, &[], done_block, &[]);
+
+            cx.builder.switch_to_block(body_block);
+            cx.builder.seal_block(body_block);
+            let idx = cx.builder.use_var(idx_var);
+            let data_base = cx.builder.ins().iadd_imm(value, 8);
+            let byte_offset = cx.builder.ins().ishl_imm(idx, 3);
+            let elem_ptr = cx.builder.ins().iadd(data_base, byte_offset);
+            let elem_val = cx
+                .builder
+                .ins()
+                .load(cx.ptr_type, MemFlags::new(), elem_ptr, 0);
+            release_if_needed(cx, elem_val, inner);
+            let one = cx.builder.ins().iconst(types::I64, 1);
+            let next_idx = cx.builder.ins().iadd(idx, one);
+            cx.builder.def_var(idx_var, next_idx);
+            cx.builder.ins().jump(header_block, &[]);
+
+            cx.builder.seal_block(header_block);
+            cx.builder.switch_to_block(done_block);
+            cx.builder.seal_block(done_block);
+        }
         TurboTy::Struct(name) => {
             if let Some(layout) = cx.struct_fields.get(name).cloned() {
                 for (index, (_field_name, field_ty)) in layout.iter().enumerate() {
-                    if is_rc_heap_type(field_ty) {
+                    if is_rc_managed_type(cx, field_ty) {
                         let field_val = cx.builder.ins().load(
                             cx.ptr_type,
                             MemFlags::new(),
@@ -1415,7 +1696,57 @@ pub(crate) fn release_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty
                 }
             }
         }
-        TurboTy::Optional(inner) if is_rc_heap_type(inner) => {
+        TurboTy::Enum(name) if cx.enum_max_slots.contains_key(name.as_str()) => {
+            let variants = cx.enum_variants.get(name).cloned().unwrap_or_default();
+            if variants.is_empty() {
+                return;
+            }
+
+            let tag = cx.builder.ins().load(types::I64, MemFlags::new(), value, 0);
+            let done_block = cx.builder.create_block();
+
+            for (variant_index, variant) in variants.iter().enumerate() {
+                let release_variant_block = cx.builder.create_block();
+                let next_variant_block = cx.builder.create_block();
+                let expected_tag = cx.builder.ins().iconst(types::I64, variant_index as i64);
+                let is_variant = cx.builder.ins().icmp(IntCC::Equal, tag, expected_tag);
+                cx.builder.ins().brif(
+                    is_variant,
+                    release_variant_block,
+                    &[],
+                    next_variant_block,
+                    &[],
+                );
+
+                cx.builder.switch_to_block(release_variant_block);
+                cx.builder.seal_block(release_variant_block);
+                let field_tys = cx
+                    .enum_variant_fields
+                    .get(&(name.clone(), variant.clone()))
+                    .cloned()
+                    .unwrap_or_default();
+                for (field_index, field_ty) in field_tys.iter().enumerate() {
+                    if is_rc_managed_type(cx, field_ty) {
+                        let field_val = cx.builder.ins().load(
+                            cx.ptr_type,
+                            MemFlags::new(),
+                            value,
+                            ((field_index + 1) * 8) as i32,
+                        );
+                        release_if_needed(cx, field_val, field_ty);
+                    }
+                }
+                cx.builder.ins().jump(done_block, &[]);
+
+                cx.builder.switch_to_block(next_variant_block);
+                cx.builder.seal_block(next_variant_block);
+            }
+
+            cx.builder.ins().jump(done_block, &[]);
+            cx.builder.switch_to_block(done_block);
+            cx.builder.seal_block(done_block);
+        }
+        TurboTy::Optional(inner) if is_rc_managed_type(cx, inner) => {
             let tag_fid = cx.rt_fns["rt_option_tag"];
             let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
             let tag_call = cx.builder.ins().call(tag_fref, &[value]);
@@ -1438,7 +1769,9 @@ pub(crate) fn release_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty
             cx.builder.switch_to_block(done_block);
             cx.builder.seal_block(done_block);
         }
-        TurboTy::Result(ok_tty, err_tty) if is_rc_heap_type(ok_tty) || is_rc_heap_type(err_tty) => {
+        TurboTy::Result(ok_tty, err_tty)
+            if is_rc_managed_type(cx, ok_tty) || is_rc_managed_type(cx, err_tty) =>
+        {
             let tag_fid = cx.rt_fns["rt_result_tag"];
             let tag_fref = cx.module.declare_func_in_func(tag_fid, cx.builder.func);
             let tag_call = cx.builder.ins().call(tag_fref, &[value]);
@@ -1452,7 +1785,7 @@ pub(crate) fn release_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty
 
             cx.builder.switch_to_block(ok_block);
             cx.builder.seal_block(ok_block);
-            if is_rc_heap_type(ok_tty) {
+            if is_rc_managed_type(cx, ok_tty) {
                 let val_fid = cx.rt_fns["rt_result_value"];
                 let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
                 let val_call = cx.builder.ins().call(val_fref, &[value]);
@@ -1463,7 +1796,7 @@ pub(crate) fn release_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty
 
             cx.builder.switch_to_block(err_block);
             cx.builder.seal_block(err_block);
-            if is_rc_heap_type(err_tty) {
+            if is_rc_managed_type(cx, err_tty) {
                 let val_fid = cx.rt_fns["rt_result_value"];
                 let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
                 let val_call = cx.builder.ins().call(val_fref, &[value]);
@@ -1477,6 +1810,13 @@ pub(crate) fn release_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty
         }
         _ => {}
     }
+}
+
+pub(crate) fn release_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty: &TurboTy) {
+    if !is_rc_managed_type(cx, ty) {
+        return;
+    }
+    release_nested_children_if_needed(cx, value, ty);
     let release_fid = cx.rt_fns["rt_release"];
     let release_ref = cx.module.declare_func_in_func(release_fid, cx.builder.func);
     cx.builder.ins().call(release_ref, &[value]);
@@ -1980,7 +2320,7 @@ fn compile_enum_variant_ctor<M: Module>(
                         cx.builder.ins().store(MemFlags::new(), tag_val, ptr, 0);
 
                         // Get the field types for this variant
-                        let _field_tys = cx
+                        let field_tys = cx
                             .enum_variant_fields
                             .get(&(enum_name.clone(), name.to_string()))
                             .cloned()
@@ -1988,8 +2328,20 @@ fn compile_enum_variant_ctor<M: Module>(
 
                         // Store each field at offset (i+1)*8
                         for (i, arg) in data_args.iter().enumerate() {
-                            let (val, _tty) = compile_expr(cx, arg)?.ok_or_else(|| CodegenError { code: ErrorCode::E0400, message: "compile_call: `arg` produced no value during code generation".to_string() })?;
+                            let (val, tty) =
+                                compile_expr(cx, arg)?.ok_or_else(|| CodegenError {
+                                    code: ErrorCode::E0400,
+                                    message: "compile_call: `arg` produced no value during code generation"
+                                        .to_string(),
+                                })?;
                             let offset = ((i + 1) * 8) as i32;
+                            let field_tty = field_tys.get(i).unwrap_or(&tty);
+                            if matches!(
+                                &arg.node,
+                                Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
+                            ) {
+                                retain_if_needed(cx, val, field_tty);
+                            }
 
                             // Widen/convert to i64 for uniform storage
                             let val_ty = cx.builder.func.dfg.value_type(val);
@@ -2200,7 +2552,7 @@ fn compile_fn_call_args<M: Module>(
             } else {
                 val
             };
-            // COW: passing a named struct or array to a function
+            // COW/ARC: passing a borrowed refcounted value to a function
             // aliases the caller's binding — the callee receives the
             // same pointer. Retain it so the shared allocation's
             // refcount reflects both references; a `mut`-param write
@@ -2210,8 +2562,10 @@ fn compile_fn_call_args<M: Module>(
             // `a[i] = ..` via rt_array_set for arrays, BL-27 Part A).
             // Fresh temporaries (non-idents) are not aliased, so they
             // are left alone to avoid needless copies.
-            if matches!(&arg.node, Expr::Ident(_))
-                && matches!(&tty, TurboTy::Struct(_) | TurboTy::Array(_))
+            if matches!(
+                &arg.node,
+                Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
+            ) && is_rc_managed_type(cx, &tty)
             {
                 retain_if_needed(cx, val, &tty);
             }
@@ -2416,6 +2770,12 @@ fn compile_plain_fn_call<M: Module>(
                     .ins()
                     .bitcast(types::F64, MemFlags::new(), result);
             }
+        }
+        if cx.extern_fns.contains(name) && matches!(actual_ret_tty, TurboTy::Str) {
+            let fid = cx.rt_fns["rt_str_copy"];
+            let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+            let call = cx.builder.ins().call(fref, &[result]);
+            result = cx.builder.inst_results(call)[0];
         }
         Ok(Some((result, actual_ret_tty)))
     }

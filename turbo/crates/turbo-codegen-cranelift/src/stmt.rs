@@ -48,11 +48,13 @@ pub(crate) fn compile_stmt<M: Module>(
             //     be counted too — otherwise a later `s.x = ..` / `row[0] = ..`
             //     sees refcount 1, mutates in place, and silently aliases the
             //     array element (structs: BL-10; nested arrays: BL-27 Part A).
-            //     Gated to struct/array element types so scalar indexing (e.g.
+            //     Strings follow the same rule now that they are ARC-managed.
+            //     Gated to refcounted element types so scalar indexing (e.g.
             //     `let x = ints[0]`) is left byte-for-byte unchanged.
             let rhs_retains = rhs_is_ident
-                || (matches!(&value.node, Expr::Index { .. })
-                    && matches!(&turbo_ty, TurboTy::Struct(_) | TurboTy::Array(_)));
+                || (matches!(&value.node, Expr::Index { .. }) && is_rc_managed_type(cx, &turbo_ty))
+                || (matches!(&value.node, Expr::FieldAccess { .. })
+                    && is_rc_managed_type(cx, &turbo_ty));
             if rhs_retains {
                 if let Some(v) = val {
                     retain_if_needed(cx, v, &turbo_ty);
@@ -70,7 +72,9 @@ pub(crate) fn compile_stmt<M: Module>(
         Stmt::Expr(e) => {
             // COW builtin auto-reassign is handled in the parser now
             // (rewrites `push(items, 4)` → `items = push(items, 4)`)
-            compile_expr(cx, e)?;
+            if let Some((value, tty)) = compile_expr(cx, e)? {
+                release_expr_temp_if_needed(cx, value, &tty, e);
+            }
             Ok(())
         }
         Stmt::Return(value) => {

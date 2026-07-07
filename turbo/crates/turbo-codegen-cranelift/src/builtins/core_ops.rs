@@ -5,7 +5,10 @@ use cranelift_module::Module;
 use turbo_ast::*;
 
 use crate::turbo_types::{CodegenError, MaybeTyped, TurboTy};
-use crate::{compile_expr, Ctx};
+use crate::{
+    compile_expr, expr_produces_owned_rc_temp, release_expr_temp_if_needed, release_if_needed,
+    retain_if_needed, Ctx,
+};
 
 use super::*;
 
@@ -22,7 +25,7 @@ pub(crate) fn compile_print<M: Module>(
     let result = compile_expr(cx, &args[0])?;
 
     if let Some((v, tty)) = result {
-        match tty {
+        match &tty {
             TurboTy::Str => cx.rt_call("rt_print_str", &[v]),
             TurboTy::Float => cx.rt_call("rt_print_f64", &[v]),
             TurboTy::Bool => {
@@ -69,7 +72,7 @@ pub(crate) fn compile_print<M: Module>(
                 let ptr = cx.create_string("()")?;
                 cx.rt_call("rt_print_str", &[ptr]);
             }
-            TurboTy::Enum(ref enum_name) => {
+            TurboTy::Enum(enum_name) => {
                 // For data enums, extract the tag from the tagged union pointer; for unit enums, use the value directly
                 let tag_val = if cx.enum_max_slots.contains_key(enum_name.as_str()) {
                     // Data enum: load tag from ptr[0]
@@ -95,6 +98,7 @@ pub(crate) fn compile_print<M: Module>(
             | TurboTy::Optional(_) => {
                 let s = convert_to_str(cx, v, &tty)?;
                 cx.rt_call("rt_print_str", &[s]);
+                release_if_needed(cx, s, &TurboTy::Str);
             }
             TurboTy::Fn(_, _) => {
                 let ptr = cx.create_string("[function]")?;
@@ -105,6 +109,7 @@ pub(crate) fn compile_print<M: Module>(
                 cx.rt_call("rt_print_str", &[ptr]);
             }
         }
+        release_expr_temp_if_needed(cx, v, &tty, &args[0]);
     } else {
         let ptr = cx.create_string("()")?;
         cx.rt_call("rt_print_str", &[ptr]);
@@ -275,6 +280,8 @@ pub(crate) fn compile_assert_eq<M: Module>(
 
     cx.builder.switch_to_block(ok_block);
     cx.builder.seal_block(ok_block);
+    release_expr_temp_if_needed(cx, left_val, &left_tty, &args[0]);
+    release_expr_temp_if_needed(cx, right_val, &right_tty, &args[1]);
 
     Ok(None)
 }
@@ -298,12 +305,14 @@ pub(crate) fn compile_len<M: Module>(
         let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
         let call = cx.builder.ins().call(len_ref, &[val]);
         let result = cx.builder.inst_results(call)[0];
+        release_expr_temp_if_needed(cx, val, &tty, &args[0]);
         Ok(Some((result, TurboTy::Int)))
     } else {
         let len_fid = cx.rt_fns["rt_array_len"];
         let len_ref = cx.module.declare_func_in_func(len_fid, cx.builder.func);
         let call = cx.builder.ins().call(len_ref, &[val]);
         let result = cx.builder.inst_results(call)[0];
+        release_expr_temp_if_needed(cx, val, &tty, &args[0]);
         Ok(Some((result, TurboTy::Int)))
     }
 }
@@ -442,6 +451,13 @@ pub(crate) fn compile_to_str_builtin<M: Module>(
             .to_string(),
     })?;
     let str_val = convert_to_str(cx, val, &tty)?;
+    if tty == TurboTy::Str {
+        if !expr_produces_owned_rc_temp(&args[0]) {
+            retain_if_needed(cx, str_val, &TurboTy::Str);
+        }
+    } else {
+        release_expr_temp_if_needed(cx, val, &tty, &args[0]);
+    }
     Ok(Some((str_val, TurboTy::Str)))
 }
 
@@ -527,8 +543,8 @@ pub(crate) fn compile_type_of<M: Module>(
 ) -> Result<MaybeTyped, CodegenError> {
     // Compile the argument to get its type, then discard the value
     let result = compile_expr(cx, &args[0])?;
-    let type_name = if let Some((_, ref tty)) = result {
-        match tty {
+    let type_name = if let Some((value, ref tty)) = result {
+        let name = match tty {
             TurboTy::I8 => "i8",
             TurboTy::I16 => "i16",
             TurboTy::Int => "i64",
@@ -545,11 +561,13 @@ pub(crate) fn compile_type_of<M: Module>(
             TurboTy::Result(_, _) => "result",
             TurboTy::Optional(_) => "optional",
             TurboTy::Future(_) => "future",
-        }
+        };
+        release_expr_temp_if_needed(cx, value, tty, &args[0]);
+        name.to_string()
     } else {
-        "unit"
+        "unit".to_string()
     };
-    let ptr = cx.create_string(type_name)?;
+    let ptr = cx.create_string(&type_name)?;
     Ok(Some((ptr, TurboTy::Str)))
 }
 
