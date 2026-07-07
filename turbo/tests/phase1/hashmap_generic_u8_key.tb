@@ -1,0 +1,10 @@
+fn main() {
+    let m: HashMap<u8, str> = hashmap()
+    let a: u8 = 255
+    let b: u8 = 200
+    hashmap_set(m, a, "max")
+    hashmap_set(m, b, "twohundred")
+    print(hashmap_get(m, a) ?? "MISS")
+    print(hashmap_get(m, b) ?? "MISS")
+    print(hashmap_len(m))
+}

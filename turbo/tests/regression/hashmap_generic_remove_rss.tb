@@ -1,0 +1,17 @@
+// remove() must release the rc-heap value it drops. Insert a fresh string then
+// remove it each iteration; the map returns to empty, staying memory-flat.
+fn churn(n: i64) -> int {
+    let m: HashMap<str, str> = hashmap()
+    let mut i = 0
+    while i < n {
+        let s = "payload-{i}"
+        hashmap_set(m, "k", s)
+        hashmap_remove(m, "k")
+        i = i + 1
+    }
+    hashmap_len(m)
+}
+
+fn main() {
+    print(churn(20000))
+}

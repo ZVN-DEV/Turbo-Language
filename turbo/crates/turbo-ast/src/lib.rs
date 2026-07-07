@@ -287,6 +287,9 @@ pub enum TypeExpr {
     Optional(Box<Spanned<TypeExpr>>),
     /// `Future<T>` — the result type of an async function / spawn
     Future(Box<Spanned<TypeExpr>>),
+    /// `HashMap<K, V>` — a typed generic hash map. `K` (the key) is restricted
+    /// by sema to `int` or `str`; `V` (the value) may be any type.
+    HashMap(Box<Spanned<TypeExpr>>, Box<Spanned<TypeExpr>>),
     /// Inferred type -- placeholder that sema resolves from calling context
     Inferred,
 }

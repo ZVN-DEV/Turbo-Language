@@ -1,0 +1,49 @@
+// JIT <-> AOT parity for generic HashMap<K,V>: int/str keys, and
+// int / float / str / array / struct / fn values.
+struct Point { x: int, y: int }
+
+fn scale(x: int) -> int { x * 10 }
+
+fn main() {
+    // int -> str, with overwrite
+    let a: HashMap<int, str> = hashmap()
+    hashmap_set(a, 1, "one")
+    hashmap_set(a, 2, "two")
+    hashmap_set(a, 1, "uno")
+    print(hashmap_len(a))
+    print(hashmap_get(a, 1) ?? "?")
+    print(hashmap_get(a, 5) ?? "?")
+    print(hashmap_keys(a))
+
+    // str -> int
+    let b: HashMap<str, int> = hashmap()
+    hashmap_set(b, "x", 7)
+    hashmap_set(b, "y", 9)
+    print(hashmap_get(b, "x") ?? -1)
+    print(hashmap_has(b, "y"))
+    hashmap_remove(b, "y")
+    print(hashmap_has(b, "y"))
+    print(hashmap_keys(b))
+
+    // int -> float
+    let c: HashMap<int, float> = hashmap()
+    hashmap_set(c, 3, 3.25)
+    print(hashmap_get(c, 3) ?? 0.0)
+
+    // str -> [int]
+    let d: HashMap<str, [int]> = hashmap()
+    hashmap_set(d, "nums", [9, 8, 7])
+    print(hashmap_get(d, "nums") ?? [0])
+
+    // str -> struct
+    let e: HashMap<str, Point> = hashmap()
+    hashmap_set(e, "p", Point { x: 2, y: 5 })
+    let p = hashmap_get(e, "p") ?? Point { x: 0, y: 0 }
+    print(p.x + p.y)
+
+    // str -> fn dispatch
+    let f: HashMap<str, fn(int) -> int> = hashmap()
+    hashmap_set(f, "scale", scale)
+    let fn0 = hashmap_get(f, "scale") ?? scale
+    print(fn0(4))
+}

@@ -1,0 +1,5 @@
+fn main() {
+    let h = hashmap()
+    let m: HashMap<int, int> = h
+    print(hashmap_len(m))
+}

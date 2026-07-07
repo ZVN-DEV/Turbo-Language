@@ -7,6 +7,16 @@ use super::*;
 
 // ── Statement compilation ───────────────────────────────────────────
 
+/// Whether `e` is a bare, zero-argument `hashmap()` call — the constructor
+/// that a `HashMap<K, V>` annotation turns into a typed map.
+fn is_bare_hashmap_call(e: &Expr) -> bool {
+    if let Expr::Call { callee, args } = e {
+        args.is_empty() && matches!(&callee.node, Expr::Ident(n) if n == "hashmap")
+    } else {
+        false
+    }
+}
+
 pub(crate) fn compile_stmt<M: Module>(
     cx: &mut Ctx<'_, M>,
     stmt: &Spanned<Stmt>,
@@ -19,7 +29,19 @@ pub(crate) fn compile_stmt<M: Module>(
             cx.last_struct_lit_concrete_fields = None;
             // Check if the RHS is a variable reference (for COW retain)
             let rhs_is_ident = matches!(&value.node, Expr::Ident(_));
-            let result = compile_expr(cx, value)?;
+            // A `hashmap()` bound to a `HashMap<K, V>` annotation constructs a
+            // typed, descriptor-carrying map instead of the legacy str→str
+            // handle, so its key hashing and rc value retain/release are set up.
+            let typed_map_ctor = ty.as_ref().and_then(|t| {
+                match turbo_ty_from_type_expr(&t.node, cx.enum_variants) {
+                    TurboTy::HashMap(k, v) if is_bare_hashmap_call(&value.node) => Some((k, v)),
+                    _ => None,
+                }
+            });
+            let result = match typed_map_ctor {
+                Some((k, v)) => crate::builtins::compile_typed_hashmap_ctor(cx, &k, &v)?,
+                None => compile_expr(cx, value)?,
+            };
             // If the value was a struct literal, capture concrete field types for generic structs
             if let Some(concrete_fields) = cx.last_struct_lit_concrete_fields.take() {
                 cx.generic_struct_field_overrides

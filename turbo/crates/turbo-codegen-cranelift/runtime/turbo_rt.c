@@ -2443,7 +2443,19 @@ typedef struct {
      * Reads (rt_hashmap_get / rt_hashmap_keys) still hand back arena-scoped
      * copies regardless, since those results are request-local. */
     char persistent;
+    /* ── Generic HashMap<K,V> descriptors (Tier 1.2) ──────────────────
+     * Legacy `hashmap()` maps leave these at their zero defaults (str keys,
+     * non-rc values) and go through the legacy str->str / str->int accessors
+     * above, which keep their per-entry `is_int` polymorphism. A typed map
+     * created via rt_hashmap_new_typed() sets a fixed key-kind and value-kind
+     * and is only ever touched by the generic rt_hashmap_g* accessors, which
+     * store the raw 8-byte value in `entry.ivalue` (is_int == 1). */
+    char key_kind;  /* HM_KEY_STR (0) or HM_KEY_INT (1) */
+    char val_is_rc; /* 1 if values are rc-heap pointers needing retain/release */
 } turbo_hashmap;
+
+#define HM_KEY_STR 0
+#define HM_KEY_INT 1
 
 /* Duplicate `s` into storage whose lifetime matches the owning map's scope
  * (see turbo_hashmap.persistent). A persistent map gets a malloc'd copy that
@@ -2531,6 +2543,10 @@ void *rt_hashmap_new(void) {
     map->entries = hashmap_alloc_entries(map, HASHMAP_INIT_CAP);
     map->capacity = HASHMAP_INIT_CAP;
     map->count = 0;
+    /* Legacy maps: str keys, non-rc (stringified) values; the legacy accessors
+     * ignore these fields but we set them so a shared read is well-defined. */
+    map->key_kind = HM_KEY_STR;
+    map->val_is_rc = 0;
     return map;
 }
 
@@ -2776,6 +2792,232 @@ long long rt_hashmap_inc(void *map_ptr, const char *key, long long delta) {
     map->entries[h].occupied = 1;
     map->count++;
     return delta;
+}
+
+/* ── Generic HashMap<K,V> core (Tier 1.2) ────────────────────────────────
+ * A typed map (rt_hashmap_new_typed) fixes a per-map key-kind and value-kind
+ * and stores each value as a raw 8-byte slot in `entry.ivalue` (is_int == 1).
+ * Keys are strdup'd strings (HM_KEY_STR) or raw integers bit-stored in the
+ * `char* key` field (HM_KEY_INT). rc-heap values are retained on insert and
+ * released on overwrite / remove, mirroring the array/string ARC discipline.
+ * The map object itself stays leak-but-safe (arena/persistent), exactly like
+ * the legacy maps — see the scope-cut note in docs/stdlib.md. */
+
+void rt_retain(void *data_ptr);
+
+static unsigned long hashmap_ghash(const turbo_hashmap *map, long long key) {
+    if (map->key_kind == HM_KEY_INT) {
+        /* splitmix64 finalizer — good dispersion for identity int keys. */
+        unsigned long long k = (unsigned long long)key;
+        k = (k ^ (k >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        k = (k ^ (k >> 27)) * 0x94d049bb133111ebULL;
+        k = k ^ (k >> 31);
+        return (unsigned long)k;
+    }
+    return hashmap_hash((const char *)(size_t)key);
+}
+
+static int hashmap_gkey_eq(const turbo_hashmap *map, long long a, long long b) {
+    if (map->key_kind == HM_KEY_INT) {
+        return a == b;
+    }
+    return strcmp((const char *)(size_t)a, (const char *)(size_t)b) == 0;
+}
+
+static int hashmap_gkey_gt(const turbo_hashmap *map, long long a, long long b) {
+    if (map->key_kind == HM_KEY_INT) {
+        return a > b;
+    }
+    return strcmp((const char *)(size_t)a, (const char *)(size_t)b) > 0;
+}
+
+/* Probe for `key`; return the entry index if present, or -1. */
+static long long hashmap_gfind(const turbo_hashmap *map, long long key) {
+    unsigned long h = hashmap_ghash(map, key) % (unsigned long)map->capacity;
+    long long checked = 0;
+    while (map->entries[h].occupied && checked < map->capacity) {
+        if (hashmap_gkey_eq(map, (long long)(size_t)map->entries[h].key, key)) {
+            return (long long)h;
+        }
+        h = (h + 1) % (unsigned long)map->capacity;
+        checked++;
+    }
+    return -1;
+}
+
+/* Generic-aware resize: rehash by the map's key-kind and copy the whole entry
+ * (raw value slot included). The legacy hashmap_resize cannot be reused for
+ * int-keyed maps because it hashes the key field as a C string. */
+static void hashmap_gresize(turbo_hashmap *map, long long new_cap) {
+    hashmap_entry *old = map->entries;
+    long long old_cap = map->capacity;
+    map->entries = hashmap_alloc_entries(map, new_cap);
+    map->capacity = new_cap;
+    map->count = 0;
+    for (long long i = 0; i < old_cap; i++) {
+        if (old[i].occupied) {
+            long long k = (long long)(size_t)old[i].key;
+            unsigned long h = hashmap_ghash(map, k) % (unsigned long)new_cap;
+            while (map->entries[h].occupied) {
+                h = (h + 1) % (unsigned long)new_cap;
+            }
+            map->entries[h] = old[i];
+            map->count++;
+        }
+    }
+    turbo_free(old);
+}
+
+/* Construct a typed map. key_kind is HM_KEY_STR/HM_KEY_INT; val_is_rc says
+ * whether values are rc-heap pointers that need retain/release. */
+void *rt_hashmap_new_typed(long long key_kind, long long val_is_rc) {
+    turbo_hashmap *map = (turbo_hashmap *)turbo_alloc(sizeof(turbo_hashmap));
+    map->persistent = (t_current_arena == NULL) ? 1 : 0;
+    map->entries = hashmap_alloc_entries(map, HASHMAP_INIT_CAP);
+    map->capacity = HASHMAP_INIT_CAP;
+    map->count = 0;
+    map->key_kind = (char)key_kind;
+    map->val_is_rc = (char)(val_is_rc ? 1 : 0);
+    return map;
+}
+
+/* Insert or overwrite. `value` is the raw 8-byte slot (int / float bits / bool
+ * / pointer). rc-heap values are retained here and released on overwrite. */
+void rt_hashmap_gset(void *map_ptr, long long key, long long value) {
+    turbo_hashmap *map = (turbo_hashmap *)map_ptr;
+    if ((double)(map->count + 1) > (double)map->capacity * HASHMAP_LOAD_FACTOR) {
+        hashmap_gresize(map, map->capacity * 2);
+    }
+    long long idx = hashmap_gfind(map, key);
+    if (idx >= 0) {
+        /* Retain the new value before releasing the old so a self-overwrite
+         * (value aliases the stored pointer) never transiently hits zero. */
+        if (map->val_is_rc) {
+            rt_retain((void *)(size_t)value);
+            rt_release((void *)(size_t)map->entries[idx].ivalue);
+        }
+        map->entries[idx].ivalue = value;
+        map->entries[idx].is_int = 1;
+        return;
+    }
+    unsigned long h = hashmap_ghash(map, key) % (unsigned long)map->capacity;
+    while (map->entries[h].occupied) {
+        h = (h + 1) % (unsigned long)map->capacity;
+    }
+    if (map->key_kind == HM_KEY_STR) {
+        map->entries[h].key = hashmap_strdup(map, (const char *)(size_t)key);
+    } else {
+        map->entries[h].key = (char *)(size_t)key;
+    }
+    if (map->val_is_rc) {
+        rt_retain((void *)(size_t)value);
+    }
+    map->entries[h].value = NULL;
+    map->entries[h].ivalue = value;
+    map->entries[h].is_int = 1;
+    map->entries[h].occupied = 1;
+    map->count++;
+}
+
+/* Look up `key`, returning an Optional: some(value) on hit (rc values are
+ * retained into the returned Optional), none on miss. */
+void *rt_hashmap_gget(void *map_ptr, long long key) {
+    turbo_hashmap *map = (turbo_hashmap *)map_ptr;
+    long long idx = hashmap_gfind(map, key);
+    if (idx < 0) {
+        return rt_option_none();
+    }
+    long long v = map->entries[idx].ivalue;
+    if (map->val_is_rc) {
+        rt_retain((void *)(size_t)v);
+    }
+    return rt_option_some(v);
+}
+
+char rt_hashmap_ghas(const void *map_ptr, long long key) {
+    const turbo_hashmap *map = (const turbo_hashmap *)map_ptr;
+    return hashmap_gfind(map, key) >= 0 ? 1 : 0;
+}
+
+long long rt_hashmap_glen(const void *map_ptr) {
+    return ((const turbo_hashmap *)map_ptr)->count;
+}
+
+void rt_hashmap_gremove(void *map_ptr, long long key) {
+    turbo_hashmap *map = (turbo_hashmap *)map_ptr;
+    long long fi = hashmap_gfind(map, key);
+    if (fi < 0) {
+        return;
+    }
+    unsigned long h = (unsigned long)fi;
+    if (map->val_is_rc) {
+        rt_release((void *)(size_t)map->entries[h].ivalue);
+    }
+    if (map->key_kind == HM_KEY_STR) {
+        turbo_free(map->entries[h].key);
+    }
+    map->entries[h].key = NULL;
+    map->entries[h].value = NULL;
+    map->entries[h].ivalue = 0;
+    map->entries[h].is_int = 0;
+    map->entries[h].occupied = 0;
+    map->count--;
+    /* Re-insert entries displaced along the probe chain. */
+    unsigned long next = (h + 1) % (unsigned long)map->capacity;
+    while (map->entries[next].occupied) {
+        hashmap_entry e = map->entries[next];
+        map->entries[next].key = NULL;
+        map->entries[next].value = NULL;
+        map->entries[next].occupied = 0;
+        map->count--;
+        long long rk = (long long)(size_t)e.key;
+        unsigned long rh = hashmap_ghash(map, rk) % (unsigned long)map->capacity;
+        while (map->entries[rh].occupied) {
+            rh = (rh + 1) % (unsigned long)map->capacity;
+        }
+        map->entries[rh] = e;
+        map->count++;
+        next = (next + 1) % (unsigned long)map->capacity;
+    }
+}
+
+/* Return all keys as an array. For str keys the elements are strdup'd string
+ * pointers ([str]); for int keys they are the raw integers ([int]). Sorted for
+ * deterministic output, matching rt_hashmap_keys. */
+void *rt_hashmap_gkeys(const void *map_ptr) {
+    const turbo_hashmap *map = (const turbo_hashmap *)map_ptr;
+    long long *tmp = (long long *)turbo_alloc((size_t)map->count * sizeof(long long));
+    long long idx = 0;
+    for (long long i = 0; i < map->capacity; i++) {
+        if (map->entries[i].occupied) {
+            tmp[idx++] = (long long)(size_t)map->entries[i].key;
+        }
+    }
+    for (long long i = 1; i < idx; i++) {
+        long long t = tmp[i];
+        long long j = i - 1;
+        while (j >= 0 && hashmap_gkey_gt(map, tmp[j], t)) {
+            tmp[j + 1] = tmp[j];
+            j--;
+        }
+        tmp[j + 1] = t;
+    }
+    if (!rt_array_len_fits(idx)) {
+        fprintf(stderr, "runtime error: array alloc size overflow (hashmap keys %lld)\n", idx);
+        exit(1);
+    }
+    size_t data_size = 8 + (size_t)idx * 8;
+    long long *arr = (long long *)rt_rc_alloc(data_size, idx);
+    arr[0] = idx;
+    for (long long i = 0; i < idx; i++) {
+        if (map->key_kind == HM_KEY_STR) {
+            arr[1 + i] = (long long)(size_t)turbo_strdup((const char *)(size_t)tmp[i]);
+        } else {
+            arr[1 + i] = tmp[i];
+        }
+    }
+    turbo_free(tmp);
+    return arr;
 }
 
 /* ── HTTP server runtime ─────────────────────────────────────────────── */

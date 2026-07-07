@@ -1704,6 +1704,14 @@ impl CEmitter {
             Stmt::Let {
                 name, value, ty, ..
             } => {
+                // The WASM backend supports only the legacy str→str map subset;
+                // a typed `HashMap<K, V>` relies on the descriptor runtime the
+                // WASM runtime doesn't provide. Fail loud rather than mislower.
+                if let Some(t) = ty {
+                    if matches!(t.node, TypeExpr::HashMap(_, _)) {
+                        self.record_unsupported("generic HashMap<K, V>", Some(&t.span));
+                    }
+                }
                 // Record the variable type for later print/interpolation dispatch
                 let type_tag = if let Some(t) = ty {
                     Self::type_expr_to_tag(&t.node)
@@ -1904,6 +1912,14 @@ impl CEmitter {
             Stmt::Let {
                 name, value, ty, ..
             } => {
+                // The WASM backend supports only the legacy str→str map subset;
+                // a typed `HashMap<K, V>` relies on the descriptor runtime the
+                // WASM runtime doesn't provide. Fail loud rather than mislower.
+                if let Some(t) = ty {
+                    if matches!(t.node, TypeExpr::HashMap(_, _)) {
+                        self.record_unsupported("generic HashMap<K, V>", Some(&t.span));
+                    }
+                }
                 // Record the variable type for later print/interpolation dispatch
                 let type_tag = if let Some(t) = ty {
                     Self::type_expr_to_tag(&t.node)

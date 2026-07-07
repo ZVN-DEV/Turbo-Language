@@ -1,0 +1,5 @@
+struct Point { x: int, y: int }
+fn main() {
+    let m: HashMap<Point, str> = hashmap()
+    print(hashmap_len(m))
+}

@@ -1,0 +1,10 @@
+fn main() {
+    let m: HashMap<str, [str]> = hashmap()
+    hashmap_set(m, "letters", ["a", "b", "c"])
+    hashmap_set(m, "nums", ["1", "2"])
+    let l = hashmap_get(m, "letters") ?? ["?"]
+    print(l)
+    print(len(l))
+    let n = hashmap_get(m, "nums") ?? ["?"]
+    print(n[0])
+}

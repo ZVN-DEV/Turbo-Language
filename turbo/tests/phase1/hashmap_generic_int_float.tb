@@ -1,0 +1,7 @@
+fn main() {
+    let m: HashMap<int, float> = hashmap()
+    hashmap_set(m, 1, 1.5)
+    hashmap_set(m, 2, 2.5)
+    print(hashmap_get(m, 1) ?? 0.0)
+    print(hashmap_get(m, 2) ?? 0.0)
+}

@@ -1,0 +1,18 @@
+// Overwriting an rc-heap (string) value under the same key must release the
+// previous value, so this bounded loop stays memory-flat. If release-on-
+// overwrite regresses, ASan / leak tooling flags it; functionally the map
+// keeps exactly one entry throughout.
+fn churn(n: i64) -> int {
+    let m: HashMap<int, str> = hashmap()
+    let mut i = 0
+    while i < n {
+        let s = "value-{i}"
+        hashmap_set(m, 0, s)
+        i = i + 1
+    }
+    hashmap_len(m)
+}
+
+fn main() {
+    print(churn(20000))
+}

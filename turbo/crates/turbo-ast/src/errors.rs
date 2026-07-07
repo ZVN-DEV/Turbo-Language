@@ -209,6 +209,8 @@ pub enum ErrorCode {
     E0515,
     /// Compiler recursion limit exceeded (parser/codegen)
     E0516,
+    /// HashMap key type must be `int` or `str`
+    E0525,
     /// Call through a value that is not a function (or arity/type mismatch
     /// when calling through a first-class function value)
     E0530,
@@ -325,6 +327,7 @@ impl ErrorCode {
             ErrorCode::E0514 => "E0514",
             ErrorCode::E0515 => "E0515",
             ErrorCode::E0516 => "E0516",
+            ErrorCode::E0525 => "E0525",
             ErrorCode::E0530 => "E0530",
             // Runtime & operational
             ErrorCode::E0601 => "E0601",
@@ -433,6 +436,7 @@ impl ErrorCode {
             ErrorCode::E0514 => "unused return value of pure function",
             ErrorCode::E0515 => "unused variable",
             ErrorCode::E0516 => "compiler recursion limit exceeded",
+            ErrorCode::E0525 => "hashmap key type must be int or str",
             ErrorCode::E0530 => "value is not callable",
             // Runtime & operational
             ErrorCode::E0601 => "division by zero",
@@ -541,6 +545,7 @@ impl ErrorCode {
             ErrorCode::E0514,
             ErrorCode::E0515,
             ErrorCode::E0516,
+            ErrorCode::E0525,
             ErrorCode::E0530,
             ErrorCode::E0601,
             ErrorCode::E0602,

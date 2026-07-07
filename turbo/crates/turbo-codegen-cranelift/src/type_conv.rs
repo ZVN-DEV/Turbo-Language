@@ -30,7 +30,8 @@ pub(crate) fn turbo_ty_to_cl_type(tty: &TurboTy, ptr_type: types::Type) -> types
         TurboTy::Enum(_) => types::I64, // both unit (tag) and data (ptr) enums fit in I64
         TurboTy::Result(_, _) => ptr_type,
         TurboTy::Optional(_) => ptr_type,
-        TurboTy::Future(_) => ptr_type, // thread handle pointer
+        TurboTy::Future(_) => ptr_type,     // thread handle pointer
+        TurboTy::HashMap(_, _) => ptr_type, // opaque map handle pointer
     }
 }
 
@@ -247,6 +248,7 @@ fn resolve_cl_type_inner(
         TypeExpr::FnType { .. } => Ok(ptr_type), // Function pointers are pointers
         TypeExpr::Result { .. } => Ok(ptr_type), // Result types are heap-allocated tagged unions
         TypeExpr::Optional(_) => Ok(ptr_type), // Optional types are heap-allocated tagged unions
+        TypeExpr::HashMap(_, _) => Ok(ptr_type), // maps are opaque handle pointers
         // Sprint 9: Future<T> compiles identically to T
         TypeExpr::Future(inner) => resolve_cl_type_inner(
             &inner.node,

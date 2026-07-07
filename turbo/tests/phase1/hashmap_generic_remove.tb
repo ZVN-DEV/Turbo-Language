@@ -1,0 +1,11 @@
+fn main() {
+    let m: HashMap<int, str> = hashmap()
+    hashmap_set(m, 1, "a")
+    hashmap_set(m, 2, "b")
+    hashmap_set(m, 3, "c")
+    hashmap_remove(m, 2)
+    print(hashmap_len(m))
+    print(hashmap_has(m, 2))
+    print(hashmap_has(m, 3))
+    print(hashmap_get(m, 3) ?? "?")
+}

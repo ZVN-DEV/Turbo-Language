@@ -46,6 +46,10 @@ pub(crate) enum TurboTy {
     Optional(Box<TurboTy>),
     /// Future type: a spawned thread handle (pointer to JoinHandle)
     Future(Box<TurboTy>),
+    /// Typed hash map `HashMap<K, V>` — an opaque runtime handle (pointer/i64)
+    /// carrying its key and value types so codegen can pick key-kind hashing
+    /// and retain/release the values.
+    HashMap(Box<TurboTy>, Box<TurboTy>),
 }
 
 pub(crate) fn turbo_ty_from_type_expr(
@@ -120,6 +124,11 @@ pub(crate) fn turbo_ty_from_type_expr_with_params(
             let inner_tty =
                 turbo_ty_from_type_expr_with_params(&inner.node, enum_variants, type_params);
             TurboTy::Future(Box::new(inner_tty))
+        }
+        TypeExpr::HashMap(k, v) => {
+            let k_tty = turbo_ty_from_type_expr_with_params(&k.node, enum_variants, type_params);
+            let v_tty = turbo_ty_from_type_expr_with_params(&v.node, enum_variants, type_params);
+            TurboTy::HashMap(Box::new(k_tty), Box::new(v_tty))
         }
         #[allow(unreachable_patterns)]
         _ => TurboTy::Int,

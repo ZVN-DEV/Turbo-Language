@@ -1,0 +1,11 @@
+struct Point { x: int, y: int }
+fn main() {
+    let m: HashMap<str, Point> = hashmap()
+    hashmap_set(m, "a", Point { x: 1, y: 2 })
+    hashmap_set(m, "b", Point { x: 3, y: 4 })
+    let p = hashmap_get(m, "a") ?? Point { x: 0, y: 0 }
+    print(p.x)
+    print(p.y)
+    let q = hashmap_get(m, "b") ?? Point { x: 0, y: 0 }
+    print(q.x + q.y)
+}

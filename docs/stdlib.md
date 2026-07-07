@@ -548,12 +548,97 @@ Returns a pseudo-random integer uniformly distributed between `min` and `max`, *
 
 ## HashMap
 
-Turbo ships two flavors of hash map: the original `str → str`
-API and a new `str → int` variant. Both share the same underlying map
-object — you pick a variant per call, not per map. A fully generic
-`HashMap<K, V>` is planned post-1.0; until then, if you need a different
-value type, stringify/parse at the boundary or wait for the generic
-version.
+Turbo has a fully generic, typed `HashMap<K, V>` (below), plus the original
+untyped `hashmap()` handle that still backs the legacy `str → str` and
+`str → int` helpers. New code should prefer the typed form.
+
+### Typed `HashMap<K, V>`
+
+Annotate a `hashmap()` binding with `HashMap<K, V>` to get a typed map:
+
+```turbo
+let scores: HashMap<str, int> = hashmap()
+hashmap_set(scores, "alice", 10)
+hashmap_set(scores, "bob", 7)
+
+print(hashmap_get(scores, "alice") ?? 0)   // 10  — get returns V?
+print(hashmap_get(scores, "carol") ?? 0)   // 0   — missing key is `none`
+print(hashmap_has(scores, "bob"))          // true
+print(hashmap_len(scores))                 // 2
+print(hashmap_keys(scores))                // ["alice", "bob"]  — [K], sorted
+hashmap_remove(scores, "bob")
+```
+
+- **Keys (`K`)** may be `int` (any integer type; hashed by identity) or `str`
+  (hashed by contents). Any other key type is a compile error
+  ([E0525](errors/E0525.md)).
+- **Values (`V`)** may be any type: `int`, `float`, `bool`, `str`, arrays,
+  structs, enums, `Result`/`Optional`, and **function values**. Reference-
+  counted values (strings, arrays, structs, …) are retained on insert and
+  released on overwrite/remove, so maps don't leak or alias their values.
+- **`hashmap_get` returns `V?`** (an optional) for a typed map — `none` on a
+  missing key. Unwrap it with `??` (default), `if let`, or `match`.
+- **`hashmap_keys` returns `[K]`** — a `[str]` for string keys, `[int]` for
+  int keys — sorted for deterministic iteration.
+
+A typed map composes with first-class functions to give a dispatch table:
+
+```turbo
+fn double(x: int) -> int { x * 2 }
+
+let ops: HashMap<str, fn(int) -> int> = hashmap()
+hashmap_set(ops, "double", double)
+hashmap_set(ops, "inc", |x: int| -> int { x + 1 })
+
+let f = hashmap_get(ops, "double") ?? double
+print(f(21))   // 42
+```
+
+**Type inference.** A typed map is created by annotating the `let` that binds
+`hashmap()` (`let m: HashMap<K, V> = hashmap()`). The annotation is required —
+Turbo does not yet infer `K`/`V` from the first insert. Function parameters and
+return types spelled `HashMap<K, V>` are typed automatically; to return a typed
+map from a function, build it in an annotated `let` and return that binding.
+
+**Key restriction (v1).** Struct/array/enum/tuple/function key types are
+rejected with [E0525](errors/E0525.md). Derive a stable `int` or `str` key from
+a compound value if you need to key by it.
+
+**Value-type checking (v1).** Keys and values are accepted against the declared
+`K`/`V` by exact type or same numeric family (so an `int` literal fits a
+`HashMap<i32, ..>` value and a float literal fits an `f32`).
+
+**Lifetime / scope cut.** As with the legacy maps, the typed map *object*
+itself is not reference-counted — it lives in the request arena (inside an HTTP
+handler) or for the process (server-scoped), and is not eagerly freed at scope
+exit. Dropping a whole map does not walk-and-free its remaining entries. This
+keeps the persistent server-config use case sound and matches the legacy maps'
+behavior; a future change may make map objects themselves rc-managed.
+
+Map **values are reference-counted one level deep.** For a flat value
+(`str`, or a scalar) this is complete: inserting retains it and
+overwriting/removing frees it, with no leak. For an **aggregate** value —
+`[str]`, a struct with rc-heap fields, a data enum, an `Optional`/`Result`
+carrying rc data — the map manages the *container* pointer but not its nested
+rc children: overwriting or removing such a value frees the container and leaks
+its inner elements/fields (a bounded leak proportional to churn of aggregate
+values, not a crash). Reading such values back is safe. If you need to store
+many short-lived aggregate values under churn, prefer flat values (e.g. store a
+joined `str` instead of a `[str]`). Full deep reference-counting of aggregate
+map values is tracked as a follow-up.
+
+**WASM.** The WASM backend supports only the legacy `str → str` map subset;
+generic `HashMap<K, V>` operations are rejected there (fail-loud), not silently
+mislowered.
+
+### Legacy untyped map
+
+The original `hashmap()` handle (no annotation) still backs the `str → str` and
+`str → int` helpers. Both share one underlying map object — you pick a variant
+per call, not per map. `hashmap_get` on the legacy handle returns a `str`
+(empty string on a miss), and the `str → int` helpers (`hashmap_set_int`,
+`hashmap_get_int`, `hashmap_inc`) are legacy-only. Prefer the typed
+`HashMap<K, V>` for new code.
 
 ### hashmap
 
