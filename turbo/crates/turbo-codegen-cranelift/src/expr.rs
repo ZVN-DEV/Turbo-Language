@@ -60,13 +60,21 @@ fn compile_expr_inner<M: Module>(
                 let const_expr = const_expr.clone();
                 return compile_expr(cx, &const_expr);
             }
-            let (var, _cl_ty, turbo_ty) = cx.vars.get(name).ok_or_else(|| CodegenError {
+            if let Some((var, _cl_ty, turbo_ty)) = cx.vars.get(name) {
+                let turbo_ty = turbo_ty.clone();
+                let val = cx.builder.use_var(*var);
+                return Ok(Some((val, turbo_ty)));
+            }
+            // A bare function name used as a value becomes a first-class
+            // function value: a `[adapter_ptr, null_env]` pair (see
+            // `compile_named_fn_value`).
+            if let Some(result) = compile_named_fn_value(cx, name)? {
+                return Ok(result);
+            }
+            Err(CodegenError {
                 code: ErrorCode::E0401,
                 message: format!("undefined variable: {name}"),
-            })?;
-            let turbo_ty = turbo_ty.clone();
-            let val = cx.builder.use_var(*var);
-            Ok(Some((val, turbo_ty)))
+            })
         }
 
         Expr::BinaryOp { left, op, right } => {
@@ -2112,6 +2120,14 @@ fn compile_call<M: Module>(
                     return Ok(Some((results[0], ret_tty)));
                 }
             }
+            // No method `field`: fall back to invoking a function value held in
+            // a struct field, e.g. `(obj.handler)(x)`. Sema guarantees the
+            // field type here is `Fn` (otherwise it reports E0530).
+            if let Some((field_ptr, TurboTy::Fn(param_tys, ret_ty))) =
+                load_struct_field(cx, obj_val, type_name, field)?
+            {
+                return compile_indirect_call_from_value(cx, field_ptr, &param_tys, &ret_ty, args);
+            }
         }
         return Err(CodegenError {
             code: ErrorCode::E0400,
@@ -2120,9 +2136,20 @@ fn compile_call<M: Module>(
     }
 
     let Expr::Ident(name) = &callee.node else {
+        // Indirect call through an arbitrary expression callee, e.g.
+        // `make_adder(3)(4)` (Call callee) or `handlers[i](x)` (Index callee).
+        // The callee must evaluate to a first-class function value. Sema has
+        // already verified the type is `Fn`; guard here defensively.
+        let (callee_val, callee_tty) = compile_expr(cx, callee)?.ok_or_else(|| CodegenError {
+            code: ErrorCode::E0530,
+            message: "callee expression produced no value".to_string(),
+        })?;
+        if let TurboTy::Fn(param_tys, ret_ty) = callee_tty {
+            return compile_indirect_call_from_value(cx, callee_val, &param_tys, &ret_ty, args);
+        }
         return Err(CodegenError {
-            code: ErrorCode::E0400,
-            message: "indirect function calls not yet supported".to_string(),
+            code: ErrorCode::E0530,
+            message: format!("cannot call a value of type `{callee_tty:?}` — it is not a function"),
         });
     };
 
@@ -2395,6 +2422,7 @@ fn compile_ufcs_method_call<M: Module>(
                 .to_string(),
         })?;
         if let TurboTy::Struct(ref type_name) = first_tty {
+            let type_name = type_name.clone();
             let mangled = format!("{}__{}", type_name, name);
             if let Some(&fid) = cx.user_fns.get(&mangled) {
                 let mut arg_vals = vec![first_val];
@@ -2417,6 +2445,22 @@ fn compile_ufcs_method_call<M: Module>(
                     return Ok(Some(Some((results[0], ret_tty))));
                 }
             }
+            // No method `name`: the receiver may hold a function value in a
+            // field named `name`, i.e. `obj.f(x)` where `f: fn(...) -> ...`.
+            // Methods take precedence (checked above); sema applies the same
+            // rule. Invoke the field value with the remaining args.
+            if let Some((field_ptr, TurboTy::Fn(param_tys, ret_ty))) =
+                load_struct_field(cx, first_val, &type_name, name)?
+            {
+                let result = compile_indirect_call_from_value(
+                    cx,
+                    field_ptr,
+                    &param_tys,
+                    &ret_ty,
+                    &args[1..],
+                )?;
+                return Ok(Some(result));
+            }
         }
     }
     Ok(None)
@@ -2435,81 +2479,175 @@ fn compile_closure_call<M: Module>(
     // Check if the callee is a variable with a function pointer type (closure)
     if let Some((var, _cl_ty, TurboTy::Fn(ref param_tys, ref ret_ty))) = cx.vars.get(name).cloned()
     {
-        // Closure is a pair struct: [fn_ptr, env_ptr]
+        let param_tys = param_tys.clone();
+        let ret_ty = *ret_ty.clone();
         let closure_ptr = cx.builder.use_var(var);
-        let fn_ptr = cx
-            .builder
-            .ins()
-            .load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
-        let env_ptr = cx
-            .builder
-            .ins()
-            .load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
-
-        // Build the Cranelift signature: env_ptr first, then user params
-        let mut sig = cx.module.make_signature();
-        sig.call_conv = CallConv::Fast;
-        sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
-        let mut param_cl_tys = Vec::with_capacity(param_tys.len());
-        for param_tty in param_tys {
-            let cl_ty = turbo_ty_to_cl_type(param_tty, cx.ptr_type);
-            sig.params.push(AbiParam::new(cl_ty));
-            param_cl_tys.push(cl_ty);
-        }
-        let ret_tty = *ret_ty.clone();
-        if ret_tty != TurboTy::Unit {
-            let cl_ret = turbo_ty_to_cl_type(&ret_tty, cx.ptr_type);
-            sig.returns.push(AbiParam::new(cl_ret));
-        }
-
-        let sig_ref = cx.builder.import_signature(sig);
-
-        let mut arg_values = vec![env_ptr]; // env_ptr is first hidden arg
-        for (i, arg) in args.iter().enumerate() {
-            if let Some((val, _)) = compile_expr(cx, arg)? {
-                // If the closure's param slot is a uniform i64 but the
-                // value is a float (inferred-param closure called with a
-                // float), move the bits through the integer register so
-                // both sides agree on the register class.
-                let val = if let Some(&expected) = param_cl_tys.get(i) {
-                    let actual = cx.builder.func.dfg.value_type(val);
-                    if actual != expected
-                        && actual.bits() == expected.bits()
-                        && (actual.is_float() && expected.is_int()
-                            || actual.is_int() && expected.is_float())
-                    {
-                        cx.builder.ins().bitcast(expected, MemFlags::new(), val)
-                    } else {
-                        val
-                    }
-                } else {
-                    val
-                };
-                arg_values.push(val);
-            }
-        }
-
-        let call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
-        let results = cx.builder.inst_results(call).to_vec();
-        if results.is_empty() {
-            return Ok(Some(None));
-        } else {
-            let mut result = results[0];
-            // If the closure's declared return is float but it came back
-            // through a uniform i64 slot, reinterpret the bits as F64.
-            if matches!(ret_tty, TurboTy::Float) {
-                let rty = cx.builder.func.dfg.value_type(result);
-                if rty.is_int() && rty.bits() == 64 {
-                    result = cx
-                        .builder
-                        .ins()
-                        .bitcast(types::F64, MemFlags::new(), result);
-                }
-            }
-            return Ok(Some(Some((result, ret_tty))));
-        }
+        let result = compile_indirect_call_from_value(cx, closure_ptr, &param_tys, &ret_ty, args)?;
+        return Ok(Some(result));
     }
     Ok(None)
+}
+
+/// Emit an indirect call through a first-class function value. Every function
+/// value — a closure or a named function used as a value — is a heap pair
+/// `[fn_ptr, env_ptr]` whose `fn_ptr` targets an env-first `CallConv::Fast`
+/// entry (closures compile that way directly; named functions are wrapped in an
+/// env-first adapter). This loads the pair, builds the env-first signature,
+/// reconciles float/int register classes for uniform-i64 slots, emits
+/// `call_indirect`, and reinterprets a float return arriving through an i64 slot.
+pub(crate) fn compile_indirect_call_from_value<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    closure_ptr: Value,
+    param_tys: &[TurboTy],
+    ret_ty: &TurboTy,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    // Function value is a pair struct: [fn_ptr, env_ptr]
+    let fn_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 0);
+    let env_ptr = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), closure_ptr, 8);
+
+    // Build the Cranelift signature: env_ptr first, then user params
+    let mut sig = cx.module.make_signature();
+    sig.call_conv = CallConv::Fast;
+    sig.params.push(AbiParam::new(cx.ptr_type)); // env_ptr
+    let mut param_cl_tys = Vec::with_capacity(param_tys.len());
+    for param_tty in param_tys {
+        let cl_ty = turbo_ty_to_cl_type(param_tty, cx.ptr_type);
+        sig.params.push(AbiParam::new(cl_ty));
+        param_cl_tys.push(cl_ty);
+    }
+    let ret_tty = ret_ty.clone();
+    if ret_tty != TurboTy::Unit {
+        let cl_ret = turbo_ty_to_cl_type(&ret_tty, cx.ptr_type);
+        sig.returns.push(AbiParam::new(cl_ret));
+    }
+
+    let sig_ref = cx.builder.import_signature(sig);
+
+    let mut arg_values = vec![env_ptr]; // env_ptr is first hidden arg
+    for (i, arg) in args.iter().enumerate() {
+        if let Some((val, _)) = compile_expr(cx, arg)? {
+            // If the value's param slot is a uniform i64 but the value is a
+            // float (inferred-param closure called with a float), move the
+            // bits through the integer register so both sides agree on the
+            // register class.
+            let val = if let Some(&expected) = param_cl_tys.get(i) {
+                let actual = cx.builder.func.dfg.value_type(val);
+                if actual != expected
+                    && actual.bits() == expected.bits()
+                    && (actual.is_float() && expected.is_int()
+                        || actual.is_int() && expected.is_float())
+                {
+                    cx.builder.ins().bitcast(expected, MemFlags::new(), val)
+                } else {
+                    val
+                }
+            } else {
+                val
+            };
+            arg_values.push(val);
+        }
+    }
+
+    let call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
+    let results = cx.builder.inst_results(call).to_vec();
+    if results.is_empty() {
+        Ok(None)
+    } else {
+        let mut result = results[0];
+        // If the declared return is float but it came back through a uniform
+        // i64 slot, reinterpret the bits as F64.
+        if matches!(ret_tty, TurboTy::Float) {
+            let rty = cx.builder.func.dfg.value_type(result);
+            if rty.is_int() && rty.bits() == 64 {
+                result = cx
+                    .builder
+                    .ins()
+                    .bitcast(types::F64, MemFlags::new(), result);
+            }
+        }
+        Ok(Some((result, ret_tty)))
+    }
+}
+
+/// Materialize a first-class function value for a bare function name used as a
+/// value (e.g. `let g = dbl`). A named function is compiled with a plain
+/// `(params...) -> ret` signature, but every function value must be callable
+/// through the uniform env-first closure ABI. We therefore point the value's
+/// `fn_ptr` at the function's env-first adapter (`__fnval_<name>`, generated in
+/// `compile.rs`), which ignores the env pointer and forwards to the real
+/// function. The env pointer is null. Returns `Ok(None)` when `name` is not an
+/// adaptable user function.
+fn compile_named_fn_value<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    name: &str,
+) -> Result<Option<MaybeTyped>, CodegenError> {
+    let adapter_name = format!("__fnval_{name}");
+    let Some(&adapter_fid) = cx.user_fns.get(&adapter_name) else {
+        return Ok(None);
+    };
+    // Build the value's Fn type from the function's declared signature.
+    let Some(fn_def) = cx.fn_asts.get(name).copied() else {
+        return Ok(None);
+    };
+    let param_tys: Vec<TurboTy> = fn_def
+        .params
+        .iter()
+        .map(|p| turbo_ty_from_type_expr(&p.ty.node, cx.enum_variants))
+        .collect();
+    let ret_ty = cx.fn_ret_types.get(name).cloned().unwrap_or(TurboTy::Unit);
+
+    // Address of the env-first adapter.
+    let adapter_ref = cx.module.declare_func_in_func(adapter_fid, cx.builder.func);
+    let fn_ptr = cx.builder.ins().func_addr(cx.ptr_type, adapter_ref);
+
+    // Allocate the closure pair [fn_ptr, env_ptr] with a null env.
+    let two = cx.builder.ins().iconst(types::I64, 2);
+    let alloc_fid = cx.rt_fns["rt_struct_alloc"];
+    let alloc_fref = cx.module.declare_func_in_func(alloc_fid, cx.builder.func);
+    let call = cx.builder.ins().call(alloc_fref, &[two]);
+    let pair_ptr = cx.builder.inst_results(call)[0];
+    let null_env = cx.builder.ins().iconst(cx.ptr_type, 0);
+    cx.builder.ins().store(MemFlags::new(), fn_ptr, pair_ptr, 0);
+    cx.builder
+        .ins()
+        .store(MemFlags::new(), null_env, pair_ptr, 8);
+
+    Ok(Some(Some((
+        pair_ptr,
+        TurboTy::Fn(param_tys, Box::new(ret_ty)),
+    ))))
+}
+
+/// Load a struct field's raw slot value and its declared `TurboTy`. Returns
+/// `Ok(None)` if the struct has no such field. Used to fetch a function value
+/// stored in a struct field for invocation; the raw i64 slot IS the pair
+/// pointer for `Fn`-typed fields, so no reinterpretation is needed.
+fn load_struct_field<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    struct_ptr: Value,
+    struct_name: &str,
+    field: &str,
+) -> Result<Option<(Value, TurboTy)>, CodegenError> {
+    let Some(layout) = cx.struct_fields.get(struct_name).cloned() else {
+        return Ok(None);
+    };
+    let Some(field_index) = layout.iter().position(|(n, _)| n == field) else {
+        return Ok(None);
+    };
+    let field_tty = layout[field_index].1.clone();
+    let offset = (field_index * 8) as i32;
+    let raw = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlags::new(), struct_ptr, offset);
+    Ok(Some((raw, field_tty)))
 }
 
 /// Compile each call argument, reconciling its Cranelift value type against the

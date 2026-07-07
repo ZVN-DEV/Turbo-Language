@@ -209,6 +209,9 @@ pub enum ErrorCode {
     E0515,
     /// Compiler recursion limit exceeded (parser/codegen)
     E0516,
+    /// Call through a value that is not a function (or arity/type mismatch
+    /// when calling through a first-class function value)
+    E0530,
 
     // ── Runtime & operational errors (E0600-E0699) ──────────────────
     /// Division (or modulo) by zero at runtime
@@ -322,6 +325,7 @@ impl ErrorCode {
             ErrorCode::E0514 => "E0514",
             ErrorCode::E0515 => "E0515",
             ErrorCode::E0516 => "E0516",
+            ErrorCode::E0530 => "E0530",
             // Runtime & operational
             ErrorCode::E0601 => "E0601",
             ErrorCode::E0602 => "E0602",
@@ -429,6 +433,7 @@ impl ErrorCode {
             ErrorCode::E0514 => "unused return value of pure function",
             ErrorCode::E0515 => "unused variable",
             ErrorCode::E0516 => "compiler recursion limit exceeded",
+            ErrorCode::E0530 => "value is not callable",
             // Runtime & operational
             ErrorCode::E0601 => "division by zero",
             ErrorCode::E0602 => "index out of bounds",
@@ -536,6 +541,7 @@ impl ErrorCode {
             ErrorCode::E0514,
             ErrorCode::E0515,
             ErrorCode::E0516,
+            ErrorCode::E0530,
             ErrorCode::E0601,
             ErrorCode::E0602,
             ErrorCode::E0603,

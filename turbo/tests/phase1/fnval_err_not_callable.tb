@@ -1,0 +1,6 @@
+struct Bag { n: i64 }
+
+fn main() {
+    let b = Bag { n: 5 }
+    print(b.n(3))
+}

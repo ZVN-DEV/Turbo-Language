@@ -1,0 +1,11 @@
+struct Counter { step: fn(i64) -> i64 }
+
+fn make_counter(by: i64) -> Counter {
+    Counter { step: |x: i64| -> i64 { x + by } }
+}
+
+fn main() {
+    let c = make_counter(100)
+    print(c.step(1))
+    print(c.step(5))
+}

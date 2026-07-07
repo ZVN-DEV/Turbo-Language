@@ -88,6 +88,11 @@ impl Checker {
         };
         if let Some(info) = self.lookup_var(name) {
             info.ty.clone()
+        } else if let Some(fn_ty) = self.named_fn_value_ty(name) {
+            // A bare function name used as a value (not called): it becomes a
+            // first-class function value with the function's signature. Only
+            // non-generic, non-async, non-FFI functions can be used this way.
+            fn_ty
         } else {
             let in_scope: Vec<&str> = self
                 .scopes
@@ -101,6 +106,64 @@ impl Checker {
             self.error(ErrorCode::E0300, msg, expr.span.clone());
             Ty::Error
         }
+    }
+
+    /// If `name` is a top-level user function usable as a first-class value,
+    /// return its `fn(params) -> ret` type. Generic, async, and FFI functions
+    /// are excluded (their calling convention isn't a plain uniform fat pair).
+    pub(crate) fn named_fn_value_ty(&self, name: &str) -> Option<Ty> {
+        if name == "main" || self.extern_fns.contains(name) {
+            return None;
+        }
+        let sig = self.functions.get(name)?;
+        if !sig.type_params.is_empty() || sig.is_async {
+            return None;
+        }
+        let param_tys = sig.params.iter().map(|(_, ty)| ty.clone()).collect();
+        Some(Ty::Fn(param_tys, Box::new(sig.ret.clone())))
+    }
+
+    /// Type-check a call made through a first-class function value whose type is
+    /// `Ty::Fn(param_tys, ret)`. Emits E0530 on arity or argument-type mismatch
+    /// and returns the function value's return type.
+    pub(crate) fn check_fn_value_call(
+        &mut self,
+        param_tys: &[Ty],
+        ret_ty: &Ty,
+        args: &[Spanned<Expr>],
+        call_span: turbo_ast::Span,
+    ) -> Ty {
+        if args.len() != param_tys.len() {
+            self.error(
+                ErrorCode::E0530,
+                format!(
+                    "function value expects {} argument(s) but {} were given",
+                    param_tys.len(),
+                    args.len()
+                ),
+                call_span,
+            );
+            return ret_ty.clone();
+        }
+        for (i, arg) in args.iter().enumerate() {
+            let arg_ty = self.check_expr_expecting(arg, &param_tys[i]);
+            if !arg_ty.contains_error()
+                && !param_tys[i].contains_error()
+                && !types_compatible(&param_tys[i], &arg_ty)
+                && arg_ty != param_tys[i]
+            {
+                self.error(
+                    ErrorCode::E0530,
+                    format!(
+                        "argument {} expects `{}`, found `{arg_ty}`",
+                        i + 1,
+                        param_tys[i]
+                    ),
+                    arg.span.clone(),
+                );
+            }
+        }
+        ret_ty.clone()
     }
 
     pub(crate) fn check_binary_op(&mut self, expr: &Spanned<Expr>) -> Ty {
@@ -559,6 +622,39 @@ impl Checker {
                             }
                             return method_sig.ret;
                         }
+                        // No method `name`, but the receiver may have a field
+                        // named `name` holding a function value: `obj.f(x)`
+                        // where `f: fn(...) -> ...`. Methods take precedence;
+                        // this is the field-value-invocation fallback.
+                        if let Some(field_ty) = self
+                            .structs
+                            .get(type_name)
+                            .and_then(|s| s.fields.iter().find(|(n, _)| n == name))
+                            .map(|(_, ty)| ty.clone())
+                        {
+                            match field_ty {
+                                Ty::Fn(ref param_tys, ref ret_ty) => {
+                                    // args[0] is the receiver; the call
+                                    // arguments are the remaining args.
+                                    return self.check_fn_value_call(
+                                        param_tys,
+                                        ret_ty,
+                                        &args[1..],
+                                        callee.span.clone(),
+                                    );
+                                }
+                                other => {
+                                    self.error(
+                                        ErrorCode::E0530,
+                                        format!(
+                                            "field `{name}` of `{type_name}` is `{other}`, not a function"
+                                        ),
+                                        callee.span.clone(),
+                                    );
+                                    return Ty::Error;
+                                }
+                            }
+                        }
                     }
                 }
                 // Offer a "did you mean" against user-defined functions
@@ -615,6 +711,30 @@ impl Checker {
                         }
                     }
                     method_sig.ret
+                } else if let Some(field_ty) = self
+                    .structs
+                    .get(type_name)
+                    .and_then(|s| s.fields.iter().find(|(n, _)| n == field))
+                    .map(|(_, ty)| ty.clone())
+                {
+                    // No method named `field`, but the struct has a field with
+                    // that name. If it holds a function value, invoke it (e.g.
+                    // `(obj.handler)(x)`); otherwise it is not callable.
+                    match field_ty {
+                        Ty::Fn(ref param_tys, ref ret_ty) => {
+                            self.check_fn_value_call(param_tys, ret_ty, args, callee.span.clone())
+                        }
+                        other => {
+                            self.error(
+                                ErrorCode::E0530,
+                                format!(
+                                    "field `{field}` of `{type_name}` is `{other}`, not a function"
+                                ),
+                                callee.span.clone(),
+                            );
+                            Ty::Error
+                        }
+                    }
                 } else {
                     self.error(
                         ErrorCode::E0317,
@@ -634,12 +754,25 @@ impl Checker {
                 Ty::Error
             }
         } else {
-            self.error(
-                ErrorCode::E0512,
-                "only named function calls are supported".to_string(),
-                callee.span.clone(),
-            );
-            Ty::Error
+            // Call through an arbitrary expression callee, e.g.
+            // `make_adder(3)(4)` (Call callee) or `handlers[i](x)` (Index
+            // callee). The callee must evaluate to a first-class function
+            // value; otherwise it is not callable.
+            let callee_ty = self.check_expr(callee);
+            match callee_ty {
+                Ty::Fn(ref param_tys, ref ret_ty) => {
+                    self.check_fn_value_call(param_tys, ret_ty, args, callee.span.clone())
+                }
+                Ty::Error => Ty::Error,
+                other => {
+                    self.error(
+                        ErrorCode::E0530,
+                        format!("cannot call a value of type `{other}` — it is not a function"),
+                        callee.span.clone(),
+                    );
+                    Ty::Error
+                }
+            }
         }
     }
 
