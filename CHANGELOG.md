@@ -3,6 +3,53 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.12.0] - 2026-07-07
+
+A feature release that turns Turbo into a language you can build a real service
+in: a typed generic `HashMap<K,V>`, SQLite compiled into the binary, and an HTTP
+server hardened for life behind a proxy. Together they land the flagship
+`examples/http-sqlite-api` — HTTP in, SQLite under, JSON out, one static binary.
+
+### Added
+- **Generic `HashMap<K,V>`.** Maps are now typed: keys are `int` or `str`
+  (anything else is rejected at every annotation site with `E0525`, not at
+  runtime), and values can be any type — including first-class functions, so a
+  `HashMap<str, fn(i64) -> i64>` dispatch table works. `hashmap_get` returns
+  `V?` and `keys()` returns `[K]`, both correctly typed. Reference-counted
+  values are retained on insert and released on overwrite/drop, so a loop that
+  overwrites keys 2M times holds flat RSS instead of leaking. Legacy untyped
+  hashmaps still work unchanged (benches within noise), and a legacy handle
+  passed to a typed boundary is now rejected rather than segfaulting; unsigned
+  narrow keys and values round-trip correctly. Survived a GPT-5.5 adversarial
+  review round (7 findings fixed before merge). Known limit (documented, tracked
+  in #60): aggregate map values release only one level deep. (#61)
+- **SQLite, built in.** SQLite 3.47.2 is vendored and statically linked — no
+  system dependency, identical behavior across JIT and AOT. `sqlite_open`,
+  `sqlite_exec`, and `sqlite_prepare` return a `Result` with real error
+  messages, and the bind/step/column/finalize/close surface is exposed for
+  prepared-statement work. String returns are ARC-compliant (a raw-malloc heap
+  corruption bug was caught and fixed in review). Costs ~3.1MB of binary. Ships
+  with a new flagship example, `examples/http-sqlite-api`: an HTTP service that
+  reads and writes SQLite and returns JSON, as one binary. (#62)
+
+### Changed
+- **HTTP server hardened for behind-a-proxy production.** The server now closes
+  slowloris-on-write with a write/send timeout, drains gracefully on SIGTERM and
+  SIGINT, and caps keep-alive connections with a request limit and an idle
+  timeout. A new `http_config(key, value)` builtin tunes the limits —
+  `max_body_bytes`, `max_header_bytes`, `max_connections`, `read_timeout_ms`,
+  `write_timeout_ms`, `keepalive_max_requests`, and `idle_timeout_ms`. Oversized
+  bodies now get a `413` instead of being read into memory, partial writes are
+  handled robustly, and `spawn` deep-copies arena-backed string arguments so a
+  spawned handler no longer reads freed request memory (fixes #56). New
+  `docs/production-server.md` documents running behind nginx. (#59)
+
+### Known issues
+- Owned string temporaries passed as arguments to *user-defined* functions, and
+  their `Result` wrappers, still accumulate across a loop (#54).
+- A string bound in a block-tail `match` arm can be over-retained (#55).
+- Aggregate `HashMap` values release only one level deep on drop (#60).
+
 ## [0.11.0] - 2026-07-07
 
 The headline of this release is real string memory management: Turbo strings are

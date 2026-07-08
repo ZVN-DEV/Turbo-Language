@@ -95,6 +95,42 @@ async fn main() {
 }
 ```
 
+## What Turbo is for
+
+Turbo is a general-purpose compiled language whose sweet spot is small, fast,
+self-contained programs and services — the kind of thing you want to hand
+someone as a single native binary with no runtime to install.
+
+What it does well today:
+
+- **Long-running programs stay memory-bounded.** Strings, arrays, structs,
+  results, and optionals are reference-counted and freed *during* execution, not
+  at process exit — so a server or a churning loop holds flat RSS instead of
+  climbing until it's killed.
+- **Real data structures and dispatch.** A typed generic `HashMap<K,V>` (int or
+  `str` keys, any value type) gives you honest maps, and first-class function
+  values let you build callback tables and `HashMap<str, fn(i64) -> i64>`
+  dispatch tables without a `match` ladder.
+- **Single-binary HTTP + SQLite + JSON services.** SQLite is vendored and
+  statically linked, the HTTP server does timeouts, graceful shutdown, and
+  tunable limits via `http_config`, and JSON serialization is built in — so an
+  HTTP-in, SQLite-under, JSON-out service compiles to one native binary. See
+  the flagship [`examples/http-sqlite-api`](examples/http-sqlite-api) and
+  [`docs/production-server.md`](docs/production-server.md) for running it behind
+  nginx/Caddy.
+- **A growing package ecosystem.** Browse the curated index at
+  [turbolang.dev/packages](https://turbolang.dev/packages), search it from the
+  CLI with `turbolang search <query>`, and install with `turbolang install`.
+
+Honest caveats that still hold:
+
+- Concurrency is **thread-per-`spawn`** on real OS threads (plus channels and
+  mutex) — there is no async event loop yet, so it's not the tool for tens of
+  thousands of concurrent connections on one process.
+- The HTTP server provides **no TLS or HTTP/2** — run it behind a reverse proxy
+  (nginx, Caddy) for public exposure.
+- The **WASM** target is partial, and **Windows** support is experimental.
+
 ## Features
 
 ### Native Compilation
