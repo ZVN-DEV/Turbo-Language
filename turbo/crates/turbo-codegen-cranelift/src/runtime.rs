@@ -95,12 +95,16 @@ mod cstd {
                 format: *const c_char,
                 tm: *const tm,
             ) -> size_t;
-            // MSVC secure, thread-safe variant. Note the argument order is
-            // (result*, time*) — the reverse of C11 Annex K's `localtime_s`.
-            // Returns errno_t (0 on success). We prefer this over the legacy
-            // `localtime`, whose returned pointer aliases a shared static and
-            // is a data race under the HTTP server's per-connection threads.
-            fn localtime_s(result: *mut tm, time: *const time_t) -> c_int;
+            // MSVC secure, thread-safe variant. We bind `_localtime64_s`, the
+            // real UCRT export: the standard `localtime_s` is only a static
+            // inline in <corecrt_time.h> that forwards here, so there is no
+            // `localtime_s` symbol to link against from FFI (LNK2019).
+            // Signature: errno_t _localtime64_s(struct tm* result,
+            // const __time64_t* time) — result-first arg order, and
+            // __time64_t is a 64-bit epoch (== libc::time_t on windows-msvc).
+            // Preferred over the legacy `localtime`, whose returned pointer
+            // aliases a shared static and races under the HTTP server threads.
+            fn _localtime64_s(result: *mut tm, time: *const time_t) -> c_int;
         }
 
         // Per-thread scratch `tm`, mirroring C `localtime`'s static-storage
@@ -111,7 +115,7 @@ mod cstd {
         }
 
         /// Thread-safe drop-in for libc's `localtime`: fills a per-thread `tm`
-        /// via MSVC `localtime_s` and returns a pointer to it, or null on
+        /// via MSVC `_localtime64_s` and returns a pointer to it, or null on
         /// failure. Same signature as the Unix `libc::localtime`, so the call
         /// site stays platform-agnostic.
         ///
@@ -121,7 +125,7 @@ mod cstd {
         pub unsafe fn localtime(time: *const time_t) -> *mut tm {
             TM_BUF.with(|cell| {
                 let ptr = cell.get();
-                if localtime_s(ptr, time) == 0 {
+                if _localtime64_s(ptr, time) == 0 {
                     ptr
                 } else {
                     std::ptr::null_mut()
