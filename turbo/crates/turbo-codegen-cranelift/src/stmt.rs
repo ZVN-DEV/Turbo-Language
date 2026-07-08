@@ -83,6 +83,11 @@ pub(crate) fn compile_stmt<M: Module>(
             cx.builder.declare_var(var, cl_ty);
             if let Some(v) = val {
                 cx.builder.def_var(var, v);
+                if let Some(origin) = generic_origin_for_value(cx, v) {
+                    cx.generic_var_origins.insert(name.clone(), origin);
+                } else {
+                    cx.generic_var_origins.remove(name);
+                }
             }
             cx.vars.insert(name.clone(), (var, cl_ty, turbo_ty));
             Ok(())
@@ -107,6 +112,7 @@ pub(crate) fn compile_stmt<M: Module>(
                             }
                         }
                     }
+                    retain_generic_return_if_needed(cx, v);
                     release_mutable_param_vars(cx);
                     cx.builder.ins().return_(&[v]);
                 } else {

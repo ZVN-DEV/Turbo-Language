@@ -1,0 +1,10 @@
+fn idg<T>(x: T) -> T {
+    let _unused = 1
+    x
+}
+
+fn main() {
+    let r = idg("gen" + to_str(5))
+    print(r)
+    print(r)
+}

@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use turbo_ast::*;
 
 use crate::closures::{extract_all_closures, extract_all_spawn_sites, CaptureInfo};
-use crate::expr::{compile_expr, release_mutable_param_vars};
+use crate::expr::{compile_expr, release_mutable_param_vars, retain_generic_return_if_needed};
 use crate::turbo_types::*;
 use crate::type_conv::{coerce_value, resolve_cl_type, resolve_cl_type_ffi, turbo_ty_to_cl_type};
 use crate::Ctx;
@@ -43,6 +43,20 @@ pub(crate) fn declare_rt_fn<M: Module>(
         })?;
     rt_fns.insert(name.to_string(), id);
     Ok(())
+}
+
+fn return_type_param_name(
+    return_type: Option<&Spanned<TypeExpr>>,
+    type_params: &[String],
+) -> Option<String> {
+    let ret_ty = return_type?;
+    let TypeExpr::Named(name) = &ret_ty.node else {
+        return None;
+    };
+    type_params
+        .iter()
+        .any(|type_param| type_param == name)
+        .then(|| name.clone())
 }
 
 // ── Module compilation ──────────────────────────────────────────────
@@ -1196,27 +1210,21 @@ pub(crate) fn compile_module<M: Module>(
         if f.name != "main" {
             sig.call_conv = CallConv::Fast;
         }
+        let type_params = f.type_param_names();
         let mut param_cl_types = Vec::with_capacity(f.params.len());
         for param in &f.params {
-            let cl = resolve_cl_type(
-                &param.ty.node,
-                ptr_type,
-                &enum_variants,
-                &f.type_param_names(),
-            )?;
+            let cl = resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &type_params)?;
             sig.params.push(AbiParam::new(cl));
             param_cl_types.push(cl);
         }
+        for _ in &type_params {
+            sig.params.push(AbiParam::new(types::I8));
+        }
         fn_param_cl_types.insert(f.name.clone(), param_cl_types);
         let ret_turbo = if let Some(ret_ty) = &f.return_type {
-            let cl = resolve_cl_type(
-                &ret_ty.node,
-                ptr_type,
-                &enum_variants,
-                &f.type_param_names(),
-            )?;
+            let cl = resolve_cl_type(&ret_ty.node, ptr_type, &enum_variants, &type_params)?;
             sig.returns.push(AbiParam::new(cl));
-            turbo_ty_from_type_expr_with_params(&ret_ty.node, &enum_variants, &f.type_param_names())
+            turbo_ty_from_type_expr_with_params(&ret_ty.node, &enum_variants, &type_params)
         } else {
             TurboTy::Unit
         };
@@ -1303,6 +1311,8 @@ pub(crate) fn compile_module<M: Module>(
         for method_spanned in &imp.methods {
             let method = &method_spanned.node;
             let mangled = format!("{}__{}", imp.type_name, method.name);
+            fn_asts.insert(mangled.clone(), method);
+            fn_type_params.insert(mangled.clone(), method.type_param_names());
 
             let mut sig = module.make_signature();
             sig.call_conv = CallConv::Fast;
@@ -1582,6 +1592,8 @@ pub(crate) fn compile_module<M: Module>(
             continue;
         };
         let func_id = user_fns[&f.name];
+        let type_params = f.type_param_names();
+        let return_type_param = return_type_param_name(f.return_type.as_ref(), &type_params);
 
         cl_ctx.func.signature = module.make_signature();
         if f.name != "main" {
@@ -1596,8 +1608,11 @@ pub(crate) fn compile_module<M: Module>(
                     &param.ty.node,
                     ptr_type,
                     &enum_variants,
-                    &f.type_param_names(),
+                    &type_params,
                 )?));
+        }
+        for _ in &type_params {
+            cl_ctx.func.signature.params.push(AbiParam::new(types::I8));
         }
         if let Some(ret_ty) = &f.return_type {
             cl_ctx
@@ -1608,7 +1623,7 @@ pub(crate) fn compile_module<M: Module>(
                     &ret_ty.node,
                     ptr_type,
                     &enum_variants,
-                    &f.type_param_names(),
+                    &type_params,
                 )?));
         }
 
@@ -1627,6 +1642,10 @@ pub(crate) fn compile_module<M: Module>(
                 vars: HashMap::new(),
                 borrowed_param_vars: Vec::new(),
                 mutable_param_vars: Vec::new(),
+                generic_rc_flags: HashMap::new(),
+                generic_value_origins: HashMap::new(),
+                generic_var_origins: HashMap::new(),
+                return_type_param: return_type_param.clone(),
                 next_var: 0,
                 data_desc: &mut data_desc,
                 string_counter: &mut string_counter,
@@ -1660,18 +1679,21 @@ pub(crate) fn compile_module<M: Module>(
             // as unreachable because layout.entry_block() returns None.
             cx.builder.ensure_inserted_block();
 
+            for (type_param_index, type_param) in type_params.iter().enumerate() {
+                let flag_index = f.params.len() + type_param_index;
+                if let Some(flag) = cx.builder.block_params(entry).get(flag_index).copied() {
+                    cx.generic_rc_flags.insert(type_param.clone(), flag);
+                }
+            }
+
             // Define parameters as variables
             for (i, param) in f.params.iter().enumerate() {
-                let cl_ty = resolve_cl_type(
-                    &param.ty.node,
-                    ptr_type,
-                    &enum_variants,
-                    &f.type_param_names(),
-                )?;
+                let cl_ty =
+                    resolve_cl_type(&param.ty.node, ptr_type, &enum_variants, &type_params)?;
                 let turbo_ty = turbo_ty_from_type_expr_with_params(
                     &param.ty.node,
                     &enum_variants,
-                    &f.type_param_names(),
+                    &type_params,
                 );
                 let var = cx.fresh_var(cl_ty, turbo_ty.clone());
                 let val = cx.builder.block_params(entry)[i];
@@ -1679,6 +1701,13 @@ pub(crate) fn compile_module<M: Module>(
                 cx.borrowed_param_vars.push(var);
                 if param.mutable {
                     cx.mutable_param_vars.push((var, turbo_ty.clone()));
+                }
+                if let TypeExpr::Named(name) = &param.ty.node {
+                    if type_params.iter().any(|type_param| type_param == name) {
+                        cx.generic_var_origins
+                            .insert(param.name.clone(), name.clone());
+                        cx.generic_value_origins.insert(val, name.clone());
+                    }
                 }
                 cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
             }
@@ -1688,8 +1717,13 @@ pub(crate) fn compile_module<M: Module>(
             if !cx.builder.is_unreachable() {
                 if let Some(ret_ty_expr) = &f.return_type {
                     if let Some((val, val_tty)) = result {
+                        retain_generic_return_if_needed(&mut cx, val);
                         // Coerce return value to match the declared return type
-                        let ret_tty = turbo_ty_from_type_expr(&ret_ty_expr.node, &enum_variants);
+                        let ret_tty = turbo_ty_from_type_expr_with_params(
+                            &ret_ty_expr.node,
+                            &enum_variants,
+                            &type_params,
+                        );
                         let (val, _) = coerce_value(&mut cx, val, &val_tty, &ret_tty);
                         release_mutable_param_vars(&mut cx);
                         cx.builder.ins().return_(&[val]);
@@ -1773,6 +1807,10 @@ pub(crate) fn compile_module<M: Module>(
                     vars: HashMap::new(),
                     borrowed_param_vars: Vec::new(),
                     mutable_param_vars: Vec::new(),
+                    generic_rc_flags: HashMap::new(),
+                    generic_value_origins: HashMap::new(),
+                    generic_var_origins: HashMap::new(),
+                    return_type_param: None,
                     next_var: 0,
                     data_desc: &mut data_desc,
                     string_counter: &mut string_counter,
@@ -1905,6 +1943,10 @@ pub(crate) fn compile_module<M: Module>(
                 vars: HashMap::new(),
                 borrowed_param_vars: Vec::new(),
                 mutable_param_vars: Vec::new(),
+                generic_rc_flags: HashMap::new(),
+                generic_value_origins: HashMap::new(),
+                generic_var_origins: HashMap::new(),
+                return_type_param: None,
                 next_var: 0,
                 data_desc: &mut data_desc,
                 string_counter: &mut string_counter,
@@ -2005,6 +2047,10 @@ pub(crate) fn compile_module<M: Module>(
                 vars: HashMap::new(),
                 borrowed_param_vars: Vec::new(),
                 mutable_param_vars: Vec::new(),
+                generic_rc_flags: HashMap::new(),
+                generic_value_origins: HashMap::new(),
+                generic_var_origins: HashMap::new(),
+                return_type_param: None,
                 next_var: 0,
                 data_desc: &mut data_desc,
                 string_counter: &mut string_counter,
@@ -2194,6 +2240,10 @@ pub(crate) fn compile_module<M: Module>(
                 vars: HashMap::new(),
                 borrowed_param_vars: Vec::new(),
                 mutable_param_vars: Vec::new(),
+                generic_rc_flags: HashMap::new(),
+                generic_value_origins: HashMap::new(),
+                generic_var_origins: HashMap::new(),
+                return_type_param: None,
                 next_var: 0,
                 data_desc: &mut data_desc,
                 string_counter: &mut string_counter,

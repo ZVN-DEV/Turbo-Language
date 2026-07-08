@@ -1,0 +1,11 @@
+fn pick<T>(c: bool, a: T, b: T) -> T {
+    if c { a } else { b }
+}
+
+fn main() {
+    let r = pick(true, "l" + to_str(1), "r" + to_str(2))
+    print(r)
+    print(r)
+    let q = pick(false, "l" + to_str(3), "r" + to_str(4))
+    print(q)
+}

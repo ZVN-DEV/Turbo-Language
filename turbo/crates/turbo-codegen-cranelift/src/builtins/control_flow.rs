@@ -7,8 +7,8 @@ use turbo_ast::*;
 
 use crate::turbo_types::{CodegenError, MaybeTyped, TurboTy};
 use crate::{
-    compile_expr, expr_produces_owned_rc_temp, is_rc_managed_type, release_if_needed,
-    retain_if_needed, Ctx,
+    compile_expr, expr_produces_owned_rc_temp, generic_origin_for_value, is_rc_managed_type,
+    mark_generic_value_origin, release_if_needed, retain_if_needed, Ctx,
 };
 
 fn extract_single_assign(branch: &Spanned<Expr>) -> Option<(&str, &Spanned<Expr>)> {
@@ -140,7 +140,6 @@ pub(crate) fn compile_if<M: Module>(
 
     // Merge
     cx.builder.switch_to_block(merge_block);
-    cx.builder.seal_block(merge_block);
 
     // A branch contributes a value-carrying edge to the merge block iff it is
     // reachable (`*_needs_jump`), the `if` can yield a value (`can_yield_value`),
@@ -157,6 +156,12 @@ pub(crate) fn compile_if<M: Module>(
     let else_yielded = else_edge && else_result.is_some();
 
     if then_yielded || else_yielded {
+        let then_origin = then_result
+            .as_ref()
+            .and_then(|(value, _)| generic_origin_for_value(cx, *value));
+        let else_origin = else_result
+            .as_ref()
+            .and_then(|(value, _)| generic_origin_for_value(cx, *value));
         let (val_for_ty, tty) = match (&then_result, &else_result) {
             (Some((v, t)), _) if then_yielded => (*v, t.clone()),
             (_, Some((v, t))) => (*v, t.clone()),
@@ -165,8 +170,21 @@ pub(crate) fn compile_if<M: Module>(
         let ty = cx.builder.func.dfg.value_type(val_for_ty);
         cx.builder.append_block_param(merge_block, ty);
         let param = cx.builder.block_params(merge_block)[0];
+        let merged_origin = match (then_yielded, else_yielded, then_origin, else_origin) {
+            (true, false, Some(origin), _) => Some(origin),
+            (false, true, _, Some(origin)) => Some(origin),
+            (true, true, Some(then_origin), Some(else_origin)) if then_origin == else_origin => {
+                Some(then_origin)
+            }
+            _ => None,
+        };
+        if let Some(origin) = merged_origin {
+            mark_generic_value_origin(cx, param, origin);
+        }
+        cx.builder.seal_block(merge_block);
         Ok(Some((param, tty)))
     } else {
+        cx.builder.seal_block(merge_block);
         Ok(None)
     }
 }
