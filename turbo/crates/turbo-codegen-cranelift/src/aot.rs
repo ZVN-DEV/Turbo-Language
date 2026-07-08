@@ -261,6 +261,13 @@ pub fn aot_compile(
     for arg in &cc_args {
         cmd.arg(arg);
     }
+    if cfg!(windows) {
+        // The POSIX runtime uses standard C names the UCRT marks "deprecated"
+        // (fopen, getenv, strerror, isatty, fileno, ...). Silence that noise so
+        // the build log stays clean and a future -Werror can't trip on it.
+        cmd.arg("-D_CRT_SECURE_NO_WARNINGS")
+            .arg("-D_CRT_NONSTDC_NO_DEPRECATE");
+    }
     if sqlite_obj_path.is_some() {
         cmd.arg("-DTURBO_WITH_SQLITE")
             .arg(format!("-I{}", tmp_dir.path().display()));

@@ -60,6 +60,12 @@
  * The POSIX side must stay byte-identical, so every shim here is either a
  * macro that renames a UCRT equivalent (`_stricmp`, `_access`, `_mkdir`) or a
  * tiny wrapper; the shared C code is never rewritten. */
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN  /* trim windows.h (no winsock1, no struct timeval) */
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX             /* do not define min()/max() macros */
+#endif
 #include <windows.h>
 #include <io.h>        /* _access */
 #include <direct.h>    /* _mkdir */
@@ -1102,6 +1108,7 @@ const char* rt_str_join(const char *arr_ptr, const char *sep) {
 
 /* ── Standard library: I/O functions ───────────────────────────────── */
 
+#ifndef _WIN32
 const char* rt_read_line(void) {
     char *line = NULL;
     size_t cap = 0;
@@ -1119,6 +1126,37 @@ const char* rt_read_line(void) {
     free(line);
     return result;
 }
+#else
+/* Windows: `getline`/`ssize_t` are POSIX-only. Read a line from stdin one
+ * character at a time into a growable buffer, matching the POSIX version's
+ * semantics (empty string on immediate EOF, trailing CR/LF stripped). */
+const char* rt_read_line(void) {
+    size_t cap = 128, len = 0;
+    char *line = (char *)malloc(cap);
+    if (!line) { fprintf(stderr, "runtime error: out of memory\n"); exit(1); }
+    int c;
+    while ((c = getchar()) != EOF && c != '\n') {
+        if (len + 1 >= cap) {
+            cap *= 2;
+            char *grown = (char *)realloc(line, cap);
+            if (!grown) { free(line); fprintf(stderr, "runtime error: out of memory\n"); exit(1); }
+            line = grown;
+        }
+        line[len++] = (char)c;
+    }
+    if (c == EOF && len == 0) {
+        free(line);
+        return rt_str_empty();
+    }
+    /* strip trailing \r (from a CRLF line ending) */
+    while (len > 0 && (line[len-1] == '\r' || line[len-1] == '\n')) len--;
+    char *result = rt_str_alloc(len);
+    memcpy(result, line, len);
+    result[len] = '\0';
+    free(line);
+    return result;
+}
+#endif
 
 const char* rt_read_file(const char *path) {
     FILE *f = fopen(path, "rb");
