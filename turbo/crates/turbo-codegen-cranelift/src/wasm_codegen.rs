@@ -273,6 +273,11 @@ impl CEmitter {
                         | "filter" => "void*".to_string(),
                         _ => "int".to_string(),
                     }
+                } else if let Expr::FieldAccess { field, .. } = &callee.node {
+                    self.fn_return_types
+                        .get(field.as_str())
+                        .cloned()
+                        .unwrap_or_else(|| "int".to_string())
                 } else {
                     "int".to_string()
                 }
@@ -317,7 +322,23 @@ impl CEmitter {
                     }
                 }
             }
-            Expr::If { then_branch, .. } => self.infer_type_tag(&then_branch.node),
+            Expr::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let then_tag = self.infer_type_tag(&then_branch.node);
+                if let Some(else_b) = else_branch {
+                    let else_tag = self.infer_type_tag(&else_b.node);
+                    if then_tag == "float" || else_tag == "float" {
+                        "float".to_string()
+                    } else {
+                        then_tag
+                    }
+                } else {
+                    then_tag
+                }
+            }
             Expr::Block { tail_expr, .. } => {
                 if let Some(tail) = tail_expr {
                     self.infer_type_tag(&tail.node)
@@ -326,6 +347,18 @@ impl CEmitter {
                 }
             }
             Expr::Match { subject, arms } => self.infer_match_result_tag(&subject.node, arms),
+            Expr::Index { object, .. } => {
+                if let Expr::Ident(name) = &object.node {
+                    if let Some(TypeExpr::Array(inner)) = self.var_type_exprs.get(name) {
+                        return Self::type_expr_to_tag(&inner.node);
+                    }
+                }
+                "int".to_string()
+            }
+            Expr::FieldAccess { field, .. } => self
+                .field_type_expr(field)
+                .map(Self::type_expr_to_tag)
+                .unwrap_or_else(|| "int".to_string()),
             Expr::OkExpr(_) | Expr::ErrExpr(_) => "void*".to_string(),
             Expr::SomeExpr(_) | Expr::NoneExpr => "void*".to_string(),
             _ => "int".to_string(),
@@ -397,6 +430,30 @@ impl CEmitter {
     fn record_hashmap_type_if_needed(&mut self, ty: &Spanned<TypeExpr>) {
         if Self::type_expr_contains_hashmap(&ty.node) {
             self.record_unsupported("generic HashMap<K, V> on wasm target", Some(&ty.span));
+        }
+    }
+
+    fn type_expr_contains_fn_type(ty: &TypeExpr) -> bool {
+        match ty {
+            TypeExpr::FnType { .. } => true,
+            TypeExpr::Array(inner) | TypeExpr::Optional(inner) | TypeExpr::Future(inner) => {
+                Self::type_expr_contains_fn_type(&inner.node)
+            }
+            TypeExpr::Result { ok_type, err_type } => {
+                Self::type_expr_contains_fn_type(&ok_type.node)
+                    || Self::type_expr_contains_fn_type(&err_type.node)
+            }
+            TypeExpr::HashMap(key_type, value_type) => {
+                Self::type_expr_contains_fn_type(&key_type.node)
+                    || Self::type_expr_contains_fn_type(&value_type.node)
+            }
+            TypeExpr::Named(_) | TypeExpr::Unit | TypeExpr::Inferred => false,
+        }
+    }
+
+    fn record_fn_type_if_needed(&mut self, ty: &Spanned<TypeExpr>, what: &str) {
+        if Self::type_expr_contains_fn_type(&ty.node) {
+            self.record_unsupported(what, Some(&ty.span));
         }
     }
 
@@ -873,16 +930,16 @@ impl CEmitter {
     /// If `value` binds a closure to `name`, record its signature so later
     /// `name(args)` call sites lower to an indirect closure call. Handles both
     /// closure literals and aliasing another closure variable (`let g = f`).
-    /// Remember the rich `Result`/`Optional` `TypeExpr` for a local so a later
-    /// `match` on that local can recover its `ok`/`err`/`some` payload types.
-    /// Uses the explicit `let` annotation when present, otherwise the value's
-    /// producing expression (a call's declared return type).
+    /// Remember rich local type context from explicit annotations, and from
+    /// unannotated `Result`/`Optional` producer calls, so later match/index/type
+    /// inference can use declared context instead of guessing an integer slot.
     fn record_result_binding(&mut self, name: &str, ty: &Option<Spanned<TypeExpr>>, value: &Expr) {
-        let te = match ty {
-            Some(t) => Some(t.node.clone()),
-            None => self.subject_type_expr(value),
-        };
-        if let Some(te) = te {
+        if let Some(t) = ty {
+            self.var_type_exprs.insert(name.to_string(), t.node.clone());
+            return;
+        }
+
+        if let Some(te) = self.subject_type_expr(value) {
             if matches!(te, TypeExpr::Result { .. } | TypeExpr::Optional(_)) {
                 self.var_type_exprs.insert(name.to_string(), te);
             }
@@ -1565,13 +1622,14 @@ impl CEmitter {
         // below discards its `fmt::Result` (`let _ =`) instead of `.unwrap()`
         // — semantically identical here and keeps these off the panic budget.
         let subj = self.emit_expr(&subject.node);
+        let subj_c_type = self.infer_c_type(&subject.node);
         let subj_tmp = self.fresh_tmp();
         let matched = self.fresh_tmp();
         let _ = writeln!(buf, "{}{{", self.indent_str());
         self.indent += 1;
         let _ = writeln!(
             buf,
-            "{}long long {subj_tmp} = (long long)({subj});",
+            "{}{subj_c_type} {subj_tmp} = ({subj_c_type})({subj});",
             self.indent_str()
         );
         let _ = writeln!(buf, "{}int {matched} = 0;", self.indent_str());
@@ -1674,6 +1732,21 @@ impl CEmitter {
         "long long"
     }
 
+    fn field_type_expr(&self, field: &str) -> Option<&TypeExpr> {
+        let mut found = None;
+        for fields in self.struct_fields.values() {
+            for (fname, ty) in fields {
+                if fname == field {
+                    if found.is_some() {
+                        return None;
+                    }
+                    found = Some(ty);
+                }
+            }
+        }
+        found
+    }
+
     fn get_field_index_str(&mut self, _obj_expr: &str, field: &str) -> String {
         // Try to find the field index from known struct layouts
         // For now, we can't always determine the struct type at this point,
@@ -1710,6 +1783,7 @@ impl CEmitter {
         }
 
         let subj = self.emit_expr(&subject.node);
+        let subj_c_type = self.infer_c_type(&subject.node);
         let subj_tmp = self.fresh_tmp();
         let matched = self.fresh_tmp();
         let result = self.fresh_tmp();
@@ -1767,7 +1841,7 @@ impl CEmitter {
         let mut inner = String::new();
         let _ = write!(
             &mut inner,
-            "long long {subj_tmp} = (long long)({subj}); \
+            "{subj_c_type} {subj_tmp} = ({subj_c_type})({subj}); \
              {result_c_type} {result} = ({result_c_type})(0); int {matched} = 0;"
         );
         for arm in emitted_arms {
@@ -1826,6 +1900,7 @@ impl CEmitter {
                 // WASM runtime doesn't provide. Fail loud rather than mislower.
                 if let Some(t) = ty {
                     self.record_hashmap_type_if_needed(t);
+                    self.record_fn_type_if_needed(t, "fn-typed let annotations on wasm target");
                 }
                 // Record the variable type for later print/interpolation dispatch
                 let type_tag = if let Some(t) = ty {
@@ -1902,12 +1977,15 @@ impl CEmitter {
             Expr::FloatLit(_) => "double",
             Expr::StringLit(_) | Expr::Interpolation(_) => "const char*",
             Expr::BoolLit(_) => "char",
+            Expr::Unit => "void",
             Expr::ArrayLit(_) => "void*",
             Expr::StructLit { .. } => "void*",
             Expr::MapLit(_) => "void*",
             Expr::Ident(name) => {
                 // Look up tracked variable type
-                if let Some(tag) = self.var_types.get(name) {
+                if let Some(ty) = self.var_type_exprs.get(name) {
+                    Self::type_to_c(ty)
+                } else if let Some(tag) = self.var_types.get(name) {
                     Self::tag_to_c_type(tag)
                 } else {
                     "long long"
@@ -1938,11 +2016,21 @@ impl CEmitter {
                         | "filter" => "void*",
                         _ => "long long",
                     }
+                } else if let Expr::FieldAccess { field, .. } = &callee.node {
+                    if let Some(tag) = self.fn_return_types.get(field.as_str()) {
+                        Self::tag_to_c_type(tag)
+                    } else {
+                        "long long"
+                    }
                 } else {
                     "long long"
                 }
             }
             Expr::Closure { .. } => "void*",
+            Expr::UnaryOp { op, expr } => match op {
+                UnaryOp::Not => "char",
+                UnaryOp::Neg => self.infer_c_type(&expr.node),
+            },
             Expr::BinaryOp { left, op, .. } => match op {
                 BinOp::Eq
                 | BinOp::NotEq
@@ -1954,10 +2042,80 @@ impl CEmitter {
                 | BinOp::Or => "char",
                 _ => self.infer_c_type(&left.node),
             },
+            Expr::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let then_c = self.infer_c_type(&then_branch.node);
+                if let Some(else_b) = else_branch {
+                    let else_c = self.infer_c_type(&else_b.node);
+                    if then_c == else_c {
+                        then_c
+                    } else if then_c == "double" || else_c == "double" {
+                        "double"
+                    } else {
+                        self.record_unsupported(
+                            "if expressions with incompatible branch result types on wasm target",
+                            None,
+                        );
+                        then_c
+                    }
+                } else {
+                    then_c
+                }
+            }
+            Expr::Block { tail_expr, .. } => {
+                if let Some(tail) = tail_expr {
+                    self.infer_c_type(&tail.node)
+                } else {
+                    "void"
+                }
+            }
+            Expr::Index { object, .. } => {
+                if let Expr::Ident(name) = &object.node {
+                    if let Some(TypeExpr::Array(inner)) = self.var_type_exprs.get(name) {
+                        return Self::type_to_c(&inner.node);
+                    }
+                }
+                "long long"
+            }
+            Expr::FieldAccess { object, field } => {
+                if let Expr::Ident(enum_name) = &object.node {
+                    if self
+                        .enum_variants
+                        .get(enum_name)
+                        .is_some_and(|vs| vs.iter().any(|v| v == field))
+                    {
+                        return "long long";
+                    }
+                }
+                if let Some(ty) = self.field_type_expr(field) {
+                    Self::type_to_c(ty)
+                } else {
+                    self.record_unsupported(
+                        &format!("field access '{field}' result type inference"),
+                        None,
+                    );
+                    "long long"
+                }
+            }
+            Expr::Assign { value, .. }
+            | Expr::CompoundAssign { value, .. }
+            | Expr::FieldAssign { value, .. }
+            | Expr::IndexAssign { value, .. } => self.infer_c_type(&value.node),
+            Expr::Range { .. } => "void*",
+            Expr::While { .. } | Expr::ForIn { .. } | Expr::Break | Expr::Continue => "void",
             Expr::OkExpr(_) | Expr::ErrExpr(_) => "void*",
             Expr::SomeExpr(_) | Expr::NoneExpr => "void*",
             Expr::Match { subject, arms } => self.infer_match_result_c_type(&subject.node, arms),
-            _ => "long long",
+            _ => {
+                self.record_unsupported(
+                    &format!("{} result type inference", Self::expr_kind_name(expr)),
+                    None,
+                );
+                "long long"
+            }
         }
     }
 
@@ -2033,6 +2191,7 @@ impl CEmitter {
                 // WASM runtime doesn't provide. Fail loud rather than mislower.
                 if let Some(t) = ty {
                     self.record_hashmap_type_if_needed(t);
+                    self.record_fn_type_if_needed(t, "fn-typed let annotations on wasm target");
                 }
                 // Record the variable type for later print/interpolation dispatch
                 let type_tag = if let Some(t) = ty {
@@ -2250,12 +2409,7 @@ impl CEmitter {
         let ret = Self::return_type_to_c(&fndef.return_type);
         if let Some(ret_ty) = &fndef.return_type {
             self.record_hashmap_type_if_needed(ret_ty);
-            if matches!(ret_ty.node, TypeExpr::FnType { .. }) {
-                self.record_unsupported(
-                    "fn-typed return values on wasm target",
-                    Some(&ret_ty.span),
-                );
-            }
+            self.record_fn_type_if_needed(ret_ty, "fn-typed return values on wasm target");
         }
 
         // Record function return type for call-site type inference
@@ -2267,22 +2421,16 @@ impl CEmitter {
         // Record parameter types so the body can look them up for print/interpolation
         for p in &fndef.params {
             self.record_hashmap_type_if_needed(&p.ty);
+            self.record_fn_type_if_needed(
+                &p.ty,
+                "fn-typed parameters / closures as parameters of user-defined functions \
+                 (use map/filter, or call the closure directly)",
+            );
             if p.name != "self" {
                 let tag = Self::type_expr_to_tag(&p.ty.node);
                 self.var_types.insert(p.name.clone(), tag);
-            }
-            // Closures as parameters of user-defined functions (higher-order
-            // user functions) are out of scope for the WASM backend: the call
-            // site can't recover the closure's signature from a `fn(...)` param
-            // type. Fail loud here rather than emit a body that calls a
-            // non-callable `long long` parameter. Closures handed to the
-            // map/filter builtins are fully supported.
-            if matches!(p.ty.node, TypeExpr::FnType { .. }) {
-                self.record_unsupported(
-                    "fn-typed parameters / closures as parameters of user-defined functions \
-                     (use map/filter, or call the closure directly)",
-                    Some(&p.span),
-                );
+                self.var_type_exprs
+                    .insert(p.name.clone(), p.ty.node.clone());
             }
         }
 
@@ -2327,6 +2475,13 @@ impl CEmitter {
         for item in &module.items {
             match &item.node {
                 Item::Struct(s) => {
+                    for field in &s.fields {
+                        self.record_hashmap_type_if_needed(&field.ty);
+                        self.record_fn_type_if_needed(
+                            &field.ty,
+                            "fn-typed struct fields on wasm target",
+                        );
+                    }
                     let fields: Vec<(String, TypeExpr)> = s
                         .fields
                         .iter()
@@ -2398,9 +2553,17 @@ impl CEmitter {
                     let f = &fn_sig.node;
                     if let Some(ret_ty) = &f.return_type {
                         self.record_hashmap_type_if_needed(ret_ty);
+                        self.record_fn_type_if_needed(
+                            ret_ty,
+                            "fn-typed extern return values on wasm target",
+                        );
                     }
                     for p in &f.params {
                         self.record_hashmap_type_if_needed(&p.ty);
+                        self.record_fn_type_if_needed(
+                            &p.ty,
+                            "fn-typed extern parameters on wasm target",
+                        );
                     }
                     if let Some(ret_ty) = &f.return_type {
                         let ret_tag = Self::type_expr_to_tag(&ret_ty.node);
@@ -2427,6 +2590,10 @@ impl CEmitter {
                 Item::Const(c) => {
                     if let Some(t) = &c.ty {
                         self.record_hashmap_type_if_needed(t);
+                        self.record_fn_type_if_needed(
+                            t,
+                            "fn-typed const annotations on wasm target",
+                        );
                     }
                     let v = self.emit_expr(&c.value.node);
                     let c_type = if let Some(t) = &c.ty {
@@ -3107,6 +3274,19 @@ fn main() {
 "#,
             "3.5\n1.75\n0.0\n",
         ),
+        (
+            r#"
+fn show(f: f64) {
+    match f {
+        x => print(x * 2.0)
+    }
+}
+fn main() {
+    show(2.5)
+}
+"#,
+            "5.0\n",
+        ),
     ];
 
     #[test]
@@ -3230,6 +3410,7 @@ fn main() {
         std::fs::write(dir.join("turbo_rt_guards.h"), crate::RUNTIME_GUARDS_H).unwrap();
         std::fs::write(dir.join("turbo_rt_wasm.c"), crate::RUNTIME_WASM_C).unwrap();
 
+        let mut failures = Vec::new();
         for (i, (src, expected)) in STMT_MATCH_CASES.iter().enumerate() {
             let c = compile_to_c(src);
             let prog = dir.join(format!("prog_{i}.c"));
@@ -3256,24 +3437,32 @@ fn main() {
                 .arg(&bin)
                 .output()
                 .expect("failed to spawn C compiler");
-            assert!(
-                build.status.success(),
-                "case {i} failed to host-compile:\n{}\n--- generated C ---\n{c}",
-                String::from_utf8_lossy(&build.stderr)
-            );
+            if !build.status.success() {
+                failures.push(format!(
+                    "case {i} failed to host-compile:\n{}\n--- generated C ---\n{c}",
+                    String::from_utf8_lossy(&build.stderr)
+                ));
+                continue;
+            }
 
             let run = Command::new(&bin)
                 .output()
                 .expect("failed to run compiled binary");
             let got = String::from_utf8_lossy(&run.stdout);
-            assert_eq!(
-                got.as_ref(),
-                *expected,
-                "case {i}: host-compiled WASM C output must match the native JIT output"
-            );
+            if got.as_ref() != *expected {
+                failures.push(format!(
+                    "case {i}: host-compiled WASM C output must match the native JIT output\nexpected:\n{expected:?}\ngot:\n{:?}",
+                    got.as_ref()
+                ));
+            }
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            failures.is_empty(),
+            "statement-match host parity failures:\n{}",
+            failures.join("\n\n")
+        );
     }
 
     // ── Expression-context match / typed-map fail-loud ─────────────────
@@ -3361,6 +3550,68 @@ fn main() {
 }
 "#,
             "20\nstr\n0\n9\n0\n",
+        ),
+        (
+            r#"
+fn pick(n: i64) -> f64 {
+    match n {
+        1 => { 1.5 }
+        _ => { 2.5 }
+    }
+}
+fn main() {
+    print(pick(1))
+    print(pick(0))
+}
+"#,
+            "1.5\n2.5\n",
+        ),
+        (
+            r#"
+fn pick(n: i64) -> f64 {
+    match n {
+        1 => if n > 0 { 1.5 } else { 1.25 }
+        _ => if n > 0 { 2.5 } else { 3.5 }
+    }
+}
+fn main() {
+    print(pick(1))
+    print(pick(0))
+}
+"#,
+            "1.5\n3.5\n",
+        ),
+        (
+            r#"
+fn scale(f: f64) -> f64 {
+    match f {
+        x => x * 2.0
+    }
+}
+fn main() {
+    print(scale(2.5))
+}
+"#,
+            "5.0\n",
+        ),
+        (
+            r#"
+fn nested(a: i64, b: i64) -> i64 {
+    match a {
+        1 => match b {
+            2 => 20
+            _ => 10
+        }
+        _ => 0
+    }
+}
+fn main() {
+    print(nested(1, 2))
+    print(nested(1, 3))
+    print(nested(0, 2))
+}
+"#,
+            "20\n10\n0\n",
         ),
     ];
 
@@ -3453,6 +3704,7 @@ fn main() {
         std::fs::write(dir.join("turbo_rt_guards.h"), crate::RUNTIME_GUARDS_H).unwrap();
         std::fs::write(dir.join("turbo_rt_wasm.c"), crate::RUNTIME_WASM_C).unwrap();
 
+        let mut failures = Vec::new();
         for (i, (src, expected)) in EXPR_MATCH_CASES.iter().enumerate() {
             let c = compile_to_c(src);
             let prog = dir.join(format!("expr_prog_{i}.c"));
@@ -3474,24 +3726,32 @@ fn main() {
                 .arg(&bin)
                 .output()
                 .expect("failed to spawn C compiler");
-            assert!(
-                build.status.success(),
-                "case {i} failed to host-compile:\n{}\n--- generated C ---\n{c}",
-                String::from_utf8_lossy(&build.stderr)
-            );
+            if !build.status.success() {
+                failures.push(format!(
+                    "case {i} failed to host-compile:\n{}\n--- generated C ---\n{c}",
+                    String::from_utf8_lossy(&build.stderr)
+                ));
+                continue;
+            }
 
             let run = Command::new(&bin)
                 .output()
                 .expect("failed to run compiled binary");
             let got = String::from_utf8_lossy(&run.stdout);
-            assert_eq!(
-                got.as_ref(),
-                *expected,
-                "case {i}: expression-match C output must match expected stdout"
-            );
+            if got.as_ref() != *expected {
+                failures.push(format!(
+                    "case {i}: expression-match C output must match expected stdout\nexpected:\n{expected:?}\ngot:\n{:?}",
+                    got.as_ref()
+                ));
+            }
         }
 
         let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            failures.is_empty(),
+            "expression-match host parity failures:\n{}",
+            failures.join("\n\n")
+        );
     }
 
     #[test]
@@ -3570,6 +3830,26 @@ fn count(m: HashMap<int, str>) -> i64 {
     }
 
     #[test]
+    fn generic_hashmap_struct_field_fails_loud_on_wasm_target() {
+        let err = try_compile_to_c(
+            r#"
+struct Bag {
+    m: HashMap<str, str>
+}
+
+fn main() {}
+"#,
+        )
+        .expect_err("typed HashMap struct fields must be unsupported on WASM");
+        assert_eq!(err.code, ErrorCode::E0403);
+        assert!(
+            err.message.contains("generic HashMap<K, V>") && err.message.contains("wasm target"),
+            "diagnostic should identify typed HashMap struct fields: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn typed_hashmap_map_literal_fails_loud_on_wasm_target() {
         let err = try_compile_to_c(
             r#"
@@ -3638,6 +3918,100 @@ fn main() {
                     .message
                     .contains("indirect calls through computed function values"),
             "diagnostic should name the unsupported construct: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn fn_type_nested_in_param_annotation_fails_loud() {
+        let err = try_compile_to_c(
+            r#"
+fn apply(cbs: [fn(i64) -> i64]) -> i64 {
+    0
+}
+"#,
+        )
+        .expect_err("fn types nested in parameter annotations must be unsupported on WASM");
+        assert_eq!(err.code, ErrorCode::E0403);
+        assert!(
+            err.message.contains("fn-typed parameters")
+                || err.message.contains("closures as parameters"),
+            "diagnostic should name fn-typed parameters: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn fn_type_nested_in_return_annotation_fails_loud() {
+        let err = try_compile_to_c(
+            r#"
+fn callbacks() -> [fn(i64) -> i64] {
+    []
+}
+"#,
+        )
+        .expect_err("fn types nested in return annotations must be unsupported on WASM");
+        assert_eq!(err.code, ErrorCode::E0403);
+        assert!(
+            err.message.contains("fn-typed return values"),
+            "diagnostic should name fn-typed returns: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn fn_type_in_struct_field_fails_loud() {
+        let err = try_compile_to_c(
+            r#"
+struct Handler {
+    cb: fn(i64) -> i64
+}
+
+fn main() {}
+"#,
+        )
+        .expect_err("fn-typed struct fields must be unsupported on WASM");
+        assert_eq!(err.code, ErrorCode::E0403);
+        assert!(
+            err.message.contains("fn-typed struct fields"),
+            "diagnostic should name fn-typed struct fields: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn fn_type_nested_in_const_annotation_fails_loud() {
+        let err = try_compile_to_c(
+            r#"
+const CBS: [fn(i64) -> i64] = []
+
+fn main() {}
+"#,
+        )
+        .expect_err("fn types nested in const annotations must be unsupported on WASM");
+        assert_eq!(err.code, ErrorCode::E0403);
+        assert!(
+            err.message.contains("fn-typed const annotations"),
+            "diagnostic should name fn-typed const annotations: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn fn_type_nested_in_let_annotation_fails_loud() {
+        let err = try_compile_to_c(
+            r#"
+fn main() {
+    let cbs: [fn(i64) -> i64] = []
+    print(len(cbs))
+}
+"#,
+        )
+        .expect_err("fn types nested in let annotations must be unsupported on WASM");
+        assert_eq!(err.code, ErrorCode::E0403);
+        assert!(
+            err.message.contains("fn-typed let annotations"),
+            "diagnostic should name fn-typed let annotations: {}",
             err.message
         );
     }

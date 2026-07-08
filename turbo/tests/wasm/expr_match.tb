@@ -27,6 +27,13 @@ fn label(a: i64, b: i64) -> str {
     }
 }
 
+fn pick_float(n: i64) -> f64 {
+    match n {
+        1 => { 1.5 }
+        _ => if n > 0 { 2.5 } else { 3.5 }
+    }
+}
+
 fn main() {
     print(value(Shape.Circle(5)))
     print(match lookup(3) {
@@ -42,4 +49,6 @@ fn main() {
         true => 1
         false => 0
     })
+    print(pick_float(1))
+    print(pick_float(0))
 }
