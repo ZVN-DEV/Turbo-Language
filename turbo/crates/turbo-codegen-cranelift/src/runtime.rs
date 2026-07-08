@@ -69,11 +69,40 @@ fn str_index_oob(index: i64, len: usize) -> ! {
     runtime_error("E0602", &message, &help);
 }
 
+/// C-stdlib functions the float/date-formatting twins call. The `libc` crate
+/// exposes `snprintf`/`localtime`/`strftime` on Unix but not on windows-msvc,
+/// even though the UCRT provides the symbols. Binding them directly here keeps
+/// the Unix path a plain re-export (byte-identical behavior) while giving the
+/// Windows build the same C formatting — critical for float/date output parity
+/// with the fixtures and the C runtime.
+mod cstd {
+    #[cfg(unix)]
+    pub use libc::{localtime, snprintf, strftime};
+
+    #[cfg(windows)]
+    pub use win::{localtime, snprintf, strftime};
+
+    #[cfg(windows)]
+    mod win {
+        use libc::{c_char, c_int, size_t, time_t, tm};
+        unsafe extern "C" {
+            pub fn snprintf(buf: *mut c_char, size: size_t, format: *const c_char, ...) -> c_int;
+            pub fn localtime(time: *const time_t) -> *mut tm;
+            pub fn strftime(
+                s: *mut c_char,
+                max: size_t,
+                format: *const c_char,
+                tm: *const tm,
+            ) -> size_t;
+        }
+    }
+}
+
 fn format_f64(n: f64) -> String {
     let n = if n == 0.0 { 0.0 } else { n };
     let mut buf = [0 as libc::c_char; 64];
     let formatted = unsafe {
-        libc::snprintf(
+        cstd::snprintf(
             buf.as_mut_ptr(),
             buf.len(),
             F64_FORMAT.as_ptr() as *const libc::c_char,
@@ -3819,13 +3848,13 @@ fn chrono_like_format(epoch_secs: i64, fmt: &str) -> String {
     // Use libc localtime + strftime via FFI
     unsafe {
         let t = epoch_secs as libc::time_t;
-        let tm = libc::localtime(&t);
+        let tm = cstd::localtime(&t);
         if tm.is_null() {
             return String::new();
         }
         let fmt_c = cstring_or_empty(fmt);
         let mut buf = [0u8; 256];
-        let n = libc::strftime(
+        let n = cstd::strftime(
             buf.as_mut_ptr() as *mut libc::c_char,
             buf.len(),
             fmt_c.as_ptr(),
