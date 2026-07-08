@@ -272,7 +272,7 @@ export default function PackagesPage() {
   "repo": "owner/turbo-json",        // GitHub "owner/name"
   "description": "A fast JSON parser and serializer",
   "categories": ["serialization"],   // lowercase tags
-  "min_turbo_version": "0.10.0",     // optional: semver the package needs
+  "min_turbo_version": "0.12.0",     // optional: semver the package needs
   "homepage": "https://example.com"  // optional
 }`}</code>
         </pre>

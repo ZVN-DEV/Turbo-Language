@@ -4,9 +4,9 @@
 
 | Version | Status |
 |---------|--------|
-| 0.10.x  | Current — supported with security fixes |
-| 0.9.x   | Security fixes only while 0.10.x is the current series |
-| < 0.9   | Not supported |
+| 0.12.x  | Current — supported with security fixes |
+| 0.11.x  | Security fixes only while 0.12.x is the current series |
+| < 0.11  | Not supported |
 
 ## Reporting a Vulnerability
 
@@ -127,8 +127,11 @@ reading from and writing to arbitrary memory addresses.
 ### 6. File I/O
 
 `read_file`, `write_file`, `try_read_file`, and `try_write_file`
-operate on any path the OS user has access to. There is no path
-sanitization, no chroot, and no allowlist of accessible directories.
+operate on any path the OS user has access to. The same applies to the
+filesystem builtins (`mkdir`, `delete_file`, `list_dir`, `file_exists`)
+and to `sqlite_open`, which opens or creates a database file at any path
+the process can reach. There is no path sanitization, no chroot, and no
+allowlist of accessible directories.
 
 ### 7. Shell Execution (`exec` / `shell_exec`)
 
@@ -150,10 +153,16 @@ fixing them is tracked in `CHANGELOG.md`:
 - **HTTP server primitives are development-grade.** See Security Model
   section 3 above for details. **Always put a reverse proxy (nginx,
   Caddy) in front of a public deployment.**
-- **JIT string arena is not individually freed.** The runtime uses a
-  thread-local string arena that is freed after each JIT execution.
-  Long-running AOT servers should be monitored for memory usage.
-  Proper ARC-based string deallocation is planned for a future release.
+- **Memory is reference-counted, with a few bounded, documented leaks.**
+  Strings, arrays, structs, results, and optionals are reference-counted
+  and freed *during* execution — at scope exit, reassignment, and typed
+  container drops — so long-running servers hold bounded memory rather
+  than growing until exit. A few narrow cases still leak by a bounded
+  amount (notably nested aggregate values overwritten/removed from a
+  `HashMap`, and the map object itself); these are non-crashing and
+  proportional to churn, and are tracked in `CHANGELOG.md`. HTTP request
+  handlers additionally use per-request arenas reclaimed in bulk at the
+  end of each request.
 - **Compiled binaries run with full system privileges.** Turbo has no
   capability/sandbox model. Treat compiled `.tb` programs the same way
   you would any compiled C program.

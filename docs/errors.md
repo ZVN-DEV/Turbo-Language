@@ -120,6 +120,8 @@ Every compiler diagnostic includes a unique error code (e.g. `E0100`). Use `turb
 | E0514 | Unused return value of pure function |
 | E0515 | Unused variable |
 | E0516 | Compiler recursion limit exceeded (parser/codegen) |
+| E0525 | HashMap key type must be `int` or `str` |
+| E0530 | Value is not callable |
 
 ## Runtime & Operational Errors (E0600-E0699)
 

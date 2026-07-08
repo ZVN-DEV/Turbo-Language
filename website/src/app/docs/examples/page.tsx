@@ -166,6 +166,7 @@ let upper = cleaned |> upper`}
               ["todo-cli", "Task manager with file I/O and structs", "Runnable today"],
               ["data-pipeline", "Log analysis engine with parsing and aggregation", "Runnable today"],
               ["game-of-life", "Conway's Game of Life with string-grid updates", "Runnable today"],
+              ["http-sqlite-api", "HTTP todo API backed by built-in SQLite — one self-contained binary", "Runnable today"],
             ].map(([name, desc, status]) => (
               <tr key={name} className="border-b border-[#1a1a2e]">
                 <td className="px-4 py-2">

@@ -195,6 +195,29 @@ fn main() {
     print(keys.len())                   // 2
 }`}</code>
       </pre>
+      <p className="mb-4">
+        For typed data, annotate the binding with{" "}
+        <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)] text-sm">
+          HashMap&lt;K, V&gt;
+        </code>
+        . Keys must be <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)] text-sm">int</code> or{" "}
+        <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)] text-sm">str</code>; values may be any
+        type (including function values). A typed{" "}
+        <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)] text-sm">hashmap_get</code> returns an
+        optional, so unwrap it with <code className="text-[#00ff88] font-[family-name:var(--font-geist-mono)] text-sm">??</code>.
+        The untyped form above still works.
+      </p>
+      <pre className="bg-[#111118] border border-[#1a1a2e] rounded-lg p-4 mb-6 overflow-x-auto text-sm font-[family-name:var(--font-geist-mono)] text-gray-300">
+        <code>{`fn main() {
+    let scores: HashMap<str, int> = hashmap()
+    hashmap_set(scores, "alice", 10)
+    hashmap_set(scores, "bob", 7)
+
+    print(hashmap_get(scores, "alice") ?? 0)   // 10  — get returns V?
+    print(hashmap_get(scores, "carol") ?? 0)   // 0   — missing key is none
+    print(hashmap_keys(scores))                // ["alice", "bob"]  — [K], sorted
+}`}</code>
+      </pre>
 
       <h2 className="text-2xl font-bold text-white mt-10 mb-4">
         Optionals and Results

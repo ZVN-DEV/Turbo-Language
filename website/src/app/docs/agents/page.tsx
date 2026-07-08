@@ -109,7 +109,7 @@ export default function AgentsPage() {
         </li>
         <li>
           <strong className="text-white">Native compilation</strong> — JIT,
-          AOT, and WASM output
+          AOT, and WASM output (WASM partial)
         </li>
         <li>
           <strong className="text-white">Tooling integration</strong> —
