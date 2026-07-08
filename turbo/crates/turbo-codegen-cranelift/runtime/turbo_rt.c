@@ -1328,8 +1328,9 @@ static void *spawn_thread_fn(void *arg) {
     ctx->result = ctx->thunk(ctx->args_ptr);
     /* The args struct is a private malloc'd copy (see rt_spawn_with_args);
      * free it now that the thunk has consumed it. Any heap string args it
-     * held were themselves copied to independent refcounted allocations that
-     * the callee ARC-manages, so we must not free those here. */
+     * held were themselves copied to independent refcounted allocations. The
+     * generated thunk releases those string slots after the callee returns, so
+     * we must not free them here. */
     free(ctx->args_ptr);
     ctx->args_ptr = NULL;
     return NULL;
@@ -1343,11 +1344,11 @@ static void *spawn_thread_fn(void *arg) {
  * places it in the per-request bump arena (RT_RC_ARENA). The spawned thread
  * outlives the request, so it would read freed memory once rt_arena_end()
  * reclaims the arena. We therefore copy the struct into a plain malloc'd
- * buffer that ctx owns, and for each string argument that is arena-backed we
- * deep-copy the string bytes into an independent refcounted heap allocation
- * before handing it to the thread. `ptr_mask` bit i marks arg slot i as a
- * string pointer eligible for this copy; `num_args` is the argument count.
- * The JIT twin in src/runtime.rs mirrors this behaviour. */
+ * buffer that ctx owns, and deep-copy every flagged string argument into an
+ * independent refcounted heap allocation before handing it to the thread.
+ * `ptr_mask` bit i marks arg slot i as a string pointer eligible for this
+ * copy; `num_args` is the argument count. The JIT twin in src/runtime.rs
+ * mirrors this behaviour. */
 void *rt_spawn_with_args(long long (*thunk)(void *), void *args_ptr,
                          long long ptr_mask, long long num_args) {
     /* Use malloc directly — spawn context must outlive the current arena
@@ -1371,9 +1372,9 @@ void *rt_spawn_with_args(long long (*thunk)(void *), void *args_ptr,
         memset(copy, 0, slots * sizeof(long long));
     }
 
-    /* Deep-copy any arena-backed string arguments so they survive past the
-     * request arena. Detach the current arena while copying so the copy is
-     * made through malloc (refcount 1), not back into the arena we are
+    /* Deep-copy flagged string arguments so the spawned thread owns an
+     * independent allocation. Detach the current arena while copying so the
+     * copy is made through malloc (refcount 1), not back into the arena we are
      * escaping. rt_str_copy_len otherwise honours t_current_arena. */
     if (ptr_mask != 0) {
         turbo_arena *saved_arena = t_current_arena;
@@ -1382,10 +1383,7 @@ void *rt_spawn_with_args(long long (*thunk)(void *), void *args_ptr,
             if (!((ptr_mask >> i) & 1)) continue;
             char *s = (char *)(size_t)copy[i + 1];
             if (!s) continue;
-            long long rc = *rt_rc_refcount_ptr(s);
-            if (rc == RT_RC_ARENA) {
-                copy[i + 1] = (long long)(size_t)rt_str_copy_len(s, strlen(s));
-            }
+            copy[i + 1] = (long long)(size_t)rt_str_copy_len(s, strlen(s));
         }
         t_current_arena = saved_arena;
     }

@@ -705,6 +705,7 @@ pub(crate) fn compile_match<M: Module>(
                 cx,
                 release_owned_subject,
                 &body_result,
+                &arm.body,
                 &pattern_bindings,
             );
             cx.vars = saved_vars;
@@ -978,6 +979,7 @@ pub(crate) fn compile_match<M: Module>(
             cx,
             release_owned_subject,
             &body_result,
+            &arm.body,
             &pattern_bindings,
         );
         cx.vars = saved_vars;
@@ -1023,9 +1025,13 @@ fn retain_match_result_if_subject_binding<M: Module>(
     cx: &mut Ctx<'_, M>,
     release_owned_subject: bool,
     body_result: &MaybeTyped,
+    body_expr: &Spanned<Expr>,
     pattern_bindings: &[(Variable, TurboTy)],
 ) {
     if !release_owned_subject || cx.builder.is_unreachable() {
+        return;
+    }
+    if expr_produces_owned_rc_temp(body_expr) {
         return;
     }
     let Some((result_val, result_tty)) = body_result else {

@@ -102,12 +102,23 @@ pub(crate) fn compile_stmt<M: Module>(
         Stmt::Return(value) => {
             if let Some(val_expr) = value {
                 let result = compile_expr(cx, val_expr)?;
-                if let Some((v, _)) = result {
+                if let Some((v, tty)) = result {
+                    if let Expr::Ident(name) = &val_expr.node {
+                        if let Some((var, _, _)) = cx.vars.get(name) {
+                            if cx.borrowed_param_vars.contains(var) && is_rc_managed_type(cx, &tty)
+                            {
+                                retain_if_needed(cx, v, &tty);
+                            }
+                        }
+                    }
+                    release_mutable_param_vars(cx);
                     cx.builder.ins().return_(&[v]);
                 } else {
+                    release_mutable_param_vars(cx);
                     cx.builder.ins().return_(&[]);
                 }
             } else {
+                release_mutable_param_vars(cx);
                 cx.builder.ins().return_(&[]);
             }
             let new_block = cx.builder.create_block();

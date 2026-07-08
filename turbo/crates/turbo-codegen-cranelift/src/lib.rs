@@ -58,7 +58,7 @@ pub use aot::{aot_compile, wasm_compile};
 mod expr;
 pub(crate) use expr::{
     compile_expr, expr_produces_owned_rc_temp, is_rc_managed_type, release_expr_temp_if_needed,
-    release_if_needed, retain_if_needed,
+    release_if_needed, release_mutable_param_vars, retain_if_needed,
 };
 pub(crate) use expr::{retain_array_elements_if_needed, retain_array_prefix_if_needed};
 
@@ -244,6 +244,8 @@ pub(crate) struct Ctx<'a, M: Module> {
     pub(crate) fn_type_params: &'a HashMap<String, Vec<String>>,
     pub(crate) rt_fns: &'a HashMap<String, FuncId>,
     pub(crate) vars: HashMap<String, (Variable, cranelift::prelude::types::Type, TurboTy)>,
+    pub(crate) borrowed_param_vars: Vec<Variable>,
+    pub(crate) mutable_param_vars: Vec<(Variable, TurboTy)>,
     pub(crate) next_var: usize,
     pub(crate) data_desc: &'a mut DataDescription,
     pub(crate) string_counter: &'a mut usize,

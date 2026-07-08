@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use turbo_ast::*;
 
 use crate::closures::{extract_all_closures, extract_all_spawn_sites, CaptureInfo};
-use crate::expr::compile_expr;
+use crate::expr::{compile_expr, release_mutable_param_vars};
 use crate::turbo_types::*;
 use crate::type_conv::{coerce_value, resolve_cl_type, resolve_cl_type_ffi, turbo_ty_to_cl_type};
 use crate::Ctx;
@@ -1625,6 +1625,8 @@ pub(crate) fn compile_module<M: Module>(
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
                 vars: HashMap::new(),
+                borrowed_param_vars: Vec::new(),
+                mutable_param_vars: Vec::new(),
                 next_var: 0,
                 data_desc: &mut data_desc,
                 string_counter: &mut string_counter,
@@ -1674,6 +1676,10 @@ pub(crate) fn compile_module<M: Module>(
                 let var = cx.fresh_var(cl_ty, turbo_ty.clone());
                 let val = cx.builder.block_params(entry)[i];
                 cx.builder.def_var(var, val);
+                cx.borrowed_param_vars.push(var);
+                if param.mutable {
+                    cx.mutable_param_vars.push((var, turbo_ty.clone()));
+                }
                 cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
             }
 
@@ -1685,6 +1691,7 @@ pub(crate) fn compile_module<M: Module>(
                         // Coerce return value to match the declared return type
                         let ret_tty = turbo_ty_from_type_expr(&ret_ty_expr.node, &enum_variants);
                         let (val, _) = coerce_value(&mut cx, val, &val_tty, &ret_tty);
+                        release_mutable_param_vars(&mut cx);
                         cx.builder.ins().return_(&[val]);
                     } else {
                         // Function claims to return a value but body returns unit.
@@ -1692,6 +1699,7 @@ pub(crate) fn compile_module<M: Module>(
                         cx.builder.ins().trap(TrapCode::unwrap_user(1));
                     }
                 } else {
+                    release_mutable_param_vars(&mut cx);
                     cx.builder.ins().return_(&[]);
                 }
             }
@@ -1763,6 +1771,8 @@ pub(crate) fn compile_module<M: Module>(
                     fn_type_params: &fn_type_params,
                     rt_fns: &rt_fns,
                     vars: HashMap::new(),
+                    borrowed_param_vars: Vec::new(),
+                    mutable_param_vars: Vec::new(),
                     next_var: 0,
                     data_desc: &mut data_desc,
                     string_counter: &mut string_counter,
@@ -1803,6 +1813,10 @@ pub(crate) fn compile_module<M: Module>(
                     let var = cx.fresh_var(cl_ty, turbo_ty.clone());
                     let val = cx.builder.block_params(entry)[i];
                     cx.builder.def_var(var, val);
+                    cx.borrowed_param_vars.push(var);
+                    if param.mutable {
+                        cx.mutable_param_vars.push((var, turbo_ty.clone()));
+                    }
                     cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
                 }
 
@@ -1814,11 +1828,13 @@ pub(crate) fn compile_module<M: Module>(
                             let ret_tty =
                                 turbo_ty_from_type_expr(&ret_ty_expr.node, &enum_variants);
                             let (val, _) = coerce_value(&mut cx, val, &val_tty, &ret_tty);
+                            release_mutable_param_vars(&mut cx);
                             cx.builder.ins().return_(&[val]);
                         } else {
                             cx.builder.ins().trap(TrapCode::unwrap_user(1));
                         }
                     } else {
+                        release_mutable_param_vars(&mut cx);
                         cx.builder.ins().return_(&[]);
                     }
                 }
@@ -1887,6 +1903,8 @@ pub(crate) fn compile_module<M: Module>(
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
                 vars: HashMap::new(),
+                borrowed_param_vars: Vec::new(),
+                mutable_param_vars: Vec::new(),
                 next_var: 0,
                 data_desc: &mut data_desc,
                 string_counter: &mut string_counter,
@@ -1927,6 +1945,10 @@ pub(crate) fn compile_module<M: Module>(
                 let var = cx.fresh_var(cl_ty, turbo_ty.clone());
                 let val = cx.builder.block_params(entry)[i];
                 cx.builder.def_var(var, val);
+                cx.borrowed_param_vars.push(var);
+                if param.mutable {
+                    cx.mutable_param_vars.push((var, turbo_ty.clone()));
+                }
                 cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
             }
 
@@ -1935,11 +1957,13 @@ pub(crate) fn compile_module<M: Module>(
             if !cx.builder.is_unreachable() {
                 if trait_method.return_type.is_some() {
                     if let Some((val, _)) = result {
+                        release_mutable_param_vars(&mut cx);
                         cx.builder.ins().return_(&[val]);
                     } else {
                         cx.builder.ins().trap(TrapCode::unwrap_user(1));
                     }
                 } else {
+                    release_mutable_param_vars(&mut cx);
                     cx.builder.ins().return_(&[]);
                 }
             }
@@ -1979,6 +2003,8 @@ pub(crate) fn compile_module<M: Module>(
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
                 vars: HashMap::new(),
+                borrowed_param_vars: Vec::new(),
+                mutable_param_vars: Vec::new(),
                 next_var: 0,
                 data_desc: &mut data_desc,
                 string_counter: &mut string_counter,
@@ -2166,6 +2192,8 @@ pub(crate) fn compile_module<M: Module>(
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
                 vars: HashMap::new(),
+                borrowed_param_vars: Vec::new(),
+                mutable_param_vars: Vec::new(),
                 next_var: 0,
                 data_desc: &mut data_desc,
                 string_counter: &mut string_counter,
@@ -2234,6 +2262,10 @@ pub(crate) fn compile_module<M: Module>(
                 let var = cx.fresh_var(cl_ty, turbo_ty.clone());
                 let val = cx.builder.block_params(entry)[i + 1]; // +1 for env_ptr
                 cx.builder.def_var(var, val);
+                cx.borrowed_param_vars.push(var);
+                if param.mutable {
+                    cx.mutable_param_vars.push((var, turbo_ty.clone()));
+                }
                 cx.vars.insert(param.name.clone(), (var, cl_ty, turbo_ty));
             }
 
@@ -2260,15 +2292,18 @@ pub(crate) fn compile_module<M: Module>(
                         } else {
                             val
                         };
+                        release_mutable_param_vars(&mut cx);
                         cx.builder.ins().return_(&[val]);
                     }
                     (_, None) => {
+                        release_mutable_param_vars(&mut cx);
                         cx.builder.ins().return_(&[]);
                     }
                     (None, Some(_)) => {
                         // Signature expects a value but the body produced none;
                         // sema should prevent this — emit a zero as a safety net.
                         let zero = cx.builder.ins().iconst(types::I64, 0);
+                        release_mutable_param_vars(&mut cx);
                         cx.builder.ins().return_(&[zero]);
                     }
                 }
@@ -2322,6 +2357,26 @@ pub(crate) fn compile_module<M: Module>(
                 .get(&site.callee_name)
                 .cloned()
                 .unwrap_or_else(|| vec![types::I64; site.num_args]);
+            let callee_param_turbo: Vec<TurboTy> = fn_asts
+                .get(&site.callee_name)
+                .map(|f| {
+                    let type_params = f.type_param_names();
+                    f.params
+                        .iter()
+                        .map(|param| {
+                            turbo_ty_from_type_expr_with_params(
+                                &param.ty.node,
+                                &enum_variants,
+                                &type_params,
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_else(|| vec![TurboTy::Int; site.num_args]);
+            let callee_param_mutable: Vec<bool> = fn_asts
+                .get(&site.callee_name)
+                .map(|f| f.params.iter().map(|param| param.mutable).collect())
+                .unwrap_or_else(|| vec![false; site.num_args]);
 
             // Load each argument from the struct (offset 8, 16, 24, ...)
             let mut arg_vals = Vec::new();
@@ -2362,7 +2417,19 @@ pub(crate) fn compile_module<M: Module>(
                 }
                 let sig_ref = builder.import_signature(callee_sig);
                 let call = builder.ins().call_indirect(sig_ref, fn_ptr, &arg_vals);
-                let results = builder.inst_results(call);
+                let results = builder.inst_results(call).to_vec();
+                let release_ref = rt_fns
+                    .get("rt_release")
+                    .map(|fid| module.declare_func_in_func(*fid, builder.func));
+                for (i, arg_val) in arg_vals.iter().enumerate() {
+                    if matches!(callee_param_turbo.get(i), Some(TurboTy::Str))
+                        && !callee_param_mutable.get(i).copied().unwrap_or(false)
+                    {
+                        if let Some(release_ref) = release_ref {
+                            builder.ins().call(release_ref, &[*arg_val]);
+                        }
+                    }
+                }
                 if !results.is_empty() {
                     let mut result = results[0];
                     // The thunk always returns i64 to rt_spawn_thunk; if the
@@ -2442,6 +2509,28 @@ pub(crate) fn compile_module<M: Module>(
 
             // Forward every user parameter (skip block_params[0], the env ptr).
             let forwarded: Vec<Value> = builder.block_params(entry)[1..].to_vec();
+            let retain_ref = rt_fns
+                .get("rt_retain")
+                .map(|fid| module.declare_func_in_func(*fid, builder.func));
+            for (i, param) in f.params.iter().enumerate() {
+                if !param.mutable {
+                    continue;
+                }
+                let param_turbo = turbo_ty_from_type_expr(&param.ty.node, &enum_variants);
+                let needs_retain = matches!(
+                    &param_turbo,
+                    TurboTy::Str
+                        | TurboTy::Array(_)
+                        | TurboTy::Struct(_)
+                        | TurboTy::Result(_, _)
+                        | TurboTy::Optional(_)
+                ) || matches!(&param_turbo, TurboTy::Enum(name) if enum_max_slots.contains_key(name.as_str()));
+                if needs_retain {
+                    if let Some(retain_ref) = retain_ref {
+                        builder.ins().call(retain_ref, &[forwarded[i]]);
+                    }
+                }
+            }
             let target_ref = module.declare_func_in_func(target_fid, builder.func);
             let call = builder.ins().call(target_ref, &forwarded);
             if has_return {

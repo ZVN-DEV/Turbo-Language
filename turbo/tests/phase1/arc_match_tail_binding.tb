@@ -1,0 +1,47 @@
+fn pick_tail(r: i64 ! str) -> str {
+    match r {
+        ok(v) => "n"
+        err(e) => e
+    }
+}
+
+fn pick_reuse(r: i64 ! str) -> str {
+    match r {
+        ok(v) => "ok" + to_str(v)
+        err(e) => {
+            print(len(e))
+            e
+        }
+    }
+}
+
+fn pick_nested(r: i64 ! str) -> str {
+    match r {
+        ok(v) => "ok" + to_str(v)
+        err(e) => match err(e) {
+            ok(v) => "bad" + to_str(v)
+            err(inner) => inner
+        }
+    }
+}
+
+fn pick_fresh(r: i64 ! str) -> str {
+    match r {
+        ok(v) => "ok" + to_str(v)
+        err(e) => upper(e)
+    }
+}
+
+fn main() {
+    let a = pick_tail(err("tail" + to_str(1)))
+    print(a)
+
+    let b = pick_reuse(err("reuse" + to_str(2)))
+    print(b)
+
+    let c = pick_nested(err("nest" + to_str(3)))
+    print(c)
+
+    let d = pick_fresh(err("fresh" + to_str(4)))
+    print(d)
+}

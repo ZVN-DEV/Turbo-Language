@@ -106,6 +106,8 @@ fn test_codegen_rejects_pathologically_deep_ast() {
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
                 vars: HashMap::new(),
+                borrowed_param_vars: Vec::new(),
+                mutable_param_vars: Vec::new(),
                 next_var: 0,
                 data_desc: &mut data_desc,
                 string_counter: &mut string_counter,

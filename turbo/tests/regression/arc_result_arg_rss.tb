@@ -1,0 +1,20 @@
+fn result_len(r: i64 ! str) -> i64 {
+    match r {
+        ok(v) => v
+        err(e) => len(e)
+    }
+}
+
+fn churn(n: i64) -> i64 {
+    let mut i = 0
+    let mut total = 0
+    while i < n {
+        total = total + result_len(err("x" + to_str(i)))
+        i = i + 1
+    }
+    total
+}
+
+fn main() {
+    print(churn(1000000))
+}
