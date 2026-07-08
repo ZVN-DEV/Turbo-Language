@@ -4730,4 +4730,55 @@ const char *rt_format_time(double timestamp, const char *fmt) {
  * -DTURBO_WITH_SQLITE. The JIT twins live in src/runtime.rs. */
 #ifdef TURBO_WITH_SQLITE
 #include "turbo_rt_sqlite.c"
+#elif defined(_WIN32)
+/* Windows AOT, program does NOT use SQLite: the codegen still emits references
+ * to the `rt_sqlite_*` builtins in every program's object, and MSVC's link.exe
+ * (unlike ELF/Mach-O `ld`, which silently drops undefined externals that no
+ * relocation actually needs) fails with LNK2001 on them. Provide fail-loud
+ * stubs so a non-SQLite program links; a program that actually opens a
+ * database is compiled WITH -DTURBO_WITH_SQLITE and gets the real engine above.
+ * These are never reached: a program that never calls a sqlite_* builtin holds
+ * no reachable path here. POSIX is unaffected — it needs no such stubs. */
+void *rt_sqlite_open(const char *path) {
+    (void)path; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return NULL;
+}
+void *rt_sqlite_exec(long long h, const char *sql) {
+    (void)h; (void)sql; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return NULL;
+}
+void *rt_sqlite_prepare(long long h, const char *sql) {
+    (void)h; (void)sql; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return NULL;
+}
+long long rt_sqlite_bind_int(long long stmt_h, long long idx, long long v) {
+    (void)stmt_h; (void)idx; (void)v; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return 0;
+}
+long long rt_sqlite_bind_str(long long stmt_h, long long idx, const char *s) {
+    (void)stmt_h; (void)idx; (void)s; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return 0;
+}
+long long rt_sqlite_bind_float(long long stmt_h, long long idx, double f) {
+    (void)stmt_h; (void)idx; (void)f; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return 0;
+}
+long long rt_sqlite_step(long long stmt_h) {
+    (void)stmt_h; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return 0;
+}
+long long rt_sqlite_column_int(long long stmt_h, long long i) {
+    (void)stmt_h; (void)i; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return 0;
+}
+const char *rt_sqlite_column_str(long long stmt_h, long long i) {
+    (void)stmt_h; (void)i; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return NULL;
+}
+double rt_sqlite_column_float(long long stmt_h, long long i) {
+    (void)stmt_h; (void)i; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return 0.0;
+}
+long long rt_sqlite_column_count(long long stmt_h) {
+    (void)stmt_h; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return 0;
+}
+long long rt_sqlite_finalize(long long stmt_h) {
+    (void)stmt_h; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return 0;
+}
+const char *rt_sqlite_error(long long h) {
+    (void)h; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return NULL;
+}
+long long rt_sqlite_close(long long h) {
+    (void)h; TURBO_WIN_AOT_UNSUPPORTED("SQLite"); return 0;
+}
 #endif

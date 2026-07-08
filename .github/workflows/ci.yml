@@ -190,10 +190,6 @@ jobs:
       # output for the core language + stdlib.
       - name: AOT smoke — core phase1 subset
         shell: bash
-        env:
-          # Surface the full C-driver + linker invocation and output on failure
-          # (aot.rs also captures link.exe's stdout, where LNK2019 lines land).
-          TURBO_AOT_VERBOSE: "1"
         run: |
           set -uo pipefail
           bin="turbo/target/release/turbolang.exe"
