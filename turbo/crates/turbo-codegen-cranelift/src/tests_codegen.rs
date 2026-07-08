@@ -110,6 +110,7 @@ fn test_codegen_rejects_pathologically_deep_ast() {
                 mutable_param_vars: Vec::new(),
                 generic_rc_flags: HashMap::new(),
                 generic_value_origins: HashMap::new(),
+                generic_value_retain_flags: HashMap::new(),
                 generic_var_origins: HashMap::new(),
                 return_type_param: None,
                 next_var: 0,

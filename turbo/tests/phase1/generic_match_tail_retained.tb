@@ -1,0 +1,14 @@
+fn pickm<T>(n: i64, a: T, b: T) -> T {
+    match n {
+        0 => a
+        _ => b
+    }
+}
+
+fn main() {
+    let r = pickm(0, "A" + to_str(1), "B" + to_str(2))
+    print(r)
+    print(r)
+    let q = pickm(5, "A" + to_str(3), "B" + to_str(4))
+    print(q)
+}

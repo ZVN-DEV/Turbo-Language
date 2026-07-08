@@ -58,7 +58,8 @@ pub use aot::{aot_compile, wasm_compile};
 mod expr;
 pub(crate) use expr::{
     compile_expr, expr_produces_owned_rc_temp, expr_result_borrows_existing_rc,
-    generic_origin_for_value, is_rc_managed_type, mark_generic_value_origin,
+    generic_origin_for_value, generic_return_retain_flag_for_value, is_rc_managed_type,
+    mark_generic_value_origin, mark_generic_value_origin_with_retain_flag,
     release_expr_temp_if_needed, release_if_needed, release_mutable_param_vars,
     retain_generic_return_if_needed, retain_if_needed,
 };
@@ -250,10 +251,18 @@ pub(crate) struct Ctx<'a, M: Module> {
     pub(crate) mutable_param_vars: Vec<(Variable, TurboTy)>,
     /// For generic functions, maps a type-parameter name to the hidden runtime
     /// flag that says whether this instantiation's concrete type is RC-managed.
+    /// Landmine: generic impl methods and first-class values of generic
+    /// functions are sema-rejected today. If sema allows them later, their
+    /// method/adaptor ABIs must thread these hidden flags too.
     pub(crate) generic_rc_flags: HashMap<String, Value>,
     /// Tracks values that are aliases of generic parameters, so return lowering
     /// can retain only borrowed generic values and not owned call results.
     pub(crate) generic_value_origins: HashMap<Value, String>,
+    /// Optional per-value flag saying whether a generic-origin value still
+    /// needs a return retain. Missing means "yes"; call results that already
+    /// retained their return can mark this as false and control-flow merges can
+    /// thread it dynamically.
+    pub(crate) generic_value_retain_flags: HashMap<Value, Value>,
     pub(crate) generic_var_origins: HashMap<String, String>,
     pub(crate) return_type_param: Option<String>,
     pub(crate) next_var: usize,

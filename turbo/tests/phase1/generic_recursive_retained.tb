@@ -1,0 +1,13 @@
+fn keep<T>(x: T, n: i64) -> T {
+    if n == 0 {
+        x
+    } else {
+        keep(x, n - 1)
+    }
+}
+
+fn main() {
+    let r = keep("rec" + to_str(7), 3)
+    print(r)
+    print(r)
+}

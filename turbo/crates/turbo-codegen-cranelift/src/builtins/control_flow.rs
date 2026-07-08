@@ -7,8 +7,9 @@ use turbo_ast::*;
 
 use crate::turbo_types::{CodegenError, MaybeTyped, TurboTy};
 use crate::{
-    compile_expr, expr_produces_owned_rc_temp, generic_origin_for_value, is_rc_managed_type,
-    mark_generic_value_origin, release_if_needed, retain_if_needed, Ctx,
+    compile_expr, expr_produces_owned_rc_temp, generic_origin_for_value,
+    generic_return_retain_flag_for_value, is_rc_managed_type, mark_generic_value_origin,
+    mark_generic_value_origin_with_retain_flag, release_if_needed, retain_if_needed, Ctx,
 };
 
 fn extract_single_assign(branch: &Spanned<Expr>) -> Option<(&str, &Spanned<Expr>)> {
@@ -42,6 +43,13 @@ fn is_pure_expr(expr: &Expr) -> bool {
         Expr::UnaryOp { expr, .. } => is_pure_expr(&expr.node),
         _ => false,
     }
+}
+
+struct MatchResultState {
+    has_result: bool,
+    origin_seen: bool,
+    origin: Option<String>,
+    turbo_ty: TurboTy,
 }
 
 pub(crate) fn compile_if<M: Module>(
@@ -108,6 +116,8 @@ pub(crate) fn compile_if<M: Module>(
     // Cranelift's remove_constant_phis pass. This bit gates the then-jump's
     // argument so its count always matches the merge block's param count.
     let can_yield_value = else_branch.is_some();
+    let thread_generic_retain_flag = can_yield_value && cx.return_type_param.is_some();
+    let mut merge_value_param_appended = false;
 
     // Then
     cx.builder.switch_to_block(then_block);
@@ -115,9 +125,23 @@ pub(crate) fn compile_if<M: Module>(
     let then_result = compile_expr(cx, then_branch)?;
     let then_needs_jump = !cx.builder.is_unreachable();
     if then_needs_jump {
-        match then_result {
-            Some((v, _)) if can_yield_value => cx.builder.ins().jump(merge_block, &[v]),
-            _ => cx.builder.ins().jump(merge_block, &[]),
+        match then_result.as_ref() {
+            Some((v, _)) if can_yield_value => {
+                let v = *v;
+                let ty = cx.builder.func.dfg.value_type(v);
+                cx.builder.append_block_param(merge_block, ty);
+                if thread_generic_retain_flag {
+                    cx.builder.append_block_param(merge_block, types::I8);
+                    let retain_flag = generic_return_retain_flag_for_value(cx, v);
+                    cx.builder.ins().jump(merge_block, &[v, retain_flag]);
+                } else {
+                    cx.builder.ins().jump(merge_block, &[v]);
+                }
+                merge_value_param_appended = true;
+            }
+            _ => {
+                cx.builder.ins().jump(merge_block, &[]);
+            }
         };
     }
 
@@ -131,8 +155,21 @@ pub(crate) fn compile_if<M: Module>(
     };
     let else_needs_jump = !cx.builder.is_unreachable();
     if else_needs_jump {
-        if let Some((v, _)) = else_result {
-            cx.builder.ins().jump(merge_block, &[v]);
+        if let Some((v, _)) = else_result.as_ref() {
+            let v = *v;
+            if !merge_value_param_appended {
+                let ty = cx.builder.func.dfg.value_type(v);
+                cx.builder.append_block_param(merge_block, ty);
+                if thread_generic_retain_flag {
+                    cx.builder.append_block_param(merge_block, types::I8);
+                }
+            }
+            if thread_generic_retain_flag {
+                let retain_flag = generic_return_retain_flag_for_value(cx, v);
+                cx.builder.ins().jump(merge_block, &[v, retain_flag]);
+            } else {
+                cx.builder.ins().jump(merge_block, &[v]);
+            }
         } else {
             cx.builder.ins().jump(merge_block, &[]);
         }
@@ -162,13 +199,11 @@ pub(crate) fn compile_if<M: Module>(
         let else_origin = else_result
             .as_ref()
             .and_then(|(value, _)| generic_origin_for_value(cx, *value));
-        let (val_for_ty, tty) = match (&then_result, &else_result) {
-            (Some((v, t)), _) if then_yielded => (*v, t.clone()),
-            (_, Some((v, t))) => (*v, t.clone()),
+        let tty = match (&then_result, &else_result) {
+            (Some((_, t)), _) if then_yielded => t.clone(),
+            (_, Some((_, t))) => t.clone(),
             _ => unreachable!("then_yielded || else_yielded guarantees one Some"),
         };
-        let ty = cx.builder.func.dfg.value_type(val_for_ty);
-        cx.builder.append_block_param(merge_block, ty);
         let param = cx.builder.block_params(merge_block)[0];
         let merged_origin = match (then_yielded, else_yielded, then_origin, else_origin) {
             (true, false, Some(origin), _) => Some(origin),
@@ -179,7 +214,12 @@ pub(crate) fn compile_if<M: Module>(
             _ => None,
         };
         if let Some(origin) = merged_origin {
-            mark_generic_value_origin(cx, param, origin);
+            if thread_generic_retain_flag {
+                let retain_flag = cx.builder.block_params(merge_block)[1];
+                mark_generic_value_origin_with_retain_flag(cx, param, origin, retain_flag);
+            } else {
+                mark_generic_value_origin(cx, param, origin);
+            }
         }
         cx.builder.seal_block(merge_block);
         Ok(Some((param, tty)))
@@ -692,8 +732,12 @@ pub(crate) fn compile_match<M: Module>(
     }
 
     let merge_block = cx.builder.create_block();
-    let mut has_result = false;
-    let mut result_turbo_ty = TurboTy::Unit;
+    let mut result_state = MatchResultState {
+        has_result: false,
+        origin_seen: false,
+        origin: None,
+        turbo_ty: TurboTy::Unit,
+    };
     let mut hit_catchall = false;
 
     for (i, arm) in arms.iter().enumerate() {
@@ -726,14 +770,11 @@ pub(crate) fn compile_match<M: Module>(
                 &arm.body,
                 &pattern_bindings,
             );
+            let body_origin = body_result
+                .as_ref()
+                .and_then(|(value, _)| generic_origin_for_value(cx, *value));
             cx.vars = saved_vars;
-            emit_match_arm_jump(
-                cx,
-                merge_block,
-                body_result,
-                &mut has_result,
-                &mut result_turbo_ty,
-            );
+            emit_match_arm_jump(cx, merge_block, body_result, body_origin, &mut result_state);
             hit_catchall = true;
 
             if !is_last {
@@ -1000,14 +1041,11 @@ pub(crate) fn compile_match<M: Module>(
             &arm.body,
             &pattern_bindings,
         );
+        let body_origin = body_result
+            .as_ref()
+            .and_then(|(value, _)| generic_origin_for_value(cx, *value));
         cx.vars = saved_vars;
-        emit_match_arm_jump(
-            cx,
-            merge_block,
-            body_result,
-            &mut has_result,
-            &mut result_turbo_ty,
-        );
+        emit_match_arm_jump(cx, merge_block, body_result, body_origin, &mut result_state);
 
         // Continue to next arm's check
         cx.builder.switch_to_block(next_block);
@@ -1025,12 +1063,15 @@ pub(crate) fn compile_match<M: Module>(
     cx.builder.switch_to_block(merge_block);
     cx.builder.seal_block(merge_block);
 
-    if has_result {
+    if result_state.has_result {
         let param = cx.builder.block_params(merge_block)[0];
+        if let Some(origin) = result_state.origin {
+            mark_generic_value_origin(cx, param, origin);
+        }
         if release_owned_subject {
             release_if_needed(cx, subj_val, &subj_tty);
         }
-        Ok(Some((param, result_turbo_ty)))
+        Ok(Some((param, result_state.turbo_ty)))
     } else {
         if release_owned_subject {
             release_if_needed(cx, subj_val, &subj_tty);
@@ -1074,18 +1115,24 @@ fn emit_match_arm_jump<M: Module>(
     cx: &mut Ctx<'_, M>,
     merge_block: cranelift::prelude::Block,
     body_result: MaybeTyped,
-    has_result: &mut bool,
-    result_turbo_ty: &mut TurboTy,
+    body_origin: Option<String>,
+    result_state: &mut MatchResultState,
 ) {
     let needs_jump = !cx.builder.is_unreachable();
     if let Some((val, tty)) = body_result {
-        if !*has_result {
-            *has_result = true;
+        if !result_state.has_result {
+            result_state.has_result = true;
             let cl_ty = cx.builder.func.dfg.value_type(val);
-            *result_turbo_ty = tty;
+            result_state.turbo_ty = tty;
             cx.builder.append_block_param(merge_block, cl_ty);
         }
         if needs_jump {
+            if !result_state.origin_seen {
+                result_state.origin = body_origin;
+                result_state.origin_seen = true;
+            } else if result_state.origin != body_origin {
+                result_state.origin = None;
+            }
             cx.builder.ins().jump(merge_block, &[val]);
         }
     } else if needs_jump {
