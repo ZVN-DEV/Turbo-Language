@@ -102,7 +102,7 @@ command to re-run if any check fails.
 3. **Parser** (`turbo-parser/src/lib.rs`) -- parse the new syntax into the AST node.
 4. **Sema** (`turbo-sema/src/lib.rs`) -- add type-checking logic.
 5. **Codegen** (`turbo-codegen-cranelift/src/lib.rs`) -- add code generation.
-6. **Formatter** (`turbo-cli/src/formatter.rs`) -- handle pretty-printing if applicable.
+6. **Formatter** (`turbo-formatter/src/lib.rs`) -- handle pretty-printing if applicable.
 7. **Test** -- add a `.tb`/`.expected` pair in `turbo/tests/phase1/`.
 
 ### New integration test

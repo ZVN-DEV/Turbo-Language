@@ -21,6 +21,7 @@ turbolang run examples/web-dashboard/main.tb
 | [game-of-life](./game-of-life/) | Conway's Game of Life | String-as-grid, char_at, nested loops, algorithms |
 | [simple-script](./simple-script/) | Text Statistics Analyzer | Strings, HashMaps, arrays, pipes, string interpolation |
 | [speed-server](./speed-server/) | REST API Benchmark Server | HTTP server, JSON responses, fibonacci, primes, sorting |
+| [http-sqlite-api](./http-sqlite-api/) | Todo API on built-in SQLite | HTTP server, embedded SQLite (`sqlite_*`), prepared statements, JSON — one self-contained binary |
 | [stateful-counter](./stateful-counter/) | Persistent Hit Counter | HTTP server, persistent in-memory state across requests (a startup hashmap survives the per-request arena), bounded memory |
 | [file-analyzer](./file-analyzer/) | Source Code Analyzer | File I/O, line parsing, statistics, progress bars |
 | [libturbo-c-host](./libturbo-c-host/) | C Host Embedding Demo | `libturbo`, JIT eval, host callbacks, typed `i64`/`str` exchange |
@@ -89,6 +90,15 @@ turbolang run examples/speed-server/main.tb
 # curl http://localhost:8080/api/fib
 ```
 
+### http-sqlite-api
+
+A tiny todo API backed by a real, embedded SQLite database — written entirely in Turbo. SQLite is vendored into the compiler and statically linked, so there is no external database server and no `libsqlite3` dependency: `turbolang build` produces a single self-contained binary. Demonstrates `sqlite_open`, prepared statements with bound parameters, row-by-row reads, and `Result`-based error handling behind an HTTP + JSON API.
+
+```bash
+turbolang run examples/http-sqlite-api/main.tb
+# curl -s http://127.0.0.1:8080/todos
+```
+
 ### libturbo-c-host
 
 A C host embedding demo that registers native callbacks, evaluates Turbo source through `libturbo`, then calls Turbo functions returning `i64` and `str`. Build and run it with the commands in [`examples/libturbo-c-host/README.md`](./libturbo-c-host/README.md).
@@ -104,6 +114,8 @@ turbolang run examples/data-pipeline/main.tb
 turbolang run examples/game-of-life/main.tb
 turbolang run examples/simple-script/main.tb
 turbolang run examples/speed-server/main.tb
+turbolang run examples/http-sqlite-api/main.tb
+turbolang run examples/stateful-counter/main.tb
 turbolang run examples/file-analyzer/main.tb
 ```
 

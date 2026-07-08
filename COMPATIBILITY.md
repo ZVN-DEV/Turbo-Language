@@ -1,6 +1,6 @@
 # Compatibility and Stability
 
-Turbo is pre-1.0. This document describes what today's `0.10.x` releases
+Turbo is pre-1.0. This document describes what today's `0.12.x` releases
 guarantee, what is still fluid, and what the `1.0` stability contract
 will mean when we cut it. It is a contract, not a marketing pitch — if
 you are shipping production code against a pre-1.0 Turbo you should
@@ -14,10 +14,10 @@ read this in full.
 We are intentionally dwelling in the `0.x` series for a long while,
 cutting many point releases, rather than racing to `1.0`. That means:
 
-- **Point releases (`0.10.0` → `0.10.1`)** — additive, bug fixes, no
+- **Point releases (`0.12.0` → `0.12.1`)** — additive, bug fixes, no
   syntactic breaking changes. Safe to auto-update in CI if you re-run
   your test suite.
-- **Minor releases (`0.10.x` → `0.11.0`)** — may break syntax, remove
+- **Minor releases (`0.12.x` → `0.13.0`)** — may break syntax, remove
   deprecated builtins, reshape the stdlib, or renumber error codes in
   the `E05xx` range. Read the CHANGELOG before upgrading.
 - **Major release (`1.0`)** — the stability contract below kicks in.
@@ -46,7 +46,7 @@ not promises today.
 - **Tier-1 platform support.** Every `1.x` release builds and passes
   the integration suite on all tier-1 platforms (see below).
 
-## What Is Explicitly Fluid in `0.10.x`
+## What Is Explicitly Fluid in `0.12.x`
 
 Do not build load-bearing production code against these unless you
 are prepared to update it on every minor release.
@@ -107,7 +107,7 @@ disclosure policy in `SECURITY.md`.
 
 ## What This Means in Practice
 
-- **If you are experimenting.** Track the latest `0.10.x`. Re-run your
+- **If you are experimenting.** Track the latest `0.12.x`. Re-run your
   tests on every bump. File issues.
 - **If you are shipping something today.** Pin an exact Turbo version
   (`turbolang --version` in CI). Vendor the install script or the

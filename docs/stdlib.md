@@ -788,6 +788,79 @@ Serializes an array of structs to a JSON array string.
 
 ---
 
+## Database (SQLite)
+
+Turbo embeds SQLite directly in the compiler — the engine is vendored and
+statically linked, so `turbolang build` produces a single self-contained binary
+with no `libsqlite3` dependency and no external database server. Database
+handles and prepared statements are opaque `i64` values.
+
+Fallible functions return a `Result` (mirroring `try_read_file`); the failure
+carries the SQLite error message as the `str` error payload. Use `?` to
+propagate, or `match` to handle both cases — nothing panics.
+
+Because `?` requires the enclosing function to return a `Result`, put the
+fallible work in a helper that returns one (for example `i64 ! str`) and call
+it from `main`:
+
+```turbo
+fn setup(db: i64) -> i64 ! str {
+    sqlite_exec(db, "CREATE TABLE IF NOT EXISTS todos (id INTEGER PRIMARY KEY, title TEXT, done INTEGER)")?
+    let ins = sqlite_prepare(db, "INSERT INTO todos (title, done) VALUES (?, 0)")?  // ? = a bound parameter (1-based)
+    sqlite_bind_str(ins, 1, "learn turbo")
+    sqlite_step(ins)
+    sqlite_finalize(ins)
+    ok(0)
+}
+
+fn run() -> i64 ! str {
+    let db = sqlite_open("app.db")?
+    setup(db)?
+
+    let q = sqlite_prepare(db, "SELECT id, title, done FROM todos ORDER BY id")?
+    while sqlite_step(q) == 1 {                 // 1 = row, 0 = done, -1 = error
+        let id    = sqlite_column_int(q, 0)
+        let title = sqlite_column_str(q, 1)
+        let done  = sqlite_column_int(q, 2)
+        print("{id}: {title} ({done})")
+    }
+    sqlite_finalize(q)
+    sqlite_close(db)
+    ok(0)
+}
+
+fn main() {
+    match run() {
+        ok(_)  => print("done")
+        err(e) => print("sqlite error: {e}")
+    }
+}
+```
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `sqlite_open` | `(path: str) -> i64 ! str` | Opens (creating if absent) a database file; returns a handle. |
+| `sqlite_close` | `(db: i64) -> i64` | Closes a database handle. |
+| `sqlite_exec` | `(db: i64, sql: str) -> unit ! str` | Runs one or more SQL statements with no result rows. |
+| `sqlite_error` | `(db: i64) -> str` | Returns the most recent error message for a handle. |
+| `sqlite_prepare` | `(db: i64, sql: str) -> i64 ! str` | Compiles a SQL statement; returns a statement handle. |
+| `sqlite_bind_int` | `(stmt: i64, idx: i64, v: i64) -> i64` | Binds an integer to a `?` parameter (1-based `idx`). |
+| `sqlite_bind_str` | `(stmt: i64, idx: i64, v: str) -> i64` | Binds a string to a `?` parameter (1-based `idx`). |
+| `sqlite_bind_float` | `(stmt: i64, idx: i64, v: f64) -> i64` | Binds a float to a `?` parameter (1-based `idx`). |
+| `sqlite_step` | `(stmt: i64) -> i64` | Advances a statement: `1` = a row is ready, `0` = done, `-1` = error. |
+| `sqlite_column_int` | `(stmt: i64, col: i64) -> i64` | Reads the current row's column as an integer (0-based `col`). |
+| `sqlite_column_str` | `(stmt: i64, col: i64) -> str` | Reads the current row's column as a string. |
+| `sqlite_column_float` | `(stmt: i64, col: i64) -> f64` | Reads the current row's column as a float. |
+| `sqlite_column_count` | `(stmt: i64) -> i64` | Returns the number of columns in the current result row. |
+| `sqlite_finalize` | `(stmt: i64) -> i64` | Releases a prepared statement. Call it when you're done with each statement. |
+
+> **Note — filesystem access.** `sqlite_open` reads and writes a real file on
+> disk, so it is disabled in the browser playground sandbox and unavailable on
+> the WASM target. A runnable end-to-end example lives in
+> [`examples/http-sqlite-api`](../examples/http-sqlite-api).
+
+---
+
 ## HTTP Client
 
 ### http_get
@@ -1138,6 +1211,7 @@ Writes a 64-bit integer value to the given memory address.
 | **Math** | `abs`, `min`, `max`, `pow`, `sqrt`, `random`, `random_range` |
 | **HashMap** | `hashmap`, `hashmap_set`, `hashmap_get`, `hashmap_set_int`, `hashmap_get_int`, `hashmap_inc`, `hashmap_has`, `hashmap_len`, `hashmap_keys`, `hashmap_remove` |
 | **JSON** | `json_get`, `json_stringify`, `to_json`, `to_json_array` |
+| **Database (SQLite)** | `sqlite_open`, `sqlite_close`, `sqlite_exec`, `sqlite_error`, `sqlite_prepare`, `sqlite_bind_int`, `sqlite_bind_str`, `sqlite_bind_float`, `sqlite_step`, `sqlite_column_int`, `sqlite_column_str`, `sqlite_column_float`, `sqlite_column_count`, `sqlite_finalize` |
 | **HTTP Client** | `http_get`, `http_post`, `http_post_with_headers` |
 | **HTTP Server** | `http_server`, `http_server_public`, `http_config`, `route`, `http_listen`, `respond_text`, `respond_html`, `respond_json`, `request_body`, `request_method`, `request_path`, `request_query`, `request_header` |
 | **System** | `exec`, `env_get`, `exit`, `type_of` |

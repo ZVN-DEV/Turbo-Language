@@ -53,13 +53,13 @@ turbolang build hello.tb      # AOT — produce a native binary
 ./hello
 ```
 
-### Known Limitations (v0.10.x)
+### Known Limitations (v0.12.x)
 
 > **Note — runtime string allocation:** Strings, arrays, structs, results, and optionals use the runtime ARC header and are released at scope exit, reassignment, and typed container drops. HTTP servers still use per-request arenas for request-scoped allocations, so handler temporaries are reclaimed in bulk at the end of each request while server state held in hashmaps persists correctly across requests.
 >
 > **Note — HTTP server is behind-proxy production-grade:** The built-in HTTP server binds to `127.0.0.1` by default, enforces body/header/connection caps and read/write/idle timeouts, does graceful shutdown on `SIGTERM`/`SIGINT`, and exposes tunables via `http_config`. It provides no TLS/HTTP2 — put it behind a reverse proxy (nginx, Caddy) for public exposure. See [`docs/production-server.md`](docs/production-server.md) for deployment and [`SECURITY.md`](SECURITY.md) for the threat model.
 
-> **Roadmap note — agent/tool features live in a sidecar, not the compiler.** Earlier design sketches explored `agent` and `tool fn` keywords. Those are no longer planned as core-language features — they'll ship (post-1.0) as a separate `turbo-agent` library that builds on Turbo's async, HTTP, and typed-serialization primitives. The compiler itself stays focused on being a fast, small, general-purpose systems/application language. Today's release ships native compilation, WASM output, async primitives, HTTP building blocks, REPL/playground, formatter, and LSP.
+> **Roadmap note — agent/tool features live in a sidecar, not the compiler.** Earlier design sketches explored `agent` and `tool fn` keywords. Those are no longer planned as core-language features — they'll ship (post-1.0) as a separate `turbo-agent` library that builds on Turbo's async, HTTP, and typed-serialization primitives. The compiler itself stays focused on being a fast, small, general-purpose systems/application language. Today's release ships native compilation, WASM output, thread-per-`spawn` concurrency, a hardened HTTP server, built-in SQLite, a typed generic `HashMap<K,V>`, first-class function values, a package registry, REPL/playground, formatter, and LSP.
 
 ### Security Model
 
@@ -326,9 +326,10 @@ fn main() {
 | **Strings** | `s.trim()`, `s.upper()`, `s.split(",")`, `s.contains("x")`, `s.replace("a", "b")` |
 | **Arrays** | `arr.len()`, `arr.push(elem)`, `arr.map(fn)`, `arr.filter(fn)` |
 | **Math** | `abs(n)`, `min(a, b)`, `max(a, b)`, `pow(base, exp)` (integer base/exponent), `sqrt(x)` |
-| **HashMap** | `hashmap()`, `hashmap_set(m, k, v)`, `hashmap_get(m, k)`, `hashmap_set_int(m, k, v)`, `hashmap_get_int(m, k)`, `hashmap_keys(m)` |
+| **HashMap** | typed `HashMap<K,V>` (int/`str` keys, any value incl. functions), plus `hashmap()`, `hashmap_set(m, k, v)`, `hashmap_get(m, k)`, `hashmap_has(m, k)`, `hashmap_keys(m)`, `hashmap_remove(m, k)` |
 | **JSON** | `json_get(json, key)`, `to_json(struct)`, `to_json_array(arr)` |
-| **HTTP** | `http_get(url)`, `http_post(url, body)`, `http_server(port)`, `route(...)` |
+| **Database** | built-in SQLite: `sqlite_open(path)`, `sqlite_exec(db, sql)`, `sqlite_prepare(db, sql)`, `sqlite_step(stmt)`, `sqlite_column_int/str/float(...)`, `sqlite_bind_int/str/float(...)` |
+| **HTTP** | `http_get(url)`, `http_post(url, body)`, `http_server(port)`, `http_config(key, value)`, `route(...)` |
 | **System** | `exec(cmd)`, `env_get(key)` |
 | **Concurrency** | `channel()`, `send(ch, v)`, `recv(ch)`, `mutex(val)`, `sleep(ms)`, `clone(s)` |
 | **Testing** | `assert(cond)`, `assert_eq(a, b)`, `assert_ne(a, b)`, `panic(msg)` |
@@ -389,6 +390,7 @@ See [`examples/speed-server/main.tb`](examples/speed-server/main.tb)
 | `turbolang test <file.tb>` | Run `@test` functions |
 | `turbolang bench <file.tb>` | Benchmark with timing |
 | `turbolang check <file.tb>` | Type-check without compiling |
+| `turbolang search <query>` | Search the package registry ([turbolang.dev/packages](https://turbolang.dev/packages)) |
 | `turbolang install` | Install `path` and `github` dependencies from `turbo.toml` |
 | `turbolang update` | Update pinned GitHub dependencies and refresh `turbo.lock` |
 | `turbolang playground` | Launch browser-based playground |
