@@ -313,16 +313,35 @@ pub fn aot_compile(
         cmd.arg(format!("-l{}", lib));
     }
 
+    // Verbose diagnostics: `TURBO_AOT_VERBOSE=1` prints the full C-driver
+    // command and passes `-v` so the driver echoes the underlying linker
+    // invocation. Useful when a link fails with an opaque driver-level error.
+    if std::env::var("TURBO_AOT_VERBOSE").is_ok() {
+        cmd.arg("-v");
+        eprintln!("[turbo-aot] link command: {cmd:?}");
+    }
+
     let output = cmd.output().map_err(|e| CodegenError {
         code: ErrorCode::E0404,
         message: format!("failed to run linker '{}': {e}", cc_cmd),
     })?;
 
     if !output.status.success() {
+        // Capture BOTH streams: C drivers print their own diagnostics to stderr,
+        // but the underlying linker (notably MSVC link.exe / lld-link, which
+        // report LNK2019 "unresolved external symbol" lines) writes to stdout.
+        // Surfacing only stderr swallowed the actual missing-symbol list.
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let combined = format!("{stderr}{stdout}");
+        let detail = if combined.trim().is_empty() {
+            format!("(no linker output; exit status {})", output.status)
+        } else {
+            combined
+        };
         return Err(CodegenError {
             code: ErrorCode::E0404,
-            message: format!("linker failed: {stderr}"),
+            message: format!("linker failed: {detail}"),
         });
     }
 
