@@ -60,6 +60,28 @@ fn main() {
 
     let mut compile = Command::new(&cc);
     compile.args(cflags);
+
+    // Cross-compilation: a bare `cc` compiles for the HOST arch, but cargo
+    // may be building a different TARGET (the release matrix cross-builds
+    // x86_64-apple-darwin on arm64 runners). A wrong-arch object is silently
+    // ignored by the linker and surfaces as undefined `_sqlite3_*` symbols.
+    let host = std::env::var("HOST").unwrap_or_default();
+    let target = std::env::var("TARGET").unwrap_or_default();
+    if !target.is_empty() && target != host {
+        if target.contains("apple-darwin") {
+            let arch = if target.starts_with("aarch64") {
+                "arm64"
+            } else {
+                "x86_64"
+            };
+            compile.arg("-arch").arg(arch);
+        } else {
+            // clang accepts a bare triple via --target; gcc-based cross
+            // setups are expected to provide a target-specific $CC instead.
+            compile.arg(format!("--target={target}"));
+        }
+    }
+
     compile.arg("-c").arg(&sqlite_c).arg("-o").arg(&obj_path);
 
     let status = compile
