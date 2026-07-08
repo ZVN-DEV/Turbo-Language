@@ -27,8 +27,6 @@ pub(crate) fn compile_stmt<M: Module>(
         } => {
             // Clear any stale concrete fields from a previous struct lit
             cx.last_struct_lit_concrete_fields = None;
-            // Check if the RHS is a variable reference (for COW retain)
-            let rhs_is_ident = matches!(&value.node, Expr::Ident(_));
             // A `hashmap()` bound to a `HashMap<K, V>` annotation constructs a
             // typed, descriptor-carrying map instead of the legacy str→str
             // handle, so its key hashing and rc value retain/release are set up.
@@ -73,10 +71,8 @@ pub(crate) fn compile_stmt<M: Module>(
             //     Strings follow the same rule now that they are ARC-managed.
             //     Gated to refcounted element types so scalar indexing (e.g.
             //     `let x = ints[0]`) is left byte-for-byte unchanged.
-            let rhs_retains = rhs_is_ident
-                || (matches!(&value.node, Expr::Index { .. }) && is_rc_managed_type(cx, &turbo_ty))
-                || (matches!(&value.node, Expr::FieldAccess { .. })
-                    && is_rc_managed_type(cx, &turbo_ty));
+            let rhs_retains =
+                expr_result_borrows_existing_rc(value) && is_rc_managed_type(cx, &turbo_ty);
             if rhs_retains {
                 if let Some(v) = val {
                     retain_if_needed(cx, v, &turbo_ty);

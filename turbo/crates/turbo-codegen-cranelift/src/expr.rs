@@ -327,10 +327,7 @@ fn compile_expr_inner<M: Module>(
                     }
                 }
             }
-            let rhs_ident = match &value.node {
-                Expr::Ident(name) => Some(name.as_str()),
-                _ => None,
-            };
+            let rhs_borrows_existing = expr_result_borrows_existing_rc(value);
             let (val, tty) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
@@ -346,7 +343,7 @@ fn compile_expr_inner<M: Module>(
                 // Assignment to refcounted values must handle aliasing as:
                 //
                 //   if old != new {
-                //       retain(new); // when new is borrowed from another variable
+                //       retain(new); // when new is borrowed from existing storage
                 //       release(old);
                 //   }
                 //
@@ -364,7 +361,7 @@ fn compile_expr_inner<M: Module>(
 
                 cx.builder.switch_to_block(changed_block);
                 cx.builder.seal_block(changed_block);
-                if rhs_ident.is_some() {
+                if rhs_borrows_existing {
                     retain_if_needed(cx, val, &tty);
                 }
                 release_if_needed(cx, prev_val, &prev_tty);
@@ -373,7 +370,7 @@ fn compile_expr_inner<M: Module>(
                 cx.builder.switch_to_block(done_block);
                 cx.builder.seal_block(done_block);
             } else {
-                if rhs_ident.is_some() {
+                if rhs_borrows_existing {
                     retain_if_needed(cx, val, &tty);
                 }
                 if is_rc_managed_type(cx, &prev_tty) {
@@ -515,10 +512,7 @@ fn compile_expr_inner<M: Module>(
             };
 
             if is_rc_managed_type(cx, &field_tty) {
-                if matches!(
-                    &value.node,
-                    Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-                ) {
+                if expr_result_borrows_existing_rc(value) {
                     retain_if_needed(cx, val, &field_tty);
                 }
                 let old_val = cx
@@ -537,10 +531,14 @@ fn compile_expr_inner<M: Module>(
             index,
             value,
         } => {
-            let (arr, _arr_tty) = compile_expr(cx, object)?.ok_or_else(|| CodegenError {
+            let (arr, arr_tty) = compile_expr(cx, object)?.ok_or_else(|| CodegenError {
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
+            let elem_tty = match &arr_tty {
+                TurboTy::Array(inner) => *inner.clone(),
+                _ => TurboTy::Int,
+            };
             let (idx, _) = compile_expr(cx, index)?.ok_or_else(|| CodegenError {
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
@@ -573,13 +571,26 @@ fn compile_expr_inner<M: Module>(
             };
 
             let trusted = MemFlags::trusted();
+            let elem_is_rc = is_rc_managed_type(cx, &elem_tty);
+            let value_borrows_existing = expr_result_borrows_existing_rc(value);
+            if elem_is_rc && value_borrows_existing {
+                retain_if_needed(cx, val, &elem_tty);
+            }
 
             if cx.is_unsafe {
                 // @unsafe: skip COW check and bounds check — direct store
                 let data_base = cx.builder.ins().iadd_imm(arr, 8);
                 let byte_offset = cx.builder.ins().ishl_imm(idx, 3);
                 let elem_ptr = cx.builder.ins().iadd(data_base, byte_offset);
+                let old_val = if elem_is_rc {
+                    Some(cx.builder.ins().load(cx.ptr_type, trusted, elem_ptr, 0i32))
+                } else {
+                    None
+                };
                 cx.builder.ins().store(trusted, val, elem_ptr, 0i32);
+                if let Some(old_val) = old_val {
+                    release_if_needed(cx, old_val, &elem_tty);
+                }
             } else {
                 // COW check: if refcount > 1, call rt_array_set (slow/copy path)
                 let rc = cx
@@ -604,6 +615,7 @@ fn compile_expr_inner<M: Module>(
                 let set_ref = cx.module.declare_func_in_func(set_fid, cx.builder.func);
                 let call = cx.builder.ins().call(set_ref, &[arr, idx, val]);
                 let slow_result = cx.builder.inst_results(call)[0];
+                retain_array_elements_except_index_if_needed(cx, slow_result, &elem_tty, idx);
                 cx.builder.ins().jump(merge_block, &[slow_result]);
 
                 // Fast path: inline bounds check + store
@@ -631,7 +643,15 @@ fn compile_expr_inner<M: Module>(
                 let data_base = cx.builder.ins().iadd_imm(arr, 8);
                 let byte_offset = cx.builder.ins().ishl_imm(idx, 3);
                 let elem_ptr = cx.builder.ins().iadd(data_base, byte_offset);
+                let old_val = if elem_is_rc {
+                    Some(cx.builder.ins().load(cx.ptr_type, trusted, elem_ptr, 0i32))
+                } else {
+                    None
+                };
                 cx.builder.ins().store(trusted, val, elem_ptr, 0i32);
+                if let Some(old_val) = old_val {
+                    release_if_needed(cx, old_val, &elem_tty);
+                }
                 cx.builder.ins().jump(merge_block, &[arr]);
 
                 cx.builder.switch_to_block(merge_block);
@@ -891,12 +911,7 @@ fn compile_expr_inner<M: Module>(
                 if i == 0 {
                     elem_tty = tty;
                 }
-                if is_rc_managed_type(cx, &elem_tty)
-                    && matches!(
-                        &elem.node,
-                        Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-                    )
-                {
+                if is_rc_managed_type(cx, &elem_tty) && expr_result_borrows_existing_rc(elem) {
                     retain_if_needed(cx, val, &elem_tty);
                 }
                 let offset = cx.builder.ins().iconst(cx.ptr_type, (8 + i * 8) as i64);
@@ -1025,10 +1040,7 @@ fn compile_expr_inner<M: Module>(
                     code: ErrorCode::E0400,
                     message: "expected a value, but sub-expression has unit type".to_string(),
                 })?;
-                if matches!(
-                    &field_value.node,
-                    Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-                ) {
+                if expr_result_borrows_existing_rc(field_value) {
                     retain_if_needed(cx, val, &tty);
                 }
                 concrete_fields.push((field_name.clone(), tty));
@@ -1320,10 +1332,7 @@ fn compile_expr_inner<M: Module>(
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
-            if matches!(
-                &value.node,
-                Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-            ) {
+            if expr_result_borrows_existing_rc(value) {
                 retain_if_needed(cx, val, &tty);
             }
             // Widen to i64 if needed (bools, etc.)
@@ -1350,10 +1359,7 @@ fn compile_expr_inner<M: Module>(
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
-            if matches!(
-                &value.node,
-                Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-            ) {
+            if expr_result_borrows_existing_rc(value) {
                 retain_if_needed(cx, val, &tty);
             }
             // Widen to i64 if needed
@@ -1380,10 +1386,7 @@ fn compile_expr_inner<M: Module>(
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
-            if matches!(
-                &value.node,
-                Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-            ) {
+            if expr_result_borrows_existing_rc(value) {
                 retain_if_needed(cx, val, &tty);
             }
             // Widen to i64 if needed (bools, etc.)
@@ -1565,6 +1568,69 @@ pub(crate) fn retain_array_prefix_if_needed<M: Module>(
     cx.builder.seal_block(done_block);
 }
 
+fn retain_array_elements_except_index_if_needed<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    array: Value,
+    elem_ty: &TurboTy,
+    skip_idx: Value,
+) {
+    if !is_rc_managed_type(cx, elem_ty) {
+        return;
+    }
+    let len = cx.builder.ins().load(types::I64, MemFlags::new(), array, 0);
+    let idx_var = cx.fresh_var(types::I64, TurboTy::Int);
+    let zero = cx.builder.ins().iconst(types::I64, 0);
+    cx.builder.def_var(idx_var, zero);
+
+    let header_block = cx.builder.create_block();
+    let body_block = cx.builder.create_block();
+    let retain_block = cx.builder.create_block();
+    let inc_block = cx.builder.create_block();
+    let done_block = cx.builder.create_block();
+
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.switch_to_block(header_block);
+    let idx = cx.builder.use_var(idx_var);
+    let keep_going = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, len);
+    cx.builder
+        .ins()
+        .brif(keep_going, body_block, &[], done_block, &[]);
+
+    cx.builder.switch_to_block(body_block);
+    cx.builder.seal_block(body_block);
+    let idx = cx.builder.use_var(idx_var);
+    let is_skip = cx.builder.ins().icmp(IntCC::Equal, idx, skip_idx);
+    cx.builder
+        .ins()
+        .brif(is_skip, inc_block, &[], retain_block, &[]);
+
+    cx.builder.switch_to_block(retain_block);
+    cx.builder.seal_block(retain_block);
+    let idx = cx.builder.use_var(idx_var);
+    let data_base = cx.builder.ins().iadd_imm(array, 8);
+    let byte_offset = cx.builder.ins().ishl_imm(idx, 3);
+    let elem_ptr = cx.builder.ins().iadd(data_base, byte_offset);
+    let elem_val = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), elem_ptr, 0);
+    retain_if_needed(cx, elem_val, elem_ty);
+    cx.builder.ins().jump(inc_block, &[]);
+
+    cx.builder.switch_to_block(inc_block);
+    cx.builder.seal_block(inc_block);
+    let idx = cx.builder.use_var(idx_var);
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let next_idx = cx.builder.ins().iadd(idx, one);
+    cx.builder.def_var(idx_var, next_idx);
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.seal_block(header_block);
+    cx.builder.switch_to_block(done_block);
+    cx.builder.seal_block(done_block);
+}
+
 pub(crate) fn retain_array_elements_if_needed<M: Module>(
     cx: &mut Ctx<'_, M>,
     array: Value,
@@ -1596,6 +1662,22 @@ fn match_arm_yields_owned_or_static_rc(arm: &MatchArm) -> bool {
     expr_produces_owned_rc_temp(&arm.body)
         || matches!(arm.body.node, Expr::StringLit(_))
         || match_arm_yields_subject_binding(arm)
+}
+
+pub(crate) fn expr_result_borrows_existing_rc(expr: &Spanned<Expr>) -> bool {
+    match &expr.node {
+        Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. } => true,
+        Expr::Match { subject, arms } => {
+            !expr_produces_owned_rc_temp(subject)
+                && !arms.is_empty()
+                && arms.iter().any(match_arm_yields_subject_binding)
+                && arms.iter().all(|arm| {
+                    match_arm_yields_subject_binding(arm)
+                        || matches!(arm.body.node, Expr::StringLit(_))
+                })
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn expr_produces_owned_rc_temp(expr: &Spanned<Expr>) -> bool {

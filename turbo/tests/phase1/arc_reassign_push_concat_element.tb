@@ -1,0 +1,10 @@
+fn f() -> str {
+    let mut arr: [str] = ["seed"]
+    arr = push(arr, "x" + "1")
+    arr = push(arr, "y" + "2")
+    let mut found = ""
+    found = arr[2]
+    let _other = 5
+    found
+}
+fn main() { print("concat=[" + f() + "]") }

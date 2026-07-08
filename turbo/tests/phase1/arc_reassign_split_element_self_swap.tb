@@ -1,0 +1,12 @@
+fn first_twice(pattern: str) -> str {
+    let parts = split(pattern, "/")
+    let mut found = ""
+    found = parts[0]
+    found = parts[0]
+    let _other = 5
+    found
+}
+
+fn main() {
+    print("twice=[" + first_twice("a/b/c") + "]")
+}

@@ -1,0 +1,13 @@
+struct User { name: str }
+
+fn pick_name() -> str {
+    let u = User { name: "Ada" + "" }
+    let mut found = ""
+    found = u.name
+    let _other = 5
+    found
+}
+
+fn main() {
+    print("field=[" + pick_name() + "]")
+}

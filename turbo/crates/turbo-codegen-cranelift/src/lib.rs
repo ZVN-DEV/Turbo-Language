@@ -57,8 +57,8 @@ pub use aot::{aot_compile, wasm_compile};
 
 mod expr;
 pub(crate) use expr::{
-    compile_expr, expr_produces_owned_rc_temp, is_rc_managed_type, release_expr_temp_if_needed,
-    release_if_needed, release_mutable_param_vars, retain_if_needed,
+    compile_expr, expr_produces_owned_rc_temp, expr_result_borrows_existing_rc, is_rc_managed_type,
+    release_expr_temp_if_needed, release_if_needed, release_mutable_param_vars, retain_if_needed,
 };
 pub(crate) use expr::{retain_array_elements_if_needed, retain_array_prefix_if_needed};
 

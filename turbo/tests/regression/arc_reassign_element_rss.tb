@@ -1,0 +1,16 @@
+fn churn(n: i64) -> i64 {
+    let parts = split("a/b/c", "/")
+    let mut found = ""
+    let mut i = 0
+    let mut total = 0
+    while i < n {
+        found = parts[i % 3]
+        total = total + len(found)
+        i = i + 1
+    }
+    total
+}
+
+fn main() {
+    print(churn(1000000))
+}
