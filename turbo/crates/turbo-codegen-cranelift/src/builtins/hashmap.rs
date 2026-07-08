@@ -1,7 +1,7 @@
 //! Hashmap built-ins.
 
 use cranelift::prelude::*;
-use cranelift_module::Module;
+use cranelift_module::{FuncId, Linkage, Module};
 use turbo_ast::*;
 
 use crate::expr::{
@@ -76,6 +76,33 @@ pub(crate) fn hashmap_key_kind(key_tty: &TurboTy) -> i64 {
     }
 }
 
+fn ensure_hashmap_value_release_thunk<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    val_tty: &TurboTy,
+) -> Result<FuncId, CodegenError> {
+    let key = hashmap_value_release_thunk_key(val_tty);
+    if let Some((thunk_fid, _)) = cx.hashmap_value_release_thunks.get(key.as_str()) {
+        return Ok(*thunk_fid);
+    }
+
+    let thunk_name = format!(
+        "__hashmap_value_release${}",
+        cx.hashmap_value_release_thunks.len()
+    );
+    let mut sig = cx.module.make_signature();
+    sig.params.push(AbiParam::new(cx.ptr_type));
+    let thunk_fid = cx
+        .module
+        .declare_function(&thunk_name, Linkage::Local, &sig)
+        .map_err(|e| CodegenError {
+            code: ErrorCode::E0405,
+            message: format!("failed to declare hashmap value release thunk: {e}"),
+        })?;
+    cx.hashmap_value_release_thunks
+        .insert(key, (thunk_fid, val_tty.clone()));
+    Ok(thunk_fid)
+}
+
 /// hashmap() -> HashMap (opaque legacy str→str/str→int handle).
 pub(crate) fn compile_builtin_hashmap<M: Module>(
     cx: &mut Ctx<'_, M>,
@@ -104,13 +131,9 @@ pub(crate) fn compile_typed_hashmap_ctor<M: Module>(
     let key_kind = cx.builder.ins().iconst(types::I64, kk);
     let val_is_rc = cx.builder.ins().iconst(types::I64, rc);
     let release_fn = if hashmap_value_needs_custom_release(cx, val_tty) {
-        let key = hashmap_value_release_thunk_key(val_tty);
-        if let Some(&thunk_fid) = cx.hashmap_value_release_thunks.get(key.as_str()) {
-            let thunk_ref = cx.module.declare_func_in_func(thunk_fid, cx.builder.func);
-            cx.builder.ins().func_addr(cx.ptr_type, thunk_ref)
-        } else {
-            cx.builder.ins().iconst(cx.ptr_type, 0)
-        }
+        let thunk_fid = ensure_hashmap_value_release_thunk(cx, val_tty)?;
+        let thunk_ref = cx.module.declare_func_in_func(thunk_fid, cx.builder.func);
+        cx.builder.ins().func_addr(cx.ptr_type, thunk_ref)
     } else {
         cx.builder.ins().iconst(cx.ptr_type, 0)
     };

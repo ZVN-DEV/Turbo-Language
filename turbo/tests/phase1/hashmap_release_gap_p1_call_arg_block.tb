@@ -1,0 +1,14 @@
+fn sink(m: HashMap<str, HashMap<int, [str]>>) -> int {
+    hashmap_len(m)
+}
+
+fn main() {
+    let r = sink({
+        let outer: HashMap<str, HashMap<int, [str]>> = hashmap()
+        let inner: HashMap<int, [str]> = hashmap()
+        hashmap_set(inner, 1, ["nested", "value"])
+        hashmap_set(outer, "k", inner)
+        outer
+    })
+    print(r)
+}

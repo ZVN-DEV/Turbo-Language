@@ -15,8 +15,7 @@ use turbo_ast::*;
 
 use crate::closures::{extract_all_closures, extract_all_spawn_sites, CaptureInfo};
 use crate::expr::{
-    compile_expr, hashmap_value_needs_custom_release_with_layouts, hashmap_value_release_thunk_key,
-    release_if_needed, release_mutable_param_vars, retain_generic_return_if_needed,
+    compile_expr, release_if_needed, release_mutable_param_vars, retain_generic_return_if_needed,
 };
 use crate::turbo_types::*;
 use crate::type_conv::{coerce_value, resolve_cl_type, resolve_cl_type_ffi, turbo_ty_to_cl_type};
@@ -46,412 +45,6 @@ pub(crate) fn declare_rt_fn<M: Module>(
         })?;
     rt_fns.insert(name.to_string(), id);
     Ok(())
-}
-
-fn collect_hashmap_release_type_exprs(
-    te: &TypeExpr,
-    enum_variants: &HashMap<String, Vec<String>>,
-    struct_fields: &HashMap<String, Vec<(String, TurboTy)>>,
-    enum_variant_fields: &HashMap<(String, String), Vec<TurboTy>>,
-    enum_max_slots: &HashMap<String, usize>,
-    out: &mut HashMap<String, TurboTy>,
-) {
-    match te {
-        TypeExpr::Array(inner) | TypeExpr::Optional(inner) | TypeExpr::Future(inner) => {
-            collect_hashmap_release_type_exprs(
-                &inner.node,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                out,
-            );
-        }
-        TypeExpr::FnType { params, ret } => {
-            for param in params {
-                collect_hashmap_release_type_exprs(
-                    &param.node,
-                    enum_variants,
-                    struct_fields,
-                    enum_variant_fields,
-                    enum_max_slots,
-                    out,
-                );
-            }
-            collect_hashmap_release_type_exprs(
-                &ret.node,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                out,
-            );
-        }
-        TypeExpr::Result { ok_type, err_type } => {
-            collect_hashmap_release_type_exprs(
-                &ok_type.node,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                out,
-            );
-            collect_hashmap_release_type_exprs(
-                &err_type.node,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                out,
-            );
-        }
-        TypeExpr::HashMap(key, value) => {
-            collect_hashmap_release_type_exprs(
-                &key.node,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                out,
-            );
-            collect_hashmap_release_type_exprs(
-                &value.node,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                out,
-            );
-            let value_ty = turbo_ty_from_type_expr(&value.node, enum_variants);
-            if hashmap_value_needs_custom_release_with_layouts(
-                &value_ty,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-            ) {
-                out.entry(hashmap_value_release_thunk_key(&value_ty))
-                    .or_insert(value_ty);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn collect_hashmap_release_thunk_types(
-    ast_module: &turbo_ast::Module,
-    enum_variants: &HashMap<String, Vec<String>>,
-    struct_fields: &HashMap<String, Vec<(String, TurboTy)>>,
-    enum_variant_fields: &HashMap<(String, String), Vec<TurboTy>>,
-    enum_max_slots: &HashMap<String, usize>,
-) -> Vec<(String, TurboTy)> {
-    let mut found = HashMap::new();
-    for item in &ast_module.items {
-        match &item.node {
-            Item::Function(f) => {
-                for param in &f.params {
-                    collect_hashmap_release_type_exprs(
-                        &param.ty.node,
-                        enum_variants,
-                        struct_fields,
-                        enum_variant_fields,
-                        enum_max_slots,
-                        &mut found,
-                    );
-                }
-                if let Some(ret) = &f.return_type {
-                    collect_hashmap_release_type_exprs(
-                        &ret.node,
-                        enum_variants,
-                        struct_fields,
-                        enum_variant_fields,
-                        enum_max_slots,
-                        &mut found,
-                    );
-                }
-                collect_hashmap_release_thunk_exprs(
-                    &f.body,
-                    enum_variants,
-                    struct_fields,
-                    enum_variant_fields,
-                    enum_max_slots,
-                    &mut found,
-                );
-            }
-            Item::Struct(s) => {
-                for field in &s.fields {
-                    collect_hashmap_release_type_exprs(
-                        &field.ty.node,
-                        enum_variants,
-                        struct_fields,
-                        enum_variant_fields,
-                        enum_max_slots,
-                        &mut found,
-                    );
-                }
-            }
-            Item::Enum(e) => {
-                for variant in &e.variants {
-                    for field in &variant.fields {
-                        collect_hashmap_release_type_exprs(
-                            &field.node,
-                            enum_variants,
-                            struct_fields,
-                            enum_variant_fields,
-                            enum_max_slots,
-                            &mut found,
-                        );
-                    }
-                }
-            }
-            Item::Impl(imp) => {
-                for method in &imp.methods {
-                    for param in &method.node.params {
-                        collect_hashmap_release_type_exprs(
-                            &param.ty.node,
-                            enum_variants,
-                            struct_fields,
-                            enum_variant_fields,
-                            enum_max_slots,
-                            &mut found,
-                        );
-                    }
-                    if let Some(ret) = &method.node.return_type {
-                        collect_hashmap_release_type_exprs(
-                            &ret.node,
-                            enum_variants,
-                            struct_fields,
-                            enum_variant_fields,
-                            enum_max_slots,
-                            &mut found,
-                        );
-                    }
-                    collect_hashmap_release_thunk_exprs(
-                        &method.node.body,
-                        enum_variants,
-                        struct_fields,
-                        enum_variant_fields,
-                        enum_max_slots,
-                        &mut found,
-                    );
-                }
-            }
-            Item::Const(c) => collect_hashmap_release_thunk_exprs(
-                &c.value,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                &mut found,
-            ),
-            _ => {}
-        }
-    }
-    let mut out: Vec<(String, TurboTy)> = found.into_iter().collect();
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
-}
-
-fn collect_hashmap_release_thunk_exprs(
-    expr: &Spanned<Expr>,
-    enum_variants: &HashMap<String, Vec<String>>,
-    struct_fields: &HashMap<String, Vec<(String, TurboTy)>>,
-    enum_variant_fields: &HashMap<(String, String), Vec<TurboTy>>,
-    enum_max_slots: &HashMap<String, usize>,
-    out: &mut HashMap<String, TurboTy>,
-) {
-    match &expr.node {
-        Expr::Block { stmts, tail_expr } => {
-            for stmt in stmts {
-                collect_hashmap_release_thunk_stmt(
-                    stmt,
-                    enum_variants,
-                    struct_fields,
-                    enum_variant_fields,
-                    enum_max_slots,
-                    out,
-                );
-            }
-            if let Some(tail) = tail_expr {
-                collect_hashmap_release_thunk_exprs(
-                    tail,
-                    enum_variants,
-                    struct_fields,
-                    enum_variant_fields,
-                    enum_max_slots,
-                    out,
-                );
-            }
-        }
-        Expr::If {
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            collect_hashmap_release_thunk_exprs(
-                then_branch,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                out,
-            );
-            if let Some(else_branch) = else_branch {
-                collect_hashmap_release_thunk_exprs(
-                    else_branch,
-                    enum_variants,
-                    struct_fields,
-                    enum_variant_fields,
-                    enum_max_slots,
-                    out,
-                );
-            }
-        }
-        Expr::IfLet {
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            collect_hashmap_release_thunk_exprs(
-                then_branch,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                out,
-            );
-            if let Some(else_branch) = else_branch {
-                collect_hashmap_release_thunk_exprs(
-                    else_branch,
-                    enum_variants,
-                    struct_fields,
-                    enum_variant_fields,
-                    enum_max_slots,
-                    out,
-                );
-            }
-        }
-        Expr::While { body, .. } => {
-            collect_hashmap_release_thunk_exprs(
-                body,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                out,
-            );
-        }
-        Expr::ForIn { body, .. } => {
-            collect_hashmap_release_thunk_exprs(
-                body,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                out,
-            );
-        }
-        Expr::Match { arms, .. } => {
-            for arm in arms {
-                collect_hashmap_release_thunk_exprs(
-                    &arm.body,
-                    enum_variants,
-                    struct_fields,
-                    enum_variant_fields,
-                    enum_max_slots,
-                    out,
-                );
-            }
-        }
-        Expr::Closure {
-            params,
-            return_type,
-            body,
-        } => {
-            for param in params {
-                collect_hashmap_release_type_exprs(
-                    &param.ty.node,
-                    enum_variants,
-                    struct_fields,
-                    enum_variant_fields,
-                    enum_max_slots,
-                    out,
-                );
-            }
-            if let Some(return_type) = return_type {
-                collect_hashmap_release_type_exprs(
-                    &return_type.node,
-                    enum_variants,
-                    struct_fields,
-                    enum_variant_fields,
-                    enum_max_slots,
-                    out,
-                );
-            }
-            collect_hashmap_release_thunk_exprs(
-                body,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                out,
-            );
-        }
-        _ => {}
-    }
-}
-
-fn collect_hashmap_release_thunk_stmt(
-    stmt: &Spanned<Stmt>,
-    enum_variants: &HashMap<String, Vec<String>>,
-    struct_fields: &HashMap<String, Vec<(String, TurboTy)>>,
-    enum_variant_fields: &HashMap<(String, String), Vec<TurboTy>>,
-    enum_max_slots: &HashMap<String, usize>,
-    out: &mut HashMap<String, TurboTy>,
-) {
-    match &stmt.node {
-        Stmt::Let { ty, value, .. } => {
-            if let Some(ty) = ty {
-                collect_hashmap_release_type_exprs(
-                    &ty.node,
-                    enum_variants,
-                    struct_fields,
-                    enum_variant_fields,
-                    enum_max_slots,
-                    out,
-                );
-            }
-            collect_hashmap_release_thunk_exprs(
-                value,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                out,
-            );
-        }
-        Stmt::LetDestructure { value, .. } | Stmt::Expr(value) | Stmt::Defer(value) => {
-            collect_hashmap_release_thunk_exprs(
-                value,
-                enum_variants,
-                struct_fields,
-                enum_variant_fields,
-                enum_max_slots,
-                out,
-            )
-        }
-        Stmt::Return(value) => {
-            if let Some(value) = value {
-                collect_hashmap_release_thunk_exprs(
-                    value,
-                    enum_variants,
-                    struct_fields,
-                    enum_variant_fields,
-                    enum_max_slots,
-                    out,
-                );
-            }
-        }
-    }
 }
 
 fn return_type_param_name(
@@ -1996,26 +1589,7 @@ pub(crate) fn compile_module<M: Module>(
         user_fns.insert(adapter_name, id);
     }
 
-    let hashmap_value_release_thunk_types = collect_hashmap_release_thunk_types(
-        ast_module,
-        &enum_variants,
-        &struct_fields,
-        &enum_variant_fields,
-        &enum_max_slots,
-    );
-    let mut hashmap_value_release_thunks: HashMap<String, FuncId> = HashMap::new();
-    for (idx, (key, _)) in hashmap_value_release_thunk_types.iter().enumerate() {
-        let thunk_name = format!("__hashmap_value_release${idx}");
-        let mut sig = module.make_signature();
-        sig.params.push(AbiParam::new(ptr_type));
-        let id = module
-            .declare_function(&thunk_name, Linkage::Local, &sig)
-            .map_err(|e| CodegenError {
-                code: ErrorCode::E0405,
-                message: e.to_string(),
-            })?;
-        hashmap_value_release_thunks.insert(key.clone(), id);
-    }
+    let mut hashmap_value_release_thunks: HashMap<String, (FuncId, TurboTy)> = HashMap::new();
 
     // Define all user functions (and closures)
     let mut cl_ctx = module.make_context();
@@ -2024,73 +1598,6 @@ pub(crate) fn compile_module<M: Module>(
 
     // NOTE: Closure bodies are compiled AFTER function bodies, so that
     // Expr::Closure can determine capture types from the enclosing scope.
-
-    for (key, value_ty) in &hashmap_value_release_thunk_types {
-        let func_id = hashmap_value_release_thunks[key];
-        cl_ctx.func.signature = module.make_signature();
-        cl_ctx.func.signature.params.push(AbiParam::new(ptr_type));
-
-        let mut fn_ctx = FunctionBuilderContext::new();
-        {
-            let builder = FunctionBuilder::new(&mut cl_ctx.func, &mut fn_ctx);
-            let mut cx = Ctx {
-                builder,
-                module,
-                user_fns: &user_fns,
-                extern_fns: &extern_fn_names,
-                fn_ret_types: &fn_ret_types,
-                fn_asts: &fn_asts,
-                fn_type_params: &fn_type_params,
-                rt_fns: &rt_fns,
-                hashmap_value_release_thunks: &hashmap_value_release_thunks,
-                vars: HashMap::new(),
-                borrowed_param_vars: Vec::new(),
-                mutable_param_vars: Vec::new(),
-                generic_rc_flags: HashMap::new(),
-                generic_value_origins: HashMap::new(),
-                generic_value_retain_flags: HashMap::new(),
-                generic_var_origins: HashMap::new(),
-                return_type_param: None,
-                next_var: 0,
-                data_desc: &mut data_desc,
-                string_counter: &mut string_counter,
-                ptr_type,
-                struct_fields: &struct_fields,
-                enum_variants: &enum_variants,
-                enum_variant_fields: &enum_variant_fields,
-                enum_max_slots: &enum_max_slots,
-                closure_fns: &closure_fns_map,
-                trait_impls: &trait_impls,
-                inline_depth: 0,
-                expr_depth: 0,
-                closure_captures: &mut closure_captures_map,
-                generic_struct_field_overrides: HashMap::new(),
-                last_struct_lit_concrete_fields: None,
-                spawn_thunks: &spawn_thunk_map,
-                constants: &constants_map,
-                struct_derives: &struct_derives,
-                loop_stack: Vec::new(),
-                is_unsafe: false,
-            };
-            let entry = cx.builder.create_block();
-            cx.builder.append_block_params_for_function_params(entry);
-            cx.builder.switch_to_block(entry);
-            cx.builder.seal_block(entry);
-            cx.builder.ensure_inserted_block();
-            let value = cx.builder.block_params(entry)[0];
-            release_if_needed(&mut cx, value, value_ty);
-            cx.builder.ins().return_(&[]);
-            cx.builder.finalize();
-        }
-
-        module
-            .define_function(func_id, &mut cl_ctx)
-            .map_err(|e| CodegenError {
-                code: ErrorCode::E0405,
-                message: e.to_string(),
-            })?;
-        module.clear_context(&mut cl_ctx);
-    }
 
     for item in &ast_module.items {
         let Item::Function(f) = &item.node else {
@@ -2144,7 +1651,7 @@ pub(crate) fn compile_module<M: Module>(
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
-                hashmap_value_release_thunks: &hashmap_value_release_thunks,
+                hashmap_value_release_thunks: &mut hashmap_value_release_thunks,
                 vars: HashMap::new(),
                 borrowed_param_vars: Vec::new(),
                 mutable_param_vars: Vec::new(),
@@ -2311,7 +1818,7 @@ pub(crate) fn compile_module<M: Module>(
                     fn_asts: &fn_asts,
                     fn_type_params: &fn_type_params,
                     rt_fns: &rt_fns,
-                    hashmap_value_release_thunks: &hashmap_value_release_thunks,
+                    hashmap_value_release_thunks: &mut hashmap_value_release_thunks,
                     vars: HashMap::new(),
                     borrowed_param_vars: Vec::new(),
                     mutable_param_vars: Vec::new(),
@@ -2449,7 +1956,7 @@ pub(crate) fn compile_module<M: Module>(
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
-                hashmap_value_release_thunks: &hashmap_value_release_thunks,
+                hashmap_value_release_thunks: &mut hashmap_value_release_thunks,
                 vars: HashMap::new(),
                 borrowed_param_vars: Vec::new(),
                 mutable_param_vars: Vec::new(),
@@ -2555,7 +2062,7 @@ pub(crate) fn compile_module<M: Module>(
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
-                hashmap_value_release_thunks: &hashmap_value_release_thunks,
+                hashmap_value_release_thunks: &mut hashmap_value_release_thunks,
                 vars: HashMap::new(),
                 borrowed_param_vars: Vec::new(),
                 mutable_param_vars: Vec::new(),
@@ -2750,7 +2257,7 @@ pub(crate) fn compile_module<M: Module>(
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
-                hashmap_value_release_thunks: &hashmap_value_release_thunks,
+                hashmap_value_release_thunks: &mut hashmap_value_release_thunks,
                 vars: HashMap::new(),
                 borrowed_param_vars: Vec::new(),
                 mutable_param_vars: Vec::new(),
@@ -3114,6 +2621,86 @@ pub(crate) fn compile_module<M: Module>(
                 message: e.to_string(),
             })?;
         module.clear_context(&mut cl_ctx);
+    }
+
+    let mut defined_hashmap_value_release_thunks: HashSet<String> = HashSet::new();
+    loop {
+        let mut pending: Vec<(String, FuncId, TurboTy)> = hashmap_value_release_thunks
+            .iter()
+            .filter(|(key, _)| !defined_hashmap_value_release_thunks.contains(key.as_str()))
+            .map(|(key, (func_id, value_ty))| (key.clone(), *func_id, value_ty.clone()))
+            .collect();
+        if pending.is_empty() {
+            break;
+        }
+        pending.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (key, func_id, value_ty) in pending {
+            cl_ctx.func.signature = module.make_signature();
+            cl_ctx.func.signature.params.push(AbiParam::new(ptr_type));
+
+            let mut fn_ctx = FunctionBuilderContext::new();
+            {
+                let builder = FunctionBuilder::new(&mut cl_ctx.func, &mut fn_ctx);
+                let mut cx = Ctx {
+                    builder,
+                    module,
+                    user_fns: &user_fns,
+                    extern_fns: &extern_fn_names,
+                    fn_ret_types: &fn_ret_types,
+                    fn_asts: &fn_asts,
+                    fn_type_params: &fn_type_params,
+                    rt_fns: &rt_fns,
+                    hashmap_value_release_thunks: &mut hashmap_value_release_thunks,
+                    vars: HashMap::new(),
+                    borrowed_param_vars: Vec::new(),
+                    mutable_param_vars: Vec::new(),
+                    generic_rc_flags: HashMap::new(),
+                    generic_value_origins: HashMap::new(),
+                    generic_value_retain_flags: HashMap::new(),
+                    generic_var_origins: HashMap::new(),
+                    return_type_param: None,
+                    next_var: 0,
+                    data_desc: &mut data_desc,
+                    string_counter: &mut string_counter,
+                    ptr_type,
+                    struct_fields: &struct_fields,
+                    enum_variants: &enum_variants,
+                    enum_variant_fields: &enum_variant_fields,
+                    enum_max_slots: &enum_max_slots,
+                    closure_fns: &closure_fns_map,
+                    trait_impls: &trait_impls,
+                    inline_depth: 0,
+                    expr_depth: 0,
+                    closure_captures: &mut closure_captures_map,
+                    generic_struct_field_overrides: HashMap::new(),
+                    last_struct_lit_concrete_fields: None,
+                    spawn_thunks: &spawn_thunk_map,
+                    constants: &constants_map,
+                    struct_derives: &struct_derives,
+                    loop_stack: Vec::new(),
+                    is_unsafe: false,
+                };
+                let entry = cx.builder.create_block();
+                cx.builder.append_block_params_for_function_params(entry);
+                cx.builder.switch_to_block(entry);
+                cx.builder.seal_block(entry);
+                cx.builder.ensure_inserted_block();
+                let value = cx.builder.block_params(entry)[0];
+                release_if_needed(&mut cx, value, &value_ty);
+                cx.builder.ins().return_(&[]);
+                cx.builder.finalize();
+            }
+
+            module
+                .define_function(func_id, &mut cl_ctx)
+                .map_err(|e| CodegenError {
+                    code: ErrorCode::E0405,
+                    message: e.to_string(),
+                })?;
+            module.clear_context(&mut cl_ctx);
+            defined_hashmap_value_release_thunks.insert(key);
+        }
     }
 
     Ok(user_fns)
