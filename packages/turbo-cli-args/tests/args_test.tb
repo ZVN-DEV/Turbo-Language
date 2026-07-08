@@ -1,0 +1,54 @@
+import {
+    has_flag, flag_str, flag_int, positionals, positional_at
+} from "../src/lib"
+
+@test fn test_has_flag() {
+    let argv = ["build", "--verbose", "-f", "input.tb"]
+    assert(has_flag(argv, "verbose"))
+    assert(has_flag(argv, "f"))
+    assert(!has_flag(argv, "quiet"))
+}
+
+@test fn test_has_flag_eq_form() {
+    let argv = ["--name=alice"]
+    assert(has_flag(argv, "name"))
+}
+
+@test fn test_flag_str_eq_form() {
+    let argv = ["run", "--name=alice", "--port=9090"]
+    assert_eq(flag_str(argv, "name", "?"), "alice")
+    assert_eq(flag_str(argv, "port", "?"), "9090")
+}
+
+@test fn test_flag_str_space_form() {
+    let argv = ["run", "--name", "bob", "extra"]
+    assert_eq(flag_str(argv, "name", "?"), "bob")
+}
+
+@test fn test_flag_str_fallback() {
+    let argv = ["run"]
+    assert_eq(flag_str(argv, "name", "default"), "default")
+}
+
+@test fn test_flag_int() {
+    let argv = ["--port=8080", "--bad=xyz"]
+    assert_eq(flag_int(argv, "port", 0), 8080)
+    assert_eq(flag_int(argv, "bad", 3000), 3000)
+    assert_eq(flag_int(argv, "missing", 5000), 5000)
+}
+
+@test fn test_positionals() {
+    let argv = ["serve", "--verbose", "src", "dist"]
+    let pos = positionals(argv)
+    assert_eq(len(pos), 3)
+    assert_eq(pos[0], "serve")
+    assert_eq(pos[1], "src")
+    assert_eq(pos[2], "dist")
+}
+
+@test fn test_positional_at() {
+    let argv = ["cmd", "first", "second"]
+    assert_eq(positional_at(argv, 0, "?"), "cmd")
+    assert_eq(positional_at(argv, 2, "?"), "second")
+    assert_eq(positional_at(argv, 9, "none"), "none")
+}

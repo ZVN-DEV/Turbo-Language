@@ -1,0 +1,49 @@
+import {
+    dotenv_parse, dotenv_get, dotenv_has,
+    dotenv_strip_quotes, dotenv_strip_export
+} from "../src/lib"
+
+@test fn test_basic_pairs() {
+    let env = dotenv_parse("HOST=localhost\nPORT=8080")
+    assert_eq(dotenv_get(env, "HOST", "?"), "localhost")
+    assert_eq(dotenv_get(env, "PORT", "?"), "8080")
+}
+
+@test fn test_missing_key_uses_fallback() {
+    let env = dotenv_parse("A=1")
+    assert_eq(dotenv_get(env, "MISSING", "default"), "default")
+    assert(dotenv_has(env, "A"))
+    assert(!dotenv_has(env, "MISSING"))
+}
+
+@test fn test_comments_and_blanks_ignored() {
+    let env = dotenv_parse("# a comment\n\nNAME=turbo\n   # indented comment\n")
+    assert_eq(dotenv_get(env, "NAME", "?"), "turbo")
+    assert(!dotenv_has(env, "# a comment"))
+}
+
+@test fn test_quotes_and_whitespace() {
+    let env = dotenv_parse("  KEY  =  \"quoted value\"  \nSINGLE='single'\nBARE = plain")
+    assert_eq(dotenv_get(env, "KEY", "?"), "quoted value")
+    assert_eq(dotenv_get(env, "SINGLE", "?"), "single")
+    assert_eq(dotenv_get(env, "BARE", "?"), "plain")
+}
+
+@test fn test_export_prefix_stripped() {
+    let env = dotenv_parse("export TOKEN=abc123")
+    assert_eq(dotenv_get(env, "TOKEN", "?"), "abc123")
+}
+
+@test fn test_value_with_equals_sign() {
+    // Only the first '=' splits key/value, so URLs/base64 survive.
+    let env = dotenv_parse("DSN=postgres://u:p@h/db?sslmode=require")
+    assert_eq(dotenv_get(env, "DSN", "?"), "postgres://u:p@h/db?sslmode=require")
+}
+
+@test fn test_strip_helpers() {
+    assert_eq(dotenv_strip_quotes("\"x\""), "x")
+    assert_eq(dotenv_strip_quotes("'y'"), "y")
+    assert_eq(dotenv_strip_quotes("z"), "z")
+    assert_eq(dotenv_strip_export("export FOO"), "FOO")
+    assert_eq(dotenv_strip_export("FOO"), "FOO")
+}

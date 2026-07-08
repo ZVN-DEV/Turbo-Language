@@ -1,0 +1,198 @@
+// turbo-http-router — path + method routing for Turbo's built-in HTTP server.
+//
+// A `Router` is a `HashMap<str, fn(str) -> str>` whose keys are `"METHOD path"`
+// and whose values are request handlers (`fn(str) -> str`, the shape `route`
+// requires). You register routes with the method-named helpers, then either
+// `router_mount` the static routes onto a real server or `router_dispatch`
+// requests through the table yourself.
+//
+// --- What is supported ----------------------------------------------------
+//   * Method-based registration: router_get / router_post / router_put /
+//     router_delete / router_patch, plus the generic router_add.
+//   * Exact path matching (the common case).
+//   * Path patterns with named params (":id") and single-segment wildcards
+//     ("*"), matched by `route_matches` and read back with `path_param`.
+//   * Table-driven dispatch via `router_dispatch` / `router_handler_for`.
+//
+// --- What is NOT supported, and why (honest limitations) ------------------
+// Turbo's built-in server (`http_server` + `route`) matches request paths by
+// an EXACT string compare and has no wildcard/catch-all hook — an unmatched
+// path returns a hardcoded 404 inside the runtime. Consequences:
+//
+//   * `router_mount` can only register STATIC routes (no ":"/"*") on the
+//     server, because the server would never deliver `/todos/42` to a handler
+//     registered under the literal path `/todos/:id`. Param/wildcard routes
+//     are skipped by mount (and counted separately) rather than silently
+//     "registered" where they'd never fire.
+//   * To serve a param route you dispatch it yourself: register ONE static
+//     path on the server whose handler calls `router_dispatch`, or read
+//     `request_path(req)` and pull the id out with `path_param`. The matcher
+//     and dispatch functions are fully usable (and tested) for that; the
+//     server simply can't auto-expand an unbounded `:id` segment for you.
+//
+// So: static routing is fully server-native and ergonomic; param routing is a
+// tested, pure-Turbo matching layer you drive explicitly.
+
+// The default handler returned when no route matches: a 404 response.
+fn router_not_found(req: str) -> str {
+    respond_text(404, "Not Found")
+}
+
+// Create a new, empty router (a typed dispatch table).
+fn router_new() -> HashMap<str, fn(str) -> str> {
+    let r: HashMap<str, fn(str) -> str> = hashmap()
+    r
+}
+
+// Register a handler for an arbitrary method + path (or pattern).
+fn router_add(r: HashMap<str, fn(str) -> str>, method: str, path: str, handler: fn(str) -> str) {
+    hashmap_set(r, method + " " + path, handler)
+}
+
+// Method-named registration helpers.
+fn router_get(r: HashMap<str, fn(str) -> str>, path: str, handler: fn(str) -> str) {
+    router_add(r, "GET", path, handler)
+}
+
+fn router_post(r: HashMap<str, fn(str) -> str>, path: str, handler: fn(str) -> str) {
+    router_add(r, "POST", path, handler)
+}
+
+fn router_put(r: HashMap<str, fn(str) -> str>, path: str, handler: fn(str) -> str) {
+    router_add(r, "PUT", path, handler)
+}
+
+fn router_delete(r: HashMap<str, fn(str) -> str>, path: str, handler: fn(str) -> str) {
+    router_add(r, "DELETE", path, handler)
+}
+
+fn router_patch(r: HashMap<str, fn(str) -> str>, path: str, handler: fn(str) -> str) {
+    router_add(r, "PATCH", path, handler)
+}
+
+// True if a single pattern segment is a param (":name") or wildcard ("*").
+fn segment_is_dynamic(seg: str) -> bool {
+    starts_with(seg, ":") || seg == "*"
+}
+
+// True if `pattern` (e.g. "/todos/:id") matches a concrete `path`
+// (e.g. "/todos/42"). Segments are compared position-by-position; a ":name"
+// or "*" segment matches any single non-empty segment, everything else is an
+// exact compare. Different segment counts never match.
+fn route_matches(pattern: str, path: str) -> bool {
+    let pseg = split(pattern, "/")
+    let sseg = split(path, "/")
+    if len(pseg) != len(sseg) {
+        return false
+    }
+    let mut i = 0
+    let mut all_match = true
+    while i < len(pseg) {
+        let p = pseg[i]
+        let s = sseg[i]
+        if segment_is_dynamic(p) {
+            if len(s) == 0 {
+                all_match = false
+            }
+        } else {
+            if p != s {
+                all_match = false
+            }
+        }
+        i = i + 1
+    }
+    all_match
+}
+
+// Extract the value of a named param from a concrete path, given the pattern
+// it matched. Returns "" if the pattern has no ":name" segment or the counts
+// differ. Example: path_param("/todos/:id", "/todos/42", "id") -> "42".
+fn path_param(pattern: str, path: str, name: str) -> str {
+    let pseg = split(pattern, "/")
+    let sseg = split(path, "/")
+    if len(pseg) != len(sseg) {
+        return ""
+    }
+    let target = ":" + name
+    let mut i = 0
+    let mut found = ""
+    while i < len(pseg) {
+        // Bind both segments to locals before comparing/assigning: indexing two
+        // parallel `split()` arrays directly across a conditional mis-lowers in
+        // the current codegen (the assignment is dropped), so we stage them.
+        let p = pseg[i]
+        let s = sseg[i]
+        if p == target {
+            found = s
+        }
+        i = i + 1
+    }
+    found
+}
+
+// Resolve a (method, path) to its handler: an exact key wins first, then the
+// first registered pattern that matches, else the 404 handler. Keys are
+// iterated in `hashmap_keys` order (sorted), so keep patterns unambiguous.
+fn router_handler_for(r: HashMap<str, fn(str) -> str>, method: str, path: str) -> fn(str) -> str {
+    let exact = method + " " + path
+    if hashmap_has(r, exact) {
+        return hashmap_get(r, exact) ?? router_not_found
+    }
+    let keys = hashmap_keys(r)
+    let mut i = 0
+    let mut result = router_not_found
+    let mut matched = false
+    while i < len(keys) {
+        let key = keys[i]
+        let sp = index_of(key, " ")
+        if sp > 0 {
+            if !matched {
+                let m = substring(key, 0, sp)
+                let pat = substring(key, sp + 1, len(key))
+                if m == method {
+                    if route_matches(pat, path) {
+                        result = hashmap_get(r, key) ?? router_not_found
+                        matched = true
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    result
+}
+
+// Dispatch a live request through the table, returning the handler's response
+// (or a 404). Use this inside a single mounted handler to own routing for a
+// path family the built-in server can't match on its own.
+fn router_dispatch(r: HashMap<str, fn(str) -> str>, req: str) -> str {
+    let h = router_handler_for(r, request_method(req), request_path(req))
+    h(req)
+}
+
+// Register every STATIC route in the table on a real server via `route`.
+// Param/wildcard routes are skipped (the server can't match them) — mount them
+// yourself with a static entry that calls `router_dispatch`. Returns the number
+// of routes actually registered on the server.
+fn router_mount(app: i64, r: HashMap<str, fn(str) -> str>) -> i64 {
+    let keys = hashmap_keys(r)
+    let mut i = 0
+    let mut count = 0
+    while i < len(keys) {
+        let key = keys[i]
+        let sp = index_of(key, " ")
+        if sp > 0 {
+            let m = substring(key, 0, sp)
+            let pat = substring(key, sp + 1, len(key))
+            if !contains(pat, ":") {
+                if !contains(pat, "*") {
+                    let h = hashmap_get(r, key) ?? router_not_found
+                    route(app, m, pat, h)
+                    count = count + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    count
+}

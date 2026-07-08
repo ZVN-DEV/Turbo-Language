@@ -131,7 +131,48 @@ is served at `https://turbolang.dev/registry/index.json`. Its schema:
 
 Per entry: `name` (unique, matches the `turbo_modules` directory name), `repo`
 (`owner/name` on GitHub), `description`, `categories` (array of lowercase tags),
-and the optional `min_turbo_version` (semver the package needs) and `homepage`.
+and the optional `min_turbo_version` (semver the package needs), `homepage`, and
+`subdir` (see below). The `subdir` field is additive and optional — clients that
+don't understand it simply ignore it, so `schema_version` stays `1`.
+
+### Monorepo packages (`subdir`)
+
+A package doesn't have to be its own repository. When several packages live in
+one monorepo, give each index entry a `subdir` pointing at the package directory
+inside `repo`:
+
+```json
+{
+  "name": "turbo-http-router",
+  "repo": "ZVN-DEV/Turbo-Language",
+  "subdir": "packages/turbo-http-router",
+  "description": "Path + method routing for the built-in HTTP server",
+  "categories": ["web", "routing"],
+  "min_turbo_version": "0.12.0"
+}
+```
+
+With a `subdir`, `turbolang install turbo-http-router` clones `repo` at the
+resolved tag into a shared cache (`turbo_modules/.turbo-cache/<repo>@<rev>`, one
+clone per repo+rev) and links `turbo_modules/turbo-http-router` at that
+subdirectory — exactly like a `path` dependency, but sourced from a pinned git
+checkout. The subdir must be a plain relative path (no `..`, absolute, or drive
+prefix); anything else is rejected.
+
+**Version resolution for monorepo packages** works against the *monorepo's* git
+tags, not per-package tags — a request like `turbo-http-router = "0.12"` selects
+the newest `v0.12.x` tag of `repo` and installs the package from that commit.
+The package directory must therefore exist at the selected tag; publish a new
+monorepo tag whenever you add or change a bundled package.
+
+The `{ github = "owner/repo", subdir = "pkg/dir", version = "0.12" }` manifest
+form works the same way for a dependency you point at directly, without going
+through the registry index.
+
+The base host that `owner/repo` is cloned from is `https://github.com` by
+default and can be overridden with the `TURBO_GIT_BASE_URL` environment variable
+(useful for a mirror or a local `file://` clone in tests) — mirroring the
+`TURBO_REGISTRY_INDEX_URL` override for the index itself.
 
 ## Publishing a package
 

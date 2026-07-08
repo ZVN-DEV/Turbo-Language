@@ -1,0 +1,92 @@
+// turbo-dotenv — load a `.env` file into a HashMap<str, str>.
+//
+// Built on the `try_read_file` builtin (so a missing file is recoverable, not
+// a crash) and Turbo's string ops. The parser is deliberately small and
+// documented; see `dotenv_parse` for exactly what it accepts.
+//
+// Supported:
+//   * `KEY=value` lines.
+//   * `export KEY=value` (the `export ` prefix is stripped).
+//   * Blank lines and full-line `#` comments (ignored).
+//   * Surrounding single or double quotes on the value (stripped).
+//   * Whitespace around the key and around the value (trimmed).
+//
+// NOT supported (documented honestly rather than half-done):
+//   * Inline trailing comments (`KEY=value  # note`) — the `# note` stays part
+//     of the value. Quote the value or keep comments on their own line.
+//   * Escape sequences / multi-line values / variable expansion (`${OTHER}`).
+
+// Strip a single matching pair of surrounding quotes from a value, if present.
+fn dotenv_strip_quotes(v: str) -> str {
+    let n = len(v)
+    if n >= 2 {
+        let first = char_at(v, 0)
+        let last = char_at(v, n - 1)
+        if first == "\"" {
+            if last == "\"" {
+                return substring(v, 1, n - 1)
+            }
+        }
+        if first == "'" {
+            if last == "'" {
+                return substring(v, 1, n - 1)
+            }
+        }
+    }
+    v
+}
+
+// Strip a leading `export ` from a key, if present.
+fn dotenv_strip_export(key: str) -> str {
+    if starts_with(key, "export ") {
+        return trim(substring(key, 7, len(key)))
+    }
+    key
+}
+
+// Parse `.env`-style text into a HashMap<str, str>. Never fails: malformed
+// lines (no `=`, or an empty key) are skipped.
+fn dotenv_parse(content: str) -> HashMap<str, str> {
+    let env: HashMap<str, str> = hashmap()
+    let lines = split(content, "\n")
+    let mut i = 0
+    while i < len(lines) {
+        let raw = lines[i]
+        let line = trim(raw)
+        if len(line) > 0 {
+            if !starts_with(line, "#") {
+                let eq = index_of(line, "=")
+                if eq > 0 {
+                    let raw_key = trim(substring(line, 0, eq))
+                    let key = dotenv_strip_export(raw_key)
+                    let raw_val = trim(substring(line, eq + 1, len(line)))
+                    let val = dotenv_strip_quotes(raw_val)
+                    if len(key) > 0 {
+                        hashmap_set(env, key, val)
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    env
+}
+
+// Load and parse a `.env` file. A missing/unreadable file yields an empty map
+// (the honest, non-throwing default for optional config).
+fn dotenv_load(path: str) -> HashMap<str, str> {
+    match try_read_file(path) {
+        ok(content) => dotenv_parse(content)
+        err(e) => dotenv_parse("")
+    }
+}
+
+// Read a key from a parsed env map, returning `fallback` when it is absent.
+fn dotenv_get(env: HashMap<str, str>, key: str, fallback: str) -> str {
+    hashmap_get(env, key) ?? fallback
+}
+
+// True if the parsed env map contains `key`.
+fn dotenv_has(env: HashMap<str, str>, key: str) -> bool {
+    hashmap_has(env, key)
+}

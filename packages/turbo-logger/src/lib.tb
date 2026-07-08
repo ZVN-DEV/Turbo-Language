@@ -1,0 +1,99 @@
+// turbo-logger — leveled logging with level filtering and optional timestamps.
+//
+// A logger is a small stateful handle created with `logger_new`. It carries a
+// minimum level (messages below it are dropped) and a timestamp flag. Both are
+// packed into a single `mutex`-backed int so the handle is a plain `i64` you
+// can pass around and reconfigure at runtime.
+//
+// Levels, lowest to highest: DEBUG(0) < INFO(1) < WARN(2) < ERROR(3).
+// A message is printed only when its level is >= the logger's minimum level,
+// so a logger set to WARN prints WARN and ERROR but drops DEBUG and INFO.
+//
+// Timestamps use the `time_now` / `format_time` builtins (local time zone),
+// formatted "%Y-%m-%d %H:%M:%S". Output goes to stdout via `print`.
+
+// Level constants (exported so callers don't hardcode the ints).
+fn level_debug() -> i64 { 0 }
+fn level_info() -> i64 { 1 }
+fn level_warn() -> i64 { 2 }
+fn level_error() -> i64 { 3 }
+
+// Internal: the timestamp flag is stored as +10 on the packed value.
+fn logger_ts_offset() -> i64 { 10 }
+
+// Create a logger with a minimum `level` and whether to prefix timestamps.
+// Returns an opaque handle (an i64).
+fn logger_new(level: i64, timestamps: bool) -> i64 {
+    let mut packed = level
+    if timestamps {
+        packed = packed + logger_ts_offset()
+    }
+    mutex(packed)
+}
+
+// A logger that prints everything, no timestamps — handy for quick scripts.
+fn logger_default() -> i64 {
+    logger_new(level_debug(), false)
+}
+
+// The logger's current minimum level.
+fn logger_level(lg: i64) -> i64 {
+    mutex_get(lg) % logger_ts_offset()
+}
+
+// Whether the logger prefixes timestamps.
+fn logger_has_timestamps(lg: i64) -> bool {
+    mutex_get(lg) >= logger_ts_offset()
+}
+
+// Change the minimum level at runtime, preserving the timestamp setting.
+fn logger_set_level(lg: i64, level: i64) {
+    let mut packed = level
+    if logger_has_timestamps(lg) {
+        packed = packed + logger_ts_offset()
+    }
+    mutex_set(lg, packed)
+}
+
+// The uppercase label for a level int.
+fn level_label(level: i64) -> str {
+    if level <= 0 {
+        "DEBUG"
+    } else if level == 1 {
+        "INFO"
+    } else if level == 2 {
+        "WARN"
+    } else {
+        "ERROR"
+    }
+}
+
+// True if a message at `msg_level` passes the logger's threshold.
+fn logger_should_log(lg: i64, msg_level: i64) -> bool {
+    msg_level >= logger_level(lg)
+}
+
+// Build the line a logger would print for a message (without emitting it).
+// Exposed so the formatting is unit-testable without capturing stdout.
+fn logger_format(lg: i64, msg_level: i64, msg: str) -> str {
+    let label = level_label(msg_level)
+    if logger_has_timestamps(lg) {
+        let ts = format_time(time_now(), "%Y-%m-%d %H:%M:%S")
+        "[" + ts + "] [" + label + "] " + msg
+    } else {
+        "[" + label + "] " + msg
+    }
+}
+
+// Emit `msg` at `msg_level` if it passes the threshold.
+fn log_at(lg: i64, msg_level: i64, msg: str) {
+    if logger_should_log(lg, msg_level) {
+        print(logger_format(lg, msg_level, msg))
+    }
+}
+
+// Level-named convenience wrappers.
+fn log_debug(lg: i64, msg: str) { log_at(lg, level_debug(), msg) }
+fn log_info(lg: i64, msg: str)  { log_at(lg, level_info(), msg) }
+fn log_warn(lg: i64, msg: str)  { log_at(lg, level_warn(), msg) }
+fn log_error(lg: i64, msg: str) { log_at(lg, level_error(), msg) }
