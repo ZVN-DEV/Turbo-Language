@@ -1,0 +1,71 @@
+import {
+    logger_new, logger_default, logger_level, logger_has_timestamps,
+    logger_set_level, logger_should_log, logger_format, level_label,
+    level_debug, level_info, level_warn, level_error
+} from "../src/lib"
+
+@test fn test_level_constants() {
+    assert_eq(level_debug(), 0)
+    assert_eq(level_info(), 1)
+    assert_eq(level_warn(), 2)
+    assert_eq(level_error(), 3)
+}
+
+@test fn test_level_labels() {
+    assert_eq(level_label(0), "DEBUG")
+    assert_eq(level_label(1), "INFO")
+    assert_eq(level_label(2), "WARN")
+    assert_eq(level_label(3), "ERROR")
+}
+
+@test fn test_new_and_accessors() {
+    let lg = logger_new(level_warn(), true)
+    assert_eq(logger_level(lg), 2)
+    assert(logger_has_timestamps(lg))
+
+    let plain = logger_new(level_info(), false)
+    assert_eq(logger_level(plain), 1)
+    assert(!logger_has_timestamps(plain))
+}
+
+@test fn test_default_logger() {
+    let lg = logger_default()
+    assert_eq(logger_level(lg), 0)
+    assert(!logger_has_timestamps(lg))
+}
+
+@test fn test_filtering() {
+    let lg = logger_new(level_warn(), false)
+    // below threshold -> dropped
+    assert(!logger_should_log(lg, level_debug()))
+    assert(!logger_should_log(lg, level_info()))
+    // at or above -> logged
+    assert(logger_should_log(lg, level_warn()))
+    assert(logger_should_log(lg, level_error()))
+}
+
+@test fn test_set_level_preserves_timestamps() {
+    let lg = logger_new(level_debug(), true)
+    assert(logger_has_timestamps(lg))
+    logger_set_level(lg, level_error())
+    assert_eq(logger_level(lg), 3)
+    // timestamp flag must survive a level change
+    assert(logger_has_timestamps(lg))
+    // filtering now reflects the new level
+    assert(!logger_should_log(lg, level_info()))
+    assert(logger_should_log(lg, level_error()))
+}
+
+@test fn test_format_without_timestamps() {
+    let lg = logger_new(level_debug(), false)
+    assert_eq(logger_format(lg, level_info(), "hello"), "[INFO] hello")
+    assert_eq(logger_format(lg, level_error(), "boom"), "[ERROR] boom")
+}
+
+@test fn test_format_with_timestamps() {
+    let lg = logger_new(level_debug(), true)
+    let line = logger_format(lg, level_warn(), "careful")
+    // starts with a "[YYYY-..." timestamp bracket, then the level + message
+    assert(starts_with(line, "["))
+    assert(contains(line, "[WARN] careful"))
+}

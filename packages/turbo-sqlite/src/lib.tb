@@ -1,0 +1,130 @@
+// turbo-sqlite — an ergonomic, thin wrapper over the raw `sqlite_*` builtins.
+//
+// The builtins are a manual prepare/bind/step/column/finalize cursor. This
+// package keeps that model (it does not hide SQLite) but removes the
+// boilerplate for the common shapes: run a statement with bound params, pull a
+// single scalar, collect a whole column, count rows, and apply migrations.
+//
+// Every fallible function returns `T ! str`, mirroring the builtins, so you
+// compose them with `?` and handle failures with `match`. Handles are the same
+// opaque `i64` values the builtins use — `sqlite_open`/`sqlite_close` still
+// own the connection lifecycle.
+
+// Run a statement that returns no rows (DDL, INSERT/UPDATE/DELETE) with no
+// parameters. Returns ok(0) on success.
+fn db_exec(db: i64, sql: str) -> i64 ! str {
+    sqlite_exec(db, sql)?
+    ok(0)
+}
+
+// Run a single statement with positional string parameters bound to its `?`
+// placeholders (1-based). Intended for writes; any result rows are ignored.
+// Returns ok(0) on success.
+fn db_exec_params(db: i64, sql: str, params: [str]) -> i64 ! str {
+    let stmt = sqlite_prepare(db, sql)?
+    let mut i = 0
+    while i < len(params) {
+        let p = params[i]
+        sqlite_bind_str(stmt, i + 1, p)
+        i = i + 1
+    }
+    let rc = sqlite_step(stmt)
+    if rc == -1 {
+        let e = sqlite_error(db)
+        sqlite_finalize(stmt)
+        return err(e)
+    }
+    sqlite_finalize(stmt)
+    ok(0)
+}
+
+// Read a single integer from the first column of the first row of `sql`.
+// Errors if the query yields no rows.
+fn query_scalar_int(db: i64, sql: str) -> i64 ! str {
+    let stmt = sqlite_prepare(db, sql)?
+    let rc = sqlite_step(stmt)
+    if rc == 1 {
+        let v = sqlite_column_int(stmt, 0)
+        sqlite_finalize(stmt)
+        ok(v)
+    } else {
+        sqlite_finalize(stmt)
+        err("query returned no rows")
+    }
+}
+
+// Read a single string from the first column of the first row of `sql`.
+// Errors if the query yields no rows.
+fn query_scalar_str(db: i64, sql: str) -> str ! str {
+    let stmt = sqlite_prepare(db, sql)?
+    let rc = sqlite_step(stmt)
+    if rc == 1 {
+        let v = sqlite_column_str(stmt, 0)
+        sqlite_finalize(stmt)
+        ok(v)
+    } else {
+        sqlite_finalize(stmt)
+        err("query returned no rows")
+    }
+}
+
+// Collect one string column (0-based `col`) across every row of `sql` into a
+// `[str]`, in result order.
+//
+// Unlike the scalar/exec helpers these return the array directly, not a
+// `Result`: Turbo's parser does not currently accept an array as a Result's
+// ok-type (`[str] ! str` is a parse error). The tradeoff: a query that fails to
+// prepare yields an EMPTY array, indistinguishable from a query that matched no
+// rows. When you must tell "failed" from "empty" apart, probe first with a
+// `query_scalar_int` COUNT (which does return a `Result`).
+fn query_column_str(db: i64, sql: str, col: i64) -> [str] {
+    let mut out: [str] = []
+    match sqlite_prepare(db, sql) {
+        ok(stmt) => {
+            while sqlite_step(stmt) == 1 {
+                let v = sqlite_column_str(stmt, col)
+                out = push(out, v)
+            }
+            let _fin = sqlite_finalize(stmt)
+        }
+        err(e) => { let _ignore = e }
+    }
+    out
+}
+
+// Collect one integer column (0-based `col`) across every row of `sql` into a
+// `[i64]`, in result order. Returns an empty array on a query error — see the
+// note on `query_column_str` for why this isn't a `Result`.
+fn query_column_int(db: i64, sql: str, col: i64) -> [i64] {
+    let mut out: [i64] = []
+    match sqlite_prepare(db, sql) {
+        ok(stmt) => {
+            while sqlite_step(stmt) == 1 {
+                let v = sqlite_column_int(stmt, col)
+                out = push(out, v)
+            }
+            let _fin = sqlite_finalize(stmt)
+        }
+        err(e) => { let _ignore = e }
+    }
+    out
+}
+
+// Count rows in `table`. The table name is interpolated directly, so pass a
+// trusted identifier (not user input) — SQLite cannot bind an identifier.
+fn db_count(db: i64, table: str) -> i64 ! str {
+    query_scalar_int(db, "SELECT COUNT(*) FROM " + table)
+}
+
+// Apply a list of migration statements in order. Each should be idempotent
+// (e.g. `CREATE TABLE IF NOT EXISTS ...`), since this runs them every time.
+// Returns the number of statements applied.
+fn migrate(db: i64, statements: [str]) -> i64 ! str {
+    let mut i = 0
+    while i < len(statements) {
+        let sql = statements[i]
+        sqlite_exec(db, sql)?
+        i = i + 1
+    }
+    ok(len(statements))
+}

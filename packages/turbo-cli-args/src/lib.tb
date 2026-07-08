@@ -1,0 +1,106 @@
+// turbo-cli-args — flag and positional parsing over a `[str]` argv.
+//
+// Every function takes the argument vector explicitly (pass `args()` in real
+// programs — the builtin already drops the program name). Taking `[str]`
+// rather than calling `args()` internally keeps the whole package pure and
+// unit-testable with literal argument lists.
+//
+// Supported forms:
+//   * `--name=value`      → flag_str(argv, "name", ...) == "value"
+//   * `--name value`      → flag_str(argv, "name", ...) == "value"
+//   * `--name` / `-name`  → has_flag(argv, "name") == true (a boolean switch)
+//   * positionals         → any token that does not start with `-`
+//
+// Honest limitation: without a declared schema, the parser cannot know whether
+// a bare `--name` is a boolean switch or expects a following value. `flag_str`
+// treats the next token as the value for `--name value`; `positionals` counts
+// every non-`-` token. To avoid a value being miscounted as a positional,
+// prefer the unambiguous `--name=value` form.
+
+// Does the given long name (`--name`), short name (`-name`), or `--name=...`
+// appear in argv?
+fn has_flag(argv: [str], name: str) -> bool {
+    let long = "--" + name
+    let short = "-" + name
+    let eq_prefix = long + "="
+    let mut i = 0
+    let mut present = false
+    while i < len(argv) {
+        let tok = argv[i]
+        if tok == long {
+            present = true
+        }
+        if tok == short {
+            present = true
+        }
+        if starts_with(tok, eq_prefix) {
+            present = true
+        }
+        i = i + 1
+    }
+    present
+}
+
+// Value of `--name` as a string: `--name=value` wins, else the token after a
+// bare `--name`, else `fallback`.
+fn flag_str(argv: [str], name: str, fallback: str) -> str {
+    let long = "--" + name
+    let eq_prefix = long + "="
+    let mut i = 0
+    let mut result = fallback
+    let mut found = false
+    while i < len(argv) {
+        let tok = argv[i]
+        if !found {
+            if starts_with(tok, eq_prefix) {
+                result = substring(tok, len(eq_prefix), len(tok))
+                found = true
+            } else if tok == long {
+                if i + 1 < len(argv) {
+                    let nxt = argv[i + 1]
+                    result = nxt
+                    found = true
+                }
+            }
+        }
+        i = i + 1
+    }
+    result
+}
+
+// Value of `--name` parsed as an integer, or `fallback` if absent/invalid.
+fn flag_int(argv: [str], name: str, fallback: i64) -> i64 {
+    let raw = flag_str(argv, name, "")
+    if len(raw) == 0 {
+        return fallback
+    }
+    match str_to_int(raw) {
+        ok(n) => n
+        err(e) => fallback
+    }
+}
+
+// All positional arguments (tokens that do not start with `-`), in order.
+fn positionals(argv: [str]) -> [str] {
+    let mut out: [str] = []
+    let mut i = 0
+    while i < len(argv) {
+        let tok = argv[i]
+        if !starts_with(tok, "-") {
+            out = push(out, tok)
+        }
+        i = i + 1
+    }
+    out
+}
+
+// The Nth positional (0-based), or `fallback` if there aren't that many.
+fn positional_at(argv: [str], index: i64, fallback: str) -> str {
+    let pos = positionals(argv)
+    if index >= 0 {
+        if index < len(pos) {
+            return pos[index]
+        }
+    }
+    fallback
+}

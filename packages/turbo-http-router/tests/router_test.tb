@@ -1,0 +1,87 @@
+import {
+    router_new, router_get, router_post, router_add,
+    route_matches, path_param, router_handler_for, segment_is_dynamic
+} from "../src/lib"
+
+// --- pure matcher tests ---------------------------------------------------
+
+@test fn test_route_matches_exact() {
+    assert(route_matches("/todos", "/todos"))
+    assert(!route_matches("/todos", "/users"))
+    assert(!route_matches("/todos", "/todos/1"))
+}
+
+@test fn test_route_matches_param() {
+    assert(route_matches("/todos/:id", "/todos/42"))
+    assert(route_matches("/users/:uid/posts/:pid", "/users/7/posts/3"))
+    assert(!route_matches("/todos/:id", "/todos"))
+    assert(!route_matches("/todos/:id", "/todos/42/extra"))
+}
+
+@test fn test_route_matches_wildcard() {
+    assert(route_matches("/assets/*", "/assets/logo.png"))
+    assert(!route_matches("/assets/*", "/assets"))
+}
+
+@test fn test_segment_is_dynamic() {
+    assert(segment_is_dynamic(":id"))
+    assert(segment_is_dynamic("*"))
+    assert(!segment_is_dynamic("todos"))
+}
+
+@test fn test_path_param() {
+    assert_eq(path_param("/todos/:id", "/todos/42", "id"), "42")
+    assert_eq(path_param("/users/:uid/posts/:pid", "/users/7/posts/3", "pid"), "3")
+    assert_eq(path_param("/users/:uid/posts/:pid", "/users/7/posts/3", "uid"), "7")
+    // no such param -> ""
+    assert_eq(path_param("/todos/:id", "/todos/42", "nope"), "")
+    // count mismatch -> ""
+    assert_eq(path_param("/todos/:id", "/todos", "id"), "")
+}
+
+// --- dispatch-table tests -------------------------------------------------
+// Handlers return constant bodies so we can assert on the resolved handler
+// without constructing raw HTTP request strings.
+
+fn h_list(req: str) -> str { "LIST" }
+fn h_one(req: str) -> str { "ONE" }
+fn h_create(req: str) -> str { "CREATE" }
+
+@test fn test_handler_for_exact() {
+    let r = router_new()
+    router_get(r, "/todos", h_list)
+    router_post(r, "/todos", h_create)
+    let g = router_handler_for(r, "GET", "/todos")
+    assert_eq(g(""), "LIST")
+    let p = router_handler_for(r, "POST", "/todos")
+    assert_eq(p(""), "CREATE")
+}
+
+@test fn test_handler_for_param() {
+    let r = router_new()
+    router_get(r, "/todos", h_list)
+    router_get(r, "/todos/:id", h_one)
+    let one = router_handler_for(r, "GET", "/todos/99")
+    assert_eq(one(""), "ONE")
+    // exact still wins over the param route
+    let list = router_handler_for(r, "GET", "/todos")
+    assert_eq(list(""), "LIST")
+}
+
+@test fn test_handler_for_miss_returns_404() {
+    let r = router_new()
+    router_get(r, "/todos", h_list)
+    // wrong method
+    let m = router_handler_for(r, "POST", "/todos")
+    assert(contains(m(""), "Not Found"))
+    // wrong path
+    let n = router_handler_for(r, "GET", "/nope")
+    assert(contains(n(""), "Not Found"))
+}
+
+@test fn test_router_add_generic() {
+    let r = router_new()
+    router_add(r, "PUT", "/item/:id", h_one)
+    let f = router_handler_for(r, "PUT", "/item/5")
+    assert_eq(f(""), "ONE")
+}

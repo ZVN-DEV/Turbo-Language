@@ -1,0 +1,106 @@
+// turbo-test-assertions — expressive assertion helpers for @test functions.
+//
+// Turbo ships four assertion builtins: `assert`, `assert_eq`, `assert_ne`,
+// and `panic`. They abort the process (exit 1) on failure, which is exactly
+// how `turbolang test` decides a test failed. This package layers richer,
+// self-describing assertions on top of them, so a failing test prints *why*
+// it failed instead of a bare "assertion failed".
+//
+// Every helper below aborts with an informative message on failure and is a
+// no-op on success. Because a failed assertion terminates the process, you
+// test the *passing* path of your code with these; the failing path is the
+// abort itself.
+
+// --- Booleans -------------------------------------------------------------
+
+// Assert a condition is true, with a caller-supplied description.
+fn assert_true(cond: bool, what: str) {
+    assert(cond, "expected true: {what}")
+}
+
+// Assert a condition is false, with a caller-supplied description.
+fn assert_false(cond: bool, what: str) {
+    assert(!cond, "expected false: {what}")
+}
+
+// --- Integer comparisons --------------------------------------------------
+
+// Assert two integers are equal, showing both on mismatch.
+fn assert_int_eq(actual: i64, expected: i64) {
+    assert(actual == expected, "expected {expected}, got {actual}")
+}
+
+// Assert `a > b`.
+fn assert_gt(a: i64, b: i64) {
+    assert(a > b, "expected {a} > {b}")
+}
+
+// Assert `a >= b`.
+fn assert_ge(a: i64, b: i64) {
+    assert(a >= b, "expected {a} >= {b}")
+}
+
+// Assert `a < b`.
+fn assert_lt(a: i64, b: i64) {
+    assert(a < b, "expected {a} < {b}")
+}
+
+// Assert `a <= b`.
+fn assert_le(a: i64, b: i64) {
+    assert(a <= b, "expected {a} <= {b}")
+}
+
+// --- Strings --------------------------------------------------------------
+
+// Assert two strings are equal, showing both on mismatch.
+fn assert_str_eq(actual: str, expected: str) {
+    assert(actual == expected, "strings differ\n  expected: {expected}\n  actual:   {actual}")
+}
+
+// Assert `haystack` contains `needle` as a substring.
+fn assert_contains(haystack: str, needle: str) {
+    assert(contains(haystack, needle), "expected substring '{needle}' in '{haystack}'")
+}
+
+// Assert `haystack` does NOT contain `needle`.
+fn assert_not_contains(haystack: str, needle: str) {
+    assert(!contains(haystack, needle), "expected '{haystack}' to not contain '{needle}'")
+}
+
+// Assert `s` starts with `prefix`.
+fn assert_starts_with(s: str, prefix: str) {
+    assert(starts_with(s, prefix), "expected '{s}' to start with '{prefix}'")
+}
+
+// Assert `s` ends with `suffix`.
+fn assert_ends_with(s: str, suffix: str) {
+    assert(ends_with(s, suffix), "expected '{s}' to end with '{suffix}'")
+}
+
+// Assert `s` is the empty string.
+fn assert_empty(s: str) {
+    assert(len(s) == 0, "expected empty string, got '{s}'")
+}
+
+// Assert `s` is non-empty.
+fn assert_not_empty(s: str) {
+    assert(len(s) > 0, "expected a non-empty string")
+}
+
+// --- Results (i64 ! str, the shape returned by sqlite_/file builtins) ------
+
+// Assert a `i64 ! str` Result is `ok`, aborting with the error payload if not.
+fn assert_ok(r: i64 ! str) {
+    match r {
+        ok(v) => assert(true)
+        err(e) => assert(false, "expected ok, got err: {e}")
+    }
+}
+
+// Assert a `i64 ! str` Result is `err`, aborting with the value if it was ok.
+fn assert_err(r: i64 ! str) {
+    match r {
+        ok(v) => assert(false, "expected err, got ok: {v}")
+        err(e) => assert(true)
+    }
+}

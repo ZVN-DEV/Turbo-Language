@@ -1,0 +1,83 @@
+import {
+    db_exec, db_exec_params, query_scalar_int, query_scalar_str,
+    query_column_str, query_column_int, db_count, migrate
+} from "../src/lib"
+
+// The fallible work lives in `-> i64 ! str` helpers so we can use `?`; the
+// @test wrapper turns an `err` into an assertion failure with the message.
+
+fn run_crud() -> i64 ! str {
+    let db = sqlite_open(":memory:")?
+    migrate(db, [
+        "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, age INTEGER)"
+    ])?
+
+    db_exec_params(db, "INSERT INTO users (name, age) VALUES (?, ?)", ["alice", "30"])?
+    db_exec_params(db, "INSERT INTO users (name, age) VALUES (?, ?)", ["bob", "25"])?
+
+    let n = db_count(db, "users")?
+    assert_eq(n, 2)
+
+    let count2 = query_scalar_int(db, "SELECT COUNT(*) FROM users WHERE age > 26")?
+    assert_eq(count2, 1)
+
+    let first = query_scalar_str(db, "SELECT name FROM users ORDER BY name LIMIT 1")?
+    assert_eq(first, "alice")
+
+    let names = query_column_str(db, "SELECT name FROM users ORDER BY name", 0)
+    assert_eq(len(names), 2)
+    assert_eq(names[0], "alice")
+    assert_eq(names[1], "bob")
+
+    let ages = query_column_int(db, "SELECT age FROM users ORDER BY age", 0)
+    assert_eq(len(ages), 2)
+    assert_eq(ages[0], 25)
+    assert_eq(ages[1], 30)
+
+    sqlite_close(db)
+    ok(0)
+}
+
+@test fn test_crud_roundtrip() {
+    match run_crud() {
+        ok(v) => assert(true)
+        err(e) => assert(false, "sqlite error: {e}")
+    }
+}
+
+fn check_no_rows() -> i64 ! str {
+    let db = sqlite_open(":memory:")?
+    db_exec(db, "CREATE TABLE t (x INTEGER)")?
+    // query_scalar_str on an empty table must error, not crash.
+    match query_scalar_str(db, "SELECT x FROM t") {
+        ok(v) => assert(false, "expected a no-rows error, got a value")
+        err(e) => assert(contains(e, "no rows"))
+    }
+    sqlite_close(db)
+    ok(0)
+}
+
+@test fn test_scalar_no_rows_errors() {
+    match check_no_rows() {
+        ok(v) => assert(true)
+        err(e) => assert(false, "setup failed: {e}")
+    }
+}
+
+fn check_exec_error() -> i64 ! str {
+    let db = sqlite_open(":memory:")?
+    // Bad SQL against a missing table — db_exec_params should return err.
+    match db_exec_params(db, "INSERT INTO missing_table (a) VALUES (?)", ["x"]) {
+        ok(v) => assert(false, "expected an error for a missing table")
+        err(e) => assert(len(e) > 0)
+    }
+    sqlite_close(db)
+    ok(0)
+}
+
+@test fn test_exec_error_is_reported() {
+    match check_exec_error() {
+        ok(v) => assert(true)
+        err(e) => assert(false, "setup failed: {e}")
+    }
+}
