@@ -55,7 +55,7 @@ struct CEmitter {
     /// variants that carry data.
     enum_variant_fields: HashMap<(String, String), Vec<String>>,
     /// Variable type tracking: variable name -> simplified type tag
-    /// ("str", "int", "float", "bool", "array", "struct", "void*")
+    /// ("str", "int", "float", "bool", "array", "struct", "void*", "closure")
     var_types: HashMap<String, String>,
     /// Function return type tracking: function name -> simplified type tag
     fn_return_types: HashMap<String, String>,
@@ -394,6 +394,15 @@ impl CEmitter {
         }
     }
 
+    fn is_fn_value_tag(tag: &str) -> bool {
+        tag == "closure"
+    }
+
+    fn fn_value_string_expr(&mut self, inner_c: &str) -> String {
+        let tmp = self.fresh_tmp();
+        format!("({{ void *{tmp} = (void*)({inner_c}); (void){tmp}; \"[function]\"; }})")
+    }
+
     /// Convert an expression to a string representation for interpolation,
     /// choosing the right rt_*_to_str based on the inferred type.
     fn expr_to_str_conversion(&mut self, expr: &Expr, inner_c: &str) -> String {
@@ -402,6 +411,7 @@ impl CEmitter {
             "str" => inner_c.to_string(),
             "float" | "f64" | "f32" => format!("rt_f64_to_str({inner_c})"),
             "bool" => format!("rt_bool_to_str({inner_c})"),
+            tag if Self::is_fn_value_tag(tag) => self.fn_value_string_expr(inner_c),
             _ => format!("rt_i64_to_str({inner_c})"),
         }
     }
@@ -1342,6 +1352,9 @@ impl CEmitter {
             return "0 /* unsupported fn value */".to_string();
         };
 
+        // Known cost: every bare named-function value evaluation allocates a
+        // fresh [fn_ptr, null_env] pair. A per-function singleton pair would
+        // avoid loop-time linear-memory growth if this later becomes hot.
         let pair = self.fresh_tmp();
         format!(
             "({{ long long *{pair} = (long long*)rt_struct_alloc(2LL); \
@@ -1575,6 +1588,13 @@ impl CEmitter {
                     // Determine which print variant to call based on the
                     // inferred type of the argument expression.
                     let tag = self.infer_type_tag(&args[0].node);
+                    if Self::is_fn_value_tag(&tag) {
+                        let tmp = self.fresh_tmp();
+                        return format!(
+                            "({{ void *{tmp} = (void*)({}); (void){tmp}; rt_print_str(\"[function]\"); }})",
+                            arg_strs[0]
+                        );
+                    }
                     let print_fn = Self::print_fn_for_tag(&tag);
                     format!("{print_fn}({args_joined})")
                 } else {
@@ -4399,6 +4419,29 @@ fn main() {
 }
 "#,
             "18\n",
+        ),
+        (
+            r#"
+fn inc(x: i64) -> i64 { x + 1 }
+
+fn main() {
+    let f = inc
+    print(f)
+}
+"#,
+            "[function]\n",
+        ),
+        (
+            r#"
+fn inc(x: i64) -> i64 { x + 1 }
+
+fn main() {
+    let f = inc
+    print("{f}")
+    print("${f}")
+}
+"#,
+            "[function]\n$[function]\n",
         ),
     ];
 

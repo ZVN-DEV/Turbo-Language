@@ -1,0 +1,8 @@
+// A named function value bound to a local should render like native JIT
+// instead of being routed through integer printing as a raw closure pointer.
+fn inc(x: i64) -> i64 { x + 1 }
+
+fn main() {
+    let f = inc
+    print(f)
+}
