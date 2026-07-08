@@ -99,11 +99,18 @@ jobs:
   test-windows:
     name: test-windows (experimental, advisory)
     runs-on: windows-latest
-    # Windows has never been exercised: AOT linking and the C runtime are
-    # OS-sensitive, so this leg is advisory only while we learn what breaks.
-    # It must NOT block CI. Only the Rust unit tests run here — the JIT/AOT
-    # integration tests and the C-runtime tests.sh are bash-based and are
-    # deliberately not run on Windows this cycle.
+    # Tier A Windows support (JIT + unit tests). This leg exercises:
+    #   1. `cargo test --workspace` — the Rust unit tests, including the
+    #      vendored-SQLite build (build.rs compiles sqlite3.c with clang and
+    #      archives it with llvm-lib into turbosqlite.lib for link.exe).
+    #   2. A JIT smoke that runs a core subset of the phase1 integration tests
+    #      via `turbolang run` and diffs stdout against the `.expected` files.
+    #
+    # Still advisory (continue-on-error) while Windows JIT hardens; promotion
+    # to a required gate is the orchestrator's call. Native AOT
+    # (`turbolang build`), the bash-based C-runtime tests.sh, and the HTTP/
+    # socket/spawn integration tests remain out of scope on Windows this cycle
+    # — the POSIX C runtime does not compile under MSVC (see aot.rs).
     continue-on-error: true
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -120,8 +127,54 @@ jobs:
             turbo/target
           key: ${{ runner.os }}-cargo-test-windows-${{ hashFiles('turbo/Cargo.lock') }}
 
+      # The vendored SQLite build (build.rs) shells out to clang + llvm-lib on
+      # windows-msvc. Both ship with the LLVM that is preinstalled on the
+      # GitHub windows runner image; surface their versions so a future image
+      # change that drops them fails loudly here rather than deep in build.rs.
+      - name: Toolchain versions (clang/llvm-lib for vendored SQLite)
+        shell: bash
+        run: |
+          echo "clang:    $(command -v clang || echo MISSING) — $(clang --version 2>&1 | head -1)"
+          echo "llvm-lib: $(command -v llvm-lib || echo MISSING)"
+
       - name: cargo test
         run: cargo test --workspace --manifest-path turbo/Cargo.toml
+
+      - name: Build release
+        run: cargo build --release --workspace --manifest-path turbo/Cargo.toml
+
+      # JIT smoke: run a curated, POSIX-free subset of the phase1 integration
+      # tests through `turbolang run` and compare stdout to the checked-in
+      # `.expected` fixtures. Runs under Git Bash (available on windows-latest)
+      # and normalizes CRLF so the LF fixtures compare cleanly.
+      - name: JIT smoke — core phase1 subset
+        shell: bash
+        run: |
+          set -uo pipefail
+          bin="turbo/target/release/turbolang.exe"
+          tests="hello fibonacci arrays string_concat string_ops stdlib_strings hashmap_basic hashmap_int match_int match_guards nested_match"
+          fail=0
+          for t in $tests; do
+            src="turbo/tests/phase1/$t.tb"
+            exp="turbo/tests/phase1/$t.expected"
+            if ! got="$("$bin" run "$src" 2>&1)"; then
+              echo "FAIL($t): turbolang run exited non-zero"
+              printf '%s\n' "$got"
+              fail=1
+              continue
+            fi
+            want="$(tr -d '\r' < "$exp")"
+            got="$(printf '%s' "$got" | tr -d '\r')"
+            if [ "$got" = "$want" ]; then
+              echo "ok    $t"
+            else
+              echo "FAIL($t): output mismatch"
+              echo "--- want ---"; printf '%s\n' "$want"
+              echo "--- got  ---"; printf '%s\n' "$got"
+              fail=1
+            fi
+          done
+          exit "$fail"
 
   integration:
     name: Integration tests (${{ matrix.os }})

@@ -41,32 +41,57 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=CC");
 
-    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let host = std::env::var("HOST").unwrap_or_default();
+    let target = std::env::var("TARGET").unwrap_or_default();
+    let is_windows = target.contains("windows");
+    let is_msvc = target.contains("msvc");
+
+    // `cc` (the POSIX default) is not present on Windows. Default to clang,
+    // which is preinstalled and on PATH on the GitHub windows runners and, on a
+    // windows-msvc host, emits COFF objects that link.exe consumes. An explicit
+    // $CC override still wins on every platform.
+    let cc = std::env::var("CC").unwrap_or_else(|_| {
+        if is_windows {
+            "clang".to_string()
+        } else {
+            "cc".to_string()
+        }
+    });
 
     let obj_path = Path::new(&out_dir).join("sqlite3.o");
-    let lib_path = Path::new(&out_dir).join("libturbosqlite.a");
+    // rustc's `static=turbosqlite` resolves to `turbosqlite.lib` on msvc and
+    // `libturbosqlite.a` everywhere else, so the archive must be named to match.
+    let lib_path = if is_msvc {
+        Path::new(&out_dir).join("turbosqlite.lib")
+    } else {
+        Path::new(&out_dir).join("libturbosqlite.a")
+    };
 
-    // Compile flags — keep in sync with `SQLITE_CFLAGS` in src/lib.rs.
-    let cflags: &[&str] = &[
-        "-O2",
-        "-fPIC",
+    // Compile flags — the `-D` defines MUST stay in sync with `SQLITE_CFLAGS`
+    // in src/lib.rs.
+    let mut cflags: Vec<&str> = vec!["-O2"];
+    // Position-independent code is required for the Unix AOT/static-link path;
+    // it is irrelevant on Windows (all code is relocatable) and clang warns
+    // "argument unused" if it is passed there.
+    if !is_windows {
+        cflags.push("-fPIC");
+    }
+    cflags.extend_from_slice(&[
         "-DSQLITE_THREADSAFE=1",
         "-DSQLITE_OMIT_LOAD_EXTENSION",
         "-DSQLITE_OMIT_DEPRECATED",
         "-DSQLITE_DQS=0",
         "-DSQLITE_DEFAULT_MEMSTATUS=0",
         "-DSQLITE_OMIT_SHARED_CACHE",
-    ];
+    ]);
 
     let mut compile = Command::new(&cc);
-    compile.args(cflags);
+    compile.args(&cflags);
 
     // Cross-compilation: a bare `cc` compiles for the HOST arch, but cargo
     // may be building a different TARGET (the release matrix cross-builds
     // x86_64-apple-darwin on arm64 runners). A wrong-arch object is silently
     // ignored by the linker and surfaces as undefined `_sqlite3_*` symbols.
-    let host = std::env::var("HOST").unwrap_or_default();
-    let target = std::env::var("TARGET").unwrap_or_default();
     if !target.is_empty() && target != host {
         if target.contains("apple-darwin") {
             let arch = if target.starts_with("aarch64") {
@@ -92,25 +117,40 @@ fn main() {
     }
 
     // Archive the object so cargo can link it as a static library. Remove any
-    // stale archive first so `ar` never appends to an old member set.
+    // stale archive first so the archiver never appends to an old member set.
+    // The archiver and its argument syntax differ by toolchain:
+    //   - Unix / windows-gnu: `ar crs libturbosqlite.a sqlite3.o`
+    //   - windows-msvc:       `llvm-lib /OUT:turbosqlite.lib sqlite3.o`
+    //     (llvm-lib ships with the clang we default to and produces a COFF
+    //     archive that link.exe accepts). Honors an $AR override on either path.
     let _ = std::fs::remove_file(&lib_path);
-    let ar = std::env::var("AR").unwrap_or_else(|_| "ar".to_string());
-    let status = Command::new(&ar)
-        .arg("crs")
-        .arg(&lib_path)
-        .arg(&obj_path)
-        .status()
-        .unwrap_or_else(|e| panic!("failed to spawn '{ar}' to archive sqlite3.o: {e}"));
-    if !status.success() {
-        panic!("ar failed archiving sqlite3.o (exit {status})");
+    let ar_status = if is_msvc {
+        let ar = std::env::var("AR").unwrap_or_else(|_| "llvm-lib".to_string());
+        Command::new(&ar)
+            .arg("/NOLOGO")
+            .arg(format!("/OUT:{}", lib_path.display()))
+            .arg(&obj_path)
+            .status()
+            .unwrap_or_else(|e| panic!("failed to spawn '{ar}' to archive sqlite3.o: {e}"))
+    } else {
+        let ar = std::env::var("AR").unwrap_or_else(|_| "ar".to_string());
+        Command::new(&ar)
+            .arg("crs")
+            .arg(&lib_path)
+            .arg(&obj_path)
+            .status()
+            .unwrap_or_else(|e| panic!("failed to spawn '{ar}' to archive sqlite3.o: {e}"))
+    };
+    if !ar_status.success() {
+        panic!("archiver failed archiving sqlite3.o (exit {ar_status})");
     }
 
     println!("cargo:rustc-link-search=native={out_dir}");
     println!("cargo:rustc-link-lib=static=turbosqlite");
 
     // SQLite needs the C math library everywhere and dlopen/pthread on Linux.
-    // (macOS provides these via libSystem, which Rust links automatically.)
-    let target = std::env::var("TARGET").unwrap_or_default();
+    // (macOS provides these via libSystem; Windows provides them via the CRT
+    // and kernel32, both of which rustc links automatically.)
     if target.contains("linux") {
         println!("cargo:rustc-link-lib=dylib=dl");
         println!("cargo:rustc-link-lib=dylib=pthread");

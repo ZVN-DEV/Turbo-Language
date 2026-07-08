@@ -55,6 +55,31 @@ fn create_exclusive_temp_dir(prefix: &str, preserve: bool) -> Result<TempBuildDi
     })
 }
 
+/// Windows: native AOT (`turbolang build`) links the POSIX C runtime
+/// (`turbo_rt.c` — pthreads, `fork`, BSD sockets), which does not compile under
+/// the MSVC toolchain. Fail fast with an actionable message instead of a
+/// confusing downstream `cc`/linker error. JIT (`turbolang run`) is fully
+/// supported on Windows.
+#[cfg(windows)]
+pub fn aot_compile(
+    _ast_module: &turbo_ast::Module,
+    _output_path: &Path,
+    _optimize: bool,
+    _target: Option<&str>,
+    _link_libs: &[String],
+) -> Result<(), CodegenError> {
+    Err(CodegenError {
+        code: ErrorCode::E0404,
+        message: "AOT native compilation (`turbolang build`) is not yet \
+                  supported on Windows: the bundled C runtime requires POSIX \
+                  APIs (pthreads, fork, sockets) that the MSVC toolchain does \
+                  not provide. Use `turbolang run` to execute programs via the \
+                  JIT, which is fully supported on Windows."
+            .to_string(),
+    })
+}
+
+#[cfg(not(windows))]
 pub fn aot_compile(
     ast_module: &turbo_ast::Module,
     output_path: &Path,
