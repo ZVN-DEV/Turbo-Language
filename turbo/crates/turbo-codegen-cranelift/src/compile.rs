@@ -14,7 +14,9 @@ use std::collections::{HashMap, HashSet};
 use turbo_ast::*;
 
 use crate::closures::{extract_all_closures, extract_all_spawn_sites, CaptureInfo};
-use crate::expr::{compile_expr, release_mutable_param_vars, retain_generic_return_if_needed};
+use crate::expr::{
+    compile_expr, release_if_needed, release_mutable_param_vars, retain_generic_return_if_needed,
+};
 use crate::turbo_types::*;
 use crate::type_conv::{coerce_value, resolve_cl_type, resolve_cl_type_ffi, turbo_ty_to_cl_type};
 use crate::Ctx;
@@ -826,8 +828,16 @@ pub(crate) fn compile_module<M: Module>(
         module,
         &mut rt_fns,
         "rt_hashmap_new_typed",
-        &[types::I64, types::I64],
+        &[types::I64, types::I64, ptr_type, ptr_type],
         Some(ptr_type),
+    )?;
+    declare_rt_fn(module, &mut rt_fns, "rt_hashmap_gretain", &[ptr_type], None)?;
+    declare_rt_fn(
+        module,
+        &mut rt_fns,
+        "rt_hashmap_grelease",
+        &[ptr_type],
+        None,
     )?;
     declare_rt_fn(
         module,
@@ -1579,6 +1589,8 @@ pub(crate) fn compile_module<M: Module>(
         user_fns.insert(adapter_name, id);
     }
 
+    let mut hashmap_value_release_thunks: HashMap<String, (FuncId, TurboTy)> = HashMap::new();
+
     // Define all user functions (and closures)
     let mut cl_ctx = module.make_context();
     let mut data_desc = DataDescription::new();
@@ -1639,6 +1651,7 @@ pub(crate) fn compile_module<M: Module>(
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
+                hashmap_value_release_thunks: &mut hashmap_value_release_thunks,
                 vars: HashMap::new(),
                 borrowed_param_vars: Vec::new(),
                 mutable_param_vars: Vec::new(),
@@ -1805,6 +1818,7 @@ pub(crate) fn compile_module<M: Module>(
                     fn_asts: &fn_asts,
                     fn_type_params: &fn_type_params,
                     rt_fns: &rt_fns,
+                    hashmap_value_release_thunks: &mut hashmap_value_release_thunks,
                     vars: HashMap::new(),
                     borrowed_param_vars: Vec::new(),
                     mutable_param_vars: Vec::new(),
@@ -1942,6 +1956,7 @@ pub(crate) fn compile_module<M: Module>(
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
+                hashmap_value_release_thunks: &mut hashmap_value_release_thunks,
                 vars: HashMap::new(),
                 borrowed_param_vars: Vec::new(),
                 mutable_param_vars: Vec::new(),
@@ -2047,6 +2062,7 @@ pub(crate) fn compile_module<M: Module>(
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
+                hashmap_value_release_thunks: &mut hashmap_value_release_thunks,
                 vars: HashMap::new(),
                 borrowed_param_vars: Vec::new(),
                 mutable_param_vars: Vec::new(),
@@ -2241,6 +2257,7 @@ pub(crate) fn compile_module<M: Module>(
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
+                hashmap_value_release_thunks: &mut hashmap_value_release_thunks,
                 vars: HashMap::new(),
                 borrowed_param_vars: Vec::new(),
                 mutable_param_vars: Vec::new(),
@@ -2604,6 +2621,86 @@ pub(crate) fn compile_module<M: Module>(
                 message: e.to_string(),
             })?;
         module.clear_context(&mut cl_ctx);
+    }
+
+    let mut defined_hashmap_value_release_thunks: HashSet<String> = HashSet::new();
+    loop {
+        let mut pending: Vec<(String, FuncId, TurboTy)> = hashmap_value_release_thunks
+            .iter()
+            .filter(|(key, _)| !defined_hashmap_value_release_thunks.contains(key.as_str()))
+            .map(|(key, (func_id, value_ty))| (key.clone(), *func_id, value_ty.clone()))
+            .collect();
+        if pending.is_empty() {
+            break;
+        }
+        pending.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (key, func_id, value_ty) in pending {
+            cl_ctx.func.signature = module.make_signature();
+            cl_ctx.func.signature.params.push(AbiParam::new(ptr_type));
+
+            let mut fn_ctx = FunctionBuilderContext::new();
+            {
+                let builder = FunctionBuilder::new(&mut cl_ctx.func, &mut fn_ctx);
+                let mut cx = Ctx {
+                    builder,
+                    module,
+                    user_fns: &user_fns,
+                    extern_fns: &extern_fn_names,
+                    fn_ret_types: &fn_ret_types,
+                    fn_asts: &fn_asts,
+                    fn_type_params: &fn_type_params,
+                    rt_fns: &rt_fns,
+                    hashmap_value_release_thunks: &mut hashmap_value_release_thunks,
+                    vars: HashMap::new(),
+                    borrowed_param_vars: Vec::new(),
+                    mutable_param_vars: Vec::new(),
+                    generic_rc_flags: HashMap::new(),
+                    generic_value_origins: HashMap::new(),
+                    generic_value_retain_flags: HashMap::new(),
+                    generic_var_origins: HashMap::new(),
+                    return_type_param: None,
+                    next_var: 0,
+                    data_desc: &mut data_desc,
+                    string_counter: &mut string_counter,
+                    ptr_type,
+                    struct_fields: &struct_fields,
+                    enum_variants: &enum_variants,
+                    enum_variant_fields: &enum_variant_fields,
+                    enum_max_slots: &enum_max_slots,
+                    closure_fns: &closure_fns_map,
+                    trait_impls: &trait_impls,
+                    inline_depth: 0,
+                    expr_depth: 0,
+                    closure_captures: &mut closure_captures_map,
+                    generic_struct_field_overrides: HashMap::new(),
+                    last_struct_lit_concrete_fields: None,
+                    spawn_thunks: &spawn_thunk_map,
+                    constants: &constants_map,
+                    struct_derives: &struct_derives,
+                    loop_stack: Vec::new(),
+                    is_unsafe: false,
+                };
+                let entry = cx.builder.create_block();
+                cx.builder.append_block_params_for_function_params(entry);
+                cx.builder.switch_to_block(entry);
+                cx.builder.seal_block(entry);
+                cx.builder.ensure_inserted_block();
+                let value = cx.builder.block_params(entry)[0];
+                release_if_needed(&mut cx, value, &value_ty);
+                cx.builder.ins().return_(&[]);
+                cx.builder.finalize();
+            }
+
+            module
+                .define_function(func_id, &mut cl_ctx)
+                .map_err(|e| CodegenError {
+                    code: ErrorCode::E0405,
+                    message: e.to_string(),
+                })?;
+            module.clear_context(&mut cl_ctx);
+            defined_hashmap_value_release_thunks.insert(key);
+        }
     }
 
     Ok(user_fns)

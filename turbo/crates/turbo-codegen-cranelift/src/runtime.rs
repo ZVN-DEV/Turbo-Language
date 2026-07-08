@@ -5,7 +5,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicI64, Ordering},
+    Mutex,
+};
 
 const F64_FORMAT: &[u8] = b"%.15g\0";
 const RT_RC_IMMORTAL: i64 = i64::MAX;
@@ -2195,7 +2198,6 @@ const RT_RESPONSE_SEP: char = '\u{1f}';
 // per-connection handlers once listening. Stored as atomics since worker
 // threads read them concurrently, though there is no writer after listen
 // begins. Keep the keys, defaults, and validation in lockstep with the C side.
-use std::sync::atomic::AtomicI64;
 static HTTP_CFG_MAX_BODY: AtomicI64 = AtomicI64::new(RT_HTTP_MAX_BODY as i64);
 static HTTP_CFG_MAX_HEADER: AtomicI64 = AtomicI64::new(16 * 1024);
 static HTTP_CFG_MAX_CONN: AtomicI64 = AtomicI64::new(256);
@@ -3301,14 +3303,20 @@ enum GKey {
 struct GMap {
     key_kind: u8,
     val_is_rc: bool,
+    value_release_fn: Option<extern "C" fn(*mut u8)>,
+    value_retain_fn: Option<extern "C" fn(*mut u8)>,
     entries: HashMap<GKey, i64>,
 }
 
-type GMapHandle = Mutex<GMap>;
+struct GMapHandle {
+    refcount: AtomicI64,
+    map: Mutex<GMap>,
+}
 
 fn lock_gmap(map_ptr: *const u8) -> std::sync::MutexGuard<'static, GMap> {
     let handle: &'static GMapHandle = unsafe { &*(map_ptr as *const GMapHandle) };
     handle
+        .map
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -3327,33 +3335,91 @@ fn gkey_from(key_kind: u8, key: i64) -> GKey {
     }
 }
 
+fn gvalue_retain(map: &GMap, value: i64) {
+    if let Some(retain_fn) = map.value_retain_fn {
+        retain_fn(value as *mut u8);
+    } else if map.val_is_rc {
+        rt_retain(value as *mut u8);
+    }
+}
+
+fn gvalue_release(map: &GMap, value: i64) {
+    if let Some(release_fn) = map.value_release_fn {
+        release_fn(value as *mut u8);
+    } else if map.val_is_rc {
+        rt_release(value as *mut u8);
+    }
+}
+
+fn decode_gvalue_fn(ptr: *mut u8) -> Option<extern "C" fn(*mut u8)> {
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut u8, extern "C" fn(*mut u8)>(ptr) })
+    }
+}
+
 /// Create a typed map. `key_kind`: 0 = str, 1 = int; `val_is_rc`: values are
-/// rc-heap pointers needing retain/release.
-pub(crate) extern "C" fn rt_hashmap_new_typed(key_kind: i64, val_is_rc: i64) -> *mut u8 {
+/// rc-heap pointers needing retain/release. `value_release_fn`, when non-null,
+/// replaces plain `rt_release` for value eviction/drop so aggregate values can
+/// recursively release their children before freeing the top-level container.
+pub(crate) extern "C" fn rt_hashmap_new_typed(
+    key_kind: i64,
+    val_is_rc: i64,
+    value_release_fn: *mut u8,
+    value_retain_fn: *mut u8,
+) -> *mut u8 {
     let gmap = GMap {
         key_kind: key_kind as u8,
         val_is_rc: val_is_rc != 0,
+        value_release_fn: decode_gvalue_fn(value_release_fn),
+        value_retain_fn: decode_gvalue_fn(value_retain_fn),
         entries: HashMap::new(),
     };
-    let boxed: Box<GMapHandle> = Box::new(Mutex::new(gmap));
+    let boxed: Box<GMapHandle> = Box::new(GMapHandle {
+        refcount: AtomicI64::new(1),
+        map: Mutex::new(gmap),
+    });
     Box::into_raw(boxed) as *mut u8
+}
+
+pub(crate) extern "C" fn rt_hashmap_gretain(map_ptr: *mut u8) {
+    if map_ptr.is_null() {
+        return;
+    }
+    let handle: &GMapHandle = unsafe { &*(map_ptr as *const GMapHandle) };
+    handle.refcount.fetch_add(1, Ordering::AcqRel);
+}
+
+pub(crate) extern "C" fn rt_hashmap_grelease(map_ptr: *mut u8) {
+    if map_ptr.is_null() {
+        return;
+    }
+    let handle: &GMapHandle = unsafe { &*(map_ptr as *const GMapHandle) };
+    if handle.refcount.fetch_sub(1, Ordering::Release) != 1 {
+        return;
+    }
+    std::sync::atomic::fence(Ordering::Acquire);
+    let boxed = unsafe { Box::from_raw(map_ptr as *mut GMapHandle) };
+    let map = boxed
+        .map
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for value in map.entries.values().copied() {
+        gvalue_release(&map, value);
+    }
 }
 
 /// Insert or overwrite. `value` is the raw 8-byte slot. rc-heap values are
 /// retained here and released when they are overwritten.
 pub(crate) extern "C" fn rt_hashmap_gset(map_ptr: *mut u8, key: i64, value: i64) {
     let mut map = lock_gmap(map_ptr);
-    let is_rc = map.val_is_rc;
     let k = gkey_from(map.key_kind, key);
-    if is_rc {
-        // Retain the new value before releasing any old one so a self-overwrite
-        // (value aliases the stored pointer) never transiently hits zero.
-        rt_retain(value as *mut u8);
-    }
+    // Retain the new value before releasing any old one so a self-overwrite
+    // (value aliases the stored pointer) never transiently hits zero.
+    gvalue_retain(&map, value);
     if let Some(old) = map.entries.insert(k, value) {
-        if is_rc {
-            rt_release(old as *mut u8);
-        }
+        gvalue_release(&map, old);
     }
 }
 
@@ -3364,9 +3430,7 @@ pub(crate) extern "C" fn rt_hashmap_gget(map_ptr: *mut u8, key: i64) -> *mut u8 
     let k = gkey_from(map.key_kind, key);
     match map.entries.get(&k) {
         Some(&v) => {
-            if map.val_is_rc {
-                rt_retain(v as *mut u8);
-            }
+            gvalue_retain(&map, v);
             rt_option_some(v)
         }
         None => rt_option_none(),
@@ -3392,12 +3456,9 @@ pub(crate) extern "C" fn rt_hashmap_ghas(map_ptr: *const u8, key: i64) -> i8 {
 /// Remove `key`, releasing its rc-heap value if present.
 pub(crate) extern "C" fn rt_hashmap_gremove(map_ptr: *mut u8, key: i64) {
     let mut map = lock_gmap(map_ptr);
-    let is_rc = map.val_is_rc;
     let k = gkey_from(map.key_kind, key);
     if let Some(old) = map.entries.remove(&k) {
-        if is_rc {
-            rt_release(old as *mut u8);
-        }
+        gvalue_release(&map, old);
     }
 }
 

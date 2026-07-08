@@ -608,24 +608,20 @@ a compound value if you need to key by it.
 `K`/`V` by exact type or same numeric family (so an `int` literal fits a
 `HashMap<i32, ..>` value and a float literal fits an `f32`).
 
-**Lifetime / scope cut.** As with the legacy maps, the typed map *object*
-itself is not reference-counted — it lives in the request arena (inside an HTTP
-handler) or for the process (server-scoped), and is not eagerly freed at scope
-exit. Dropping a whole map does not walk-and-free its remaining entries. This
-keeps the persistent server-config use case sound and matches the legacy maps'
-behavior; a future change may make map objects themselves rc-managed.
+**Lifetime.** Typed maps retain values on insert and release them on overwrite,
+remove, and typed-map release. Flat values (`str`, or a scalar) use the fast
+path: scalar values need no release, and flat rc values use normal ARC retain /
+release. Aggregate values — `[str]`, structs with rc-heap fields, data enums,
+and `Optional`/`Result` carrying rc data — carry a per-map release callback
+generated for the concrete `V` type. That callback performs the same recursive
+child release the compiler emits for ordinary scope cleanup, so aggregate value
+churn is memory-flat instead of leaking nested children.
 
-Map **values are reference-counted one level deep.** For a flat value
-(`str`, or a scalar) this is complete: inserting retains it and
-overwriting/removing frees it, with no leak. For an **aggregate** value —
-`[str]`, a struct with rc-heap fields, a data enum, an `Optional`/`Result`
-carrying rc data — the map manages the *container* pointer but not its nested
-rc children: overwriting or removing such a value frees the container and leaks
-its inner elements/fields (a bounded leak proportional to churn of aggregate
-values, not a crash). Reading such values back is safe. If you need to store
-many short-lived aggregate values under churn, prefer flat values (e.g. store a
-joined `str` instead of a `[str]`). Full deep reference-counting of aggregate
-map values is tracked as a follow-up.
+Typed map handles are also retain/release managed when they flow through typed
+Turbo values. This lets nested maps compose: releasing an outer map value can
+release an inner map, and the inner map uses its own stored value descriptor for
+its entries. Legacy untyped maps keep their original process/request-lifetime
+behavior.
 
 **WASM.** The WASM backend supports only the legacy `str → str` map subset;
 generic `HashMap<K, V>` operations are rejected there (fail-loud), not silently

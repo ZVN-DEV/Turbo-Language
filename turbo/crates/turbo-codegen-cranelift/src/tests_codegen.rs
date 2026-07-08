@@ -85,6 +85,8 @@ fn test_codegen_rejects_pathologically_deep_ast() {
             let fn_asts: HashMap<String, &FnDef> = HashMap::new();
             let fn_type_params: HashMap<String, Vec<String>> = HashMap::new();
             let rt_fns: HashMap<String, FuncId> = HashMap::new();
+            let mut hashmap_value_release_thunks: HashMap<String, (FuncId, TurboTy)> =
+                HashMap::new();
             let struct_fields: HashMap<String, Vec<(String, TurboTy)>> = HashMap::new();
             let enum_variants: HashMap<String, Vec<String>> = HashMap::new();
             let enum_variant_fields: HashMap<(String, String), Vec<TurboTy>> = HashMap::new();
@@ -105,6 +107,7 @@ fn test_codegen_rejects_pathologically_deep_ast() {
                 fn_asts: &fn_asts,
                 fn_type_params: &fn_type_params,
                 rt_fns: &rt_fns,
+                hashmap_value_release_thunks: &mut hashmap_value_release_thunks,
                 vars: HashMap::new(),
                 borrowed_param_vars: Vec::new(),
                 mutable_param_vars: Vec::new(),

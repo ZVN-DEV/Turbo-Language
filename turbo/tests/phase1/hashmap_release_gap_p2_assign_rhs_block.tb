@@ -1,0 +1,17 @@
+fn churn(n: i64) -> int {
+    let mut current: HashMap<int, [str]> = hashmap()
+    let mut i = 0
+    while i < n {
+        current = {
+            let next: HashMap<int, [str]> = hashmap()
+            hashmap_set(next, 0, ["value-{i}", "tail"])
+            next
+        }
+        i = i + 1
+    }
+    hashmap_len(current)
+}
+
+fn main() {
+    print(churn(10))
+}

@@ -1,0 +1,32 @@
+struct Holder { count: int }
+
+fn consume(builder: fn(i64) -> int) -> int {
+    builder(1)
+    1
+}
+
+fn main() {
+    let closure_count = consume((x: i64) => {
+        let m: HashMap<int, [str]> = hashmap()
+        hashmap_set(m, 1, ["closure"])
+        x
+    })
+    print(closure_count)
+
+    let match_count = match 1 {
+        1 => {
+            let m: HashMap<int, [str]> = hashmap()
+            hashmap_set(m, 2, ["match"])
+            hashmap_len(m)
+        }
+        _ => 0
+    }
+    print(match_count)
+
+    let holder = Holder { count: {
+        let m: HashMap<int, [str]> = hashmap()
+        hashmap_set(m, 3, ["field"])
+        hashmap_len(m)
+    } }
+    print(holder.count)
+}

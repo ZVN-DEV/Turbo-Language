@@ -91,7 +91,10 @@ extern void *rt_spawn_with_args(long long (*thunk)(void *), void *args_ptr,
                                 long long ptr_mask, long long num_args);
 extern long long rt_await_handle(void *handle_ptr);
 /* Generic HashMap<K,V> descriptor-based core (Tier 1.2). */
-extern void *rt_hashmap_new_typed(long long key_kind, long long val_is_rc);
+extern void *rt_hashmap_new_typed(long long key_kind, long long val_is_rc,
+                                  void *value_release_fn, void *value_retain_fn);
+extern void rt_hashmap_gretain(void *map);
+extern void rt_hashmap_grelease(void *map);
 extern void rt_hashmap_gset(void *map, long long key, long long value);
 extern void *rt_hashmap_gget(void *map, long long key);
 extern char rt_hashmap_ghas(const void *map, long long key);
@@ -943,7 +946,7 @@ static void test_http_config_validation(void) {
 
 /* ── Generic HashMap<K,V> (Tier 1.2): value retain/release discipline ── */
 static void test_hashmap_generic_value_refcounts(void) {
-    void *m = rt_hashmap_new_typed(1, 1); /* int keys, rc-heap values */
+    void *m = rt_hashmap_new_typed(1, 1, NULL, NULL); /* int keys, rc-heap values */
     const char *a = rt_str_concat("val", "-a"); /* fresh rc string, rc 1 */
     long long base_a = RT_RC(a);
     rt_hashmap_gset(m, 7, (long long)a); /* map retains -> base_a + 1 */
@@ -965,12 +968,13 @@ static void test_hashmap_generic_value_refcounts(void) {
 
     rt_release((void *)a);
     rt_release((void *)b);
+    rt_hashmap_grelease(m);
     check("test_hashmap_generic_value_refcounts set/overwrite/remove retain-release",
           ok);
 }
 
 static void test_hashmap_generic_resize_and_drop(void) {
-    void *m = rt_hashmap_new_typed(1, 1); /* int keys, rc-heap values */
+    void *m = rt_hashmap_new_typed(1, 1, NULL, NULL); /* int keys, rc-heap values */
     enum { N = 100 };
     const char *vals[N];
     int ok = 1;
@@ -994,12 +998,13 @@ static void test_hashmap_generic_resize_and_drop(void) {
         ok = ok && RT_RC(vals[i]) == 1;
         rt_release((void *)vals[i]); /* frees, ASan verifies no double-free */
     }
+    rt_hashmap_grelease(m);
     check("test_hashmap_generic_resize_and_drop retains through resize, frees on remove",
           ok);
 }
 
 static void test_hashmap_generic_str_keys_get(void) {
-    void *m = rt_hashmap_new_typed(0, 0); /* str keys, non-rc int values */
+    void *m = rt_hashmap_new_typed(0, 0, NULL, NULL); /* str keys, non-rc int values */
     rt_hashmap_gset(m, (long long)"alpha", 11);
     rt_hashmap_gset(m, (long long)"beta", 22);
     rt_hashmap_gset(m, (long long)"alpha", 111); /* overwrite */
@@ -1019,7 +1024,55 @@ static void test_hashmap_generic_str_keys_get(void) {
     rt_release(hit);
     rt_release(miss);
     rt_release(keys);
+    rt_hashmap_grelease(m);
     check("test_hashmap_generic_str_keys_get get/has/keys/overwrite with string keys",
+          ok);
+}
+
+static int g_hashmap_release_thunk_calls = 0;
+
+static void release_struct_with_child(void *value) {
+    if (!value) return;
+    long long *fields = (long long *)value;
+    rt_release((void *)(size_t)fields[0]);
+    rt_release(value);
+    g_hashmap_release_thunk_calls++;
+}
+
+static void *make_child_struct(const char *prefix, const char *suffix) {
+    long long *s = (long long *)rt_struct_alloc(1);
+    s[0] = (long long)(size_t)rt_str_concat(prefix, suffix);
+    return s;
+}
+
+static void test_hashmap_generic_value_release_fn(void) {
+    g_hashmap_release_thunk_calls = 0;
+    void *m = rt_hashmap_new_typed(0, 1, (void *)release_struct_with_child, NULL);
+
+    void *a = make_child_struct("child", "-a");
+    rt_hashmap_gset(m, (long long)(size_t)"k", (long long)(size_t)a);
+    rt_release(a); /* codegen balances the map retain at top level only */
+
+    void *b = make_child_struct("child", "-b");
+    rt_hashmap_gset(m, (long long)(size_t)"k", (long long)(size_t)b);
+    rt_release(b);
+    int ok = g_hashmap_release_thunk_calls == 1;
+
+    void *c = make_child_struct("child", "-c");
+    rt_hashmap_gset(m, (long long)(size_t)"k", (long long)(size_t)c);
+    rt_release(c);
+    ok = ok && g_hashmap_release_thunk_calls == 2;
+
+    rt_hashmap_gremove(m, (long long)(size_t)"k");
+    ok = ok && g_hashmap_release_thunk_calls == 3;
+
+    void *d = make_child_struct("child", "-d");
+    rt_hashmap_gset(m, (long long)(size_t)"k", (long long)(size_t)d);
+    rt_release(d);
+    rt_hashmap_grelease(m);
+    ok = ok && g_hashmap_release_thunk_calls == 4;
+
+    check("test_hashmap_generic_value_release_fn overwrite/remove/free callbacks",
           ok);
 }
 
@@ -1170,6 +1223,7 @@ int main(void) {
     test_hashmap_generic_value_refcounts();
     test_hashmap_generic_resize_and_drop();
     test_hashmap_generic_str_keys_get();
+    test_hashmap_generic_value_release_fn();
     test_string_arc_loop_releases();
     test_string_arc_alias_then_reassign();
     test_string_arc_literal_never_freed();

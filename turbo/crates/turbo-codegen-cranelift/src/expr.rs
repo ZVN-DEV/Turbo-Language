@@ -1518,12 +1518,26 @@ pub(crate) fn is_rc_heap_type(ty: &TurboTy) -> bool {
     )
 }
 
-pub(crate) fn is_rc_managed_type<M: Module>(cx: &Ctx<'_, M>, ty: &TurboTy) -> bool {
+pub(crate) fn is_rc_managed_type_with_layouts(
+    ty: &TurboTy,
+    enum_max_slots: &HashMap<String, usize>,
+) -> bool {
     is_rc_heap_type(ty)
-        || matches!(ty, TurboTy::Enum(name) if cx.enum_max_slots.contains_key(name.as_str()))
+        || matches!(ty, TurboTy::HashMap(_, _))
+        || matches!(ty, TurboTy::Enum(name) if enum_max_slots.contains_key(name.as_str()))
+}
+
+pub(crate) fn is_rc_managed_type<M: Module>(cx: &Ctx<'_, M>, ty: &TurboTy) -> bool {
+    is_rc_managed_type_with_layouts(ty, cx.enum_max_slots)
 }
 
 pub(crate) fn retain_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty: &TurboTy) {
+    if matches!(ty, TurboTy::HashMap(_, _)) {
+        let retain_fid = cx.rt_fns["rt_hashmap_gretain"];
+        let retain_ref = cx.module.declare_func_in_func(retain_fid, cx.builder.func);
+        cx.builder.ins().call(retain_ref, &[value]);
+        return;
+    }
     if !is_rc_managed_type(cx, ty) {
         return;
     }
@@ -1738,29 +1752,71 @@ pub(crate) fn release_expr_temp_if_needed<M: Module>(
     }
 }
 
-fn has_nested_rc_children<M: Module>(cx: &Ctx<'_, M>, ty: &TurboTy) -> bool {
+pub(crate) fn has_nested_rc_children_with_layouts(
+    ty: &TurboTy,
+    struct_fields: &HashMap<String, Vec<(String, TurboTy)>>,
+    enum_variant_fields: &HashMap<(String, String), Vec<TurboTy>>,
+    enum_max_slots: &HashMap<String, usize>,
+) -> bool {
     match ty {
-        TurboTy::Array(inner) => is_rc_managed_type(cx, inner),
-        TurboTy::Struct(name) => cx.struct_fields.get(name).is_some_and(|layout| {
+        TurboTy::Array(inner) => is_rc_managed_type_with_layouts(inner, enum_max_slots),
+        TurboTy::Struct(name) => struct_fields.get(name).is_some_and(|layout| {
             layout
                 .iter()
-                .any(|(_, field_ty)| is_rc_managed_type(cx, field_ty))
+                .any(|(_, field_ty)| is_rc_managed_type_with_layouts(field_ty, enum_max_slots))
         }),
-        TurboTy::Enum(name) => cx
-            .enum_variant_fields
+        TurboTy::Enum(name) => enum_variant_fields
             .iter()
             .filter(|((enum_name, _), _)| enum_name == name)
             .any(|(_, field_tys)| {
                 field_tys
                     .iter()
-                    .any(|field_ty| is_rc_managed_type(cx, field_ty))
+                    .any(|field_ty| is_rc_managed_type_with_layouts(field_ty, enum_max_slots))
             }),
-        TurboTy::Optional(inner) => is_rc_managed_type(cx, inner),
+        TurboTy::Optional(inner) => is_rc_managed_type_with_layouts(inner, enum_max_slots),
         TurboTy::Result(ok_tty, err_tty) => {
-            is_rc_managed_type(cx, ok_tty) || is_rc_managed_type(cx, err_tty)
+            is_rc_managed_type_with_layouts(ok_tty, enum_max_slots)
+                || is_rc_managed_type_with_layouts(err_tty, enum_max_slots)
         }
         _ => false,
     }
+}
+
+fn has_nested_rc_children<M: Module>(cx: &Ctx<'_, M>, ty: &TurboTy) -> bool {
+    has_nested_rc_children_with_layouts(
+        ty,
+        cx.struct_fields,
+        cx.enum_variant_fields,
+        cx.enum_max_slots,
+    )
+}
+
+pub(crate) fn hashmap_value_needs_custom_release_with_layouts(
+    ty: &TurboTy,
+    struct_fields: &HashMap<String, Vec<(String, TurboTy)>>,
+    enum_variant_fields: &HashMap<(String, String), Vec<TurboTy>>,
+    enum_max_slots: &HashMap<String, usize>,
+) -> bool {
+    matches!(ty, TurboTy::HashMap(_, _))
+        || has_nested_rc_children_with_layouts(
+            ty,
+            struct_fields,
+            enum_variant_fields,
+            enum_max_slots,
+        )
+}
+
+pub(crate) fn hashmap_value_needs_custom_release<M: Module>(cx: &Ctx<'_, M>, ty: &TurboTy) -> bool {
+    hashmap_value_needs_custom_release_with_layouts(
+        ty,
+        cx.struct_fields,
+        cx.enum_variant_fields,
+        cx.enum_max_slots,
+    )
+}
+
+pub(crate) fn hashmap_value_release_thunk_key(ty: &TurboTy) -> String {
+    format!("{ty:?}")
 }
 
 fn release_nested_children_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty: &TurboTy) {
@@ -1963,6 +2019,12 @@ fn release_nested_children<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty: &Tu
 }
 
 pub(crate) fn release_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty: &TurboTy) {
+    if matches!(ty, TurboTy::HashMap(_, _)) {
+        let release_fid = cx.rt_fns["rt_hashmap_grelease"];
+        let release_ref = cx.module.declare_func_in_func(release_fid, cx.builder.func);
+        cx.builder.ins().call(release_ref, &[value]);
+        return;
+    }
     if !is_rc_managed_type(cx, ty) {
         return;
     }

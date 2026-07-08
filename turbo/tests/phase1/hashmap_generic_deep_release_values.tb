@@ -1,0 +1,58 @@
+struct Label { name: str, suffix: str }
+
+type Payload {
+    Text(str),
+    Pair(str, str),
+    Empty,
+}
+
+fn print_payload(p: Payload) {
+    match p {
+        Text(s) => print("text:{s}")
+        Pair(a, b) => print("pair:{a}-{b}")
+        Empty => print("empty")
+    }
+}
+
+fn main() {
+    let arrays: HashMap<str, [str]> = hashmap()
+    hashmap_set(arrays, "k", ["old", "array"])
+    hashmap_set(arrays, "k", ["new", "array"])
+    let arr = hashmap_get(arrays, "k") ?? ["missing"]
+    print(arr[0])
+    hashmap_remove(arrays, "k")
+    print(hashmap_len(arrays))
+
+    let labels: HashMap<str, Label> = hashmap()
+    hashmap_set(labels, "item", Label { name: "first", suffix: "v1" })
+    hashmap_set(labels, "item", Label { name: "second", suffix: "v2" })
+    let label = hashmap_get(labels, "item") ?? Label { name: "missing", suffix: "x" }
+    print(label.name)
+    hashmap_remove(labels, "item")
+    print(hashmap_has(labels, "item"))
+
+    let payloads: HashMap<str, Payload> = hashmap()
+    hashmap_set(payloads, "p", Payload.Text("first"))
+    hashmap_set(payloads, "p", Payload.Pair("left", "right"))
+    let payload = hashmap_get(payloads, "p") ?? Payload.Empty
+    print_payload(payload)
+    hashmap_remove(payloads, "p")
+    let missing_payload = hashmap_get(payloads, "p") ?? Payload.Empty
+    print_payload(missing_payload)
+
+    let optionals: HashMap<str, str?> = hashmap()
+    hashmap_set(optionals, "maybe", some("old"))
+    hashmap_set(optionals, "maybe", some("new"))
+    let maybe = hashmap_get(optionals, "maybe") ?? some("missing")
+    print(maybe ?? "missing")
+    hashmap_remove(optionals, "maybe")
+    let gone = hashmap_get(optionals, "maybe") ?? some("gone")
+    print(gone ?? "gone")
+
+    {
+        let dropped: HashMap<str, [str]> = hashmap()
+        hashmap_set(dropped, "scope", ["drop", "children"])
+        print(hashmap_len(dropped))
+    }
+    print("done")
+}
