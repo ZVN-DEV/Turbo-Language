@@ -1,54 +1,78 @@
 {
   "schema_version": 1,
-  "_comment": "Canonical Turbo package index. This is a STATIC, git-versioned, curated registry — there is no dynamic registry service and no auth. Publishing a package is a pull request that appends one object to `packages` below. Each object: { \"name\" (unique, matches the turbo_modules dir name), \"repo\" (\"owner/name\" on GitHub), \"description\", \"categories\" (array of lowercase tags), optional \"min_turbo_version\" (semver the package needs), optional \"homepage\" (URL). Entries are the six first-party packages that live under `packages/<name>/` in this repository; each has a `src/lib.tb` entry point and a passing `tests/` suite. See docs/packages.md for the full schema and publishing flow.",
+  "_comment": "Canonical Turbo package index. STATIC, git-versioned, curated registry \u2014 no dynamic service, no auth. Publishing appends one object to `packages`. Fields: name (unique, matches the turbo_modules dir), repo (\"owner/name\" on GitHub), description, categories (lowercase tags), optional min_turbo_version, optional homepage, and optional subdir (a subdirectory within `repo` holding the package's turbo.toml + src/lib.tb \u2014 used for monorepo packages so `install` clones `repo` at the requested tag and installs from that subdirectory). The six first-party packages below live under packages/<name>/ in this monorepo. See docs/packages.md for the schema and publishing flow.",
   "packages": [
     {
       "name": "turbo-cli-args",
-      "repo": "ZVN-DEV/turbo-cli-args",
+      "repo": "ZVN-DEV/Turbo-Language",
       "description": "Flag and positional argument parsing over an argv string array. Supports --name=value, --name value, boolean switches, and positionals.",
-      "categories": ["cli", "parsing"],
+      "categories": [
+        "cli",
+        "parsing"
+      ],
       "min_turbo_version": "0.12.0",
-      "homepage": "https://github.com/ZVN-DEV/TurboLang/tree/master/packages/turbo-cli-args"
+      "homepage": "https://github.com/ZVN-DEV/Turbo-Language/tree/master/packages/turbo-cli-args",
+      "subdir": "packages/turbo-cli-args"
     },
     {
       "name": "turbo-dotenv",
-      "repo": "ZVN-DEV/turbo-dotenv",
+      "repo": "ZVN-DEV/Turbo-Language",
       "description": "Load a .env file into a HashMap<str, str>. Handles comments, blank lines, quotes, whitespace, and the export prefix.",
-      "categories": ["config", "environment"],
+      "categories": [
+        "config",
+        "environment"
+      ],
       "min_turbo_version": "0.12.0",
-      "homepage": "https://github.com/ZVN-DEV/TurboLang/tree/master/packages/turbo-dotenv"
+      "homepage": "https://github.com/ZVN-DEV/Turbo-Language/tree/master/packages/turbo-dotenv",
+      "subdir": "packages/turbo-dotenv"
     },
     {
       "name": "turbo-http-router",
-      "repo": "ZVN-DEV/turbo-http-router",
+      "repo": "ZVN-DEV/Turbo-Language",
       "description": "Path + method routing for the built-in HTTP server using a HashMap<str, fn(str)->str> dispatch table, with :param / wildcard matching helpers.",
-      "categories": ["web", "http", "routing"],
+      "categories": [
+        "web",
+        "http",
+        "routing"
+      ],
       "min_turbo_version": "0.12.0",
-      "homepage": "https://github.com/ZVN-DEV/TurboLang/tree/master/packages/turbo-http-router"
+      "homepage": "https://github.com/ZVN-DEV/Turbo-Language/tree/master/packages/turbo-http-router",
+      "subdir": "packages/turbo-http-router"
     },
     {
       "name": "turbo-logger",
-      "repo": "ZVN-DEV/turbo-logger",
+      "repo": "ZVN-DEV/Turbo-Language",
       "description": "Leveled logging (debug/info/warn/error) with level filtering and optional timestamps, in a single reconfigurable handle.",
-      "categories": ["logging", "observability"],
+      "categories": [
+        "logging",
+        "observability"
+      ],
       "min_turbo_version": "0.12.0",
-      "homepage": "https://github.com/ZVN-DEV/TurboLang/tree/master/packages/turbo-logger"
+      "homepage": "https://github.com/ZVN-DEV/Turbo-Language/tree/master/packages/turbo-logger",
+      "subdir": "packages/turbo-logger"
     },
     {
       "name": "turbo-sqlite",
-      "repo": "ZVN-DEV/turbo-sqlite",
+      "repo": "ZVN-DEV/Turbo-Language",
       "description": "An ergonomic, thin wrapper over the raw sqlite_* builtins: exec-with-params, scalar and column queries, row counts, and a migration helper.",
-      "categories": ["database", "sqlite"],
+      "categories": [
+        "database",
+        "sqlite"
+      ],
       "min_turbo_version": "0.12.0",
-      "homepage": "https://github.com/ZVN-DEV/TurboLang/tree/master/packages/turbo-sqlite"
+      "homepage": "https://github.com/ZVN-DEV/Turbo-Language/tree/master/packages/turbo-sqlite",
+      "subdir": "packages/turbo-sqlite"
     },
     {
       "name": "turbo-test-assertions",
-      "repo": "ZVN-DEV/turbo-test-assertions",
-      "description": "Expressive assertion helpers for @test functions — string, integer, comparison, and Result assertions with self-describing failure messages.",
-      "categories": ["testing"],
+      "repo": "ZVN-DEV/Turbo-Language",
+      "description": "Expressive assertion helpers for @test functions \u2014 string, integer, comparison, and Result assertions with self-describing failure messages.",
+      "categories": [
+        "testing"
+      ],
       "min_turbo_version": "0.12.0",
-      "homepage": "https://github.com/ZVN-DEV/TurboLang/tree/master/packages/turbo-test-assertions"
+      "homepage": "https://github.com/ZVN-DEV/Turbo-Language/tree/master/packages/turbo-test-assertions",
+      "subdir": "packages/turbo-test-assertions"
     }
   ]
 }

@@ -81,3 +81,45 @@ fn check_exec_error() -> i64 ! str {
         err(e) => assert(false, "setup failed: {e}")
     }
 }
+
+// params > placeholders must error (extra values are NOT silently dropped).
+fn check_too_many_params() -> i64 ! str {
+    let db = sqlite_open(":memory:")?
+    db_exec(db, "CREATE TABLE t (a TEXT)")?
+    match db_exec_params(db, "INSERT INTO t (a) VALUES (?)", ["x", "y"]) {
+        ok(v) => assert(false, "expected an error: 2 params for 1 placeholder")
+        err(e) => assert(contains(e, "placeholder"))
+    }
+    // the bad insert must not have written a row
+    let n = query_scalar_int(db, "SELECT COUNT(*) FROM t")?
+    assert_eq(n, 0)
+    sqlite_close(db)
+    ok(0)
+}
+
+@test fn test_too_many_params_errors() {
+    match check_too_many_params() {
+        ok(v) => assert(true)
+        err(e) => assert(false, "setup failed: {e}")
+    }
+}
+
+// params < placeholders: the unbound placeholder is NULL, which a NOT NULL
+// column rejects at step time — surfaced as the real SQLite error.
+fn check_too_few_params() -> i64 ! str {
+    let db = sqlite_open(":memory:")?
+    db_exec(db, "CREATE TABLE t (a TEXT, b TEXT NOT NULL)")?
+    match db_exec_params(db, "INSERT INTO t (a, b) VALUES (?, ?)", ["only-a"]) {
+        ok(v) => assert(false, "expected an error: 1 param for 2 placeholders with NOT NULL b")
+        err(e) => assert(contains(e, "NOT NULL"))
+    }
+    sqlite_close(db)
+    ok(0)
+}
+
+@test fn test_too_few_params_errors() {
+    match check_too_few_params() {
+        ok(v) => assert(true)
+        err(e) => assert(false, "setup failed: {e}")
+    }
+}

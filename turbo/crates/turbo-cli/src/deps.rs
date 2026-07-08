@@ -16,6 +16,8 @@ pub(crate) enum DependencySource {
         repo: String,
         rev: Option<String>,
         version: Option<String>,
+        /// Optional subdirectory within the repo that holds the package.
+        subdir: Option<String>,
     },
     Version {
         version: String,
@@ -44,7 +46,13 @@ pub(crate) fn parse_dependency_spec(name: &str, rest: &str, section: &str) -> De
     } else if let Some(repo) = extract_quoted_value(rest, "github") {
         let rev = extract_quoted_value(rest, "rev");
         let version = extract_quoted_value(rest, "version");
-        DependencySource::GitHub { repo, rev, version }
+        let subdir = extract_quoted_value(rest, "subdir");
+        DependencySource::GitHub {
+            repo,
+            rev,
+            version,
+            subdir,
+        }
     } else if let Some(version) = rest
         .trim()
         .strip_prefix('"')
@@ -402,8 +410,21 @@ pub(crate) fn current_git_head(dir: &Path) -> Result<String, String> {
     git_output_in_dir(dir, &["rev-parse", "HEAD"])
 }
 
+/// Base URL that `owner/repo` git sources are resolved against. Defaults to
+/// GitHub; overridable via `TURBO_GIT_BASE_URL` (used by tests and by anyone
+/// pointing at a mirror or a local `file://` clone). The `.git` suffix and the
+/// `{base}/{repo}` join are applied by the callers.
+pub(crate) fn git_base_url() -> String {
+    std::env::var("TURBO_GIT_BASE_URL").unwrap_or_else(|_| "https://github.com".to_string())
+}
+
+/// Build the clone/fetch URL for a `owner/repo` against [`git_base_url`].
+pub(crate) fn git_repo_url(repo: &str) -> String {
+    format!("{}/{repo}.git", git_base_url().trim_end_matches('/'))
+}
+
 pub(crate) fn clone_github_repo(repo: &str, target: &Path) -> Result<(), String> {
-    let url = format!("https://github.com/{repo}.git");
+    let url = git_repo_url(repo);
     let target_str = target.to_string_lossy().to_string();
     git_output(&["clone", "--depth=1", &url, &target_str]).map(|_| ())
 }
@@ -414,7 +435,7 @@ pub(crate) fn checkout_git_rev(dir: &Path, rev: &str) -> Result<(), String> {
 }
 
 pub(crate) fn git_ls_remote_tags(repo: &str) -> Result<Vec<(String, String)>, String> {
-    let url = format!("https://github.com/{repo}.git");
+    let url = git_repo_url(repo);
     let output = git_output(&["ls-remote", "--tags", &url])?;
     let mut tags = HashMap::new();
 
@@ -487,6 +508,126 @@ pub(crate) fn resolve_versioned_rev(repo: &str, version: &str) -> Result<(String
     let tags = git_ls_remote_tags(repo)?;
     select_tag_for_version(version, &tags)
         .ok_or_else(|| format!("no tag found in {repo} matching version {version}"))
+}
+
+/// Validate a package subdirectory path taken from an untrusted registry index
+/// or manifest: it must be relative and contain only plain path components (no
+/// `.`, `..`, root, or Windows drive prefix) so it can't escape the clone.
+pub(crate) fn validate_subdir(subdir: &str) -> Result<(), String> {
+    if subdir.is_empty() {
+        return Err("package subdir must not be empty".to_string());
+    }
+    if Path::new(subdir).is_absolute() || is_windows_path_prefix(subdir) {
+        return Err(format!("package subdir `{subdir}` must be a relative path"));
+    }
+    for component in Path::new(subdir).components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return Err(format!(
+                "package subdir `{subdir}` must not contain `.`, `..`, or a root"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Clone `repo` at `rev` into a shared cache under `turbo_modules/.turbo-cache`
+/// and link `target` (`turbo_modules/<name>`) at the package's `subdir` inside
+/// that clone. One clone is kept per `repo@rev`, shared across every package
+/// that lives in the same monorepo tag. Returns the resolved HEAD sha.
+///
+/// This mirrors the path-dependency install (a symlink on Unix, a recursive
+/// copy elsewhere), except the link target is a subdirectory of a git checkout
+/// rather than an arbitrary local path.
+pub(crate) fn materialize_subdir_dependency(
+    repo: &str,
+    rev: &str,
+    subdir: &str,
+    target: &Path,
+) -> Result<String, String> {
+    validate_subdir(subdir)?;
+
+    let cache_root = Path::new("turbo_modules").join(".turbo-cache");
+    let slug = repo.replace('/', "__");
+    let cache_dir = cache_root.join(format!("{slug}@{rev}"));
+
+    if cache_dir.exists() {
+        if current_git_head(&cache_dir).ok().as_deref() != Some(rev) {
+            checkout_git_rev(&cache_dir, rev)?;
+        }
+    } else {
+        std::fs::create_dir_all(&cache_root)
+            .map_err(|e| format!("could not create dependency cache dir: {}", io_reason(&e)))?;
+        clone_github_repo(repo, &cache_dir)?;
+        checkout_git_rev(&cache_dir, rev)?;
+    }
+
+    let head = current_git_head(&cache_dir)?;
+
+    // Resolve the package subdir inside the clone, guarding against escape even
+    // after the syntactic check above (e.g. a symlink inside the repo).
+    let canonical_cache = std::fs::canonicalize(&cache_dir).map_err(|e| {
+        format!(
+            "could not resolve dependency cache `{}`: {}",
+            cache_dir.display(),
+            io_reason(&e)
+        )
+    })?;
+    let package_src = cache_dir.join(subdir);
+    let canonical_src = std::fs::canonicalize(&package_src).map_err(|e| {
+        format!(
+            "subdir `{subdir}` not found in {repo}@{rev}: {}",
+            io_reason(&e)
+        )
+    })?;
+    if !canonical_src.starts_with(&canonical_cache) {
+        return Err(format!(
+            "package subdir `{subdir}` resolves outside the cloned repository"
+        ));
+    }
+
+    // Replace whatever is currently at `target` (a stale symlink or dir).
+    if let Ok(meta) = std::fs::symlink_metadata(target) {
+        if meta.file_type().is_dir() {
+            std::fs::remove_dir_all(target).ok();
+        } else {
+            std::fs::remove_file(target).ok();
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&canonical_src, target).map_err(|e| {
+            format!(
+                "could not link dependency subdir `{subdir}`: {}",
+                io_reason(&e)
+            )
+        })?;
+    }
+    #[cfg(not(unix))]
+    {
+        fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+            std::fs::create_dir_all(dst)?;
+            for entry in std::fs::read_dir(src)? {
+                let entry = entry?;
+                let ty = entry.file_type()?;
+                let dest = dst.join(entry.file_name());
+                if ty.is_dir() {
+                    copy_dir_recursive(&entry.path(), &dest)?;
+                } else {
+                    std::fs::copy(entry.path(), dest)?;
+                }
+            }
+            Ok(())
+        }
+        copy_dir_recursive(&canonical_src, target).map_err(|e| {
+            format!(
+                "could not copy dependency subdir `{subdir}`: {}",
+                io_reason(&e)
+            )
+        })?;
+    }
+
+    Ok(head)
 }
 
 /// Install dependencies listed in `turbo.toml` by symlinking path dependencies
@@ -593,7 +734,12 @@ pub(crate) fn install_deps() {
                 );
                 count += 1;
             }
-            DependencySource::GitHub { repo, rev, version } => {
+            DependencySource::GitHub {
+                repo,
+                rev,
+                version,
+                subdir,
+            } => {
                 let target = dependency_target_path(Path::new("turbo_modules"), &dep.name)
                     .unwrap_or_else(|err| {
                         eprintln!("\x1b[1;31merror\x1b[0m: {err}");
@@ -623,6 +769,37 @@ pub(crate) fn install_deps() {
                         continue;
                     }
                 };
+
+                // Monorepo subdirectory package: clone into the shared cache and
+                // link `target` at the subdir instead of cloning into `target`.
+                if let Some(subdir) = subdir.as_deref() {
+                    match materialize_subdir_dependency(&repo, &pinned_rev, subdir, &target) {
+                        Ok(head) => {
+                            lockfile.insert(
+                                dep.name.clone(),
+                                LockedGitDependency {
+                                    repo: repo.clone(),
+                                    rev: head.clone(),
+                                },
+                            );
+                            eprintln!(
+                                "  \x1b[32m\u{2713}\x1b[0m Installed {} from github:{}//{} @ {} via {} ({})",
+                                dep.name,
+                                repo,
+                                subdir,
+                                &head[..head.len().min(12)],
+                                pinned_label,
+                                dep.section
+                            );
+                            count += 1;
+                        }
+                        Err(err) => eprintln!(
+                            "  \x1b[31m\u{2717}\x1b[0m Failed to install {} from github:{}//{}: {}",
+                            dep.name, repo, subdir, err
+                        ),
+                    }
+                    continue;
+                }
 
                 if target.exists() {
                     if current_git_head(&target).ok().as_deref() != Some(pinned_rev.as_str()) {
@@ -705,6 +882,42 @@ pub(crate) fn install_deps() {
                         continue;
                     }
                 };
+
+                // Monorepo package: the registry entry carries a `subdir`, so
+                // clone `repo` at the resolved tag and link the subdir.
+                let subdir = index
+                    .as_ref()
+                    .and_then(|idx| crate::registry::resolve_subdir_from_index(&dep.name, idx));
+                if let Some(subdir) = subdir.as_deref() {
+                    match materialize_subdir_dependency(&repo, &pinned_rev, subdir, &target) {
+                        Ok(head) => {
+                            lockfile.insert(
+                                dep.name.clone(),
+                                LockedGitDependency {
+                                    repo: repo.clone(),
+                                    rev: head.clone(),
+                                },
+                            );
+                            eprintln!(
+                                "  \x1b[32m\u{2713}\x1b[0m Installed {} {} from {}//{} @ {} via {} ({})",
+                                dep.name,
+                                version,
+                                repo,
+                                subdir,
+                                &head[..head.len().min(12)],
+                                tag,
+                                dep.section
+                            );
+                            count += 1;
+                        }
+                        Err(err) => eprintln!(
+                            "  \x1b[31m\u{2717}\x1b[0m Failed to install {} {} from {}//{}: {}",
+                            dep.name, version, repo, subdir, err
+                        ),
+                    }
+                    continue;
+                }
+
                 if target.exists() {
                     if current_git_head(&target).ok().as_deref() != Some(pinned_rev.as_str()) {
                         if let Err(err) = checkout_git_rev(&target, &pinned_rev) {
@@ -802,12 +1015,62 @@ pub(crate) fn update_deps() {
 
     for dep in deps {
         match dep.source {
-            DependencySource::GitHub { repo, rev, version } => {
+            DependencySource::GitHub {
+                repo,
+                rev,
+                version,
+                subdir,
+            } => {
                 let target = dependency_target_path(Path::new("turbo_modules"), &dep.name)
                     .unwrap_or_else(|err| {
                         eprintln!("\x1b[1;31merror\x1b[0m: {err}");
                         std::process::exit(1);
                     });
+
+                // Subdir packages are re-materialized at the freshly resolved
+                // rev (rev pin or newest matching tag); a bare github source has
+                // no moving target to update a subdir against.
+                if let Some(subdir) = subdir.as_deref() {
+                    let resolved = if let Some(wanted) = rev.as_deref() {
+                        Ok((wanted.to_string(), format!("rev {wanted}")))
+                    } else if let Some(version) = version.as_deref() {
+                        resolve_versioned_rev(&repo, version)
+                            .map(|(tag, sha)| (sha, format!("tag {tag}")))
+                    } else {
+                        Err(
+                            "a subdir github dependency needs a rev or version to update"
+                                .to_string(),
+                        )
+                    };
+                    match resolved.and_then(|(pinned_rev, label)| {
+                        materialize_subdir_dependency(&repo, &pinned_rev, subdir, &target)
+                            .map(|head| (head, label))
+                    }) {
+                        Ok((head, label)) => {
+                            lockfile.insert(
+                                dep.name.clone(),
+                                LockedGitDependency {
+                                    repo: repo.clone(),
+                                    rev: head.clone(),
+                                },
+                            );
+                            eprintln!(
+                                "  \x1b[32m\u{2713}\x1b[0m {} updated to {} ({}) //{}",
+                                dep.name,
+                                &head[..head.len().min(12)],
+                                label,
+                                subdir
+                            );
+                            count += 1;
+                        }
+                        Err(err) => eprintln!(
+                            "  \x1b[31m\u{2717}\x1b[0m Failed to update {} //{}: {}",
+                            dep.name, subdir, err
+                        ),
+                    }
+                    continue;
+                }
+
                 if !target.exists() {
                     eprintln!(
                         "  \x1b[33m!\x1b[0m {} not installed — run `turbolang install` first",
@@ -915,6 +1178,43 @@ pub(crate) fn update_deps() {
                         eprintln!("\x1b[1;31merror\x1b[0m: {err}");
                         std::process::exit(1);
                     });
+
+                // Monorepo registry package: re-materialize the subdir at the
+                // newest matching tag.
+                let subdir = index
+                    .as_ref()
+                    .and_then(|idx| crate::registry::resolve_subdir_from_index(&dep.name, idx));
+                if let Some(subdir) = subdir.as_deref() {
+                    match resolve_versioned_rev(&repo, &version).and_then(|(tag, pinned_rev)| {
+                        materialize_subdir_dependency(&repo, &pinned_rev, subdir, &target)
+                            .map(|head| (tag, head))
+                    }) {
+                        Ok((tag, head)) => {
+                            lockfile.insert(
+                                dep.name.clone(),
+                                LockedGitDependency {
+                                    repo: repo.clone(),
+                                    rev: head.clone(),
+                                },
+                            );
+                            eprintln!(
+                                "  \x1b[32m\u{2713}\x1b[0m {} {} -> {} ({}) //{}",
+                                dep.name,
+                                version,
+                                &head[..head.len().min(12)],
+                                tag,
+                                subdir
+                            );
+                            count += 1;
+                        }
+                        Err(err) => eprintln!(
+                            "  \x1b[31m\u{2717}\x1b[0m Failed to update {} {} //{}: {}",
+                            dep.name, version, subdir, err
+                        ),
+                    }
+                    continue;
+                }
+
                 if !target.exists() {
                     eprintln!(
                         "  \x1b[33m!\x1b[0m {} not installed — run `turbolang install` first",
@@ -1086,6 +1386,49 @@ agent-kit = { github = "owner/agent-kit", version = "1.2" }
             DependencySource::GitHub { ref repo, version: Some(ref version), .. }
                 if repo == "owner/agent-kit" && version == "1.2"
         ));
+    }
+
+    #[test]
+    fn parse_github_subdir_dependency() {
+        // `{ github = ..., subdir = ... }` must resolve to a GitHub source with
+        // the subdir set — NOT be mistaken for a `path` source.
+        let deps = parse_dependencies_from_manifest(
+            r#"
+[dependencies]
+turbo-http-router = { github = "ZVN-DEV/Turbo-Language", subdir = "packages/turbo-http-router", version = "0.12" }
+"#,
+        );
+        assert!(matches!(
+            deps[0].source,
+            DependencySource::GitHub {
+                ref repo,
+                version: Some(ref version),
+                subdir: Some(ref subdir),
+                ..
+            } if repo == "ZVN-DEV/Turbo-Language"
+                && version == "0.12"
+                && subdir == "packages/turbo-http-router"
+        ));
+    }
+
+    #[test]
+    fn validate_subdir_accepts_relative_and_rejects_escapes() {
+        assert!(validate_subdir("packages/turbo-http-router").is_ok());
+        assert!(validate_subdir("pkg").is_ok());
+        for bad in [
+            "",
+            "..",
+            "../escape",
+            "packages/../../etc",
+            "/absolute/path",
+            "./here",
+            "C:\\windows",
+        ] {
+            assert!(
+                validate_subdir(bad).is_err(),
+                "{bad:?} should be rejected as a subdir"
+            );
+        }
     }
 
     #[test]

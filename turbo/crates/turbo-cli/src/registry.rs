@@ -25,6 +25,11 @@ pub(crate) struct RegistryPackage {
     pub categories: Vec<String>,
     pub min_turbo_version: Option<String>,
     pub homepage: Option<String>,
+    /// Optional subdirectory within `repo` that holds the package (a
+    /// `turbo.toml` + `src/lib.tb`). Set for monorepo packages so `install`
+    /// clones `repo` at the requested tag and installs from this subdirectory
+    /// instead of the repository root. Absent for single-package repos.
+    pub subdir: Option<String>,
 }
 
 /// The parsed registry index.
@@ -127,6 +132,7 @@ pub(crate) fn parse_registry_index(body: &str) -> Result<RegistryIndex, String> 
             categories,
             min_turbo_version: opt("min_turbo_version"),
             homepage: opt("homepage"),
+            subdir: opt("subdir"),
         });
     }
 
@@ -175,6 +181,16 @@ pub(crate) fn resolve_repo_from_index(name: &str, index: &RegistryIndex) -> Opti
         .iter()
         .find(|pkg| pkg.name == name)
         .map(|pkg| pkg.repo.clone())
+}
+
+/// Look up a bare package name in the index and return its `subdir`, if the
+/// entry is a monorepo package (an entry with no `subdir` returns `None`).
+pub(crate) fn resolve_subdir_from_index(name: &str, index: &RegistryIndex) -> Option<String> {
+    index
+        .packages
+        .iter()
+        .find(|pkg| pkg.name == name)
+        .and_then(|pkg| pkg.subdir.clone())
 }
 
 /// Fetch + parse the index, or `None` if it can't be reached/parsed. Used by
@@ -285,11 +301,12 @@ mod tests {
           "packages": [
             {
               "name": "turbo-json",
-              "repo": "ZVN-DEV/turbo-json",
+              "repo": "ZVN-DEV/monorepo",
               "description": "A fast JSON parser and serializer",
               "categories": ["serialization", "encoding"],
               "min_turbo_version": "0.10.0",
-              "homepage": "https://example.com/turbo-json"
+              "homepage": "https://example.com/turbo-json",
+              "subdir": "packages/turbo-json"
             },
             {
               "name": "turbo-http",
@@ -309,17 +326,31 @@ mod tests {
 
         let json = &index.packages[0];
         assert_eq!(json.name, "turbo-json");
-        assert_eq!(json.repo, "ZVN-DEV/turbo-json");
+        assert_eq!(json.repo, "ZVN-DEV/monorepo");
         assert_eq!(json.categories, vec!["serialization", "encoding"]);
         assert_eq!(json.min_turbo_version.as_deref(), Some("0.10.0"));
         assert_eq!(
             json.homepage.as_deref(),
             Some("https://example.com/turbo-json")
         );
+        assert_eq!(json.subdir.as_deref(), Some("packages/turbo-json"));
 
         let http = &index.packages[1];
         assert_eq!(http.min_turbo_version, None);
         assert_eq!(http.homepage, None);
+        assert_eq!(http.subdir, None);
+    }
+
+    #[test]
+    fn resolve_subdir_from_index_only_for_monorepo_entries() {
+        let index = parse_registry_index(sample_index_json()).unwrap();
+        assert_eq!(
+            resolve_subdir_from_index("turbo-json", &index).as_deref(),
+            Some("packages/turbo-json")
+        );
+        // A single-package repo entry has no subdir.
+        assert_eq!(resolve_subdir_from_index("turbo-http", &index), None);
+        assert_eq!(resolve_subdir_from_index("turbo-missing", &index), None);
     }
 
     #[test]

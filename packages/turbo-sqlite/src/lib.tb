@@ -20,21 +20,40 @@ fn db_exec(db: i64, sql: str) -> i64 ! str {
 // Run a single statement with positional string parameters bound to its `?`
 // placeholders (1-based). Intended for writes; any result rows are ignored.
 // Returns ok(0) on success.
+//
+// Every bind's return code is checked before stepping: passing MORE params than
+// the statement has placeholders makes SQLite reject the out-of-range bind
+// (rc 25, SQLITE_RANGE), which is surfaced as an error instead of silently
+// dropping the extra value. Passing FEWER params leaves the unbound
+// placeholders as NULL — if that violates a NOT NULL / constraint the `step`
+// below fails and the real SQLite message is returned.
 fn db_exec_params(db: i64, sql: str, params: [str]) -> i64 ! str {
     let stmt = sqlite_prepare(db, sql)?
     let mut i = 0
+    let mut fail_idx = -1
+    let mut fail_rc = 0
     while i < len(params) {
         let p = params[i]
-        sqlite_bind_str(stmt, i + 1, p)
+        let rc = sqlite_bind_str(stmt, i + 1, p)
+        if rc != 0 {
+            if fail_idx < 0 {
+                fail_idx = i + 1
+                fail_rc = rc
+            }
+        }
         i = i + 1
+    }
+    if fail_idx >= 0 {
+        let _fin = sqlite_finalize(stmt)
+        return err("bind of parameter " + to_str(fail_idx) + " failed (sqlite rc " + to_str(fail_rc) + "): more params than the statement has ? placeholders")
     }
     let rc = sqlite_step(stmt)
     if rc == -1 {
         let e = sqlite_error(db)
-        sqlite_finalize(stmt)
+        let _fin2 = sqlite_finalize(stmt)
         return err(e)
     }
-    sqlite_finalize(stmt)
+    let _fin3 = sqlite_finalize(stmt)
     ok(0)
 }
 
