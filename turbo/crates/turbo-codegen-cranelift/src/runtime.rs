@@ -85,15 +85,48 @@ mod cstd {
     #[cfg(windows)]
     mod win {
         use libc::{c_char, c_int, size_t, time_t, tm};
+        use std::cell::UnsafeCell;
+
         unsafe extern "C" {
             pub fn snprintf(buf: *mut c_char, size: size_t, format: *const c_char, ...) -> c_int;
-            pub fn localtime(time: *const time_t) -> *mut tm;
             pub fn strftime(
                 s: *mut c_char,
                 max: size_t,
                 format: *const c_char,
                 tm: *const tm,
             ) -> size_t;
+            // MSVC secure, thread-safe variant. Note the argument order is
+            // (result*, time*) — the reverse of C11 Annex K's `localtime_s`.
+            // Returns errno_t (0 on success). We prefer this over the legacy
+            // `localtime`, whose returned pointer aliases a shared static and
+            // is a data race under the HTTP server's per-connection threads.
+            fn localtime_s(result: *mut tm, time: *const time_t) -> c_int;
+        }
+
+        // Per-thread scratch `tm`, mirroring C `localtime`'s static-storage
+        // contract (pointer valid until the next call on the same thread)
+        // without its cross-thread data race.
+        thread_local! {
+            static TM_BUF: UnsafeCell<tm> = UnsafeCell::new(unsafe { std::mem::zeroed() });
+        }
+
+        /// Thread-safe drop-in for libc's `localtime`: fills a per-thread `tm`
+        /// via MSVC `localtime_s` and returns a pointer to it, or null on
+        /// failure. Same signature as the Unix `libc::localtime`, so the call
+        /// site stays platform-agnostic.
+        ///
+        /// # Safety
+        /// `time` must point to a valid `time_t`. The returned pointer is valid
+        /// until the next `localtime` call on the same thread.
+        pub unsafe fn localtime(time: *const time_t) -> *mut tm {
+            TM_BUF.with(|cell| {
+                let ptr = cell.get();
+                if localtime_s(ptr, time) == 0 {
+                    ptr
+                } else {
+                    std::ptr::null_mut()
+                }
+            })
         }
     }
 }
@@ -4102,6 +4135,51 @@ pub(crate) extern "C" fn rt_sqlite_error(h: i64) -> *const u8 {
 /// `sqlite_close(h) -> i64` (sqlite rc)
 pub(crate) extern "C" fn rt_sqlite_close(h: i64) -> i64 {
     unsafe { sqlite_ffi::sqlite3_close(h as *mut _) as i64 }
+}
+
+#[cfg(test)]
+mod format_time_tests {
+    use super::rt_format_time;
+    use std::ffi::{CStr, CString};
+
+    /// Read back the arena string `rt_format_time` returns.
+    fn call(epoch: f64, fmt: &str) -> String {
+        let fmt_c = CString::new(fmt).unwrap();
+        let ptr = rt_format_time(epoch, fmt_c.as_ptr() as *const u8);
+        assert!(!ptr.is_null(), "rt_format_time returned null");
+        unsafe { CStr::from_ptr(ptr as *const std::ffi::c_char) }
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn rt_format_time_produces_plausible_output() {
+        // Fixed epoch 1_000_000_000 = 2001-09-09T01:46:40Z. The calendar year
+        // is timezone-stable for this instant (no offset in the -12..+14 range
+        // shifts it out of 2001), so asserting on "%Y" is not a timezone flake.
+        // This exercises the localtime + strftime FFI path on every platform,
+        // including the windows-msvc `localtime_s` wrapper — which nothing else
+        // in `cargo test` or the JIT smoke covers on Windows.
+        assert_eq!(call(1_000_000_000.0, "%Y"), "2001");
+
+        // Full pattern: assert plausible, not exact (H:M:S shift with the
+        // runner's timezone). Non-empty, stable year, strftime separators.
+        let full = call(1_000_000_000.0, "%Y-%m-%d %H:%M:%S");
+        assert!(full.starts_with("2001-"), "unexpected format: {full:?}");
+        assert!(full.len() >= 19, "too short: {full:?}");
+        assert!(full.contains(':'), "missing time separators: {full:?}");
+    }
+
+    #[test]
+    fn rt_format_time_null_fmt_uses_default() {
+        // A null fmt pointer must fall back to the default pattern, not crash.
+        let ptr = rt_format_time(1_000_000_000.0, std::ptr::null());
+        assert!(!ptr.is_null());
+        let s = unsafe { CStr::from_ptr(ptr as *const std::ffi::c_char) }
+            .to_string_lossy()
+            .into_owned();
+        assert!(s.starts_with("2001-"), "unexpected default format: {s:?}");
+    }
 }
 
 #[cfg(test)]
