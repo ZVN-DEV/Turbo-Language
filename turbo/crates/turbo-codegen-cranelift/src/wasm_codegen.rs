@@ -3271,6 +3271,7 @@ mod tests {
                 .arg(dir.join("turbo_rt_wasm.c"))
                 .arg("-o")
                 .arg(&bin)
+                .arg("-lm")
                 .output()
                 .expect("failed to spawn C compiler");
             if !build.status.success() {
