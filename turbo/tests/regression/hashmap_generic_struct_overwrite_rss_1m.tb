@@ -1,0 +1,15 @@
+struct Entry { name: str, tag: str }
+
+fn churn(n: i64) -> int {
+    let m: HashMap<int, Entry> = hashmap()
+    let mut i = 0
+    while i < n {
+        hashmap_set(m, 0, Entry { name: "entry-{i}", tag: "stable" })
+        i = i + 1
+    }
+    hashmap_len(m)
+}
+
+fn main() {
+    print(churn(1000000))
+}

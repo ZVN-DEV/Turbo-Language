@@ -274,6 +274,8 @@ fn register_runtime_symbols(jit_builder: &mut JITBuilder) {
     jit_builder.symbol("rt_hashmap_get_int", rt_hashmap_get_int as *const u8);
     jit_builder.symbol("rt_hashmap_inc", rt_hashmap_inc as *const u8);
     jit_builder.symbol("rt_hashmap_new_typed", rt_hashmap_new_typed as *const u8);
+    jit_builder.symbol("rt_hashmap_gretain", rt_hashmap_gretain as *const u8);
+    jit_builder.symbol("rt_hashmap_grelease", rt_hashmap_grelease as *const u8);
     jit_builder.symbol("rt_hashmap_gset", rt_hashmap_gset as *const u8);
     jit_builder.symbol("rt_hashmap_gget", rt_hashmap_gget as *const u8);
     jit_builder.symbol("rt_hashmap_ghas", rt_hashmap_ghas as *const u8);

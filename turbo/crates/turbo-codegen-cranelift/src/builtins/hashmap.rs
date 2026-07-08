@@ -4,7 +4,10 @@ use cranelift::prelude::*;
 use cranelift_module::Module;
 use turbo_ast::*;
 
-use crate::expr::{expr_produces_owned_rc_temp, is_rc_managed_type};
+use crate::expr::{
+    expr_produces_owned_rc_temp, hashmap_value_needs_custom_release,
+    hashmap_value_release_thunk_key, is_rc_managed_type,
+};
 use crate::turbo_types::{CodegenError, MaybeTyped, TurboTy};
 use crate::{compile_expr, Ctx};
 
@@ -52,7 +55,11 @@ fn release_owned_rc_temp_top_level<M: Module>(
     expr: &Spanned<Expr>,
 ) {
     if is_rc_managed_type(cx, tty) && expr_produces_owned_rc_temp(expr) {
-        let fid = cx.rt_fns["rt_release"];
+        let fid = if matches!(tty, TurboTy::HashMap(_, _)) {
+            cx.rt_fns["rt_hashmap_grelease"]
+        } else {
+            cx.rt_fns["rt_release"]
+        };
         let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
         cx.builder.ins().call(fref, &[value]);
     }
@@ -80,7 +87,8 @@ pub(crate) fn compile_builtin_hashmap<M: Module>(
     Ok(Some((result, TurboTy::Int)))
 }
 
-/// Emit a typed-map constructor `rt_hashmap_new_typed(key_kind, val_is_rc)`.
+/// Emit a typed-map constructor `rt_hashmap_new_typed(key_kind, val_is_rc,
+/// value_release_fn, value_retain_fn)`.
 /// Used when a `hashmap()` call is bound to a `HashMap<K, V>` annotation.
 pub(crate) fn compile_typed_hashmap_ctor<M: Module>(
     cx: &mut Ctx<'_, M>,
@@ -95,9 +103,30 @@ pub(crate) fn compile_typed_hashmap_ctor<M: Module>(
     };
     let key_kind = cx.builder.ins().iconst(types::I64, kk);
     let val_is_rc = cx.builder.ins().iconst(types::I64, rc);
+    let release_fn = if hashmap_value_needs_custom_release(cx, val_tty) {
+        let key = hashmap_value_release_thunk_key(val_tty);
+        if let Some(&thunk_fid) = cx.hashmap_value_release_thunks.get(key.as_str()) {
+            let thunk_ref = cx.module.declare_func_in_func(thunk_fid, cx.builder.func);
+            cx.builder.ins().func_addr(cx.ptr_type, thunk_ref)
+        } else {
+            cx.builder.ins().iconst(cx.ptr_type, 0)
+        }
+    } else {
+        cx.builder.ins().iconst(cx.ptr_type, 0)
+    };
+    let retain_fn = if matches!(val_tty, TurboTy::HashMap(_, _)) {
+        let retain_fid = cx.rt_fns["rt_hashmap_gretain"];
+        let retain_ref = cx.module.declare_func_in_func(retain_fid, cx.builder.func);
+        cx.builder.ins().func_addr(cx.ptr_type, retain_ref)
+    } else {
+        cx.builder.ins().iconst(cx.ptr_type, 0)
+    };
     let fid = cx.rt_fns["rt_hashmap_new_typed"];
     let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-    let call = cx.builder.ins().call(fref, &[key_kind, val_is_rc]);
+    let call = cx
+        .builder
+        .ins()
+        .call(fref, &[key_kind, val_is_rc, release_fn, retain_fn]);
     let result = cx.builder.inst_results(call)[0];
     Ok(Some((
         result,

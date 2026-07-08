@@ -1,0 +1,40 @@
+struct Label { name: str }
+
+type Payload {
+    Text(str),
+    Empty,
+}
+
+fn payload_text(p: Payload) -> str {
+    match p {
+        Text(s) => s
+        Empty => "empty"
+    }
+}
+
+fn main() {
+    let arrays: HashMap<str, [str]> = hashmap()
+    hashmap_set(arrays, "a", ["one", "old"])
+    hashmap_set(arrays, "a", ["two", "new"])
+    let arr = hashmap_get(arrays, "a") ?? ["missing"]
+    print(arr[0])
+    hashmap_remove(arrays, "a")
+    print(hashmap_len(arrays))
+
+    let labels: HashMap<str, Label> = hashmap()
+    hashmap_set(labels, "l", Label { name: "old" })
+    hashmap_set(labels, "l", Label { name: "new" })
+    let label = hashmap_get(labels, "l") ?? Label { name: "missing" }
+    print(label.name)
+
+    let payloads: HashMap<str, Payload> = hashmap()
+    hashmap_set(payloads, "p", Payload.Text("old"))
+    hashmap_set(payloads, "p", Payload.Text("new"))
+    print(payload_text(hashmap_get(payloads, "p") ?? Payload.Empty))
+
+    let opts: HashMap<str, str?> = hashmap()
+    hashmap_set(opts, "o", some("old"))
+    hashmap_set(opts, "o", some("new"))
+    let got = hashmap_get(opts, "o") ?? some("missing")
+    print(got ?? "missing")
+}

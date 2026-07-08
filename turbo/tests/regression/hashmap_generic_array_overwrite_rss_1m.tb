@@ -1,0 +1,14 @@
+fn churn(n: i64) -> int {
+    let m: HashMap<int, [str]> = hashmap()
+    let mut i = 0
+    while i < n {
+        let head = "value-{i}"
+        hashmap_set(m, 0, [head, "tail"])
+        i = i + 1
+    }
+    hashmap_len(m)
+}
+
+fn main() {
+    print(churn(1000000))
+}
