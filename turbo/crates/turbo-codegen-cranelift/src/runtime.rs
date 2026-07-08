@@ -2590,6 +2590,7 @@ pub(crate) fn handle_http_connection(
 
 /// SIGTERM/SIGINT handler: flip the graceful-shutdown flag. Only an atomic
 /// store — async-signal-safe.
+#[cfg(unix)]
 extern "C" fn rt_http_shutdown_signal(_sig: libc::c_int) {
     HTTP_SHUTDOWN.store(true, std::sync::atomic::Ordering::Relaxed);
 }
@@ -2598,6 +2599,12 @@ extern "C" fn rt_http_shutdown_signal(_sig: libc::c_int) {
 /// runtime's `rt_http_install_signal_handlers`). Rust's std already sets
 /// SIGPIPE to SIG_IGN at startup, so response writes to a dead peer surface as
 /// EPIPE errors rather than killing the process.
+///
+/// POSIX-only: `sigaction` and friends have no libc-crate binding on Windows.
+/// The Windows build gets the no-op stub below — the HTTP server is not a
+/// supported Windows target this cycle (see `aot_compile`), so a JIT-hosted
+/// server there simply runs without a graceful-shutdown signal handler.
+#[cfg(unix)]
 fn rt_http_install_signal_handlers() {
     static SIG_ONCE: std::sync::Once = std::sync::Once::new();
     SIG_ONCE.call_once(|| unsafe {
@@ -2609,6 +2616,11 @@ fn rt_http_install_signal_handlers() {
         libc::sigaction(libc::SIGINT, &sa, std::ptr::null_mut());
     });
 }
+
+/// Windows stub: no POSIX signal API to install. The `HTTP_SHUTDOWN` flag is
+/// still honored by the accept loop; this simply skips signal-handler wiring.
+#[cfg(not(unix))]
+fn rt_http_install_signal_handlers() {}
 
 /// Start the HTTP server. Spawns a thread per connection with keep-alive.
 pub(crate) extern "C" fn rt_http_listen(server_id: i64) {
