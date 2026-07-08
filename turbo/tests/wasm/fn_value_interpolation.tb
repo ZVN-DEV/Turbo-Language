@@ -1,0 +1,9 @@
+// String interpolation should render a named function value like native JIT
+// instead of formatting the closure pair through integer conversion.
+fn inc(x: i64) -> i64 { x + 1 }
+
+fn main() {
+    let f = inc
+    print("{f}")
+    print("${f}")
+}

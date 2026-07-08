@@ -55,7 +55,7 @@ struct CEmitter {
     /// variants that carry data.
     enum_variant_fields: HashMap<(String, String), Vec<String>>,
     /// Variable type tracking: variable name -> simplified type tag
-    /// ("str", "int", "float", "bool", "array", "struct", "void*")
+    /// ("str", "int", "float", "bool", "array", "struct", "void*", "closure")
     var_types: HashMap<String, String>,
     /// Function return type tracking: function name -> simplified type tag
     fn_return_types: HashMap<String, String>,
@@ -69,8 +69,16 @@ struct CEmitter {
     var_type_exprs: HashMap<String, TypeExpr>,
     /// Names of all top-level user functions (including unit-returning ones,
     /// which `fn_return_types` omits). Lets a value-position identifier detect a
-    /// named function used as a first-class value — unsupported on this backend.
+    /// named function used as a first-class value.
     user_fn_names: HashSet<String>,
+    /// Eligible top-level user function -> env-first adapter name. A named
+    /// function value is materialized as the same `[fn_ptr, env_ptr]` pair this
+    /// backend already uses for closures; the adapter ignores the null env.
+    named_fn_adapters: HashMap<String, String>,
+    /// C signatures for eligible named function values, keyed by source
+    /// function name. The signature is env-first at call time, but `params`
+    /// stores only user-visible parameters to match `ClosureSig`.
+    named_fn_sigs: HashMap<String, ClosureSig>,
     /// Per-scope stack of deferred expressions. Each entry is a scope;
     /// the inner `Vec<Expr>` holds the deferred expressions in the order
     /// they were encountered (they will be emitted in LIFO order at scope
@@ -84,9 +92,15 @@ struct CEmitter {
     /// Monotonic counter for naming lifted closure functions (`__closure_N`).
     closure_counter: usize,
     /// Variable name -> closure signature, for every local bound to a closure
-    /// value. Lets a call site recognize `f(args)` as an indirect closure
-    /// call (rather than a direct user-function call) and emit the right cast.
+    /// or named-function value. Lets a call site recognize `f(args)` as an
+    /// indirect function-value call (rather than a direct user-function call)
+    /// and emit the right cast.
     closure_sigs: HashMap<String, ClosureSig>,
+    /// Locals that are specifically backed by closure literals. Named function
+    /// values use the same ABI but are not in this set; this lets user-defined
+    /// higher-order functions accept named fn values while closure callbacks
+    /// remain limited to the direct/map/filter paths this backend already had.
+    closure_value_vars: HashSet<String>,
 }
 
 impl CEmitter {
@@ -106,10 +120,13 @@ impl CEmitter {
             fn_return_type_exprs: HashMap::new(),
             var_type_exprs: HashMap::new(),
             user_fn_names: HashSet::new(),
+            named_fn_adapters: HashMap::new(),
+            named_fn_sigs: HashMap::new(),
             defer_stack: Vec::new(),
             errors: Vec::new(),
             closure_counter: 0,
             closure_sigs: HashMap::new(),
+            closure_value_vars: HashSet::new(),
         }
     }
 
@@ -242,6 +259,8 @@ impl CEmitter {
             Expr::Ident(name) => {
                 if let Some(tag) = self.var_types.get(name) {
                     tag.clone()
+                } else if self.named_fn_sigs.contains_key(name) {
+                    "closure".to_string()
                 } else {
                     "int".to_string()
                 }
@@ -375,6 +394,15 @@ impl CEmitter {
         }
     }
 
+    fn is_fn_value_tag(tag: &str) -> bool {
+        tag == "closure"
+    }
+
+    fn fn_value_string_expr(&mut self, inner_c: &str) -> String {
+        let tmp = self.fresh_tmp();
+        format!("({{ void *{tmp} = (void*)({inner_c}); (void){tmp}; \"[function]\"; }})")
+    }
+
     /// Convert an expression to a string representation for interpolation,
     /// choosing the right rt_*_to_str based on the inferred type.
     fn expr_to_str_conversion(&mut self, expr: &Expr, inner_c: &str) -> String {
@@ -383,6 +411,7 @@ impl CEmitter {
             "str" => inner_c.to_string(),
             "float" | "f64" | "f32" => format!("rt_f64_to_str({inner_c})"),
             "bool" => format!("rt_bool_to_str({inner_c})"),
+            tag if Self::is_fn_value_tag(tag) => self.fn_value_string_expr(inner_c),
             _ => format!("rt_i64_to_str({inner_c})"),
         }
     }
@@ -451,8 +480,37 @@ impl CEmitter {
         }
     }
 
+    fn type_expr_contains_nested_fn_type(ty: &TypeExpr) -> bool {
+        match ty {
+            TypeExpr::FnType { params, ret } => {
+                params
+                    .iter()
+                    .any(|p| Self::type_expr_contains_fn_type(&p.node))
+                    || Self::type_expr_contains_fn_type(&ret.node)
+            }
+            TypeExpr::Array(inner) | TypeExpr::Optional(inner) | TypeExpr::Future(inner) => {
+                Self::type_expr_contains_fn_type(&inner.node)
+            }
+            TypeExpr::Result { ok_type, err_type } => {
+                Self::type_expr_contains_fn_type(&ok_type.node)
+                    || Self::type_expr_contains_fn_type(&err_type.node)
+            }
+            TypeExpr::HashMap(key_type, value_type) => {
+                Self::type_expr_contains_fn_type(&key_type.node)
+                    || Self::type_expr_contains_fn_type(&value_type.node)
+            }
+            TypeExpr::Named(_) | TypeExpr::Unit | TypeExpr::Inferred => false,
+        }
+    }
+
     fn record_fn_type_if_needed(&mut self, ty: &Spanned<TypeExpr>, what: &str) {
         if Self::type_expr_contains_fn_type(&ty.node) {
+            self.record_unsupported(what, Some(&ty.span));
+        }
+    }
+
+    fn record_nested_fn_type_if_needed(&mut self, ty: &Spanned<TypeExpr>, what: &str) {
+        if Self::type_expr_contains_nested_fn_type(&ty.node) {
             self.record_unsupported(what, Some(&ty.span));
         }
     }
@@ -486,19 +544,16 @@ impl CEmitter {
             }
             Expr::Unit => "0".to_string(),
             Expr::Ident(name) => {
-                // A bare function name in value position is a first-class
-                // function value. The Cranelift backend lowers this to an
-                // env-first adapter pair; the WASM (C-transpile) backend has no
-                // such lowering, so emitting `name` here would produce
-                // `long long g = dbl;` and later `((g)(...))` — invalid C.
-                // Fail loud instead, matching the backend's other unsupported
-                // constructs. (A shadowing local of the same name wins.)
+                // A bare eligible function name in value position is a
+                // first-class function value. This C backend uses the same
+                // heap pair as closure literals: `[env_first_adapter, env]`.
+                // Named functions have no captures, so env is null and the
+                // adapter just forwards to the real C function.
                 if !self.var_types.contains_key(name)
                     && !self.closure_sigs.contains_key(name)
                     && self.user_fn_names.contains(name)
                 {
-                    self.record_unsupported("using a named function as a first-class value", None);
-                    return "0 /* unsupported fn value */".to_string();
+                    return self.emit_named_fn_value(name);
                 }
                 // Map Turbo identifiers to C, handling reserved words
                 match name.as_str() {
@@ -637,6 +692,13 @@ impl CEmitter {
                 }
             }
             Expr::ArrayLit(elems) => {
+                if elems
+                    .iter()
+                    .any(|elem| self.expr_contains_fn_value(&elem.node))
+                {
+                    self.record_unsupported("function values inside arrays on wasm target", None);
+                    return "0 /* unsupported fn array */".to_string();
+                }
                 let len = elems.len();
                 let tmp = self.fresh_tmp();
                 // This needs to be in statement context; for expression context,
@@ -769,6 +831,16 @@ impl CEmitter {
                 self.emit_enum_unit_variant(enum_name, variant)
             }
             Expr::MapLit(pairs) => {
+                if pairs.iter().any(|(key, value)| {
+                    self.expr_contains_fn_value(&key.node)
+                        || self.expr_contains_fn_value(&value.node)
+                }) {
+                    self.record_unsupported(
+                        "function values inside HashMap/map literals on wasm target",
+                        None,
+                    );
+                    return "0 /* unsupported fn map */".to_string();
+                }
                 let tmp = self.fresh_tmp();
                 let mut inner = String::new();
                 write!(&mut inner, "void *{tmp} = rt_hashmap_new();").unwrap();
@@ -913,6 +985,145 @@ impl CEmitter {
         }
     }
 
+    fn fn_type_sig(ty: &TypeExpr) -> Option<ClosureSig> {
+        if let TypeExpr::FnType { params, ret } = ty {
+            Some(ClosureSig {
+                params: params.iter().map(|p| Self::type_to_c(&p.node)).collect(),
+                ret: Self::type_to_c(&ret.node),
+            })
+        } else {
+            None
+        }
+    }
+
+    fn fndef_sig(fndef: &FnDef) -> ClosureSig {
+        ClosureSig {
+            params: fndef
+                .params
+                .iter()
+                .map(|p| Self::type_to_c(&p.ty.node))
+                .collect(),
+            ret: fndef
+                .return_type
+                .as_ref()
+                .map(|t| Self::type_to_c(&t.node))
+                .unwrap_or("void"),
+        }
+    }
+
+    fn is_named_fn_value_eligible(fndef: &FnDef) -> bool {
+        fndef.name != "main"
+            && fndef.type_param_names().is_empty()
+            && !fndef.is_async
+            && !fndef.is_unsafe
+    }
+
+    fn fn_value_sig_for_expr(&self, expr: &Expr) -> Option<ClosureSig> {
+        match expr {
+            Expr::Ident(name) => self
+                .closure_sigs
+                .get(name)
+                .or_else(|| self.named_fn_sigs.get(name))
+                .cloned(),
+            Expr::Call { callee, .. } => {
+                if let Expr::Ident(fname) = &callee.node {
+                    self.fn_return_type_exprs
+                        .get(fname)
+                        .and_then(Self::fn_type_sig)
+                } else {
+                    None
+                }
+            }
+            Expr::Block {
+                tail_expr: Some(tail),
+                ..
+            } => self.fn_value_sig_for_expr(&tail.node),
+            Expr::If {
+                then_branch,
+                else_branch: Some(else_branch),
+                ..
+            } => self
+                .fn_value_sig_for_expr(&then_branch.node)
+                .or_else(|| self.fn_value_sig_for_expr(&else_branch.node)),
+            _ => None,
+        }
+    }
+
+    fn expr_contains_fn_value(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Ident(name) => {
+                self.named_fn_sigs.contains_key(name) || self.closure_sigs.contains_key(name)
+            }
+            Expr::Closure { .. } => true,
+            Expr::ArrayLit(elems) => elems
+                .iter()
+                .any(|elem| self.expr_contains_fn_value(&elem.node)),
+            Expr::StructLit { fields, .. } => fields
+                .iter()
+                .any(|(_, value)| self.expr_contains_fn_value(&value.node)),
+            Expr::MapLit(pairs) => pairs.iter().any(|(key, value)| {
+                self.expr_contains_fn_value(&key.node) || self.expr_contains_fn_value(&value.node)
+            }),
+            Expr::Block { stmts, tail_expr } => {
+                stmts
+                    .iter()
+                    .any(|stmt| self.stmt_contains_fn_value(&stmt.node))
+                    || tail_expr
+                        .as_ref()
+                        .is_some_and(|tail| self.expr_contains_fn_value(&tail.node))
+            }
+            Expr::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.expr_contains_fn_value(&then_branch.node)
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|else_branch| self.expr_contains_fn_value(&else_branch.node))
+            }
+            Expr::Call { callee, args } => {
+                self.fn_value_sig_for_expr(expr).is_some()
+                    || self.expr_contains_fn_value(&callee.node)
+                    || args
+                        .iter()
+                        .any(|arg| self.expr_contains_fn_value(&arg.node))
+            }
+            _ => false,
+        }
+    }
+
+    fn stmt_contains_fn_value(&self, stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Let { value, .. } => self.expr_contains_fn_value(&value.node),
+            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Defer(expr) => {
+                self.expr_contains_fn_value(&expr.node)
+            }
+            Stmt::Return(None) => false,
+            Stmt::LetDestructure { value, .. } => self.expr_contains_fn_value(&value.node),
+        }
+    }
+
+    fn expr_is_closure_value(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Closure { .. } => true,
+            Expr::Ident(name) => self.closure_value_vars.contains(name),
+            Expr::Block {
+                tail_expr: Some(tail),
+                ..
+            } => self.expr_is_closure_value(&tail.node),
+            Expr::If {
+                then_branch,
+                else_branch: Some(else_branch),
+                ..
+            } => {
+                self.expr_is_closure_value(&then_branch.node)
+                    || self.expr_is_closure_value(&else_branch.node)
+            }
+            _ => false,
+        }
+    }
+
     /// Resolve the signature of a closure passed as an argument: either a
     /// closure literal or an identifier bound to a closure.
     fn closure_sig_of_arg(&mut self, arg: &Expr) -> Option<ClosureSig> {
@@ -922,7 +1133,11 @@ impl CEmitter {
                 return_type,
                 body,
             } => Some(self.closure_sig_of(params, return_type, &body.node)),
-            Expr::Ident(name) => self.closure_sigs.get(name).cloned(),
+            Expr::Ident(name) => self
+                .closure_sigs
+                .get(name)
+                .or_else(|| self.named_fn_sigs.get(name))
+                .cloned(),
             _ => None,
         }
     }
@@ -946,7 +1161,27 @@ impl CEmitter {
         }
     }
 
-    fn record_closure_binding(&mut self, name: &str, value: &Expr) {
+    fn record_fn_value_binding(
+        &mut self,
+        name: &str,
+        ty: &Option<Spanned<TypeExpr>>,
+        value: &Expr,
+    ) {
+        self.closure_sigs.remove(name);
+        self.closure_value_vars.remove(name);
+
+        if let Some(t) = ty {
+            if let Some(sig) = Self::fn_type_sig(&t.node) {
+                self.closure_sigs.insert(name.to_string(), sig);
+                if matches!(value, Expr::Closure { .. })
+                    || matches!(value, Expr::Ident(src) if self.closure_value_vars.contains(src))
+                {
+                    self.closure_value_vars.insert(name.to_string());
+                }
+                return;
+            }
+        }
+
         match value {
             Expr::Closure {
                 params,
@@ -955,10 +1190,30 @@ impl CEmitter {
             } => {
                 let sig = self.closure_sig_of(params, return_type, &body.node);
                 self.closure_sigs.insert(name.to_string(), sig);
+                self.closure_value_vars.insert(name.to_string());
             }
             Expr::Ident(src) => {
-                if let Some(sig) = self.closure_sigs.get(src).cloned() {
+                if let Some(sig) = self
+                    .closure_sigs
+                    .get(src)
+                    .or_else(|| self.named_fn_sigs.get(src))
+                    .cloned()
+                {
                     self.closure_sigs.insert(name.to_string(), sig);
+                    if self.closure_value_vars.contains(src) {
+                        self.closure_value_vars.insert(name.to_string());
+                    }
+                }
+            }
+            Expr::Call { callee, .. } => {
+                if let Expr::Ident(fname) = &callee.node {
+                    if let Some(sig) = self
+                        .fn_return_type_exprs
+                        .get(fname)
+                        .and_then(Self::fn_type_sig)
+                    {
+                        self.closure_sigs.insert(name.to_string(), sig);
+                    }
                 }
             }
             _ => {}
@@ -1091,6 +1346,62 @@ impl CEmitter {
         format!("({{ {inner} }})")
     }
 
+    fn emit_named_fn_value(&mut self, name: &str) -> String {
+        let Some(adapter_name) = self.named_fn_adapters.get(name).cloned() else {
+            self.record_unsupported("using an ineligible named function as a value", None);
+            return "0 /* unsupported fn value */".to_string();
+        };
+
+        // Known cost: every bare named-function value evaluation allocates a
+        // fresh [fn_ptr, null_env] pair. A per-function singleton pair would
+        // avoid loop-time linear-memory growth if this later becomes hot.
+        let pair = self.fresh_tmp();
+        format!(
+            "({{ long long *{pair} = (long long*)rt_struct_alloc(2LL); \
+             {pair}[0] = (long long)(&{adapter_name}); {pair}[1] = 0LL; \
+             (void*){pair}; }})"
+        )
+    }
+
+    fn emit_named_fn_adapter(&mut self, fndef: &FnDef, adapter_name: &str) {
+        let sig = Self::fndef_sig(fndef);
+        let mut params = vec!["void *env".to_string()];
+        params.extend(
+            fndef
+                .params
+                .iter()
+                .map(|p| format!("{} {}", Self::type_to_c(&p.ty.node), p.name)),
+        );
+        let params_str = params.join(", ");
+        self.fn_decls
+            .push(format!("{} {adapter_name}({params_str});", sig.ret));
+
+        let call_args = fndef
+            .params
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let target_name = &fndef.name;
+        let call = if call_args.is_empty() {
+            format!("{target_name}()")
+        } else {
+            format!("{target_name}({call_args})")
+        };
+
+        let mut body = String::new();
+        let _ = writeln!(&mut body, "{} {adapter_name}({params_str}) {{", sig.ret);
+        let _ = writeln!(&mut body, "    (void)env;");
+        if sig.ret == "void" {
+            let _ = writeln!(&mut body, "    {call};");
+            let _ = writeln!(&mut body, "}}");
+        } else {
+            let _ = writeln!(&mut body, "    return {call};");
+            let _ = writeln!(&mut body, "}}");
+        }
+        self.fn_defs.push(body);
+    }
+
     /// Emit an indirect call through a closure pair: load `fn_ptr`/`env_ptr`
     /// from the pair, cast `fn_ptr` to the right function-pointer type, and
     /// call it with `env_ptr` as the hidden leading argument.
@@ -1178,13 +1489,10 @@ impl CEmitter {
                 return format!("{obj_name}_{field}");
             }
             _ => {
-                // A call whose callee is a computed value (e.g. `make_adder(3)(4)`
-                // or `handlers[i](x)`) needs an indirect call through a function
-                // value. The Cranelift backend supports this; the WASM
-                // (C-transpile) backend does not, so fail loud rather than
-                // emitting `((<long long>)(...))` — invalid C.
-                for arg in args {
-                    let _ = self.emit_expr(&arg.node);
+                let arg_strs: Vec<String> = args.iter().map(|a| self.emit_expr(&a.node)).collect();
+                if let Some(sig) = self.fn_value_sig_for_expr(&callee.node) {
+                    let callee_c = self.emit_expr(&callee.node);
+                    return self.emit_closure_call(&callee_c, &sig, &arg_strs);
                 }
                 self.record_unsupported(
                     "indirect calls through computed function values",
@@ -1212,6 +1520,16 @@ impl CEmitter {
 
         let arg_strs: Vec<String> = args.iter().map(|a| self.emit_expr(&a.node)).collect();
         let args_joined = arg_strs.join(", ");
+
+        if self.user_fn_names.contains(&fn_name)
+            && args.iter().any(|arg| self.expr_is_closure_value(&arg.node))
+        {
+            self.record_unsupported(
+                "closures as parameters of user-defined functions on wasm target",
+                Some(&callee.span),
+            );
+            return "0 /* unsupported closure argument */".to_string();
+        }
 
         // A call to a local bound to a closure value lowers to an indirect
         // call through its [fn_ptr, env_ptr] pair rather than a direct
@@ -1270,6 +1588,13 @@ impl CEmitter {
                     // Determine which print variant to call based on the
                     // inferred type of the argument expression.
                     let tag = self.infer_type_tag(&args[0].node);
+                    if Self::is_fn_value_tag(&tag) {
+                        let tmp = self.fresh_tmp();
+                        return format!(
+                            "({{ void *{tmp} = (void*)({}); (void){tmp}; rt_print_str(\"[function]\"); }})",
+                            arg_strs[0]
+                        );
+                    }
                     let print_fn = Self::print_fn_for_tag(&tag);
                     format!("{print_fn}({args_joined})")
                 } else {
@@ -1900,7 +2225,10 @@ impl CEmitter {
                 // WASM runtime doesn't provide. Fail loud rather than mislower.
                 if let Some(t) = ty {
                     self.record_hashmap_type_if_needed(t);
-                    self.record_fn_type_if_needed(t, "fn-typed let annotations on wasm target");
+                    self.record_nested_fn_type_if_needed(
+                        t,
+                        "nested/container fn-typed let annotations on wasm target",
+                    );
                 }
                 // Record the variable type for later print/interpolation dispatch
                 let type_tag = if let Some(t) = ty {
@@ -1910,7 +2238,7 @@ impl CEmitter {
                 };
                 self.var_types.insert(name.clone(), type_tag);
                 self.record_result_binding(name, ty, &value.node);
-                self.record_closure_binding(name, &value.node);
+                self.record_fn_value_binding(name, ty, &value.node);
 
                 let v = self.emit_expr(&value.node);
                 let c_type = if let Some(t) = ty {
@@ -1987,6 +2315,8 @@ impl CEmitter {
                     Self::type_to_c(ty)
                 } else if let Some(tag) = self.var_types.get(name) {
                     Self::tag_to_c_type(tag)
+                } else if self.named_fn_sigs.contains_key(name) {
+                    "void*"
                 } else {
                     "long long"
                 }
@@ -2191,7 +2521,10 @@ impl CEmitter {
                 // WASM runtime doesn't provide. Fail loud rather than mislower.
                 if let Some(t) = ty {
                     self.record_hashmap_type_if_needed(t);
-                    self.record_fn_type_if_needed(t, "fn-typed let annotations on wasm target");
+                    self.record_nested_fn_type_if_needed(
+                        t,
+                        "nested/container fn-typed let annotations on wasm target",
+                    );
                 }
                 // Record the variable type for later print/interpolation dispatch
                 let type_tag = if let Some(t) = ty {
@@ -2201,7 +2534,7 @@ impl CEmitter {
                 };
                 self.var_types.insert(name.clone(), type_tag);
                 self.record_result_binding(name, ty, &value.node);
-                self.record_closure_binding(name, &value.node);
+                self.record_fn_value_binding(name, ty, &value.node);
 
                 let v = self.emit_expr(&value.node);
                 let c_type = if let Some(t) = ty {
@@ -2409,7 +2742,10 @@ impl CEmitter {
         let ret = Self::return_type_to_c(&fndef.return_type);
         if let Some(ret_ty) = &fndef.return_type {
             self.record_hashmap_type_if_needed(ret_ty);
-            self.record_fn_type_if_needed(ret_ty, "fn-typed return values on wasm target");
+            self.record_nested_fn_type_if_needed(
+                ret_ty,
+                "nested/container fn-typed return values on wasm target",
+            );
         }
 
         // Record function return type for call-site type inference
@@ -2421,16 +2757,19 @@ impl CEmitter {
         // Record parameter types so the body can look them up for print/interpolation
         for p in &fndef.params {
             self.record_hashmap_type_if_needed(&p.ty);
-            self.record_fn_type_if_needed(
+            self.record_nested_fn_type_if_needed(
                 &p.ty,
-                "fn-typed parameters / closures as parameters of user-defined functions \
-                 (use map/filter, or call the closure directly)",
+                "nested/container fn-typed parameters on wasm target",
             );
             if p.name != "self" {
                 let tag = Self::type_expr_to_tag(&p.ty.node);
                 self.var_types.insert(p.name.clone(), tag);
                 self.var_type_exprs
                     .insert(p.name.clone(), p.ty.node.clone());
+                if let Some(sig) = Self::fn_type_sig(&p.ty.node) {
+                    self.closure_sigs.insert(p.name.clone(), sig);
+                    self.closure_value_vars.remove(&p.name);
+                }
             }
         }
 
@@ -2535,6 +2874,25 @@ impl CEmitter {
                 }
             }
         }
+
+        let fn_value_adapter_targets: Vec<FnDef> = module
+            .items
+            .iter()
+            .filter_map(|item| match &item.node {
+                Item::Function(fndef) if Self::is_named_fn_value_eligible(fndef) => {
+                    Some(fndef.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        for (i, fndef) in fn_value_adapter_targets.iter().enumerate() {
+            let adapter_name = format!("__turbo_fnval_{i}_{}", fndef.name);
+            self.named_fn_adapters
+                .insert(fndef.name.clone(), adapter_name);
+            self.named_fn_sigs
+                .insert(fndef.name.clone(), Self::fndef_sig(fndef));
+        }
+
         for methods in self.impl_methods.values() {
             for (_method_name, method) in methods {
                 if let Some(ret_ty) = &method.return_type {
@@ -2579,6 +2937,12 @@ impl CEmitter {
         for (type_name, methods) in &impl_methods {
             for (_, method) in methods {
                 self.emit_function(method, Some(type_name));
+            }
+        }
+
+        for fndef in &fn_value_adapter_targets {
+            if let Some(adapter_name) = self.named_fn_adapters.get(&fndef.name).cloned() {
+                self.emit_named_fn_adapter(fndef, &adapter_name);
             }
         }
 
@@ -2863,6 +3227,77 @@ mod tests {
             }
         }
         panic!("unterminated turbo_main body in emitted C");
+    }
+
+    fn host_compile_parity(cases: &[(&str, &str)], suite: &str) {
+        use std::process::Command;
+
+        if cfg!(target_os = "windows") {
+            eprintln!("skipping {suite} host parity on Windows: no POSIX C host toolchain");
+            return;
+        }
+
+        let cc = ["clang", "cc", "gcc"].iter().copied().find(|c| {
+            Command::new(c)
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        });
+        let Some(cc) = cc else {
+            eprintln!("skipping {suite} host parity: no C compiler found");
+            return;
+        };
+
+        let dir =
+            std::env::temp_dir().join(format!("turbo_wasm_{suite}_parity_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("turbo_rt_guards.h"), crate::RUNTIME_GUARDS_H).unwrap();
+        std::fs::write(dir.join("turbo_rt_wasm.c"), crate::RUNTIME_WASM_C).unwrap();
+
+        let mut failures = Vec::new();
+        for (i, (src, expected)) in cases.iter().enumerate() {
+            let c = compile_to_c(src);
+            let c_path = dir.join(format!("case_{i}.c"));
+            let bin = dir.join(format!("case_{i}"));
+            std::fs::write(&c_path, &c).unwrap();
+
+            let build = Command::new(cc)
+                .arg("-std=gnu11")
+                .arg("-Wno-int-to-pointer-cast")
+                .arg("-Wno-pointer-to-int-cast")
+                .arg(&c_path)
+                .arg(dir.join("turbo_rt_wasm.c"))
+                .arg("-o")
+                .arg(&bin)
+                .arg("-lm")
+                .output()
+                .expect("failed to spawn C compiler");
+            if !build.status.success() {
+                failures.push(format!(
+                    "case {i} failed to host-compile:\n{}\n--- generated C ---\n{c}",
+                    String::from_utf8_lossy(&build.stderr)
+                ));
+                continue;
+            }
+
+            let run = Command::new(&bin)
+                .output()
+                .expect("failed to run compiled C");
+            let stdout = String::from_utf8_lossy(&run.stdout);
+            if !run.status.success() || stdout != *expected {
+                failures.push(format!(
+                    "case {i}: host-compiled WASM C output mismatch\nexpected:\n{expected:?}\ngot:\n{stdout:?}"
+                ));
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "{suite} host parity failures:\n{}",
+            failures.join("\n\n")
+        );
     }
 
     #[test]
@@ -3889,12 +4324,8 @@ fn main() {
     }
 
     #[test]
-    fn named_fn_as_value_fails_loud() {
-        // The Cranelift backend lowers a named function used as a first-class
-        // value (via an env-first adapter), but the WASM (C-transpile) backend
-        // has no such lowering. It must fail loud rather than emit invalid C
-        // (`long long g = dbl; ((g)(...));`).
-        let err = try_compile_to_c(
+    fn named_fn_value_lowers_to_adapter_pair() {
+        let c = compile_to_c(
             r#"
 fn dbl(x: i64) -> i64 { x * 2 }
 
@@ -3903,40 +4334,154 @@ fn main() {
     print(g(9))
 }
 "#,
-        )
-        .expect_err("named function used as a value must be unsupported on WASM");
-        assert_eq!(err.code, ErrorCode::E0403);
+        );
+
         assert!(
-            err.message
-                .contains("named function as a first-class value"),
-            "diagnostic should name the unsupported construct: {}",
-            err.message
+            c.contains("long long __turbo_fnval_0_dbl(void *env, long long x)"),
+            "named function values must get an env-first adapter:\n{c}"
+        );
+        assert!(
+            c.contains("return dbl(x);"),
+            "adapter must forward to the original function:\n{c}"
+        );
+        let body = turbo_main_body(&c);
+        assert!(
+            body.contains("rt_struct_alloc(2LL)")
+                && body.contains("(long long)(&__turbo_fnval_0_dbl)")
+                && body.contains("[1] = 0LL"),
+            "named function value must be a {{adapter, null_env}} pair:\n{body}"
+        );
+        assert!(
+            body.contains("(long long(*)(void*, long long))"),
+            "call-through must cast the pair's function slot with the fn signature:\n{body}"
         );
     }
 
-    #[test]
-    fn immediate_invoke_of_returned_fn_fails_loud() {
-        // A function returning `fn(...) -> ...` is a first-class function
-        // value path. The WASM backend must fail loud before emitting it as an
-        // integer-returning C function or as `((<expr>)(...))`.
-        let err = try_compile_to_c(
+    const FN_VALUE_CASES: &[(&str, &str)] = &[
+        (
             r#"
-fn make_adder(n: i64) -> fn(i64) -> i64 {
-    |x: i64| -> i64 { x + n }
+fn dbl(x: i64) -> i64 { x * 2 }
+
+fn main() {
+    let f = dbl
+    print(f(9))
+}
+"#,
+            "18\n",
+        ),
+        (
+            r#"
+fn inc(x: i64) -> i64 { x + 1 }
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 { f(x) }
+
+fn main() {
+    print(apply(inc, 41))
+}
+"#,
+            "42\n",
+        ),
+        (
+            r#"
+fn inc(x: i64) -> i64 { x + 1 }
+fn pick() -> fn(i64) -> i64 { inc }
+
+fn main() {
+    let f = pick()
+    print(f(10))
+    print(pick()(20))
+}
+"#,
+            "11\n21\n",
+        ),
+        (
+            r#"
+fn inc(x: i64) -> i64 { x + 1 }
+fn dec(x: i64) -> i64 { x - 1 }
+
+fn main() {
+    let mut f = inc
+    print(f(1))
+    f = dec
+    print(f(1))
+}
+"#,
+            "2\n0\n",
+        ),
+        (
+            r#"
+fn dbl(x: i64) -> i64 { x * 2 }
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 { f(x) }
+fn chain(f: fn(i64) -> i64, x: i64) -> i64 {
+    apply(f, x) + apply(f, x + 1)
 }
 
 fn main() {
-    print(make_adder(3)(4))
+    print(chain(dbl, 4))
+}
+"#,
+            "18\n",
+        ),
+        (
+            r#"
+fn inc(x: i64) -> i64 { x + 1 }
+
+fn main() {
+    let f = inc
+    print(f)
+}
+"#,
+            "[function]\n",
+        ),
+        (
+            r#"
+fn inc(x: i64) -> i64 { x + 1 }
+
+fn main() {
+    let f = inc
+    print("{f}")
+    print("${f}")
+}
+"#,
+            "[function]\n$[function]\n",
+        ),
+    ];
+
+    #[test]
+    fn fn_value_cases_lower_without_unsupported() {
+        for (src, _) in FN_VALUE_CASES {
+            let c = compile_to_c(src);
+            assert!(
+                !c.contains("unsupported fn"),
+                "function-value case emitted stale unsupported placeholder:\n{c}"
+            );
+            assert!(
+                c.contains("__turbo_fnval_"),
+                "function-value case should emit a named-function adapter:\n{c}"
+            );
+        }
+    }
+
+    #[test]
+    fn fn_value_host_compile_parity() {
+        host_compile_parity(FN_VALUE_CASES, "fn_value");
+    }
+
+    #[test]
+    fn ineligible_named_fn_as_value_fails_loud() {
+        let err = try_compile_to_c(
+            r#"
+@unsafe fn secret(x: i64) -> i64 { x + 1 }
+
+fn main() {
+    let f = secret
+    print(f(1))
 }
 "#,
         )
-        .expect_err("indirect call through a computed value must be unsupported on WASM");
+        .expect_err("unsafe named function values must stay unsupported on WASM");
         assert_eq!(err.code, ErrorCode::E0403);
         assert!(
-            err.message.contains("fn-typed return values")
-                || err
-                    .message
-                    .contains("indirect calls through computed function values"),
+            err.message.contains("ineligible named function"),
             "diagnostic should name the unsupported construct: {}",
             err.message
         );
@@ -4032,6 +4577,49 @@ fn main() {
         assert!(
             err.message.contains("fn-typed let annotations"),
             "diagnostic should name fn-typed let annotations: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn named_fn_values_inside_array_literals_fail_loud() {
+        let err = try_compile_to_c(
+            r#"
+fn inc(x: i64) -> i64 { x + 1 }
+fn dec(x: i64) -> i64 { x - 1 }
+
+fn main() {
+    let ops = [inc, dec]
+    print(len(ops))
+}
+"#,
+        )
+        .expect_err("function values inside arrays must be unsupported on WASM");
+        assert_eq!(err.code, ErrorCode::E0403);
+        assert!(
+            err.message.contains("function values inside arrays"),
+            "diagnostic should name fn values in arrays: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn fn_type_inside_typed_hashmap_fails_loud() {
+        let err = try_compile_to_c(
+            r#"
+fn inc(x: i64) -> i64 { x + 1 }
+
+fn main() {
+    let handlers: HashMap<str, fn(i64) -> i64> = hashmap()
+    handlers.set("inc", inc)
+}
+"#,
+        )
+        .expect_err("fn values inside typed HashMap must be unsupported on WASM");
+        assert_eq!(err.code, ErrorCode::E0403);
+        assert!(
+            err.message.contains("generic HashMap<K, V>") && err.message.contains("wasm target"),
+            "diagnostic should keep typed HashMap unsupported: {}",
             err.message
         );
     }

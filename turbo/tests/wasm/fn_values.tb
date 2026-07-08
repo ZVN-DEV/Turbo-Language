@@ -1,0 +1,37 @@
+// WASM first-class named function values.
+//
+// The C-transpile backend represents each named fn value as the same
+// {fn_ptr, env_ptr} pair used by closure literals, with a generated env-first
+// adapter and a null env pointer.
+
+fn inc(x: i64) -> i64 { x + 1 }
+fn dec(x: i64) -> i64 { x - 1 }
+fn dbl(x: i64) -> i64 { x * 2 }
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 { f(x) }
+
+fn pick(which: i64) -> fn(i64) -> i64 {
+    if which == 0 { inc } else { dec }
+}
+
+fn chain(f: fn(i64) -> i64, x: i64) -> i64 {
+    apply(f, x) + apply(f, x + 1)
+}
+
+fn main() {
+    let f = dbl
+    print(f(9))
+
+    print(apply(inc, 41))
+
+    let picked = pick(0)
+    print(picked(10))
+    print(pick(1)(10))
+
+    let mut current = inc
+    print(current(1))
+    current = dec
+    print(current(1))
+
+    print(chain(dbl, 4))
+}
