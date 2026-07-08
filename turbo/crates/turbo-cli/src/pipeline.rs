@@ -853,6 +853,9 @@ pub(crate) fn build_file(
         });
         if is_wasm {
             base.with_extension("wasm")
+        } else if cfg!(windows) {
+            // Native Windows executables need a .exe extension to be runnable.
+            base.with_extension("exe")
         } else {
             base
         }

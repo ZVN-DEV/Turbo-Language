@@ -40,16 +40,68 @@
 #include <stdint.h>
 #include <stdatomic.h>
 #include <string.h>
-#include <strings.h>   /* strcasecmp, strncasecmp (BSD/POSIX) */
 #include <limits.h>
-#include <pthread.h>
 #include <math.h>
 #include <time.h>
-#include <sys/time.h>
 #include <sys/stat.h>
+
+#ifdef _WIN32
+/* ── Windows (MSVC/UCRT) portability shims — Tier B AOT ──────────────────
+ *
+ * The POSIX headers below do not exist under the MSVC toolchain. We compile
+ * `turbo_rt.c` with clang targeting `*-pc-windows-msvc`, which uses the UCRT
+ * headers. The CORE language + stdlib surface (print, strings/ARC, arrays,
+ * structs/enums/match, hashmaps, math, json, sqlite, file I/O, time) is made
+ * to compile via the small shims here; the NON-CORE surface that genuinely
+ * needs POSIX (spawn/channels/mutex via pthreads, and the HTTP client/server
+ * via fork/exec + BSD sockets) is `#ifndef _WIN32`-guarded further down and
+ * replaced with fail-loud runtime-error stubs (see TURBO_WIN_AOT_UNSUPPORTED).
+ *
+ * The POSIX side must stay byte-identical, so every shim here is either a
+ * macro that renames a UCRT equivalent (`_stricmp`, `_access`, `_mkdir`) or a
+ * tiny wrapper; the shared C code is never rewritten. */
+#include <windows.h>
+#include <io.h>        /* _access */
+#include <direct.h>    /* _mkdir */
+#define strcasecmp  _stricmp
+#define strncasecmp _strnicmp
+#define access      _access
+#ifndef F_OK
+#define F_OK 0
+#endif
+/* MSVC's _mkdir takes no mode argument; the sole caller passes 0755. */
+#define mkdir(path, mode) _mkdir(path)
+#ifndef S_ISDIR
+#define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
+#endif
+/* localtime_r shim over UCRT's localtime_s. NOTE: the MSVC secure form is
+ * `errno_t localtime_s(struct tm *, const time_t *)` — the argument order is
+ * REVERSED relative to the C11 Annex K prototype, so this wrapper is required
+ * to keep rt_format_time's POSIX body unchanged. */
+static struct tm *turbo_localtime_r(const time_t *timer, struct tm *out) {
+    return localtime_s(out, timer) == 0 ? out : NULL;
+}
+#define localtime_r(timer, out) turbo_localtime_r((timer), (out))
+/* Emitted by every Windows stub for a NON-CORE builtin so linking succeeds
+ * but calling one fails loudly with an actionable message (never silently). */
+#define TURBO_WIN_AOT_UNSUPPORTED(feature)                                    \
+    do {                                                                      \
+        fprintf(stderr, "runtime error: " feature " is not yet supported in " \
+                "Windows AOT (`turbolang build`) binaries; use `turbolang "    \
+                "run` (JIT) or build on a non-Windows target\n");             \
+        exit(1);                                                              \
+    } while (0)
+#else
+/* POSIX system headers. Under -std=c11 the headers default to strict
+ * POSIX/C11, which hides BSD extensions we depend on (strcasecmp/strncasecmp,
+ * INADDR_LOOPBACK); the feature-test macros above unhide them. */
+#include <strings.h>   /* strcasecmp, strncasecmp (BSD/POSIX) */
+#include <pthread.h>
+#include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <dirent.h>
+#endif
 
 /* Shared size-overflow / allocation-cap guards (single source of truth,
  * also included by turbo_rt_wasm.c so the two runtimes never drift). */
@@ -1318,6 +1370,7 @@ void rt_sleep_ms(long long ms) {
 }
 #endif
 
+#ifndef _WIN32
 typedef struct {
     long long (*thunk)(void *);
     void *args_ptr;    /* malloc'd copy of the args struct — owned by ctx */
@@ -1417,6 +1470,20 @@ long long rt_await_handle(void *handle_ptr) {
     free(handle);
     return result;
 }
+#else /* _WIN32: async spawn/await are NON-CORE (POSIX pthreads) — stub. */
+void *rt_spawn_with_args(long long (*thunk)(void *), void *args_ptr,
+                         long long ptr_mask, long long num_args) {
+    (void)thunk; (void)args_ptr; (void)ptr_mask; (void)num_args;
+    TURBO_WIN_AOT_UNSUPPORTED("spawn/async concurrency");
+    return NULL;
+}
+
+long long rt_await_handle(void *handle_ptr) {
+    (void)handle_ptr;
+    TURBO_WIN_AOT_UNSUPPORTED("await");
+    return 0;
+}
+#endif /* _WIN32 */
 
 /* ── HTTP + JSON builtins ───────────────────────────────────────────── */
 
@@ -1429,6 +1496,12 @@ long long rt_await_handle(void *handle_ptr) {
  * using real realloc during the read loop and copying to the arena exactly
  * once at the end, callers still receive an arena-lifetime pointer while
  * the growing code avoids the arena-realloc pitfall. */
+#ifndef _WIN32
+/* The HTTP client (http_get/post) and shell_exec run a child process
+ * (curl / the target command) via fork+exec and read its stdout back through a
+ * pipe. That whole machinery — plus the SSRF URL guards it gates on — is POSIX
+ * and NON-CORE, so it is compiled out on Windows and replaced by the fail-loud
+ * stubs in the `#else` branch below. */
 static char *read_fd_to_string(int fd) {
     size_t cap = 4096, len = 0;
     char *tmp = (char *)malloc(cap);
@@ -1928,6 +2001,32 @@ const char *rt_exec(const char *cmd) {
     free(cmd_copy);
     return buf;
 }
+#else /* _WIN32: HTTP client + shell_exec are NON-CORE (fork/exec) — stub. */
+const char *rt_http_get(const char *url) {
+    (void)url;
+    TURBO_WIN_AOT_UNSUPPORTED("http_get");
+    return NULL;
+}
+
+const char *rt_http_post(const char *url, const char *body) {
+    (void)url; (void)body;
+    TURBO_WIN_AOT_UNSUPPORTED("http_post");
+    return NULL;
+}
+
+const char *rt_http_post_with_headers(const char *url, const char *body,
+                                      const char *headers) {
+    (void)url; (void)body; (void)headers;
+    TURBO_WIN_AOT_UNSUPPORTED("http_post");
+    return NULL;
+}
+
+const char *rt_exec(const char *cmd) {
+    (void)cmd;
+    TURBO_WIN_AOT_UNSUPPORTED("shell_exec/exec");
+    return NULL;
+}
+#endif /* _WIN32 */
 
 /* env_get(name) -> str — get an environment variable, returns "" if not set */
 const char *rt_env_get(const char *name) {
@@ -2252,6 +2351,7 @@ const char *rt_str_from_char(long long code) {
  * protected by a mutex and condition variable.
  */
 
+#ifndef _WIN32
 typedef struct channel_node {
     long long value;
     struct channel_node *next;
@@ -2399,6 +2499,54 @@ void rt_mutex_drop(const void *mptr) {
         free(m);
     }
 }
+#else /* _WIN32: channels + mutex are NON-CORE (POSIX pthreads) — stub. */
+void *rt_channel_create(void) {
+    TURBO_WIN_AOT_UNSUPPORTED("channels");
+    return NULL;
+}
+void rt_channel_send(const void *ch, long long value) {
+    (void)ch; (void)value;
+    TURBO_WIN_AOT_UNSUPPORTED("channels");
+}
+long long rt_channel_recv(const void *ch) {
+    (void)ch;
+    TURBO_WIN_AOT_UNSUPPORTED("channels");
+    return 0;
+}
+void *rt_channel_clone_sender(const void *ch) {
+    (void)ch;
+    TURBO_WIN_AOT_UNSUPPORTED("channels");
+    return NULL;
+}
+void *rt_mutex_create(long long value) {
+    (void)value;
+    TURBO_WIN_AOT_UNSUPPORTED("mutex");
+    return NULL;
+}
+long long rt_mutex_get(const void *mptr) {
+    (void)mptr;
+    TURBO_WIN_AOT_UNSUPPORTED("mutex");
+    return 0;
+}
+void rt_mutex_set(const void *mptr, long long value) {
+    (void)mptr; (void)value;
+    TURBO_WIN_AOT_UNSUPPORTED("mutex");
+}
+long long rt_mutex_update(const void *mptr, const void *fn, const void *env_ptr) {
+    (void)mptr; (void)fn; (void)env_ptr;
+    TURBO_WIN_AOT_UNSUPPORTED("mutex");
+    return 0;
+}
+void *rt_mutex_clone(const void *mptr) {
+    (void)mptr;
+    TURBO_WIN_AOT_UNSUPPORTED("mutex");
+    return NULL;
+}
+void rt_mutex_drop(const void *mptr) {
+    (void)mptr;
+    TURBO_WIN_AOT_UNSUPPORTED("mutex");
+}
+#endif /* _WIN32 */
 
 /* ── HashMap runtime ─────────────────────────────────────────────────── */
 
@@ -3072,6 +3220,13 @@ void *rt_hashmap_gkeys(const void *map_ptr) {
 }
 
 /* ── HTTP server runtime ─────────────────────────────────────────────── */
+
+/* The whole HTTP server — BSD sockets (socket/bind/listen/accept), POSIX
+ * signals (sigaction/SIGTERM for graceful shutdown), and pthread worker
+ * threads — is NON-CORE and compiled out on Windows. The exported builtins
+ * (http_server/http_route/http_listen/respond/...) are replaced by fail-loud
+ * stubs in the `#else` branch below so linking still succeeds. */
+#ifndef _WIN32
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -3943,6 +4098,48 @@ static int rt_parse_response(
     *body_out = colon + 1;
     return 1;
 }
+#else /* _WIN32: HTTP server is NON-CORE (sockets/signals/pthreads) — stub. */
+int rt_write_all(int fd, const char *buf, size_t len) {
+    (void)fd; (void)buf; (void)len;
+    TURBO_WIN_AOT_UNSUPPORTED("the HTTP server");
+    return -1;
+}
+long long rt_http_config(const char *key, long long value) {
+    (void)key; (void)value;
+    TURBO_WIN_AOT_UNSUPPORTED("the HTTP server");
+    return 0;
+}
+long long rt_http_server(long long port) {
+    (void)port;
+    TURBO_WIN_AOT_UNSUPPORTED("the HTTP server");
+    return 0;
+}
+long long rt_http_server_public(long long port) {
+    (void)port;
+    TURBO_WIN_AOT_UNSUPPORTED("the HTTP server");
+    return 0;
+}
+void rt_http_route(long long server_id, const char *method, const char *path,
+                   const void *handler, const void *env_ptr) {
+    (void)server_id; (void)method; (void)path; (void)handler; (void)env_ptr;
+    TURBO_WIN_AOT_UNSUPPORTED("the HTTP server");
+}
+void rt_http_listen(long long server_id) {
+    (void)server_id;
+    TURBO_WIN_AOT_UNSUPPORTED("the HTTP server");
+}
+const char* rt_respond_typed(long long status, const char *content_type,
+                             const char *body) {
+    (void)status; (void)content_type; (void)body;
+    TURBO_WIN_AOT_UNSUPPORTED("the HTTP server (respond)");
+    return NULL;
+}
+const char* rt_respond(long long status, const char *body) {
+    (void)status; (void)body;
+    TURBO_WIN_AOT_UNSUPPORTED("the HTTP server (respond)");
+    return NULL;
+}
+#endif /* _WIN32 */
 
 /* ── Request field extraction (structured request: METHOD\x01PATH\x01QUERY\x01HEADERS\x01BODY) */
 
@@ -4192,6 +4389,7 @@ long long rt_delete_file(const char *path) {
     return remove(path) == 0 ? 1 : 0;
 }
 
+#ifndef _WIN32
 void *rt_list_dir(const char *path) {
     if (!path) path = ".";
     DIR *dir = opendir(path);
@@ -4232,6 +4430,59 @@ void *rt_list_dir(const char *path) {
     free(names);
     return arr;
 }
+#else /* _WIN32: enumerate with FindFirstFile instead of opendir/readdir. */
+void *rt_list_dir(const char *path) {
+    if (!path) path = ".";
+    /* FindFirstFile needs a "<dir>\*" search pattern. */
+    size_t plen = strlen(path);
+    char *pattern = (char *)malloc(plen + 3);
+    if (!pattern) { fprintf(stderr, "runtime error: list_dir alloc failed\n"); exit(1); }
+    memcpy(pattern, path, plen);
+    size_t pi = plen;
+    if (pi > 0 && pattern[pi - 1] != '\\' && pattern[pi - 1] != '/') pattern[pi++] = '\\';
+    pattern[pi++] = '*';
+    pattern[pi] = '\0';
+
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    free(pattern);
+    if (h == INVALID_HANDLE_VALUE) {
+        /* Return empty array (matches the POSIX opendir-failure behaviour). */
+        if (!rt_array_len_fits(0)) { fprintf(stderr, "runtime error: array alloc overflow\n"); exit(1); }
+        size_t data_size = 8;
+        long long *arr = (long long *)rt_rc_alloc(data_size, 0);
+        arr[0] = 0;
+        return arr;
+    }
+    long long count = 0;
+    long long capacity = 64;
+    char **names = (char **)malloc((size_t)capacity * sizeof(char *));
+    if (!names) { FindClose(h); fprintf(stderr, "runtime error: list_dir alloc failed\n"); exit(1); }
+    do {
+        const char *name = fd.cFileName;
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+            continue;
+        if (count >= capacity) {
+            capacity *= 2;
+            char **tmp = (char **)realloc(names, (size_t)capacity * sizeof(char *));
+            if (!tmp) { free(names); FindClose(h); fprintf(stderr, "runtime error: list_dir realloc failed\n"); exit(1); }
+            names = tmp;
+        }
+        names[count++] = turbo_strdup(name);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    /* Build Turbo array */
+    if (!rt_array_len_fits(count)) { fprintf(stderr, "runtime error: array alloc overflow\n"); exit(1); }
+    size_t data_size = 8 + (size_t)count * 8;
+    long long *arr = (long long *)rt_rc_alloc(data_size, count);
+    arr[0] = count;
+    for (long long i = 0; i < count; i++) {
+        arr[1 + i] = (long long)(intptr_t)names[i];
+    }
+    free(names);
+    return arr;
+}
+#endif /* _WIN32 */
 
 long long rt_mkdir(const char *path) {
     if (!path) return 0;
@@ -4386,6 +4637,26 @@ void *rt_slice(const void *arr, long long start, long long end) {
 
 /* ── Date/Time builtins ───────────────────────────────────────────── */
 
+#ifdef _WIN32
+/* Windows has no gettimeofday/struct timeval. GetSystemTimeAsFileTime yields
+ * 100-nanosecond ticks since 1601-01-01 UTC; 116444736000000000 ticks elapsed
+ * between that epoch and the Unix epoch (1970-01-01). */
+static unsigned long long turbo_win_unix_ticks_100ns(void) {
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    unsigned long long t =
+        ((unsigned long long)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+    return t - 116444736000000000ULL;
+}
+
+double rt_time_now(void) {
+    return (double)turbo_win_unix_ticks_100ns() / 10000000.0;
+}
+
+long long rt_time_ms(void) {
+    return (long long)(turbo_win_unix_ticks_100ns() / 10000ULL);
+}
+#else
 double rt_time_now(void) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -4397,6 +4668,7 @@ long long rt_time_ms(void) {
     gettimeofday(&tv, NULL);
     return (long long)tv.tv_sec * 1000LL + (long long)tv.tv_usec / 1000LL;
 }
+#endif
 
 const char *rt_format_time(double timestamp, const char *fmt) {
     if (!fmt) fmt = "%Y-%m-%d %H:%M:%S";

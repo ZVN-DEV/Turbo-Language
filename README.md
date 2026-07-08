@@ -129,7 +129,10 @@ Honest caveats that still hold:
   thousands of concurrent connections on one process.
 - The HTTP server provides **no TLS or HTTP/2** — run it behind a reverse proxy
   (nginx, Caddy) for public exposure.
-- The **WASM** target is partial, and **Windows** support is experimental.
+- The **WASM** target is partial, and **Windows** support is experimental: JIT
+  (`turbolang run`) and native AOT (`turbolang build`) work for the core
+  language and stdlib, but the concurrency and HTTP builtins are not yet ported
+  to Windows AOT. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 ## Features
 

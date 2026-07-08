@@ -55,31 +55,17 @@ fn create_exclusive_temp_dir(prefix: &str, preserve: bool) -> Result<TempBuildDi
     })
 }
 
-/// Windows: native AOT (`turbolang build`) links the POSIX C runtime
-/// (`turbo_rt.c` — pthreads, `fork`, BSD sockets), which does not compile under
-/// the MSVC toolchain. Fail fast with an actionable message instead of a
-/// confusing downstream `cc`/linker error. JIT (`turbolang run`) is fully
-/// supported on Windows.
-#[cfg(windows)]
-pub fn aot_compile(
-    _ast_module: &turbo_ast::Module,
-    _output_path: &Path,
-    _optimize: bool,
-    _target: Option<&str>,
-    _link_libs: &[String],
-) -> Result<(), CodegenError> {
-    Err(CodegenError {
-        code: ErrorCode::E0404,
-        message: "AOT native compilation (`turbolang build`) is not yet \
-                  supported on Windows: the bundled C runtime requires POSIX \
-                  APIs (pthreads, fork, sockets) that the MSVC toolchain does \
-                  not provide. Use `turbolang run` to execute programs via the \
-                  JIT, which is fully supported on Windows."
-            .to_string(),
-    })
-}
-
-#[cfg(not(windows))]
+/// Compile a Turbo module to a native executable via Cranelift + a C driver.
+///
+/// Cross-platform: emits a COFF/Mach-O/ELF object with Cranelift, writes the C
+/// runtime (`turbo_rt.c`) to a temp dir, and links them with the platform C
+/// driver (`cc` on Unix, `clang` on Windows — see `default_native_cc`).
+///
+/// Windows (Tier B): `turbo_rt.c` compiles under clang/windows-msvc via the
+/// `#ifdef _WIN32` shims; the NON-CORE builtins (spawn/channels/mutex + the
+/// HTTP client/server) are compiled as fail-loud runtime-error stubs, so a
+/// core-language `.exe` runs while an unsupported builtin aborts with an
+/// actionable message rather than failing to link.
 pub fn aot_compile(
     ast_module: &turbo_ast::Module,
     output_path: &Path,
@@ -89,7 +75,11 @@ pub fn aot_compile(
 ) -> Result<(), CodegenError> {
     let mut flag_builder = settings::builder();
     flag_builder.set("use_colocated_libcalls", "false").unwrap();
-    flag_builder.set("is_pic", "true").unwrap(); // Required for AOT linking on macOS
+    // PIC is required for AOT linking on macOS/Linux. On Windows, executables
+    // are relocated via the PE base-relocation table (not PIC), and forcing PIC
+    // makes Cranelift emit relocations the MSVC linker cannot resolve.
+    let is_pic = if cfg!(windows) { "false" } else { "true" };
+    flag_builder.set("is_pic", is_pic).unwrap();
     if optimize {
         flag_builder.set("opt_level", "speed").unwrap();
         let verifier = if cfg!(debug_assertions) {
@@ -174,6 +164,30 @@ pub fn aot_compile(
 
     let (cc_cmd, cc_args) = resolve_cross_compiler(target)?;
 
+    // Windows AOT needs a C compiler/linker driver (clang by default) to build
+    // the runtime and link the .exe. Probe it up front so a missing toolchain
+    // yields a clear requirement instead of a confusing spawn failure later.
+    if cfg!(windows) {
+        let ok = std::process::Command::new(&cc_cmd)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            return Err(CodegenError {
+                code: ErrorCode::E0404,
+                message: format!(
+                    "Windows AOT (`turbolang build`) needs a C compiler/linker \
+                     driver ('{cc_cmd}') on PATH to build the runtime and link \
+                     the executable. Install LLVM/clang (it ships with the GitHub \
+                     windows runners and Visual Studio's C++ workload) or set the \
+                     CC environment variable to a working compiler. `turbolang \
+                     run` (JIT) needs no C toolchain and is fully supported."
+                ),
+            });
+        }
+    }
+
     // SQLite: only link the vendored engine when the program actually uses a
     // `sqlite_*` builtin, so plain programs stay small. `turbo_rt.c` pulls in
     // `turbo_rt_sqlite.c` under `-DTURBO_WITH_SQLITE`; that shim `#include`s
@@ -255,7 +269,12 @@ pub fn aot_compile(
     if let Some(ref obj) = sqlite_obj_path {
         cmd.arg(obj);
     }
-    cmd.arg("-lm").arg("-o").arg(output_path);
+    // libm is folded into the UCRT on Windows (and SQLite/kernel deps are linked
+    // automatically); only Unix needs an explicit -lm.
+    if !cfg!(windows) {
+        cmd.arg("-lm");
+    }
+    cmd.arg("-o").arg(output_path);
 
     // Linux targets need explicit -lpthread; SQLite also wants -ldl there.
     if target.is_some_and(|t| t.contains("linux")) {
@@ -305,10 +324,24 @@ pub fn aot_compile(
 
 // ── Cross-compilation helpers ──────────────────────────────────────
 
+/// The default C driver for a native build: `cc` on Unix, `clang` on Windows
+/// (`cc` does not exist under MSVC; clang ships on the GitHub windows runners
+/// and links via the MSVC toolchain). An explicit `$CC` overrides on Windows.
+fn default_native_cc() -> String {
+    if cfg!(windows) {
+        std::env::var("CC")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "clang".to_string())
+    } else {
+        "cc".to_string()
+    }
+}
+
 /// Determine the C compiler + flags for a given target.
 fn resolve_cross_compiler(target: Option<&str>) -> Result<(String, Vec<String>), CodegenError> {
     let target = match target {
-        None => return Ok(("cc".to_string(), vec![])),
+        None => return Ok((default_native_cc(), vec![])),
         Some(t) => t,
     };
 
@@ -323,7 +356,7 @@ fn resolve_cross_compiler(target: Option<&str>) -> Result<(String, Vec<String>),
             "x86_64-linux-gnu-gcc",
             "TURBO_CC_LINUX_X86",
         ),
-        _ => return Ok(("cc".to_string(), vec![])), // native or macOS cross — try system cc
+        _ => return Ok((default_native_cc(), vec![])), // native or macOS cross — try system cc
     };
 
     // 1. Check env var override
