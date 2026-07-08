@@ -1,0 +1,54 @@
+// Expression-context match over enum, Optional, Result, and literal scrutinees.
+// run_wasm_tests.sh checks wasm == native == this expected output when the
+// optional WASM toolchain is installed.
+
+type Shape { Circle(i64), Rect(i64, i64), Dot }
+
+fn value(s: Shape) -> i64 {
+    match s {
+        Circle(r) => r
+        Rect(w, h) => w + h
+        Dot => 0
+    }
+}
+
+fn lookup(n: i64) -> i64? {
+    if n > 0 { some(n * 10) } else { none }
+}
+
+fn divide(a: i64, b: i64) -> i64 ! str {
+    if b == 0 { err("divide by zero") } else { ok(a / b) }
+}
+
+fn label(a: i64, b: i64) -> str {
+    match divide(a, b) {
+        ok(v) => "ok {v}"
+        err(e) => e
+    }
+}
+
+fn pick_float(n: i64) -> f64 {
+    match n {
+        1 => { 1.5 }
+        _ => if n > 0 { 2.5 } else { 3.5 }
+    }
+}
+
+fn main() {
+    print(value(Shape.Circle(5)))
+    print(match lookup(3) {
+        some(v) => v
+        none => -1
+    })
+    print(label(10, 2))
+    print(match "x" {
+        "x" => "str"
+        _ => "other"
+    })
+    print(match false {
+        true => 1
+        false => 0
+    })
+    print(pick_float(1))
+    print(pick_float(0))
+}
