@@ -1,0 +1,17 @@
+fn name_len(name: str) -> i64 {
+    len(name)
+}
+
+fn churn(n: i64) -> i64 {
+    let mut i = 0
+    let mut total = 0
+    while i < n {
+        total = total + name_len("x" + to_str(i))
+        i = i + 1
+    }
+    total
+}
+
+fn main() {
+    print(churn(1000000))
+}

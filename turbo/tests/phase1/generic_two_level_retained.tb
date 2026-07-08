@@ -1,0 +1,13 @@
+fn inner<T>(x: T) -> T {
+    x
+}
+
+fn outer<T>(x: T) -> T {
+    inner(x)
+}
+
+fn main() {
+    let r = outer("two" + to_str(2))
+    print(r)
+    print(r)
+}

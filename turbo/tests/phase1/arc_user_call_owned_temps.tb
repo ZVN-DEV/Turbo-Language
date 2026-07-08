@@ -1,0 +1,62 @@
+fn greet_len(name: str) -> i64 {
+    len(name)
+}
+
+fn id_tail(s: str) -> str {
+    s
+}
+
+fn id_return(s: str) -> str {
+    return s
+}
+
+fn result_len(r: i64 ! str) -> i64 {
+    match r {
+        ok(v) => v
+        err(e) => len(e)
+    }
+}
+
+fn mut_len(mut name: str) -> i64 {
+    name = name + "!"
+    len(name)
+}
+
+async fn spawned_len(name: str) -> i64 {
+    len(name)
+}
+
+struct Sink {
+    tag: i64,
+}
+
+impl Sink {
+    fn take(self, name: str) -> i64 {
+        len(name) + self.tag
+    }
+
+    fn take_mut(self, mut name: str) -> i64 {
+        name = name + "!"
+        len(name) + self.tag
+    }
+}
+
+fn main() {
+    print(greet_len("hi" + to_str(1)))
+    print(id_tail("id" + to_str(2)))
+    print(id_return("ret" + to_str(3)))
+
+    let f = id_tail
+    print(f("fn" + to_str(4)))
+    let mf = mut_len
+    print(mf("mf" + to_str(9)))
+
+    print(result_len(err("bad" + to_str(5))))
+
+    let h = spawn spawned_len("sp" + to_str(6))
+    print(await h)
+
+    let sink = Sink { tag: 0 }
+    print(sink.take("m" + to_str(7)))
+    print(sink.take_mut("mu" + to_str(8)))
+}

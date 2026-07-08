@@ -1,0 +1,13 @@
+fn pick(r: i64 ! str) -> str {
+    let mut found = ""
+    found = match r {
+        ok(v) => "n"
+        err(e) => e
+    }
+    let _other = 5
+    found
+}
+
+fn main() {
+    print("match=[" + pick(err("m" + "")) + "]")
+}

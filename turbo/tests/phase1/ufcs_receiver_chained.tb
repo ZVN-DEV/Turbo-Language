@@ -1,0 +1,18 @@
+struct Sink {
+    tag: i64,
+}
+
+impl Sink {
+    fn bump(self) -> Sink {
+        Sink { tag: self.tag + 1 }
+    }
+
+    fn take(self, name: str) -> i64 {
+        len(name) + self.tag
+    }
+}
+
+fn main() {
+    let s = Sink { tag: 5 }
+    print(s.bump().bump().take("a"))
+}

@@ -1,0 +1,22 @@
+struct Boxed {
+    n: i64,
+}
+
+impl Boxed {
+    fn get(self) -> i64 {
+        self.n
+    }
+}
+
+fn main() {
+    let a = Boxed { n: 1 }
+    let b = Boxed { n: 2 }
+    print((if true { a } else { b }).get())
+
+    let c = Boxed { n: 3 }
+    let d = Boxed { n: 4 }
+    print((match 0 {
+        0 => c
+        _ => d
+    }).get())
+}

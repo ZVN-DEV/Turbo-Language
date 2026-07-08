@@ -2856,8 +2856,8 @@ pub(crate) extern "C" fn rt_spawn_with_args(
     }
 
     // Hand the buffer to the thread as a raw pointer, reclaiming it after the
-    // thunk consumes it. (The copied string args are ARC-managed by the callee
-    // and are intentionally not freed here.)
+    // thunk consumes it. Copied string args are released by generated thunk
+    // cleanup after the callee returns.
     let data_ptr = buf.as_mut_ptr();
     let cap = buf.capacity();
     let len = buf.len();

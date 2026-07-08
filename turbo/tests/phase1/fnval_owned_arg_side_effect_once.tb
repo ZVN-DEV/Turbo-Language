@@ -1,0 +1,16 @@
+fn name_len(name: str) -> i64 {
+    len(name)
+}
+
+fn make_name(i: i64) -> str {
+    print("side")
+    "x" + to_str(i)
+}
+
+fn main() {
+    let f = name_len
+    print(f(make_name(1)))
+
+    let c = |name: str| -> i64 { len(name) }
+    print(c(make_name(2)))
+}

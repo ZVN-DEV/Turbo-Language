@@ -5,6 +5,7 @@
 //! function calls, RC heap helpers, and JSON decode support.
 
 use super::*;
+use std::collections::HashMap;
 
 // ── Expression compilation ──────────────────────────────────────────
 
@@ -63,6 +64,9 @@ fn compile_expr_inner<M: Module>(
             if let Some((var, _cl_ty, turbo_ty)) = cx.vars.get(name) {
                 let turbo_ty = turbo_ty.clone();
                 let val = cx.builder.use_var(*var);
+                if let Some(origin) = cx.generic_var_origins.get(name).cloned() {
+                    mark_generic_value_origin(cx, val, origin);
+                }
                 return Ok(Some((val, turbo_ty)));
             }
             // A bare function name used as a value becomes a first-class
@@ -222,6 +226,7 @@ fn compile_expr_inner<M: Module>(
 
         Expr::Block { stmts, tail_expr } => {
             let saved_vars = cx.vars.clone();
+            let saved_generic_var_origins = cx.generic_var_origins.clone();
 
             // Collect defer expressions while compiling statements. Stop once a
             // statement diverges (`exit`/`panic`/`return`) — everything after it
@@ -279,6 +284,7 @@ fn compile_expr_inner<M: Module>(
             // Actual SSA values in Cranelift variables are unaffected —
             // only the name-to-Variable mapping is restored.
             cx.vars = saved_vars;
+            cx.generic_var_origins = saved_generic_var_origins;
 
             result
         }
@@ -327,10 +333,7 @@ fn compile_expr_inner<M: Module>(
                     }
                 }
             }
-            let rhs_ident = match &value.node {
-                Expr::Ident(name) => Some(name.as_str()),
-                _ => None,
-            };
+            let rhs_borrows_existing = expr_result_borrows_existing_rc(value);
             let (val, tty) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
@@ -346,7 +349,7 @@ fn compile_expr_inner<M: Module>(
                 // Assignment to refcounted values must handle aliasing as:
                 //
                 //   if old != new {
-                //       retain(new); // when new is borrowed from another variable
+                //       retain(new); // when new is borrowed from existing storage
                 //       release(old);
                 //   }
                 //
@@ -364,7 +367,7 @@ fn compile_expr_inner<M: Module>(
 
                 cx.builder.switch_to_block(changed_block);
                 cx.builder.seal_block(changed_block);
-                if rhs_ident.is_some() {
+                if rhs_borrows_existing {
                     retain_if_needed(cx, val, &tty);
                 }
                 release_if_needed(cx, prev_val, &prev_tty);
@@ -373,7 +376,7 @@ fn compile_expr_inner<M: Module>(
                 cx.builder.switch_to_block(done_block);
                 cx.builder.seal_block(done_block);
             } else {
-                if rhs_ident.is_some() {
+                if rhs_borrows_existing {
                     retain_if_needed(cx, val, &tty);
                 }
                 if is_rc_managed_type(cx, &prev_tty) {
@@ -382,6 +385,11 @@ fn compile_expr_inner<M: Module>(
                 }
             }
             cx.builder.def_var(var, val);
+            if let Some(origin) = generic_origin_for_value(cx, val) {
+                cx.generic_var_origins.insert(target.clone(), origin);
+            } else {
+                cx.generic_var_origins.remove(target);
+            }
             // Update the turbo type in case it changed
             if let Some(entry) = cx.vars.get_mut(target) {
                 entry.2 = tty;
@@ -515,10 +523,7 @@ fn compile_expr_inner<M: Module>(
             };
 
             if is_rc_managed_type(cx, &field_tty) {
-                if matches!(
-                    &value.node,
-                    Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-                ) {
+                if expr_result_borrows_existing_rc(value) {
                     retain_if_needed(cx, val, &field_tty);
                 }
                 let old_val = cx
@@ -537,10 +542,14 @@ fn compile_expr_inner<M: Module>(
             index,
             value,
         } => {
-            let (arr, _arr_tty) = compile_expr(cx, object)?.ok_or_else(|| CodegenError {
+            let (arr, arr_tty) = compile_expr(cx, object)?.ok_or_else(|| CodegenError {
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
+            let elem_tty = match &arr_tty {
+                TurboTy::Array(inner) => *inner.clone(),
+                _ => TurboTy::Int,
+            };
             let (idx, _) = compile_expr(cx, index)?.ok_or_else(|| CodegenError {
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
@@ -573,13 +582,26 @@ fn compile_expr_inner<M: Module>(
             };
 
             let trusted = MemFlags::trusted();
+            let elem_is_rc = is_rc_managed_type(cx, &elem_tty);
+            let value_borrows_existing = expr_result_borrows_existing_rc(value);
+            if elem_is_rc && value_borrows_existing {
+                retain_if_needed(cx, val, &elem_tty);
+            }
 
             if cx.is_unsafe {
                 // @unsafe: skip COW check and bounds check — direct store
                 let data_base = cx.builder.ins().iadd_imm(arr, 8);
                 let byte_offset = cx.builder.ins().ishl_imm(idx, 3);
                 let elem_ptr = cx.builder.ins().iadd(data_base, byte_offset);
+                let old_val = if elem_is_rc {
+                    Some(cx.builder.ins().load(cx.ptr_type, trusted, elem_ptr, 0i32))
+                } else {
+                    None
+                };
                 cx.builder.ins().store(trusted, val, elem_ptr, 0i32);
+                if let Some(old_val) = old_val {
+                    release_if_needed(cx, old_val, &elem_tty);
+                }
             } else {
                 // COW check: if refcount > 1, call rt_array_set (slow/copy path)
                 let rc = cx
@@ -604,6 +626,7 @@ fn compile_expr_inner<M: Module>(
                 let set_ref = cx.module.declare_func_in_func(set_fid, cx.builder.func);
                 let call = cx.builder.ins().call(set_ref, &[arr, idx, val]);
                 let slow_result = cx.builder.inst_results(call)[0];
+                retain_array_elements_except_index_if_needed(cx, slow_result, &elem_tty, idx);
                 cx.builder.ins().jump(merge_block, &[slow_result]);
 
                 // Fast path: inline bounds check + store
@@ -631,7 +654,15 @@ fn compile_expr_inner<M: Module>(
                 let data_base = cx.builder.ins().iadd_imm(arr, 8);
                 let byte_offset = cx.builder.ins().ishl_imm(idx, 3);
                 let elem_ptr = cx.builder.ins().iadd(data_base, byte_offset);
+                let old_val = if elem_is_rc {
+                    Some(cx.builder.ins().load(cx.ptr_type, trusted, elem_ptr, 0i32))
+                } else {
+                    None
+                };
                 cx.builder.ins().store(trusted, val, elem_ptr, 0i32);
+                if let Some(old_val) = old_val {
+                    release_if_needed(cx, old_val, &elem_tty);
+                }
                 cx.builder.ins().jump(merge_block, &[arr]);
 
                 cx.builder.switch_to_block(merge_block);
@@ -715,11 +746,15 @@ fn compile_expr_inner<M: Module>(
                         // arena-backed string args before they cross the thread
                         // boundary (arena-escape fix, issue #56).
                         let mut arg_vals = Vec::new();
+                        let mut owned_string_arg_temps = Vec::new();
                         let mut ptr_mask: i64 = 0;
                         for arg in args {
                             if let Some((val, tty)) = compile_expr(cx, arg)? {
                                 if matches!(tty, TurboTy::Str) && arg_vals.len() < 64 {
                                     ptr_mask |= 1i64 << arg_vals.len();
+                                }
+                                if matches!(tty, TurboTy::Str) && expr_produces_owned_rc_temp(arg) {
+                                    owned_string_arg_temps.push((val, tty.clone()));
                                 }
                                 let val = match tty {
                                     TurboTy::Bool => cx.builder.ins().sextend(types::I64, val),
@@ -775,6 +810,13 @@ fn compile_expr_inner<M: Module>(
                             &[thunk_fn_ptr, args_ptr, ptr_mask_val, num_args_val],
                         );
                         let handle = cx.builder.inst_results(call)[0];
+                        for (value, tty) in owned_string_arg_temps {
+                            release_if_needed(cx, value, &tty);
+                        }
+                        let release_fid = cx.rt_fns["rt_release"];
+                        let release_ref =
+                            cx.module.declare_func_in_func(release_fid, cx.builder.func);
+                        cx.builder.ins().call(release_ref, &[args_ptr]);
 
                         return Ok(Some((handle, TurboTy::Future(Box::new(inner_ret_tty)))));
                     }
@@ -880,12 +922,7 @@ fn compile_expr_inner<M: Module>(
                 if i == 0 {
                     elem_tty = tty;
                 }
-                if is_rc_managed_type(cx, &elem_tty)
-                    && matches!(
-                        &elem.node,
-                        Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-                    )
-                {
+                if is_rc_managed_type(cx, &elem_tty) && expr_result_borrows_existing_rc(elem) {
                     retain_if_needed(cx, val, &elem_tty);
                 }
                 let offset = cx.builder.ins().iconst(cx.ptr_type, (8 + i * 8) as i64);
@@ -1014,10 +1051,7 @@ fn compile_expr_inner<M: Module>(
                     code: ErrorCode::E0400,
                     message: "expected a value, but sub-expression has unit type".to_string(),
                 })?;
-                if matches!(
-                    &field_value.node,
-                    Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-                ) {
+                if expr_result_borrows_existing_rc(field_value) {
                     retain_if_needed(cx, val, &tty);
                 }
                 concrete_fields.push((field_name.clone(), tty));
@@ -1309,10 +1343,7 @@ fn compile_expr_inner<M: Module>(
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
-            if matches!(
-                &value.node,
-                Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-            ) {
+            if expr_result_borrows_existing_rc(value) {
                 retain_if_needed(cx, val, &tty);
             }
             // Widen to i64 if needed (bools, etc.)
@@ -1339,10 +1370,7 @@ fn compile_expr_inner<M: Module>(
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
-            if matches!(
-                &value.node,
-                Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-            ) {
+            if expr_result_borrows_existing_rc(value) {
                 retain_if_needed(cx, val, &tty);
             }
             // Widen to i64 if needed
@@ -1369,10 +1397,7 @@ fn compile_expr_inner<M: Module>(
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
-            if matches!(
-                &value.node,
-                Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-            ) {
+            if expr_result_borrows_existing_rc(value) {
                 retain_if_needed(cx, val, &tty);
             }
             // Widen to i64 if needed (bools, etc.)
@@ -1554,6 +1579,69 @@ pub(crate) fn retain_array_prefix_if_needed<M: Module>(
     cx.builder.seal_block(done_block);
 }
 
+fn retain_array_elements_except_index_if_needed<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    array: Value,
+    elem_ty: &TurboTy,
+    skip_idx: Value,
+) {
+    if !is_rc_managed_type(cx, elem_ty) {
+        return;
+    }
+    let len = cx.builder.ins().load(types::I64, MemFlags::new(), array, 0);
+    let idx_var = cx.fresh_var(types::I64, TurboTy::Int);
+    let zero = cx.builder.ins().iconst(types::I64, 0);
+    cx.builder.def_var(idx_var, zero);
+
+    let header_block = cx.builder.create_block();
+    let body_block = cx.builder.create_block();
+    let retain_block = cx.builder.create_block();
+    let inc_block = cx.builder.create_block();
+    let done_block = cx.builder.create_block();
+
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.switch_to_block(header_block);
+    let idx = cx.builder.use_var(idx_var);
+    let keep_going = cx.builder.ins().icmp(IntCC::SignedLessThan, idx, len);
+    cx.builder
+        .ins()
+        .brif(keep_going, body_block, &[], done_block, &[]);
+
+    cx.builder.switch_to_block(body_block);
+    cx.builder.seal_block(body_block);
+    let idx = cx.builder.use_var(idx_var);
+    let is_skip = cx.builder.ins().icmp(IntCC::Equal, idx, skip_idx);
+    cx.builder
+        .ins()
+        .brif(is_skip, inc_block, &[], retain_block, &[]);
+
+    cx.builder.switch_to_block(retain_block);
+    cx.builder.seal_block(retain_block);
+    let idx = cx.builder.use_var(idx_var);
+    let data_base = cx.builder.ins().iadd_imm(array, 8);
+    let byte_offset = cx.builder.ins().ishl_imm(idx, 3);
+    let elem_ptr = cx.builder.ins().iadd(data_base, byte_offset);
+    let elem_val = cx
+        .builder
+        .ins()
+        .load(cx.ptr_type, MemFlags::new(), elem_ptr, 0);
+    retain_if_needed(cx, elem_val, elem_ty);
+    cx.builder.ins().jump(inc_block, &[]);
+
+    cx.builder.switch_to_block(inc_block);
+    cx.builder.seal_block(inc_block);
+    let idx = cx.builder.use_var(idx_var);
+    let one = cx.builder.ins().iconst(types::I64, 1);
+    let next_idx = cx.builder.ins().iadd(idx, one);
+    cx.builder.def_var(idx_var, next_idx);
+    cx.builder.ins().jump(header_block, &[]);
+
+    cx.builder.seal_block(header_block);
+    cx.builder.switch_to_block(done_block);
+    cx.builder.seal_block(done_block);
+}
+
 pub(crate) fn retain_array_elements_if_needed<M: Module>(
     cx: &mut Ctx<'_, M>,
     array: Value,
@@ -1564,6 +1652,43 @@ pub(crate) fn retain_array_elements_if_needed<M: Module>(
     }
     let len = cx.builder.ins().load(types::I64, MemFlags::new(), array, 0);
     retain_array_prefix_if_needed(cx, array, elem_ty, len);
+}
+
+fn pattern_binds_name(pattern: &Pattern, name: &str) -> bool {
+    match pattern {
+        Pattern::Ident(binding)
+        | Pattern::Ok(binding)
+        | Pattern::Err(binding)
+        | Pattern::Some(binding) => binding == name,
+        Pattern::VariantDestructure { bindings, .. } => bindings.iter().any(|b| b == name),
+        _ => false,
+    }
+}
+
+fn match_arm_yields_subject_binding(arm: &MatchArm) -> bool {
+    matches!(&arm.body.node, Expr::Ident(name) if pattern_binds_name(&arm.pattern.node, name))
+}
+
+fn match_arm_yields_owned_or_static_rc(arm: &MatchArm) -> bool {
+    expr_produces_owned_rc_temp(&arm.body)
+        || matches!(arm.body.node, Expr::StringLit(_))
+        || match_arm_yields_subject_binding(arm)
+}
+
+pub(crate) fn expr_result_borrows_existing_rc(expr: &Spanned<Expr>) -> bool {
+    match &expr.node {
+        Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. } => true,
+        Expr::Match { subject, arms } => {
+            !expr_produces_owned_rc_temp(subject)
+                && !arms.is_empty()
+                && arms.iter().any(match_arm_yields_subject_binding)
+                && arms.iter().all(|arm| {
+                    match_arm_yields_subject_binding(arm)
+                        || matches!(arm.body.node, Expr::StringLit(_))
+                })
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn expr_produces_owned_rc_temp(expr: &Spanned<Expr>) -> bool {
@@ -1590,11 +1715,13 @@ pub(crate) fn expr_produces_owned_rc_temp(expr: &Spanned<Expr>) -> bool {
             else_branch: Some(else_branch),
             ..
         } => expr_produces_owned_rc_temp(then_branch) && expr_produces_owned_rc_temp(else_branch),
-        Expr::Match { arms, .. } => {
+        Expr::Match { subject, arms } => {
             !arms.is_empty()
-                && arms
+                && (arms
                     .iter()
                     .all(|arm| expr_produces_owned_rc_temp(&arm.body))
+                    || (expr_produces_owned_rc_temp(subject)
+                        && arms.iter().all(match_arm_yields_owned_or_static_rc)))
         }
         _ => false,
     }
@@ -2097,6 +2224,147 @@ fn compile_short_circuit<M: Module>(
 
 // ── Function calls ──────────────────────────────────────────────────
 
+struct OwnedCallArgTemp {
+    value: Value,
+    tty: TurboTy,
+}
+
+type CompiledCallArgs = (Vec<Value>, Vec<TurboTy>, Vec<OwnedCallArgTemp>);
+
+fn remember_owned_call_arg_temp<M: Module>(
+    cx: &Ctx<'_, M>,
+    owned_arg_temps: &mut Vec<OwnedCallArgTemp>,
+    value: Value,
+    tty: &TurboTy,
+    arg: &Spanned<Expr>,
+) {
+    if is_rc_managed_type(cx, tty) && expr_produces_owned_rc_temp(arg) {
+        owned_arg_temps.push(OwnedCallArgTemp {
+            value,
+            tty: tty.clone(),
+        });
+    }
+}
+
+fn retain_borrowed_call_arg_if_needed<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    value: Value,
+    tty: &TurboTy,
+    arg: &Spanned<Expr>,
+) {
+    if matches!(
+        &arg.node,
+        Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
+    ) && is_rc_managed_type(cx, tty)
+    {
+        retain_if_needed(cx, value, tty);
+    }
+}
+
+fn retain_owned_mut_call_arg_if_needed<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    value: Value,
+    tty: &TurboTy,
+    arg: &Spanned<Expr>,
+    is_mut_param: bool,
+) {
+    if is_mut_param && is_rc_managed_type(cx, tty) && expr_produces_owned_rc_temp(arg) {
+        retain_if_needed(cx, value, tty);
+    }
+}
+
+fn release_owned_call_arg_temps<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    owned_arg_temps: &[OwnedCallArgTemp],
+) {
+    for temp in owned_arg_temps {
+        release_if_needed(cx, temp.value, &temp.tty);
+    }
+}
+
+pub(crate) fn release_mutable_param_vars<M: Module>(cx: &mut Ctx<'_, M>) {
+    let params = cx.mutable_param_vars.clone();
+    for (var, tty) in params {
+        let value = cx.builder.use_var(var);
+        release_if_needed(cx, value, &tty);
+    }
+}
+
+pub(crate) fn mark_generic_value_origin<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    value: Value,
+    type_param: String,
+) {
+    cx.generic_value_origins.insert(value, type_param);
+    cx.generic_value_retain_flags.remove(&value);
+}
+
+pub(crate) fn mark_generic_value_origin_with_retain_flag<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    value: Value,
+    type_param: String,
+    retain_flag: Value,
+) {
+    cx.generic_value_origins.insert(value, type_param);
+    cx.generic_value_retain_flags.insert(value, retain_flag);
+}
+
+pub(crate) fn generic_origin_for_value<M: Module>(cx: &Ctx<'_, M>, value: Value) -> Option<String> {
+    cx.generic_value_origins.get(&value).cloned()
+}
+
+pub(crate) fn generic_return_retain_flag_for_value<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    value: Value,
+) -> Value {
+    if let Some(flag) = cx.generic_value_retain_flags.get(&value).copied() {
+        flag
+    } else if generic_origin_for_value(cx, value).is_some() {
+        cx.builder.ins().iconst(types::I8, 1)
+    } else {
+        cx.builder.ins().iconst(types::I8, 0)
+    }
+}
+
+pub(crate) fn retain_generic_return_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value) {
+    let Some(return_type_param) = cx.return_type_param.clone() else {
+        return;
+    };
+    if generic_origin_for_value(cx, value).as_deref() != Some(return_type_param.as_str()) {
+        return;
+    }
+    let Some(is_rc_flag) = cx.generic_rc_flags.get(return_type_param.as_str()).copied() else {
+        return;
+    };
+
+    let is_rc = cx.builder.ins().icmp_imm(IntCC::NotEqual, is_rc_flag, 0);
+    let retain_condition =
+        if let Some(needs_retain_flag) = cx.generic_value_retain_flags.get(&value).copied() {
+            let needs_retain = cx
+                .builder
+                .ins()
+                .icmp_imm(IntCC::NotEqual, needs_retain_flag, 0);
+            cx.builder.ins().band(is_rc, needs_retain)
+        } else {
+            is_rc
+        };
+    let retain_block = cx.builder.create_block();
+    let done_block = cx.builder.create_block();
+    cx.builder
+        .ins()
+        .brif(retain_condition, retain_block, &[], done_block, &[]);
+
+    cx.builder.switch_to_block(retain_block);
+    cx.builder.seal_block(retain_block);
+    let retain_fid = cx.rt_fns["rt_retain"];
+    let retain_ref = cx.module.declare_func_in_func(retain_fid, cx.builder.func);
+    cx.builder.ins().call(retain_ref, &[value]);
+    cx.builder.ins().jump(done_block, &[]);
+
+    cx.builder.switch_to_block(done_block);
+    cx.builder.seal_block(done_block);
+}
+
 fn compile_call<M: Module>(
     cx: &mut Ctx<'_, M>,
     callee: &Spanned<Expr>,
@@ -2115,23 +2383,49 @@ fn compile_call<M: Module>(
         if let TurboTy::Struct(ref type_name) = obj_tty {
             let mangled = format!("{}__{}", type_name, field);
             if let Some(&fid) = cx.user_fns.get(&mangled) {
+                let param_mutable: Vec<bool> = cx
+                    .fn_asts
+                    .get(mangled.as_str())
+                    .map(|f_def| f_def.params.iter().map(|param| param.mutable).collect())
+                    .unwrap_or_else(|| vec![false; args.len() + 1]);
+                let mut owned_arg_temps = Vec::new();
+                retain_borrowed_call_arg_if_needed(cx, obj_val, &obj_tty, object);
+                retain_owned_mut_call_arg_if_needed(
+                    cx,
+                    obj_val,
+                    &obj_tty,
+                    object,
+                    param_mutable.first().copied().unwrap_or(false),
+                );
+                remember_owned_call_arg_temp(cx, &mut owned_arg_temps, obj_val, &obj_tty, object);
                 let mut arg_vals = vec![obj_val];
-                for arg in args {
-                    if let Some((v, _)) = compile_expr(cx, arg)? {
+                for (arg_index, arg) in args.iter().enumerate() {
+                    if let Some((v, tty)) = compile_expr(cx, arg)? {
+                        retain_borrowed_call_arg_if_needed(cx, v, &tty, arg);
+                        retain_owned_mut_call_arg_if_needed(
+                            cx,
+                            v,
+                            &tty,
+                            arg,
+                            param_mutable.get(arg_index + 1).copied().unwrap_or(false),
+                        );
+                        remember_owned_call_arg_temp(cx, &mut owned_arg_temps, v, &tty, arg);
                         arg_vals.push(v);
                     }
                 }
                 let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
                 let call = cx.builder.ins().call(fref, &arg_vals);
-                let results = cx.builder.inst_results(call);
+                let results = cx.builder.inst_results(call).to_vec();
                 let ret_tty = cx
                     .fn_ret_types
                     .get(&mangled)
                     .cloned()
                     .unwrap_or(TurboTy::Unit);
                 if results.is_empty() {
+                    release_owned_call_arg_temps(cx, &owned_arg_temps);
                     return Ok(None);
                 } else {
+                    release_owned_call_arg_temps(cx, &owned_arg_temps);
                     return Ok(Some((results[0], ret_tty)));
                 }
             }
@@ -2434,11 +2728,223 @@ fn compile_enum_variant_ctor<M: Module>(
     Ok(None)
 }
 
+fn static_expr_turbo_ty<M: Module>(cx: &Ctx<'_, M>, expr: &Spanned<Expr>) -> Option<TurboTy> {
+    match &expr.node {
+        Expr::Ident(name) => cx.vars.get(name).map(|(_, _, tty)| tty.clone()),
+        Expr::StructLit { name, .. } => Some(TurboTy::Struct(name.clone())),
+        Expr::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let then_ty = static_expr_turbo_ty(cx, then_branch)?;
+            let else_ty = else_branch
+                .as_ref()
+                .and_then(|branch| static_expr_turbo_ty(cx, branch))?;
+            (then_ty == else_ty).then_some(then_ty)
+        }
+        Expr::IfLet {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let then_ty = static_expr_turbo_ty(cx, then_branch)?;
+            let else_ty = else_branch
+                .as_ref()
+                .and_then(|branch| static_expr_turbo_ty(cx, branch))?;
+            (then_ty == else_ty).then_some(then_ty)
+        }
+        Expr::Match { arms, .. } => {
+            let mut arm_tys = arms.iter().map(|arm| static_expr_turbo_ty(cx, &arm.body));
+            let first_ty = arm_tys.next()??;
+            arm_tys
+                .all(|arm_ty| arm_ty.as_ref() == Some(&first_ty))
+                .then_some(first_ty)
+        }
+        Expr::Call { callee, args } => match &callee.node {
+            Expr::Ident(name) => {
+                if let Some((_, _, TurboTy::Fn(_, ret_ty))) = cx.vars.get(name) {
+                    return Some((**ret_ty).clone());
+                }
+                if let Some(ret_tty) = cx.fn_ret_types.get(name).cloned() {
+                    let type_params = cx.fn_type_params.get(name).cloned().unwrap_or_default();
+                    if type_params.is_empty() {
+                        return Some(ret_tty);
+                    }
+                    let arg_ttys = args
+                        .iter()
+                        .map(|arg| static_expr_turbo_ty(cx, arg))
+                        .collect::<Option<Vec<_>>>();
+                    return Some(arg_ttys.map_or(ret_tty.clone(), |arg_ttys| {
+                        infer_generic_ret_tty(cx, name, &type_params, ret_tty, &arg_ttys)
+                    }));
+                }
+                if !args.is_empty() {
+                    let type_name = static_struct_receiver_type(cx, &args[0])?;
+                    let mangled = format!("{}__{}", type_name, name);
+                    return cx.fn_ret_types.get(&mangled).cloned();
+                }
+                None
+            }
+            Expr::FieldAccess { object, field } => {
+                let TurboTy::Struct(type_name) = static_expr_turbo_ty(cx, object)? else {
+                    return None;
+                };
+                let mangled = format!("{}__{}", type_name, field);
+                cx.fn_ret_types.get(&mangled).cloned()
+            }
+            _ => None,
+        },
+        Expr::FieldAccess { object, field } => {
+            let TurboTy::Struct(type_name) = static_expr_turbo_ty(cx, object)? else {
+                return None;
+            };
+            cx.struct_fields
+                .get(&type_name)
+                .and_then(|layout| layout.iter().find(|(name, _)| name == field))
+                .map(|(_, tty)| tty.clone())
+        }
+        Expr::Index { object, .. } => match static_expr_turbo_ty(cx, object)? {
+            TurboTy::Array(inner) => Some(*inner),
+            _ => None,
+        },
+        Expr::Block {
+            tail_expr: Some(tail),
+            ..
+        } => static_expr_turbo_ty(cx, tail),
+        _ => None,
+    }
+}
+
+fn has_possible_ufcs_target<M: Module>(cx: &Ctx<'_, M>, name: &str) -> bool {
+    cx.user_fns.keys().any(|candidate| {
+        candidate
+            .rsplit_once("__")
+            .is_some_and(|(_, method)| method == name)
+    }) || cx.struct_fields.values().any(|layout| {
+        layout
+            .iter()
+            .any(|(field, tty)| field == name && matches!(tty, TurboTy::Fn(_, _)))
+    })
+}
+
+fn has_ufcs_target_for_type<M: Module>(cx: &Ctx<'_, M>, type_name: &str, name: &str) -> bool {
+    let mangled = format!("{}__{}", type_name, name);
+    cx.user_fns.contains_key(&mangled)
+        || cx
+            .struct_fields
+            .get(type_name)
+            .and_then(|layout| layout.iter().find(|(field, _)| field == name))
+            .is_some_and(|(_, tty)| matches!(tty, TurboTy::Fn(_, _)))
+}
+
+fn static_struct_receiver_type<M: Module>(cx: &Ctx<'_, M>, expr: &Spanned<Expr>) -> Option<String> {
+    match static_expr_turbo_ty(cx, expr)? {
+        TurboTy::Struct(name) => Some(name),
+        _ => None,
+    }
+}
+
+fn compile_ufcs_with_receiver<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    type_name: &str,
+    name: &str,
+    first_val: Value,
+    first_tty: &TurboTy,
+    receiver_arg: &Spanned<Expr>,
+    args: &[Spanned<Expr>],
+) -> Result<Option<MaybeTyped>, CodegenError> {
+    let mangled = format!("{}__{}", type_name, name);
+    if let Some(&fid) = cx.user_fns.get(&mangled) {
+        let param_mutable: Vec<bool> = cx
+            .fn_asts
+            .get(mangled.as_str())
+            .map(|f_def| f_def.params.iter().map(|param| param.mutable).collect())
+            .unwrap_or_else(|| vec![false; args.len()]);
+        let mut owned_arg_temps = Vec::new();
+        retain_borrowed_call_arg_if_needed(cx, first_val, first_tty, receiver_arg);
+        retain_owned_mut_call_arg_if_needed(
+            cx,
+            first_val,
+            first_tty,
+            receiver_arg,
+            param_mutable.first().copied().unwrap_or(false),
+        );
+        remember_owned_call_arg_temp(cx, &mut owned_arg_temps, first_val, first_tty, receiver_arg);
+        let mut arg_vals = vec![first_val];
+        for (arg_index, arg) in args[1..].iter().enumerate() {
+            if let Some((v, tty)) = compile_expr(cx, arg)? {
+                retain_borrowed_call_arg_if_needed(cx, v, &tty, arg);
+                remember_owned_call_arg_temp(cx, &mut owned_arg_temps, v, &tty, arg);
+                retain_owned_mut_call_arg_if_needed(
+                    cx,
+                    v,
+                    &tty,
+                    arg,
+                    param_mutable.get(arg_index + 1).copied().unwrap_or(false),
+                );
+                arg_vals.push(v);
+            }
+        }
+        let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+        let call = cx.builder.ins().call(fref, &arg_vals);
+        let results = cx.builder.inst_results(call).to_vec();
+        let ret_tty = cx
+            .fn_ret_types
+            .get(&mangled)
+            .cloned()
+            .unwrap_or(TurboTy::Unit);
+        release_owned_call_arg_temps(cx, &owned_arg_temps);
+        return if results.is_empty() {
+            Ok(Some(None))
+        } else {
+            Ok(Some(Some((results[0], ret_tty))))
+        };
+    }
+
+    // No method `name`: the receiver may hold a function value in a field named
+    // `name`, i.e. `obj.f(x)` where `f: fn(...) -> ...`. Methods take
+    // precedence (checked above); sema applies the same rule.
+    if let Some((field_ptr, TurboTy::Fn(param_tys, ret_ty))) =
+        load_struct_field(cx, first_val, type_name, name)?
+    {
+        let result =
+            compile_indirect_call_from_value(cx, field_ptr, &param_tys, &ret_ty, &args[1..])?;
+        release_expr_temp_if_needed(cx, first_val, first_tty, receiver_arg);
+        return Ok(Some(result));
+    }
+
+    Ok(None)
+}
+
+fn static_expr_is_unit<M: Module>(cx: &Ctx<'_, M>, expr: &Spanned<Expr>) -> bool {
+    match &expr.node {
+        Expr::Unit => true,
+        Expr::Call { callee, .. } => match &callee.node {
+            Expr::Ident(name) => {
+                cx.fn_ret_types
+                    .get(name)
+                    .is_some_and(|tty| *tty == TurboTy::Unit)
+                    || matches!(
+                        name.as_str(),
+                        "print" | "assert" | "assert_eq" | "assert_ne"
+                    )
+            }
+            _ => false,
+        },
+        Expr::Block {
+            tail_expr: Some(tail),
+            ..
+        } => static_expr_is_unit(cx, tail),
+        _ => false,
+    }
+}
+
 /// Method calls lowered through UFCS (the parser rewrites `obj.method(args)` to
-/// `method(obj, args)`). When `name` is not a free function, the first argument
-/// is compiled to recover its struct type and the mangled `Type__method`
-/// function is dispatched. Returns `Ok(Some(..))` when handled, `Ok(None)` to
-/// fall through.
+/// `method(obj, args)`). When `name` is not a free function, the first argument's
+/// static type selects the mangled `Type__method` target before the receiver is
+/// compiled, so falling through to fn-value calls cannot abandon owned temps.
+/// Returns `Ok(Some(..))` when handled, `Ok(None)` to fall through.
 fn compile_ufcs_method_call<M: Module>(
     cx: &mut Ctx<'_, M>,
     name: &str,
@@ -2446,53 +2952,50 @@ fn compile_ufcs_method_call<M: Module>(
 ) -> Result<Option<MaybeTyped>, CodegenError> {
     // Check if this is a method call (UFCS: parser rewrites obj.method(args) -> method(obj, args))
     if cx.user_fns.get(name).is_none() && !args.is_empty() {
-        // Compile first arg to get its type, then check for method
+        if matches!(cx.vars.get(name), Some((_, _, TurboTy::Fn(_, _)))) {
+            return Ok(None);
+        }
+        let Some(type_name) = static_struct_receiver_type(cx, &args[0]) else {
+            if static_expr_is_unit(cx, &args[0]) {
+                return Err(CodegenError {
+                    code: ErrorCode::E0400,
+                    message: "compile_call: `&args[0]` produced no value during code generation"
+                        .to_string(),
+                });
+            }
+            if !has_possible_ufcs_target(cx, name) {
+                return Ok(None);
+            }
+            let (first_val, first_tty) =
+                compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
+                    message: "compile_call: `&args[0]` produced no value during code generation"
+                        .to_string(),
+                })?;
+            if let TurboTy::Struct(type_name) = first_tty.clone() {
+                if let Some(result) = compile_ufcs_with_receiver(
+                    cx, &type_name, name, first_val, &first_tty, &args[0], args,
+                )? {
+                    return Ok(Some(result));
+                }
+            }
+            release_expr_temp_if_needed(cx, first_val, &first_tty, &args[0]);
+            return Ok(None);
+        };
+        if !has_ufcs_target_for_type(cx, &type_name, name) {
+            return Ok(None);
+        }
         let (first_val, first_tty) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
             code: ErrorCode::E0400,
             message: "compile_call: `&args[0]` produced no value during code generation"
                 .to_string(),
         })?;
-        if let TurboTy::Struct(ref type_name) = first_tty {
-            let type_name = type_name.clone();
-            let mangled = format!("{}__{}", type_name, name);
-            if let Some(&fid) = cx.user_fns.get(&mangled) {
-                let mut arg_vals = vec![first_val];
-                for arg in &args[1..] {
-                    if let Some((v, _)) = compile_expr(cx, arg)? {
-                        arg_vals.push(v);
-                    }
-                }
-                let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
-                let call = cx.builder.ins().call(fref, &arg_vals);
-                let results = cx.builder.inst_results(call);
-                let ret_tty = cx
-                    .fn_ret_types
-                    .get(&mangled)
-                    .cloned()
-                    .unwrap_or(TurboTy::Unit);
-                if results.is_empty() {
-                    return Ok(Some(None));
-                } else {
-                    return Ok(Some(Some((results[0], ret_tty))));
-                }
-            }
-            // No method `name`: the receiver may hold a function value in a
-            // field named `name`, i.e. `obj.f(x)` where `f: fn(...) -> ...`.
-            // Methods take precedence (checked above); sema applies the same
-            // rule. Invoke the field value with the remaining args.
-            if let Some((field_ptr, TurboTy::Fn(param_tys, ret_ty))) =
-                load_struct_field(cx, first_val, &type_name, name)?
-            {
-                let result = compile_indirect_call_from_value(
-                    cx,
-                    field_ptr,
-                    &param_tys,
-                    &ret_ty,
-                    &args[1..],
-                )?;
-                return Ok(Some(result));
-            }
+        if let Some(result) =
+            compile_ufcs_with_receiver(cx, &type_name, name, first_val, &first_tty, &args[0], args)?
+        {
+            return Ok(Some(result));
         }
+        release_expr_temp_if_needed(cx, first_val, &first_tty, &args[0]);
     }
     Ok(None)
 }
@@ -2562,8 +3065,9 @@ pub(crate) fn compile_indirect_call_from_value<M: Module>(
     let sig_ref = cx.builder.import_signature(sig);
 
     let mut arg_values = vec![env_ptr]; // env_ptr is first hidden arg
+    let mut owned_arg_temps = Vec::new();
     for (i, arg) in args.iter().enumerate() {
-        if let Some((val, _)) = compile_expr(cx, arg)? {
+        if let Some((val, tty)) = compile_expr(cx, arg)? {
             // If the value's param slot is a uniform i64 but the value is a
             // float (inferred-param closure called with a float), move the
             // bits through the integer register so both sides agree on the
@@ -2582,6 +3086,7 @@ pub(crate) fn compile_indirect_call_from_value<M: Module>(
             } else {
                 val
             };
+            remember_owned_call_arg_temp(cx, &mut owned_arg_temps, val, &tty, arg);
             arg_values.push(val);
         }
     }
@@ -2589,6 +3094,7 @@ pub(crate) fn compile_indirect_call_from_value<M: Module>(
     let call = cx.builder.ins().call_indirect(sig_ref, fn_ptr, &arg_values);
     let results = cx.builder.inst_results(call).to_vec();
     if results.is_empty() {
+        release_owned_call_arg_temps(cx, &owned_arg_temps);
         Ok(None)
     } else {
         let mut result = results[0];
@@ -2603,6 +3109,7 @@ pub(crate) fn compile_indirect_call_from_value<M: Module>(
                     .bitcast(types::F64, MemFlags::new(), result);
             }
         }
+        release_owned_call_arg_temps(cx, &owned_arg_temps);
         Ok(Some((result, ret_tty)))
     }
 }
@@ -2684,15 +3191,17 @@ fn load_struct_field<M: Module>(
 /// Compile each call argument, reconciling its Cranelift value type against the
 /// callee's declared parameter slot (int width adjustment, and float<->int
 /// register-class bitcasts for generic uniform i64 slots), and inserting COW
-/// retains for aliased struct/array idents. Returns the compiled argument
-/// values alongside their `TurboTy`s.
+/// retains for aliased struct/array idents. Also records owned RC temporaries
+/// that the caller must release once the callee has returned.
 fn compile_fn_call_args<M: Module>(
     cx: &mut Ctx<'_, M>,
     args: &[Spanned<Expr>],
     param_types: &[types::Type],
-) -> Result<(Vec<Value>, Vec<TurboTy>), CodegenError> {
+    param_mutable: &[bool],
+) -> Result<CompiledCallArgs, CodegenError> {
     let mut arg_values = Vec::new();
     let mut arg_ttys = Vec::new();
+    let mut owned_arg_temps = Vec::new();
     for (i, arg) in args.iter().enumerate() {
         if let Some((val, tty)) = compile_expr(cx, arg)? {
             let val = if i < param_types.len() {
@@ -2731,18 +3240,20 @@ fn compile_fn_call_args<M: Module>(
             // `a[i] = ..` via rt_array_set for arrays, BL-27 Part A).
             // Fresh temporaries (non-idents) are not aliased, so they
             // are left alone to avoid needless copies.
-            if matches!(
-                &arg.node,
-                Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-            ) && is_rc_managed_type(cx, &tty)
-            {
-                retain_if_needed(cx, val, &tty);
-            }
+            retain_borrowed_call_arg_if_needed(cx, val, &tty, arg);
+            retain_owned_mut_call_arg_if_needed(
+                cx,
+                val,
+                &tty,
+                arg,
+                param_mutable.get(i).copied().unwrap_or(false),
+            );
+            remember_owned_call_arg_temp(cx, &mut owned_arg_temps, val, &tty, arg);
             arg_values.push(val);
             arg_ttys.push(tty);
         }
     }
-    Ok((arg_values, arg_ttys))
+    Ok((arg_values, arg_ttys, owned_arg_temps))
 }
 
 /// Reconcile the static return `TurboTy` of a generic function with the
@@ -2805,6 +3316,127 @@ fn infer_generic_ret_tty<M: Module>(
     }
 }
 
+fn infer_type_param_bindings(
+    declared: &TypeExpr,
+    actual: &TurboTy,
+    type_params: &[String],
+    bindings: &mut HashMap<String, TurboTy>,
+) {
+    match (declared, actual) {
+        (TypeExpr::Named(name), actual) if type_params.contains(name) => {
+            bindings
+                .entry(name.clone())
+                .or_insert_with(|| actual.clone());
+        }
+        (TypeExpr::Array(inner), TurboTy::Array(actual_inner))
+        | (TypeExpr::Optional(inner), TurboTy::Optional(actual_inner))
+        | (TypeExpr::Future(inner), TurboTy::Future(actual_inner)) => {
+            infer_type_param_bindings(&inner.node, actual_inner, type_params, bindings);
+        }
+        (TypeExpr::Result { ok_type, err_type }, TurboTy::Result(actual_ok, actual_err)) => {
+            infer_type_param_bindings(&ok_type.node, actual_ok, type_params, bindings);
+            infer_type_param_bindings(&err_type.node, actual_err, type_params, bindings);
+        }
+        (TypeExpr::FnType { params, ret }, TurboTy::Fn(actual_params, actual_ret)) => {
+            for (param, actual_param) in params.iter().zip(actual_params.iter()) {
+                infer_type_param_bindings(&param.node, actual_param, type_params, bindings);
+            }
+            infer_type_param_bindings(&ret.node, actual_ret, type_params, bindings);
+        }
+        (TypeExpr::HashMap(key, value), TurboTy::HashMap(actual_key, actual_value)) => {
+            infer_type_param_bindings(&key.node, actual_key, type_params, bindings);
+            infer_type_param_bindings(&value.node, actual_value, type_params, bindings);
+        }
+        _ => {}
+    }
+}
+
+fn infer_generic_type_bindings(
+    f_def: &FnDef,
+    type_params: &[String],
+    arg_ttys: &[TurboTy],
+) -> HashMap<String, TurboTy> {
+    let mut bindings = HashMap::new();
+    for (param, actual) in f_def.params.iter().zip(arg_ttys.iter()) {
+        infer_type_param_bindings(&param.ty.node, actual, type_params, &mut bindings);
+    }
+    bindings
+}
+
+fn type_expr_mentions_type_param(declared: &TypeExpr, type_param: &str) -> bool {
+    match declared {
+        TypeExpr::Named(name) => name == type_param,
+        TypeExpr::Array(inner) | TypeExpr::Optional(inner) | TypeExpr::Future(inner) => {
+            type_expr_mentions_type_param(&inner.node, type_param)
+        }
+        TypeExpr::Result { ok_type, err_type } => {
+            type_expr_mentions_type_param(&ok_type.node, type_param)
+                || type_expr_mentions_type_param(&err_type.node, type_param)
+        }
+        TypeExpr::FnType { params, ret } => {
+            params
+                .iter()
+                .any(|param| type_expr_mentions_type_param(&param.node, type_param))
+                || type_expr_mentions_type_param(&ret.node, type_param)
+        }
+        TypeExpr::HashMap(key, value) => {
+            type_expr_mentions_type_param(&key.node, type_param)
+                || type_expr_mentions_type_param(&value.node, type_param)
+        }
+        _ => false,
+    }
+}
+
+fn infer_generic_dynamic_rc_flags<M: Module>(
+    cx: &Ctx<'_, M>,
+    f_def: &FnDef,
+    type_params: &[String],
+    arg_values: &[Value],
+) -> HashMap<String, Value> {
+    let mut flags = HashMap::new();
+    for type_param in type_params {
+        for (param, actual_value) in f_def.params.iter().zip(arg_values.iter()) {
+            if !type_expr_mentions_type_param(&param.ty.node, type_param) {
+                continue;
+            }
+            let Some(origin) = generic_origin_for_value(cx, *actual_value) else {
+                continue;
+            };
+            let Some(flag) = cx.generic_rc_flags.get(origin.as_str()).copied() else {
+                continue;
+            };
+            flags.insert(type_param.clone(), flag);
+            break;
+        }
+    }
+    flags
+}
+
+fn infer_generic_return_origin<M: Module>(
+    cx: &Ctx<'_, M>,
+    f_def: &FnDef,
+    type_params: &[String],
+    arg_values: &[Value],
+) -> Option<String> {
+    let Some(ret_ty) = &f_def.return_type else {
+        return None;
+    };
+    let TypeExpr::Named(ret_name) = &ret_ty.node else {
+        return None;
+    };
+    if !type_params.contains(ret_name) {
+        return None;
+    }
+    for (param, actual_value) in f_def.params.iter().zip(arg_values.iter()) {
+        if type_expr_mentions_type_param(&param.ty.node, ret_name) {
+            if let Some(origin) = generic_origin_for_value(cx, *actual_value) {
+                return Some(origin);
+            }
+        }
+    }
+    None
+}
+
 /// Attempt to inline the callee body at the call site. Inlining is skipped for
 /// generic functions (type-parameter inference needs the normal call path),
 /// Result-returning functions (heap-allocated tagged unions need real
@@ -2834,6 +3466,9 @@ fn try_inline_fn_call<M: Module>(
     {
         if let Some(callee_def) = cx.fn_asts.get(name).cloned() {
             if !has_return(&callee_def.body.node) && callee_def.params.len() == arg_values.len() {
+                if callee_def.params.iter().any(|param| param.mutable) {
+                    return Ok(None);
+                }
                 // Save and restore outer variable scope so inlined
                 // parameter bindings don't leak out.
                 let saved_vars = cx.vars.clone();
@@ -2893,7 +3528,13 @@ fn compile_plain_fn_call<M: Module>(
         .map(|p| p.value_type)
         .collect();
 
-    let (mut arg_values, arg_ttys) = compile_fn_call_args(cx, args, &param_types)?;
+    let param_mutable: Vec<bool> = cx
+        .fn_asts
+        .get(name)
+        .map(|f_def| f_def.params.iter().map(|param| param.mutable).collect())
+        .unwrap_or_else(|| vec![false; args.len()]);
+    let (mut arg_values, arg_ttys, owned_arg_temps) =
+        compile_fn_call_args(cx, args, &param_types, &param_mutable)?;
 
     // For generic functions, infer the actual return TurboTy from args.
     let actual_ret_tty = infer_generic_ret_tty(cx, name, &type_params, ret_tty, &arg_ttys);
@@ -2901,13 +3542,37 @@ fn compile_plain_fn_call<M: Module>(
     // For generic functions, widen bool args (I8) to I64 since
     // the generic function's parameter is compiled as I64.
     if !type_params.is_empty() {
-        for val in &mut arg_values {
+        let f_def = cx.fn_asts.get(name).copied();
+        let type_bindings = f_def
+            .map(|f_def| infer_generic_type_bindings(f_def, &type_params, &arg_ttys))
+            .unwrap_or_default();
+        let dynamic_rc_flags = f_def
+            .map(|f_def| infer_generic_dynamic_rc_flags(cx, f_def, &type_params, &arg_values))
+            .unwrap_or_default();
+        for (i, val) in arg_values.iter_mut().enumerate() {
             let vty = cx.builder.func.dfg.value_type(*val);
-            if vty.bits() < 64 {
+            if param_types.get(i).copied() == Some(types::I64) && vty.bits() < 64 {
                 *val = cx.builder.ins().sextend(types::I64, *val);
             }
         }
+        for type_param in &type_params {
+            if let Some(flag) = dynamic_rc_flags.get(type_param).copied() {
+                arg_values.push(flag);
+            } else {
+                let is_rc = type_bindings
+                    .get(type_param)
+                    .is_some_and(|actual_ty| is_rc_managed_type(cx, actual_ty));
+                arg_values.push(cx.builder.ins().iconst(types::I8, i64::from(is_rc)));
+            }
+        }
     }
+    let generic_return_origin = if !type_params.is_empty() {
+        cx.fn_asts
+            .get(name)
+            .and_then(|f_def| infer_generic_return_origin(cx, f_def, &type_params, &arg_values))
+    } else {
+        None
+    };
 
     if let Some(result) = try_inline_fn_call(
         cx,
@@ -2917,6 +3582,7 @@ fn compile_plain_fn_call<M: Module>(
         &actual_ret_tty,
         &arg_values,
     )? {
+        release_owned_call_arg_temps(cx, &owned_arg_temps);
         return Ok(result);
     }
 
@@ -2924,6 +3590,7 @@ fn compile_plain_fn_call<M: Module>(
     let call = cx.builder.ins().call(func_ref, &arg_values);
     let results = cx.builder.inst_results(call).to_vec();
     if results.is_empty() {
+        release_owned_call_arg_temps(cx, &owned_arg_temps);
         Ok(None)
     } else {
         let mut result = results[0];
@@ -2946,6 +3613,11 @@ fn compile_plain_fn_call<M: Module>(
             let call = cx.builder.ins().call(fref, &[result]);
             result = cx.builder.inst_results(call)[0];
         }
+        if let Some(origin) = generic_return_origin {
+            let already_owned = cx.builder.ins().iconst(types::I8, 0);
+            mark_generic_value_origin_with_retain_flag(cx, result, origin, already_owned);
+        }
+        release_owned_call_arg_temps(cx, &owned_arg_temps);
         Ok(Some((result, actual_ret_tty)))
     }
 }

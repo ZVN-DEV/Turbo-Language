@@ -1,0 +1,15 @@
+struct Sink {
+    tag: i64,
+}
+
+impl Sink {
+    fn take_mut(self, mut name: str) -> i64 {
+        name = name + "!"
+        len(name) + self.tag
+    }
+}
+
+fn main() {
+    let sink = Sink { tag: 0 }
+    print(take_mut(sink, "uf" + to_str(9)))
+}

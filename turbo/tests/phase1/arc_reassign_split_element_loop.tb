@@ -1,0 +1,15 @@
+fn last_seg(pattern: str) -> str {
+    let parts = split(pattern, "/")
+    let mut found = ""
+    let mut i = 0
+    while i < len(parts) {
+        found = parts[i]
+        i = i + 1
+    }
+    let _other = 5
+    found
+}
+
+fn main() {
+    print("last=[" + last_seg("a/b/c") + "]")
+}

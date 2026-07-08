@@ -1,0 +1,8 @@
+fn first_seg(pattern: str) -> str {
+    let parts = split(pattern, "/")
+    let mut found = ""
+    found = parts[1]
+    let _other = 5
+    found
+}
+fn main() { print("noloop2=[" + first_seg("a/b/c") + "]") }

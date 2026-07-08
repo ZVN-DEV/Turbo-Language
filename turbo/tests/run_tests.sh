@@ -84,7 +84,8 @@ run_test() {
         return
     fi
 
-    if [ "$test_name" = "http_server" ] && loopback_bind_denied; then
+    if { [ "$test_name" = "http_server" ] || [ "$test_name" = "http_config_knobs" ]; } \
+        && loopback_bind_denied; then
         printf "  SKIP  %s (loopback bind denied by sandbox)\n" "$test_name"
         SKIP=$((SKIP + 1))
         return

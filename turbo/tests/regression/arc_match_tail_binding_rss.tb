@@ -1,0 +1,21 @@
+fn pick(r: i64 ! str) -> str {
+    match r {
+        ok(v) => "n"
+        err(e) => e
+    }
+}
+
+fn churn(n: i64) -> i64 {
+    let mut i = 0
+    let mut total = 0
+    while i < n {
+        let picked = pick(err("x" + to_str(i)))
+        total = total + len(picked)
+        i = i + 1
+    }
+    total
+}
+
+fn main() {
+    print(churn(1000000))
+}

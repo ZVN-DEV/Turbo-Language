@@ -1,0 +1,11 @@
+fn slot_from_other_array() -> str {
+    let parts = split("x/y", "/")
+    let mut arr: [str] = ["seed" + ""]
+    arr[0] = parts[1]
+    let out = arr[0]
+    out
+}
+
+fn main() {
+    print("slot=[" + slot_from_other_array() + "]")
+}

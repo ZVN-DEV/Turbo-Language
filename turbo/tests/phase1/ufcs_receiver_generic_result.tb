@@ -1,0 +1,18 @@
+struct Sink {
+    tag: i64,
+}
+
+impl Sink {
+    fn take(self, name: str) -> i64 {
+        len(name) + self.tag
+    }
+}
+
+fn idg<T>(x: T) -> T {
+    x
+}
+
+fn main() {
+    let s = Sink { tag: 4 }
+    print(idg(s).take("ab"))
+}
