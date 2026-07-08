@@ -3391,6 +3391,16 @@ fn main() {
     fn stmt_match_host_compile_parity() {
         use std::process::Command;
 
+        // The emitted C is a POSIX-oriented `int main` harness. On windows-msvc
+        // the only C compiler present is clang, which links via link.exe and
+        // cannot build this harness without a Developer environment (LNK1181).
+        // The WASM backend is not a Windows target; Linux/macOS CI still runs
+        // the full host-compile parity check.
+        if cfg!(windows) {
+            eprintln!("skipping host parity on Windows: no POSIX C host toolchain");
+            return;
+        }
+
         // Find a host C compiler.
         let cc = ["clang", "cc", "gcc"].into_iter().find(|c| {
             Command::new(c)
@@ -3683,6 +3693,16 @@ fn main() {
     #[test]
     fn expr_match_host_compile_parity() {
         use std::process::Command;
+
+        // See stmt_match_host_compile_parity: host-compile parity shells a
+        // POSIX-oriented C toolchain that clang/link.exe cannot satisfy on
+        // windows-msvc. Skip on Windows; Linux/macOS CI keeps full coverage.
+        if cfg!(windows) {
+            eprintln!(
+                "skipping expression-match host parity on Windows: no POSIX C host toolchain"
+            );
+            return;
+        }
 
         let cc = ["clang", "cc", "gcc"].into_iter().find(|c| {
             Command::new(c)
