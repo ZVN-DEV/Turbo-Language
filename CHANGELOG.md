@@ -3,6 +3,57 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.13.0] - 2026-07-08
+
+A release about reach and reuse: a first-party package set you can install by
+name, Windows as a supported target, wider `match` on the wasm backend, and an
+ARC ownership pass that takes real workloads from hundreds of megabytes down to
+flat. This is also the first tagged release to contain the `packages/` tree, so
+`turbolang install <name>` goes live here.
+
+### Added
+- **Six first-party packages + install-by-name.** A new `packages/` tree ships
+  `turbo-http-router` (a `HashMap<str, fn(str) -> str>` dispatch router with
+  `:param` and `*` wildcard patterns), `turbo-sqlite` (bind-rc-checked
+  `exec_params`, query helpers, and `migrate`), `turbo-dotenv`,
+  `turbo-cli-args`, `turbo-logger`, and `turbo-test-assertions` — 41 tests
+  across the set. The registry index schema gains an optional `subdir` field, so
+  `turbolang install <name>` clones the monorepo at a tag and links just the
+  named subdirectory. Clones share a per-repo-and-revision cache, subdirectory
+  paths are guarded against escaping the checkout, and `TURBO_GIT_BASE_URL`
+  overrides the clone source. Because this is the first tag that carries
+  `packages/`, install-by-name becomes live with this release. (#68)
+- **Windows support (Tier A).** The full `cargo test --workspace` suite and the
+  JIT (`turbolang run`) are green on `windows-msvc`: vendored SQLite builds with
+  clang + `llvm-lib`, a UCRT time/formatting shim backs `_localtime64_s`, and
+  the POSIX signal handler is `cfg`-gated out. The `test-windows` CI job now runs
+  the workspace suite, a release build, and an 11-program phase1 JIT smoke (still
+  advisory). AOT `turbolang build` on Windows intentionally errors with guidance
+  to use the JIT — the C runtime is POSIX-only — and HTTP/`spawn` are unchanged.
+  (#66)
+- **WASM: expression-position `match`.** The wasm backend now compiles `match`
+  in expression position for enum, data-carrying-enum, `Result`, `Optional`,
+  `int`, `str`, and `bool` scrutinees, with guards, nesting, and use as an
+  argument or tail expression — arm results keep their type. Generic `HashMap`
+  and `fn` types now fail loud at every annotation position on the wasm target,
+  with recursive checks through struct fields and containers. (#67)
+
+### Fixed
+- **ARC ownership batch** (closes #54, #55). Owned reference-counted temporaries
+  passed to user functions, methods, function values, and `spawn` are now
+  released by the caller — a 1M-iteration loop drops from 148–285MB RSS to about
+  11MB. The over-retain of a string bound in a block-tail `match` arm is fixed.
+  A use-after-free is fixed when a `mut` variable is reassigned from a borrowed
+  source — an array element, struct field, or match binding (`found = parts[i]`
+  previously read back empty or lost output). Generic returns now balance on the
+  callee side through `if`/`match` tails, nested generic calls, and recursion,
+  and UFCS dispatch is preserved for chained, function-value, and generic
+  receivers. Reviewed across two models over four implementation rounds, with an
+  ASan-instrumented AOT probe corpus and a clean final hostile pass. (#69)
+
+### Known issues
+- Aggregate `HashMap` values release only one level deep on drop (#60).
+
 ## [0.12.0] - 2026-07-07
 
 A feature release that turns Turbo into a language you can build a real service
