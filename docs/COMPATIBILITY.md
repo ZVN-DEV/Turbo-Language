@@ -48,9 +48,9 @@ usable C driver is found, `turbolang build` fails with an actionable message
 naming the requirement (JIT needs no C toolchain).
 
 **Unsupported builtins are fail-loud, not silent.** The concurrency primitives
-(`spawn`, channels, `mutex`) and the HTTP client/server rely on POSIX APIs
-(pthreads, `fork`/`exec`, BSD sockets) that the port does not yet provide on
-Windows. They are **compiled in as stubs** so that any program links, but
+(`spawn`, channels, `mutex`), the HTTP client/server, and process execution
+(`exec`/`shell_exec`) rely on POSIX APIs (pthreads, `fork`/`exec`, BSD sockets)
+that the port does not yet provide on Windows. They are **compiled in as stubs** so that any program links, but
 calling one aborts immediately with, for example:
 
 ```
