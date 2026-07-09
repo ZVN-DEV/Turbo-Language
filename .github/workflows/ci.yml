@@ -99,18 +99,20 @@ jobs:
   test-windows:
     name: test-windows (experimental, advisory)
     runs-on: windows-latest
-    # Tier A Windows support (JIT + unit tests). This leg exercises:
+    # Windows support (Tier A JIT + unit tests; Tier B native AOT). This leg:
     #   1. `cargo test --workspace` — the Rust unit tests, including the
     #      vendored-SQLite build (build.rs compiles sqlite3.c with clang and
     #      archives it with llvm-lib into turbosqlite.lib for link.exe).
-    #   2. A JIT smoke that runs a core subset of the phase1 integration tests
-    #      via `turbolang run` and diffs stdout against the `.expected` files.
+    #   2. A JIT smoke: run a core subset of the phase1 integration tests via
+    #      `turbolang run` and diff stdout against the `.expected` files.
+    #   3. An AOT smoke: `turbolang build` a core subset to native .exe with
+    #      clang + the `#ifdef _WIN32` turbo_rt.c port, run each, and diff.
     #
-    # Still advisory (continue-on-error) while Windows JIT hardens; promotion
-    # to a required gate is the orchestrator's call. Native AOT
-    # (`turbolang build`), the bash-based C-runtime tests.sh, and the HTTP/
-    # socket/spawn integration tests remain out of scope on Windows this cycle
-    # — the POSIX C runtime does not compile under MSVC (see aot.rs).
+    # Still advisory (continue-on-error) while Windows hardens; promotion to a
+    # required gate is the orchestrator's call. NON-CORE builtins (spawn/
+    # channels/mutex + the HTTP client/server) link on Windows AOT as fail-loud
+    # runtime-error stubs, not silent no-ops. The bash-based C-runtime tests.sh
+    # (ASan) and the HTTP/socket/spawn integration tests remain out of scope.
     continue-on-error: true
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -125,7 +127,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             turbo/target
-          key: ${{ runner.os }}-cargo-test-windows-${{ hashFiles('turbo/Cargo.lock') }}
+          # Scope the cache per-branch (github.ref_name) as well as per-lockfile.
+          # A branch-agnostic key let a stale turbo/target built from a different
+          # branch's source poison runs (panics at line numbers not in HEAD);
+          # per-branch isolation prevents that cross-branch bleed.
+          key: ${{ runner.os }}-cargo-test-windows-${{ github.ref_name }}-${{ hashFiles('turbo/Cargo.lock') }}
 
       # The vendored SQLite build (build.rs) shells out to clang + llvm-lib on
       # windows-msvc. Both ship with the LLVM that is preinstalled on the
@@ -159,6 +165,49 @@ jobs:
             exp="turbo/tests/phase1/$t.expected"
             if ! got="$("$bin" run "$src" 2>&1)"; then
               echo "FAIL($t): turbolang run exited non-zero"
+              printf '%s\n' "$got"
+              fail=1
+              continue
+            fi
+            want="$(tr -d '\r' < "$exp")"
+            got="$(printf '%s' "$got" | tr -d '\r')"
+            if [ "$got" = "$want" ]; then
+              echo "ok    $t"
+            else
+              echo "FAIL($t): output mismatch"
+              echo "--- want ---"; printf '%s\n' "$want"
+              echo "--- got  ---"; printf '%s\n' "$got"
+              fail=1
+            fi
+          done
+          exit "$fail"
+
+      # AOT smoke: compile a core, POSIX-free subset of the phase1 programs to a
+      # native .exe with `turbolang build` (clang links the turbo_rt.c #ifdef
+      # _WIN32 port), run each, and diff stdout against the `.expected` fixtures
+      # (CRLF-normalized). This is the Tier B gate — it proves the C runtime
+      # compiles and links under MSVC and that a real .exe produces correct
+      # output for the core language + stdlib.
+      - name: AOT smoke — core phase1 subset
+        shell: bash
+        run: |
+          set -uo pipefail
+          bin="turbo/target/release/turbolang.exe"
+          tests="hello fibonacci arrays string_concat string_ops structs enums match_int hashmap_basic"
+          workdir="$(mktemp -d)"
+          fail=0
+          for t in $tests; do
+            src="turbo/tests/phase1/$t.tb"
+            exp="turbo/tests/phase1/$t.expected"
+            out="$workdir/$t.exe"
+            if ! build_log="$("$bin" build "$src" -o "$out" 2>&1)"; then
+              echo "FAIL($t): turbolang build failed"
+              printf '%s\n' "$build_log"
+              fail=1
+              continue
+            fi
+            if ! got="$("$out" 2>&1)"; then
+              echo "FAIL($t): compiled .exe exited non-zero"
               printf '%s\n' "$got"
               fail=1
               continue
