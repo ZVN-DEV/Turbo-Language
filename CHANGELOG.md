@@ -3,6 +3,50 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.14.0] - 2026-07-08
+
+A release about finishing what the last few started: Windows stops erroring
+toward the JIT and starts producing a runnable `.exe`, the wasm backend learns
+to carry named functions as values, and the last documented ARC scope cut — deep
+release of aggregate `HashMap` values — is closed, so `#60` comes off the
+known-issues list for good.
+
+### Added
+- **Windows native AOT (Tier B).** `turbolang build` now produces a runnable
+  `.exe` on `windows-msvc` for the core language and stdlib: prints, strings and
+  ARC, arrays, structs/enums/`match`, hashmaps, math, JSON, file I/O, and time
+  (SQLite is compiled in but not yet CI-smoked on Windows). clang is the blessed
+  Windows linker driver — a preflight check names it if it is missing, and the
+  JIT still needs no C toolchain. Concurrency (`spawn`/channels/mutex), the HTTP
+  client and server, and `exec`/`shell_exec` are compiled-in fail-loud stubs that
+  raise a clear runtime error directing you to the JIT rather than link-failing.
+  The `test-windows` CI job (still advisory) now also AOT-builds and runs 9 core
+  programs, with a per-branch cache key. New `docs/COMPATIBILITY.md` carries the
+  platform matrix. As a bonus, `aot.rs` now captures full linker stdout and
+  stderr on failure, behind a `TURBO_AOT_VERBOSE` knob. (#71)
+- **WASM: first-class named function values.** The wasm backend now supports
+  `let f = name`, `fn`-typed locals, params, and returns, reassignment, and
+  passing and calling functions through values — implemented with a null-env
+  closure-pair ABI, so `print(f)` renders `[function]` to match native.
+  Containers of functions, nested `fn` types, and closures passed to
+  higher-order functions stay fail-loud. (An adversarial review caught a
+  fail-loud violation in `print` that was fixed pre-merge.) (#72)
+
+### Fixed
+- **Deep release of aggregate `HashMap` values** (closes #60 — the last
+  documented ARC scope cut). Typed-map descriptors now carry per-`V`
+  release/retain thunks interned at the constructor site, so `[str]`, struct,
+  enum, and `Optional` values deep-release on overwrite, remove, and drop; a
+  1M-overwrite loop drops from 148MB RSS to about 11MB, and nested typed maps
+  compose. A two-model review caught a P1 heap corruption in the first design (a
+  partial AST prewalker) and it was replaced structurally with constructor-site
+  interning; the final hostile pass was clean. (#73)
+
+### Known issues
+- On the wasm backend, `str` concatenation in a return position and
+  `push`-result locals still mis-emit — pre-existing gaps tracked for a future
+  wasm chunk.
+
 ## [0.13.0] - 2026-07-08
 
 A release about reach and reuse: a first-party package set you can install by
