@@ -140,6 +140,32 @@ Generate .d.ts files from Turbo's types:
 | Rust | Via C FFI (extern "C") | P2 — community | Guide only |
 | Java/JVM | Via JNI or WASM | P3 — future | Aspirational |
 
+## Refused: npm / PyPI Package Compatibility Layers
+
+**Decision (2026-07-09): Turbo will not ship a compatibility layer that runs
+npm or PyPI packages.** This is a durable refusal, not a deferral. There are
+only two implementation paths, and both destroy the language's identity:
+
+1. **Embed the real runtime** (V8/Node or CPython). Every Turbo binary then
+   carries a GC, an event loop, and a 50–100MB runtime — the "no runtime,
+   instant cold start, flat memory, single binary" pitch is gone.
+2. **Reimplement/transpile the packages.** Infeasible at ecosystem scale:
+   dynamic typing, monkey-patching, runtime reflection, and native extensions
+   (the most valuable PyPI packages are mostly C). Prior art is unambiguous —
+   Grumpy (Python→Go) is dead, GraalVM polyglot cost enormous sustained
+   investment for niche adoption, and npm compat was Deno's most expensive and
+   identity-diluting project despite Deno already being a JS runtime.
+
+There is also a strategic trap: perfect foreign-package compat removes the
+incentive to write Turbo packages. Languages with great FFI but no compat
+layer (Rust, Zig, Go) grew native ecosystems; "run other ecosystems" languages
+never developed their own.
+
+The supported inversion is the Tier 2 embedding story: make Turbo callable
+*from* Node and Python via `libturbo` wrappers ("write your hot path in
+Turbo"), and unlock C/Rust libraries through the C FFI. See
+`REACH-ROADMAP.md` for the sequenced plan.
+
 ## Why Not Full Transpilation
 
 1. **Semantic gaps** — Languages have fundamentally different semantics (ownership vs GC, exceptions vs Result, null vs Option)
