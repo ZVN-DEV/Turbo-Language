@@ -524,6 +524,27 @@ impl Checker {
             }
             return Some(Ty::Str);
         }
+        // http_get_raw(url: str) -> str — raw response incl. status line and
+        // headers (does not follow redirects)
+        if name == "http_get_raw" {
+            if args.len() != 1 {
+                self.error(
+                    ErrorCode::E0513,
+                    format!("http_get_raw() takes exactly 1 argument, got {}", args.len()),
+                    callee.span.clone(),
+                );
+                return Some(Ty::Error);
+            }
+            let url_ty = self.check_expr(&args[0]);
+            if !url_ty.is_error() && url_ty != Ty::Str {
+                self.error(
+                    ErrorCode::E0100,
+                    format!("http_get_raw() expects str, found `{url_ty}`"),
+                    args[0].span.clone(),
+                );
+            }
+            return Some(Ty::Str);
+        }
         // http_post(url: str, body: str) -> str
         if name == "http_post" {
             if args.len() != 2 {

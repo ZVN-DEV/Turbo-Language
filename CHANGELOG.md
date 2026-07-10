@@ -3,6 +3,50 @@
 All notable changes to the Turbo compiler are documented here.
 Format based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+Serverless as a first-class deployment target: a Lambda adapter package,
+tested deploy walkthroughs for three platforms, reproducible cold-start
+benchmarks, and the client-side HTTP builtin the adapter needed.
+
+### Added
+- **`http_get_raw(url)` builtin.** HTTP GET returning the raw response —
+  status line, headers, blank line, body — for callers that need response
+  headers or the status code (protocol clients, pagination cursors,
+  rate-limit headers). Does not follow redirects (each hop would prepend its
+  own header block); same SSRF guard and 30-second time bound as `http_get`.
+  Implemented in both runtimes (Rust JIT + `turbo_rt.c`), stubbed on Windows
+  AOT like the rest of the HTTP client, unit-tested against a local
+  one-shot server.
+- **`turbo-lambda` package.** A pure-Turbo AWS Lambda custom-runtime adapter:
+  your function is one safe `fn(str) -> str` (event JSON in, response JSON
+  out) and `lambda_run(handler)` is the entire runtime-API loop — no
+  `@unsafe` anywhere. `/invocation/next` is read with `http_get_raw` (the
+  request id arrives in a response header); responses post with `http_post`.
+  17 unit tests on the parsing core plus an end-to-end test against a mock
+  runtime API. Seventh first-party package, installable by name.
+- **Deploy examples** under `examples/deploy/`: AWS Lambda (cross-compiled
+  zip + 2-line bootstrap + `test_local.sh` mock-API test), Cloud Run and
+  Fly.io (self-contained multi-stage Dockerfiles that install the released
+  toolchain, AOT-compile the app, and ship a slim image holding only the
+  native binary; `PORT` env + `0.0.0.0` bind + health checks).
+- **Serverless cold-start benchmarks** (`benchmarks/serverless/`):
+  reproducible scripts measuring Lambda-reported Init Duration over N forced
+  cold starts for identical Turbo/Node/Python functions, plus a local
+  process-start proxy. Policy: no benchmark numbers are published that these
+  scripts did not generate.
+- **`docs/serverless.md`** tying the adapter, examples, and benchmark
+  methodology together; linked from the README.
+
+### Notes
+- The Reach roadmap (`design/REACH-ROADMAP.md`) sequences what comes next
+  (HTTP/1.1 completeness, C FFI bindgen, libturbo embedding wrappers,
+  WASM/WASI completion). `design/POLYGLOT.md` now records the npm/PyPI
+  package-compat refusal as a durable decision.
+- Released Linux binaries currently require glibc >= 2.39 (build host is
+  Ubuntu 24.04); the deploy Dockerfiles use `debian:trixie-slim` for this
+  reason.
+
 ## [0.14.0] - 2026-07-08
 
 A release about finishing what the last few started: Windows stops erroring

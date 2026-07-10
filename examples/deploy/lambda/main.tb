@@ -14,7 +14,7 @@ fn handler(event: str) -> str {
     "\{\"greeting\":\"Hello, " + name + "!\"\}"
 }
 
-@unsafe fn main() {
+fn main() {
     // TURBO_LAMBDA_MAX bounds the loop for local mock testing (test_local.sh);
     // unset in production, where the loop runs for the life of the sandbox.
     let max = env_get("TURBO_LAMBDA_MAX")

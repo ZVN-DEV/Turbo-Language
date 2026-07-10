@@ -10,22 +10,20 @@
 // is the whole runtime loop — see the package README for the bootstrap script
 // and deployment walkthrough.
 //
-// --- Transport notes (honest constraints) ----------------------------------
-//  * `/invocation/next` is fetched with `exec("curl -si ...")` because the
-//    built-in `http_get` returns only the response BODY, and the runtime API
+// --- Transport notes ---------------------------------------------------------
+//  * `/invocation/next` is fetched with `http_get_raw`, which returns the
+//    full response — status line, headers, body — because the runtime API
 //    delivers the request id in the `Lambda-Runtime-Aws-Request-Id` response
-//    HEADER. The `curl` binary is present in AWS's `provided.al2023` base
-//    image (AWS's own bash custom-runtime tutorial relies on it the same way).
-//    Because `exec` requires an `@unsafe` context, the transport functions —
-//    and therefore your `main` — are `@unsafe`. The handler itself stays safe.
-//  * Responses are posted with `http_post` (the JSON body must travel as a
-//    single argument; `exec` tokenizes its command string on whitespace, which
-//    would mangle any body containing spaces). `http_post`'s SSRF guard blocks
-//    the runtime API's loopback/link-local address by default, so the
-//    bootstrap script must export TURBO_ALLOW_PRIVATE_HOSTS=1.
-//  * `/invocation/next` long-polls by design: between invocations Lambda
-//    freezes the process while curl is blocked on the socket. No timeout is
-//    passed on that call — a timeout would turn idle waits into errors.
+//    HEADER (the body-only `http_get` can't see it). Responses are posted
+//    with `http_post`. Every function in this package is safe — no `@unsafe`
+//    anywhere in your function.
+//  * The HTTP client's SSRF guard blocks the runtime API's loopback/
+//    link-local address by default, so the bootstrap script must export
+//    TURBO_ALLOW_PRIVATE_HOSTS=1 (scoped to the Lambda sandbox).
+//  * `/invocation/next` long-polls; between invocations Lambda freezes the
+//    process mid-poll. `http_get_raw` carries the client's standard 30-second
+//    time bound — a poll that idles past it (only possible outside real
+//    Lambda, e.g. against a local mock) returns "" and the loop re-polls.
 //
 // --- Parsing notes ----------------------------------------------------------
 // Header names are matched case-insensitively. Offsets mix `index_of` (byte
@@ -41,7 +39,7 @@ fn lambda_api_base() -> str {
     "http://" + env_get("AWS_LAMBDA_RUNTIME_API") + "/2018-06-01/runtime"
 }
 
-// Case-insensitive header lookup in a raw `curl -si` transcript (status line,
+// Case-insensitive header lookup in a raw HTTP response (status line,
 // headers, blank line, body). Returns "" if the header is absent. Scanning
 // stops at the first blank line so JSON body lines containing `:` can never
 // be mistaken for headers.
@@ -68,7 +66,7 @@ fn lambda_header(raw: str, name: str) -> str {
     ""
 }
 
-// Body of a raw `curl -si` transcript: everything after the first blank line.
+// Body of a raw HTTP response: everything after the first blank line.
 fn lambda_body(raw: str) -> str {
     let sep = index_of(raw, "\r\n\r\n")
     if sep >= 0 {
@@ -106,12 +104,13 @@ fn lambda_error_payload(error_type: str, message: str) -> str {
     "\{\"errorMessage\":\"" + lambda_json_escape(message) + "\",\"errorType\":\"" + lambda_json_escape(error_type) + "\"\}"
 }
 
-// ── Transport (@unsafe: shells out to curl for header access) ───────────────
+// ── Transport ─────────────────────────────────────────────────────────────────
 
 // Fetch the next invocation as a raw headers+body transcript. Blocks until
-// Lambda delivers an event (that is the protocol, not a hang).
-@unsafe fn lambda_next_raw(base: str) -> str {
-    exec("curl -s -i -- " + base + "/invocation/next")
+// Lambda delivers an event or the client's 30s time bound elapses (the
+// caller re-polls on empty).
+fn lambda_next_raw(base: str) -> str {
+    http_get_raw(base + "/invocation/next")
 }
 
 // Post a successful handler response for `request_id`.
@@ -129,7 +128,7 @@ fn lambda_post_error(base: str, request_id: str, error_type: str, message: str) 
 // Handle exactly one invocation. Returns true if an event was received,
 // handled, and its response posted; false if `/next` failed or was
 // malformed (caller should pause briefly and retry).
-@unsafe fn lambda_handle_once(base: str, handler: fn(str) -> str) -> bool {
+fn lambda_handle_once(base: str, handler: fn(str) -> str) -> bool {
     let raw = lambda_next_raw(base)
     let parsed = lambda_parse_invocation(raw)
     let request_id = parsed[0]
@@ -143,7 +142,7 @@ fn lambda_post_error(base: str, request_id: str, error_type: str, message: str) 
 
 // Handle at most `n` invocations, returning how many succeeded. Useful for
 // tests and drain-style workers; production functions use `lambda_run`.
-@unsafe fn lambda_run_n(handler: fn(str) -> str, n: i64) -> i64 {
+fn lambda_run_n(handler: fn(str) -> str, n: i64) -> i64 {
     let base = lambda_api_base()
     let mut handled = 0
     let mut i = 0
@@ -160,7 +159,7 @@ fn lambda_post_error(base: str, request_id: str, error_type: str, message: str) 
 
 // The production entry point: poll the runtime API forever, dispatching each
 // event to `handler`. A failed poll backs off briefly instead of hot-spinning.
-@unsafe fn lambda_run(handler: fn(str) -> str) {
+fn lambda_run(handler: fn(str) -> str) {
     let base = lambda_api_base()
     while true {
         if !lambda_handle_once(base, handler) {

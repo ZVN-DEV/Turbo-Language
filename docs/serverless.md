@@ -28,9 +28,9 @@ JSON out) and `lambda_run(handler)` is the entire loop. Install it by name:
 turbolang install turbo-lambda
 ```
 
-See the package README for how it speaks the runtime API and the honest
-constraints (curl for `/next`, `@unsafe` transport boundary,
-`TURBO_ALLOW_PRIVATE_HOSTS=1` in the bootstrap).
+See the package README for how it speaks the runtime API (`http_get_raw` for
+`/invocation/next`, since the request id arrives in a response header) and
+why the bootstrap exports `TURBO_ALLOW_PRIVATE_HOSTS=1`.
 
 ## Why the model fits
 
@@ -64,10 +64,10 @@ script + date if you share results.
 - **`x86_64` only for Lambda today** — Turbo's `linux-arm64` target
   cross-compiles but is not yet runtime-validated (Tier 2), so skip Lambda's
   arm64/Graviton option for now. See [COMPATIBILITY.md](COMPATIBILITY.md).
-- **The adapter shells out to curl** for `/invocation/next` (the built-in
-  HTTP client can't read response headers yet). This is fine on
-  `provided.al2023`, which ships curl; a header-capable `http_get` variant is
-  tracked in the [Reach roadmap](../design/REACH-ROADMAP.md) Phase 1.
+- **The HTTP client executes `curl` under the hood** (all of `http_get`,
+  `http_get_raw`, `http_post`), so the deploy image needs curl present —
+  true of `provided.al2023` and the example Dockerfiles. A native-socket
+  client is [Reach roadmap](../design/REACH-ROADMAP.md) Phase 1 material.
 - **Edge WASM platforms (Cloudflare Workers, Fastly) are not supported yet** —
   they deploy WASM, not native binaries, and Turbo's WASM target is still
   experimental. That's Phase 4 of the Reach roadmap.

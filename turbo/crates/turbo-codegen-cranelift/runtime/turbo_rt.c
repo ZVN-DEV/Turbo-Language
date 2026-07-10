@@ -1806,6 +1806,47 @@ const char *rt_http_get(const char *url) {
     return buf;
 }
 
+/* http_get_raw(url) -> str — HTTP GET returning the RAW response: status
+ * line, headers, blank line, body (`curl -i`), so callers can read response
+ * headers that rt_http_get discards. Does NOT follow redirects: with -i every
+ * hop would prepend its own header block and "first blank line" parsing would
+ * break. Same SSRF guard, protocol pinning, time bound, and flag-injection
+ * guards as rt_http_get. Keep in sync with rt_http_get_raw in runtime.rs. */
+const char *rt_http_get_raw(const char *url) {
+    const char *blocked = rt_http_url_blocked_reason(url);
+    if (blocked) {
+        fprintf(stderr, "[rt_http] blocked URL (%s): %s\n",
+                blocked, url ? url : "(null)");
+        return rt_http_empty_response();
+    }
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        return turbo_strdup("error: cannot create pipe");
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return turbo_strdup("error: cannot fork");
+    }
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        execlp("curl", "curl", "-s", "-i",
+               "--proto", "=http,https",
+               "--max-time", "30",
+               "--", url, (char *)NULL);
+        _exit(1);
+    }
+    close(pipefd[1]);
+    char *buf = read_fd_to_string(pipefd[0]);
+    close(pipefd[0]);
+    int status;
+    waitpid(pid, &status, 0);
+    return buf;
+}
+
 /* http_post(url, body) -> str — HTTP POST via fork+exec (no shell interpolation) */
 const char *rt_http_post(const char *url, const char *body) {
     const char *blocked = rt_http_url_blocked_reason(url);
@@ -2043,6 +2084,12 @@ const char *rt_exec(const char *cmd) {
 const char *rt_http_get(const char *url) {
     (void)url;
     TURBO_WIN_AOT_UNSUPPORTED("http_get");
+    return NULL;
+}
+
+const char *rt_http_get_raw(const char *url) {
+    (void)url;
+    TURBO_WIN_AOT_UNSUPPORTED("http_get_raw");
     return NULL;
 }
 

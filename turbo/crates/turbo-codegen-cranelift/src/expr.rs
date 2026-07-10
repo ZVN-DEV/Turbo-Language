@@ -2601,6 +2601,7 @@ fn compile_call<M: Module>(
         "reduce" => compile_builtin_reduce(cx, args),
         // HTTP + JSON builtins
         "http_get" => compile_builtin_http_get(cx, args),
+        "http_get_raw" => compile_builtin_http_get_raw(cx, args),
         "http_post" => compile_builtin_http_post(cx, args),
         "http_post_with_headers" => compile_builtin_http_post_with_headers(cx, args),
         "json_get" => compile_builtin_json_get(cx, args),

@@ -7,6 +7,6 @@ fn handler(event: str) -> str {
     "\{\"ok\":true\}"
 }
 
-@unsafe fn main() {
+fn main() {
     lambda_run(handler)
 }

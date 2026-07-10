@@ -78,6 +78,6 @@ aws lambda invoke --function-name turbo-hello \
 - **arm64:** Lambda also offers `arm64`, but Turbo's `linux-arm64` target is
   Tier 2 (cross-compiles, not yet runtime-validated) — use `x86_64` until
   that graduates. See [`COMPATIBILITY.md`](../../../COMPATIBILITY.md).
-- **How the adapter works** (curl for `/next`, `http_post` for responses, the
-  `@unsafe` boundary): see the
-  [package README](../../../packages/turbo-lambda/README.md).
+- **How the adapter works** (`http_get_raw` for `/invocation/next` because
+  the request id arrives in a response header, `http_post` for responses):
+  see the [package README](../../../packages/turbo-lambda/README.md).

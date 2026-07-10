@@ -26,6 +26,24 @@ pub(crate) fn compile_builtin_http_get<M: Module>(
     Ok(Some((result, TurboTy::Str)))
 }
 
+/// http_get_raw(url) -> str — raw response: status line + headers + body
+pub(crate) fn compile_builtin_http_get_raw<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    args: &[Spanned<Expr>],
+) -> Result<MaybeTyped, CodegenError> {
+    let (url_val, _) = compile_expr(cx, &args[0])?.ok_or_else(|| CodegenError {
+        code: ErrorCode::E0400,
+        message:
+            "compile_builtin_http_get_raw: `&args[0]` produced no value during code generation"
+                .to_string(),
+    })?;
+    let fid = cx.rt_fns["rt_http_get_raw"];
+    let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+    let call = cx.builder.ins().call(fref, &[url_val]);
+    let result = cx.builder.inst_results(call)[0];
+    Ok(Some((result, TurboTy::Str)))
+}
+
 /// http_post(url, body) -> str
 pub(crate) fn compile_builtin_http_post<M: Module>(
     cx: &mut Ctx<'_, M>,

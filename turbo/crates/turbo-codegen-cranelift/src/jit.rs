@@ -224,6 +224,7 @@ fn register_runtime_symbols(jit_builder: &mut JITBuilder) {
     jit_builder.symbol("rt_spawn_with_args", rt_spawn_with_args as *const u8);
     jit_builder.symbol("rt_await_handle", rt_await_handle as *const u8);
     jit_builder.symbol("rt_http_get", rt_http_get as *const u8);
+    jit_builder.symbol("rt_http_get_raw", rt_http_get_raw as *const u8);
     jit_builder.symbol("rt_http_post", rt_http_post as *const u8);
     jit_builder.symbol(
         "rt_http_post_with_headers",

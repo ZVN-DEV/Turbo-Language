@@ -59,6 +59,10 @@ The platform contract work that actually matters for "serverless Node-type"
 workloads (serverless platforms' local proxies exercise these paths hard).
 Explicitly *not* TLS/HTTP2.
 
+> **Pulled forward into Phase 0:** `http_get_raw` (client-side response
+> headers + status line) shipped with the Phase 0 PR — the Lambda adapter
+> needed it, and it removed the adapter's `@unsafe` exec-curl workaround.
+
 - Keep-alive correctness audit: connection reuse, `Connection: close`
   honoring, half-close handling, FD-leak soak test.
 - Chunked transfer-encoding: decode on requests, encode on responses;
