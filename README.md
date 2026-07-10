@@ -121,6 +121,12 @@ What it does well today:
 - **A growing package ecosystem.** Browse the curated index at
   [turbolang.dev/packages](https://turbolang.dev/packages), search it from the
   CLI with `turbolang search <query>`, and install with `turbolang install`.
+- **Serverless deploys as native binaries.** Cold start is process start — no
+  runtime boots first. An AWS Lambda custom-runtime adapter
+  ([`turbo-lambda`](packages/turbo-lambda)) plus tested deploy walkthroughs
+  for Lambda, Cloud Run, and Fly.io live in
+  [`examples/deploy`](examples/deploy); see
+  [`docs/serverless.md`](docs/serverless.md).
 
 Honest caveats that still hold:
 

@@ -1,0 +1,31 @@
+// AWS Lambda function in Turbo, using the turbo-lambda custom-runtime adapter.
+//
+// The handler is a plain safe function: event JSON in, response JSON out.
+// Deployment walkthrough (build, zip, create-function, local mock testing):
+// see README.md in this directory.
+
+import { lambda_run, lambda_run_n } from "../../../packages/turbo-lambda/src/lib"
+
+fn handler(event: str) -> str {
+    let name = json_get(event, "name")
+    if len(name) == 0 {
+        return "\{\"greeting\":\"Hello from Turbo!\"\}"
+    }
+    "\{\"greeting\":\"Hello, " + name + "!\"\}"
+}
+
+@unsafe fn main() {
+    // TURBO_LAMBDA_MAX bounds the loop for local mock testing (test_local.sh);
+    // unset in production, where the loop runs for the life of the sandbox.
+    let max = env_get("TURBO_LAMBDA_MAX")
+    if len(max) > 0 {
+        let n = match str_to_int(max) {
+            ok(v) => v
+            err(e) => 0
+        }
+        let handled = lambda_run_n(handler, n)
+        print("handled: {handled}")
+    } else {
+        lambda_run(handler)
+    }
+}

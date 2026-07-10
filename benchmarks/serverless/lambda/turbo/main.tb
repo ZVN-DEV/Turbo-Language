@@ -1,0 +1,12 @@
+// Benchmark handler: trivial JSON echo, identical in shape to the Node and
+// Python variants so the comparison isolates runtime startup, not work.
+
+import { lambda_run } from "../../../../packages/turbo-lambda/src/lib"
+
+fn handler(event: str) -> str {
+    "\{\"ok\":true\}"
+}
+
+@unsafe fn main() {
+    lambda_run(handler)
+}

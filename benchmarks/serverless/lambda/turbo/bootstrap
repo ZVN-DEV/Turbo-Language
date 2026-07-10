@@ -1,0 +1,3 @@
+#!/bin/sh
+export TURBO_ALLOW_PRIVATE_HOSTS=1
+exec ./handler

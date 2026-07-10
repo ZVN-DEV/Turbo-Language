@@ -1,12 +1,13 @@
 # First-party Turbo packages
 
-Six first-party packages, each a self-contained Turbo library with a
+Seven first-party packages, each a self-contained Turbo library with a
 `turbo.toml`, a `src/lib.tb` entry point, a `README.md`, and a passing `tests/`
 suite runnable with `turbolang test`.
 
 | Package | What it does |
 |---------|--------------|
 | [turbo-http-router](turbo-http-router/) | Path + method routing for the built-in HTTP server via a `HashMap<str, fn(str)->str>` dispatch table, with `:param` / wildcard matching helpers. |
+| [turbo-lambda](turbo-lambda/) | AWS Lambda custom-runtime adapter: a pure-Turbo runtime-API loop dispatching events to a `fn(str) -> str` handler. |
 | [turbo-sqlite](turbo-sqlite/) | Ergonomic, thin wrapper over the raw `sqlite_*` builtins: exec-with-params, scalar/column queries, counts, migrations. |
 | [turbo-dotenv](turbo-dotenv/) | Load a `.env` file into a `HashMap<str, str>`. |
 | [turbo-cli-args](turbo-cli-args/) | Flag and positional argument parsing over `args()`. |
