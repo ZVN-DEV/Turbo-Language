@@ -1,0 +1,6 @@
+#!/bin/sh
+# Lambda custom-runtime entry point. TURBO_ALLOW_PRIVATE_HOSTS lets the
+# adapter POST responses to the runtime API's loopback/link-local address
+# (Turbo's SSRF guard blocks private hosts by default).
+export TURBO_ALLOW_PRIVATE_HOSTS=1
+exec ./handler

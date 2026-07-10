@@ -167,6 +167,9 @@ let upper = cleaned |> upper`}
               ["data-pipeline", "Log analysis engine with parsing and aggregation", "Runnable today"],
               ["game-of-life", "Conway's Game of Life with string-grid updates", "Runnable today"],
               ["http-sqlite-api", "HTTP todo API backed by built-in SQLite — one self-contained binary", "Runnable today"],
+              ["deploy/lambda", "AWS Lambda function via the turbo-lambda custom-runtime adapter, with a local mock-API test", "Runnable today"],
+              ["deploy/cloud-run", "Cloud Run service: multi-stage Docker build shipping just the native binary", "Runnable today"],
+              ["deploy/fly", "Fly.io service with health checks and scale-to-zero", "Runnable today"],
             ].map(([name, desc, status]) => (
               <tr key={name} className="border-b border-[#1a1a2e]">
                 <td className="px-4 py-2">

@@ -868,6 +868,22 @@ print(body)
 
 Performs an HTTP GET request and returns the response body as a string.
 
+### http_get_raw
+
+```turbo
+let raw = http_get_raw("https://api.example.com/data")
+// "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n...\r\n\r\n{...}"
+```
+
+Performs an HTTP GET request and returns the **raw response** — status line,
+headers, a blank line, then the body — for callers that need response headers
+or the status code (protocol clients like the
+[`turbo-lambda`](https://github.com/ZVN-DEV/Turbo-Language/tree/master/packages/turbo-lambda)
+adapter, pagination cursors, rate-limit headers). Unlike `http_get` it does
+**not** follow redirects: each redirect hop would prepend its own header
+block, making the response ambiguous. Subject to the same SSRF guard and
+30-second time bound as `http_get`.
+
 ### http_post
 
 ```turbo

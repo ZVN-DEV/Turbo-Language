@@ -1,0 +1,169 @@
+// turbo-lambda — AWS Lambda custom-runtime adapter, in pure Turbo.
+//
+// Speaks the Lambda Runtime API (version 2018-06-01):
+//   next:     GET  http://{AWS_LAMBDA_RUNTIME_API}/2018-06-01/runtime/invocation/next
+//   response: POST .../runtime/invocation/{request_id}/response
+//   error:    POST .../runtime/invocation/{request_id}/error
+//
+// Your handler is an ordinary safe function `fn(str) -> str`: it receives the
+// invocation event JSON and returns the response JSON. `lambda_run(handler)`
+// is the whole runtime loop — see the package README for the bootstrap script
+// and deployment walkthrough.
+//
+// --- Transport notes ---------------------------------------------------------
+//  * `/invocation/next` is fetched with `http_get_raw`, which returns the
+//    full response — status line, headers, body — because the runtime API
+//    delivers the request id in the `Lambda-Runtime-Aws-Request-Id` response
+//    HEADER (the body-only `http_get` can't see it). Responses are posted
+//    with `http_post`. Every function in this package is safe — no `@unsafe`
+//    anywhere in your function.
+//  * The HTTP client's SSRF guard blocks the runtime API's loopback/
+//    link-local address by default, so the bootstrap script must export
+//    TURBO_ALLOW_PRIVATE_HOSTS=1 (scoped to the Lambda sandbox).
+//  * `/invocation/next` long-polls; between invocations Lambda freezes the
+//    process mid-poll. `http_get_raw` carries the client's standard 30-second
+//    time bound — a poll that idles past it (only possible outside real
+//    Lambda, e.g. against a local mock) returns "" and the loop re-polls.
+//
+// --- Parsing notes ----------------------------------------------------------
+// Header names are matched case-insensitively. Offsets mix `index_of` (byte
+// index) with `substring` (char index); that is safe here because everything
+// before the body — status line and headers — is ASCII, where the two agree.
+// The event body itself is only ever sliced from a separator found in that
+// ASCII prefix, so multibyte payload characters are never split.
+
+// ── Pure parsing core (safe, unit-tested) ───────────────────────────────────
+
+// Base URL of the runtime API, from the environment Lambda always provides.
+fn lambda_api_base() -> str {
+    "http://" + env_get("AWS_LAMBDA_RUNTIME_API") + "/2018-06-01/runtime"
+}
+
+// Case-insensitive header lookup in a raw HTTP response (status line,
+// headers, blank line, body). Returns "" if the header is absent. Scanning
+// stops at the first blank line so JSON body lines containing `:` can never
+// be mistaken for headers.
+fn lambda_header(raw: str, name: str) -> str {
+    let want = lower(trim(name))
+    let lines = split(raw, "\n")
+    let mut i = 0
+    while i < len(lines) {
+        let line = trim(lines[i])
+        if len(line) == 0 {
+            if i > 0 {
+                return ""
+            }
+        }
+        let ci = index_of(line, ":")
+        if ci > 0 {
+            let key = lower(trim(substring(line, 0, ci)))
+            if key == want {
+                return trim(substring(line, ci + 1, len(line)))
+            }
+        }
+        i = i + 1
+    }
+    ""
+}
+
+// Body of a raw HTTP response: everything after the first blank line.
+fn lambda_body(raw: str) -> str {
+    let sep = index_of(raw, "\r\n\r\n")
+    if sep >= 0 {
+        return substring(raw, sep + 4, len(raw))
+    }
+    let sep2 = index_of(raw, "\n\n")
+    if sep2 >= 0 {
+        return substring(raw, sep2 + 2, len(raw))
+    }
+    ""
+}
+
+// Parse one raw `/invocation/next` transcript into [request_id, event_body].
+// On anything malformed the request id comes back "" and the caller skips
+// the iteration (the runtime API will redeliver the event).
+fn lambda_parse_invocation(raw: str) -> [str] {
+    let id = lambda_header(raw, "lambda-runtime-aws-request-id")
+    if len(id) == 0 {
+        return ["", ""]
+    }
+    // Bound to a local first: a bare `[...]` tail directly after an `if`
+    // statement parses as indexing the `if` expression.
+    let parsed = [id, lambda_body(raw)]
+    parsed
+}
+
+// Minimal JSON string escaping for error payloads: backslash then quote.
+fn lambda_json_escape(s: str) -> str {
+    let backslash_escaped = replace(s, "\\", "\\\\")
+    replace(backslash_escaped, "\"", "\\\"")
+}
+
+// Runtime-API error payload for a failed invocation.
+fn lambda_error_payload(error_type: str, message: str) -> str {
+    "\{\"errorMessage\":\"" + lambda_json_escape(message) + "\",\"errorType\":\"" + lambda_json_escape(error_type) + "\"\}"
+}
+
+// ── Transport ─────────────────────────────────────────────────────────────────
+
+// Fetch the next invocation as a raw headers+body transcript. Blocks until
+// Lambda delivers an event or the client's 30s time bound elapses (the
+// caller re-polls on empty).
+fn lambda_next_raw(base: str) -> str {
+    http_get_raw(base + "/invocation/next")
+}
+
+// Post a successful handler response for `request_id`.
+fn lambda_post_response(base: str, request_id: str, body: str) -> str {
+    http_post(base + "/invocation/" + request_id + "/response", body)
+}
+
+// Report a failed invocation for `request_id`.
+fn lambda_post_error(base: str, request_id: str, error_type: str, message: str) -> str {
+    http_post(base + "/invocation/" + request_id + "/error", lambda_error_payload(error_type, message))
+}
+
+// ── Runtime loop ─────────────────────────────────────────────────────────────
+
+// Handle exactly one invocation. Returns true if an event was received,
+// handled, and its response posted; false if `/next` failed or was
+// malformed (caller should pause briefly and retry).
+fn lambda_handle_once(base: str, handler: fn(str) -> str) -> bool {
+    let raw = lambda_next_raw(base)
+    let parsed = lambda_parse_invocation(raw)
+    let request_id = parsed[0]
+    if len(request_id) == 0 {
+        return false
+    }
+    let response = handler(parsed[1])
+    lambda_post_response(base, request_id, response)
+    true
+}
+
+// Handle at most `n` invocations, returning how many succeeded. Useful for
+// tests and drain-style workers; production functions use `lambda_run`.
+fn lambda_run_n(handler: fn(str) -> str, n: i64) -> i64 {
+    let base = lambda_api_base()
+    let mut handled = 0
+    let mut i = 0
+    while i < n {
+        if lambda_handle_once(base, handler) {
+            handled = handled + 1
+        } else {
+            sleep(50)
+        }
+        i = i + 1
+    }
+    handled
+}
+
+// The production entry point: poll the runtime API forever, dispatching each
+// event to `handler`. A failed poll backs off briefly instead of hot-spinning.
+fn lambda_run(handler: fn(str) -> str) {
+    let base = lambda_api_base()
+    while true {
+        if !lambda_handle_once(base, handler) {
+            sleep(50)
+        }
+    }
+}

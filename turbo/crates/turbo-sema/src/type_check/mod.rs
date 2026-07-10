@@ -81,6 +81,7 @@ pub(crate) const BUILTIN_FNS: &[&str] = &[
     "sqrt",
     "sleep",
     "http_get",
+    "http_get_raw",
     "http_post",
     "http_post_with_headers",
     "json_get",

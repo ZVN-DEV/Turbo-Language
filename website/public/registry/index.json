@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "_comment": "Canonical Turbo package index. STATIC, git-versioned, curated registry \u2014 no dynamic service, no auth. Publishing appends one object to `packages`. Fields: name (unique, matches the turbo_modules dir), repo (\"owner/name\" on GitHub), description, categories (lowercase tags), optional min_turbo_version, optional homepage, and optional subdir (a subdirectory within `repo` holding the package's turbo.toml + src/lib.tb \u2014 used for monorepo packages so `install` clones `repo` at the requested tag and installs from that subdirectory). The six first-party packages below live under packages/<name>/ in this monorepo. See docs/packages.md for the schema and publishing flow.",
+  "_comment": "Canonical Turbo package index. STATIC, git-versioned, curated registry \u2014 no dynamic service, no auth. Publishing appends one object to `packages`. Fields: name (unique, matches the turbo_modules dir), repo (\"owner/name\" on GitHub), description, categories (lowercase tags), optional min_turbo_version, optional homepage, and optional subdir (a subdirectory within `repo` holding the package's turbo.toml + src/lib.tb \u2014 used for monorepo packages so `install` clones `repo` at the requested tag and installs from that subdirectory). The seven first-party packages below live under packages/<name>/ in this monorepo. See docs/packages.md for the schema and publishing flow.",
   "packages": [
     {
       "name": "turbo-cli-args",
@@ -73,6 +73,19 @@
       "min_turbo_version": "0.12.0",
       "homepage": "https://github.com/ZVN-DEV/Turbo-Language/tree/master/packages/turbo-test-assertions",
       "subdir": "packages/turbo-test-assertions"
+    },
+    {
+      "name": "turbo-lambda",
+      "repo": "ZVN-DEV/Turbo-Language",
+      "description": "AWS Lambda custom-runtime adapter: a pure-Turbo runtime-API loop that dispatches invocation events to a fn(str) -> str handler.",
+      "categories": [
+        "serverless",
+        "aws",
+        "lambda"
+      ],
+      "min_turbo_version": "0.15.0",
+      "homepage": "https://github.com/ZVN-DEV/Turbo-Language/tree/master/packages/turbo-lambda",
+      "subdir": "packages/turbo-lambda"
     }
   ]
 }

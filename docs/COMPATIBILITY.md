@@ -15,7 +15,7 @@ in particular, the current shape of Windows support.
 | AOT: hashmaps, math, JSON, sorting | Yes | Yes | Yes |
 | AOT: SQLite, file I/O, date/time | Yes | Yes | Yes |
 | AOT: spawn / channels / mutex (threads) | Yes | Yes | Stub¹ |
-| AOT: HTTP client (`http_get`/`http_post`) | Yes | Yes | Stub¹ |
+| AOT: HTTP client (`http_get`/`http_get_raw`/`http_post`) | Yes | Yes | Stub¹ |
 | AOT: HTTP server (`http_server`/`respond`) | Yes | Yes | Stub¹ |
 | WASM target (`--target wasm`) | Yes² | Yes² | No |
 

@@ -186,7 +186,7 @@ const features = [
   {
     title: "Zero GC",
     description:
-      "No garbage collector pauses. Deterministic memory management with ~93 KB binaries. Deploy anywhere with no runtime.",
+      "No garbage collector pauses. Deterministic memory management with ~93 KB binaries. Deploys to AWS Lambda, Cloud Run, and Fly.io as a single native binary — cold start is just process start.",
     icon: (
       <svg
         className="w-6 h-6"

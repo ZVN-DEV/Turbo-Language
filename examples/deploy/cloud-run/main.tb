@@ -1,0 +1,38 @@
+// A minimal Turbo HTTP service shaped for Cloud Run (and any Docker PaaS):
+//   * listens on 0.0.0.0 (the platform's proxy fronts the container)
+//   * honors the PORT env var the platform injects
+//   * /healthz for probes, / for JSON, /count for cross-request state
+//
+// Deployment walkthrough: README.md in this directory.
+
+fn port_from_env() -> i64 {
+    let raw = env_get("PORT")
+    if len(raw) == 0 {
+        return 8080
+    }
+    match str_to_int(raw) {
+        ok(p) => p
+        err(e) => 8080
+    }
+}
+
+fn main() {
+    let port = port_from_env()
+
+    // Cloud Run terminates TLS and fronts the container with its own proxy,
+    // so binding all interfaces inside the container is the intended shape.
+    let app = http_server_public(port)
+
+    route(app, "GET", "/", |req: str| -> str { respond_json(200, "\{\"message\":\"Hello from Turbo on Cloud Run\",\"language\":\"turbo\"\}") })
+
+    route(app, "GET", "/healthz", |req: str| -> str { respond_text(200, "ok") })
+
+    // Server state in a hashmap persists across requests (request-scoped
+    // temporaries are arena-reclaimed per request; the map is not).
+    let counter = hashmap()
+    hashmap_set_int(counter, "hits", 0)
+    route(app, "GET", "/count", |req: str| -> str { hashmap_inc(counter, "hits") respond_json(200, "\{\"hits\":" + to_str(hashmap_get_int(counter, "hits")) + "\}") })
+
+    print("listening on 0.0.0.0:{port}")
+    http_listen(app)
+}

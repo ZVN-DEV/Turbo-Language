@@ -490,10 +490,7 @@ pub(crate) fn resolve_type_expr_with_params(
         TypeExpr::FnType { params, ret } => {
             let mut param_tys = Vec::new();
             for p in params {
-                match resolve_type_expr(&p.node, structs, enums) {
-                    Some(ty) => param_tys.push(ty),
-                    None => return None,
-                }
+                param_tys.push(resolve_type_expr(&p.node, structs, enums)?);
             }
             let ret_ty = resolve_type_expr(&ret.node, structs, enums)?;
             Some(Ty::Fn(param_tys, Box::new(ret_ty)))

@@ -1,0 +1,108 @@
+import { lambda_api_base, lambda_header, lambda_body, lambda_parse_invocation, lambda_json_escape, lambda_error_payload } from "../src/lib"
+
+// A realistic `curl -si` transcript of GET /invocation/next.
+fn sample_transcript() -> str {
+    "HTTP/1.1 200 OK\r\n" + "Content-Type: application/json\r\n" + "Lambda-Runtime-Aws-Request-Id: 8476a536-e9f4-11e8-9739-2dfe598c3fcd\r\n" + "Lambda-Runtime-Deadline-Ms: 1542409706888\r\n" + "Lambda-Runtime-Invoked-Function-Arn: arn:aws:lambda:us-east-2:123456789012:function:custom-runtime\r\n" + "\r\n" + "\{\"name\": \"Turbo\", \"count\": 3\}"
+}
+
+// --- header extraction ------------------------------------------------------
+
+@test fn test_header_exact_case() {
+    assert_eq(lambda_header(sample_transcript(), "Lambda-Runtime-Aws-Request-Id"), "8476a536-e9f4-11e8-9739-2dfe598c3fcd")
+}
+
+@test fn test_header_case_insensitive() {
+    assert_eq(lambda_header(sample_transcript(), "LAMBDA-runtime-AWS-REQUEST-id"), "8476a536-e9f4-11e8-9739-2dfe598c3fcd")
+    assert_eq(lambda_header(sample_transcript(), "content-TYPE"), "application/json")
+}
+
+@test fn test_header_missing() {
+    assert_eq(lambda_header(sample_transcript(), "X-Not-There"), "")
+}
+
+@test fn test_header_value_with_colons() {
+    // Header values themselves contain ':' — split only on the FIRST colon.
+    assert_eq(lambda_header(sample_transcript(), "Lambda-Runtime-Invoked-Function-Arn"), "arn:aws:lambda:us-east-2:123456789012:function:custom-runtime")
+}
+
+@test fn test_header_scan_stops_at_body() {
+    // A body line shaped like a header must NOT be picked up: the scan ends
+    // at the blank line separating headers from body.
+    let raw = "HTTP/1.1 200 OK\r\n" + "Real-Header: yes\r\n" + "\r\n" + "Fake-Header: from-the-body"
+    assert_eq(lambda_header(raw, "Real-Header"), "yes")
+    assert_eq(lambda_header(raw, "Fake-Header"), "")
+}
+
+@test fn test_header_on_empty_input() {
+    assert_eq(lambda_header("", "Anything"), "")
+}
+
+// --- body extraction ---------------------------------------------------------
+
+@test fn test_body_crlf() {
+    assert_eq(lambda_body(sample_transcript()), "\{\"name\": \"Turbo\", \"count\": 3\}")
+}
+
+@test fn test_body_lf_fallback() {
+    let raw = "HTTP/1.1 200 OK\nX: y\n\n\{\"a\": 1\}"
+    assert_eq(lambda_body(raw), "\{\"a\": 1\}")
+}
+
+@test fn test_body_empty_when_no_separator() {
+    assert_eq(lambda_body("HTTP/1.1 200 OK\r\nX: y\r\n"), "")
+    assert_eq(lambda_body(""), "")
+}
+
+@test fn test_body_preserves_inner_blank_lines() {
+    // Only the FIRST blank line splits headers from body; later ones belong
+    // to the payload.
+    let raw = "HTTP/1.1 200 OK\r\n\r\nline1\r\n\r\nline2"
+    assert_eq(lambda_body(raw), "line1\r\n\r\nline2")
+}
+
+// --- invocation parsing ------------------------------------------------------
+
+@test fn test_parse_invocation_ok() {
+    let parsed = lambda_parse_invocation(sample_transcript())
+    assert_eq(parsed[0], "8476a536-e9f4-11e8-9739-2dfe598c3fcd")
+    assert_eq(parsed[1], "\{\"name\": \"Turbo\", \"count\": 3\}")
+}
+
+@test fn test_parse_invocation_missing_id() {
+    // No request-id header → ["", ""] so the loop skips and retries.
+    let parsed = lambda_parse_invocation("HTTP/1.1 200 OK\r\nX: y\r\n\r\n\{\}")
+    assert_eq(parsed[0], "")
+    assert_eq(parsed[1], "")
+}
+
+@test fn test_parse_invocation_empty_transcript() {
+    // curl failing entirely produces "" — must not crash.
+    let parsed = lambda_parse_invocation("")
+    assert_eq(parsed[0], "")
+}
+
+// --- error payloads ----------------------------------------------------------
+
+@test fn test_json_escape() {
+    assert_eq(lambda_json_escape("plain"), "plain")
+    assert_eq(lambda_json_escape("say \"hi\""), "say \\\"hi\\\"")
+    assert_eq(lambda_json_escape("back\\slash"), "back\\\\slash")
+}
+
+@test fn test_error_payload_shape() {
+    assert_eq(lambda_error_payload("HandlerError", "boom"), "\{\"errorMessage\":\"boom\",\"errorType\":\"HandlerError\"\}")
+}
+
+@test fn test_error_payload_escapes_message() {
+    assert_eq(lambda_error_payload("HandlerError", "bad \"input\""), "\{\"errorMessage\":\"bad \\\"input\\\"\",\"errorType\":\"HandlerError\"\}")
+}
+
+// --- api base ------------------------------------------------------------------
+
+@test fn test_api_base_shape() {
+    // AWS_LAMBDA_RUNTIME_API is host:port with no scheme; the base URL wraps
+    // it. Outside Lambda the env var is empty but the shape still holds.
+    let base = lambda_api_base()
+    assert(starts_with(base, "http://"))
+    assert(ends_with(base, "/2018-06-01/runtime"))
+}

@@ -1902,6 +1902,49 @@ pub(crate) extern "C" fn rt_http_get(url: *const u8) -> *const u8 {
     }
 }
 
+/// HTTP GET via system curl, returning the RAW response — status line,
+/// headers, blank line, body (`curl -i`) — so callers can read response
+/// headers the body-only `rt_http_get` discards (e.g. the Lambda Runtime
+/// API's request-id header). Does NOT follow redirects: with `-i` every hop
+/// would prepend its own header block and "first blank line" parsing would
+/// break. Same scheme validation, SSRF host guard, protocol pinning, time
+/// bound, and flag-injection guards as `rt_http_get`. Keep in sync with
+/// `rt_http_get_raw` in `turbo_rt.c`.
+pub(crate) extern "C" fn rt_http_get_raw(url: *const u8) -> *const u8 {
+    if url.is_null() {
+        eprintln!("[rt_http] blocked URL (non-http(s) scheme): (null)");
+        return rt_empty_cstr();
+    }
+    let url = unsafe { std::ffi::CStr::from_ptr(url as *const std::ffi::c_char) }
+        .to_str()
+        .unwrap_or("");
+    if let Some(reason) = rt_http_url_blocked_reason(url) {
+        eprintln!("[rt_http] blocked URL ({}): {}", reason, url);
+        return rt_empty_cstr();
+    }
+    let output = std::process::Command::new("curl")
+        .arg("-s")
+        .arg("-i")
+        .arg("--proto")
+        .arg("=http,https")
+        .arg("--max-time")
+        .arg("30")
+        .arg("--")
+        .arg(url)
+        .output();
+    match output {
+        Ok(out) => {
+            let raw = String::from_utf8_lossy(&out.stdout).to_string();
+            let cs = cstring_or_empty(raw);
+            arena_str(cs)
+        }
+        Err(e) => {
+            eprintln!("[rt_http] curl exec failed: {}", e);
+            rt_empty_cstr()
+        }
+    }
+}
+
 /// HTTP POST via system curl. Takes URL and body, returns response body as a C string.
 /// Hardened with the same scheme validation, SSRF host guard, protocol pinning,
 /// and flag-injection guards as `rt_http_get`. The host guard now exists in both
@@ -4247,6 +4290,85 @@ mod format_time_tests {
     }
 }
 
+/// Serializes tests that read or mutate `TURBO_ALLOW_PRIVATE_HOSTS` —
+/// environment variables are process-global, so tests touching the SSRF
+/// opt-out must not interleave.
+#[cfg(test)]
+pub(crate) static HTTP_ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+mod http_get_raw_tests {
+    use super::rt_http_get_raw;
+    use std::ffi::{CStr, CString};
+    use std::io::{Read, Write};
+
+    /// One-shot local HTTP server: accepts a single connection, sends a
+    /// canned response with a custom header, and returns its address.
+    fn spawn_one_shot_server() -> std::net::SocketAddr {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut sock, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf); // consume the request
+                let _ = sock.write_all(
+                    b"HTTP/1.1 200 OK\r\n\
+                      Content-Type: application/json\r\n\
+                      X-Turbo-Test: raw-header-works\r\n\
+                      Content-Length: 11\r\n\
+                      Connection: close\r\n\
+                      \r\n\
+                      {\"ok\":true}",
+                );
+            }
+        });
+        addr
+    }
+
+    fn call_raw(url: &str) -> String {
+        let url_c = CString::new(url).unwrap();
+        let ptr = rt_http_get_raw(url_c.as_ptr() as *const u8);
+        assert!(!ptr.is_null(), "rt_http_get_raw returned null");
+        unsafe { CStr::from_ptr(ptr as *const std::ffi::c_char) }
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn raw_get_exposes_status_line_headers_and_body() {
+        let _guard = super::HTTP_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let addr = spawn_one_shot_server();
+        std::env::set_var("TURBO_ALLOW_PRIVATE_HOSTS", "1");
+        let raw = call_raw(&format!("http://{addr}/"));
+        std::env::remove_var("TURBO_ALLOW_PRIVATE_HOSTS");
+
+        assert!(
+            raw.starts_with("HTTP/1.1 200"),
+            "missing status line: {raw:?}"
+        );
+        assert!(
+            raw.contains("X-Turbo-Test: raw-header-works"),
+            "missing custom response header: {raw:?}"
+        );
+        let sep = raw.find("\r\n\r\n").expect("missing header/body separator");
+        assert_eq!(&raw[sep + 4..], "{\"ok\":true}", "body mismatch: {raw:?}");
+    }
+
+    #[test]
+    fn raw_get_is_ssrf_guarded_by_default() {
+        let _guard = super::HTTP_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if std::env::var("TURBO_ALLOW_PRIVATE_HOSTS").as_deref() == Ok("1") {
+            return; // developer shell has the opt-out exported; skip
+        }
+        // Loopback must be blocked (empty response), same as http_get.
+        assert_eq!(call_raw("http://127.0.0.1:9/"), "");
+    }
+}
+
 #[cfg(test)]
 mod ssrf_tests {
     use super::{
@@ -4345,6 +4467,11 @@ mod ssrf_tests {
 
     #[test]
     fn blocked_reason_default_on() {
+        // Serialize against tests that mutate TURBO_ALLOW_PRIVATE_HOSTS
+        // (http_get_raw_tests) — env vars are process-global.
+        let _guard = crate::runtime::HTTP_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Non-http scheme is always rejected regardless of the opt-out.
         assert_eq!(
             rt_http_url_blocked_reason("file:///etc/passwd"),

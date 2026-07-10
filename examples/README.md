@@ -25,6 +25,9 @@ turbolang run examples/web-dashboard/main.tb
 | [stateful-counter](./stateful-counter/) | Persistent Hit Counter | HTTP server, persistent in-memory state across requests (a startup hashmap survives the per-request arena), bounded memory |
 | [file-analyzer](./file-analyzer/) | Source Code Analyzer | File I/O, line parsing, statistics, progress bars |
 | [libturbo-c-host](./libturbo-c-host/) | C Host Embedding Demo | `libturbo`, JIT eval, host callbacks, typed `i64`/`str` exchange |
+| [deploy/lambda](./deploy/lambda/) | AWS Lambda function (custom runtime) | `turbo-lambda` adapter, cross-compiled zip artifact, local mock-runtime test |
+| [deploy/cloud-run](./deploy/cloud-run/) | Cloud Run service | Multi-stage Docker build, `PORT` env, `0.0.0.0` bind, health checks |
+| [deploy/fly](./deploy/fly/) | Fly.io service | Same container shape + `fly.toml` with health checks and scale-to-zero |
 
 ### web-dashboard
 
