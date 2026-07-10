@@ -23,7 +23,7 @@ turbo-codegen-cranelift = { version = "0.15.0", path = "../turbo-codegen-craneli
 turbo-sema = { version = "0.15.0", path = "../turbo-sema" }
 clap = { workspace = true }
 ariadne = { workspace = true }
-rustyline = "15"
+rustyline = "18"
 notify = { workspace = true }
 notify-debouncer-mini = { workspace = true }
 ctrlc = { workspace = true }
