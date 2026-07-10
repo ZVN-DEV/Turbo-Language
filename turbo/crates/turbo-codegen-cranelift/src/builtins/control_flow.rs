@@ -1145,7 +1145,7 @@ fn lookup_variant_tag_static(
     enum_variants: &HashMap<String, Vec<String>>,
     variant_name: &str,
 ) -> Option<usize> {
-    for (_enum_name, variants) in enum_variants.iter() {
+    for variants in enum_variants.values() {
         if let Some(pos) = variants.iter().position(|v| v == variant_name) {
             return Some(pos);
         }
