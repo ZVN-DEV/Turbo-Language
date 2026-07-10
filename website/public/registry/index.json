@@ -83,7 +83,7 @@
         "aws",
         "lambda"
       ],
-      "min_turbo_version": "0.14.0",
+      "min_turbo_version": "0.15.0",
       "homepage": "https://github.com/ZVN-DEV/Turbo-Language/tree/master/packages/turbo-lambda",
       "subdir": "packages/turbo-lambda"
     }

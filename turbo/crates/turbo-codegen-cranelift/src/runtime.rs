@@ -4344,7 +4344,10 @@ mod http_get_raw_tests {
         let raw = call_raw(&format!("http://{addr}/"));
         std::env::remove_var("TURBO_ALLOW_PRIVATE_HOSTS");
 
-        assert!(raw.starts_with("HTTP/1.1 200"), "missing status line: {raw:?}");
+        assert!(
+            raw.starts_with("HTTP/1.1 200"),
+            "missing status line: {raw:?}"
+        );
         assert!(
             raw.contains("X-Turbo-Test: raw-header-works"),
             "missing custom response header: {raw:?}"

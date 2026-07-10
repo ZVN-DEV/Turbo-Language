@@ -530,7 +530,10 @@ impl Checker {
             if args.len() != 1 {
                 self.error(
                     ErrorCode::E0513,
-                    format!("http_get_raw() takes exactly 1 argument, got {}", args.len()),
+                    format!(
+                        "http_get_raw() takes exactly 1 argument, got {}",
+                        args.len()
+                    ),
                     callee.span.clone(),
                 );
                 return Some(Ty::Error);
