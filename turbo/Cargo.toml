@@ -43,7 +43,7 @@ cranelift-frontend = "0.113"
 cranelift-native = "0.113"
 cranelift-object = "0.113"
 target-lexicon = "0.12"
-ariadne = "0.4"
+ariadne = "0.6"
 clap = { version = "4", features = ["derive"] }
 notify = "7"
 notify-debouncer-mini = "0.5"
