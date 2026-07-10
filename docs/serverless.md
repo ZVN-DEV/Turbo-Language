@@ -22,10 +22,13 @@ account (`test_local.sh` for Lambda against a mock runtime API; `docker build
 
 [`turbo-lambda`](../packages/turbo-lambda) is a pure-Turbo custom-runtime
 adapter: your function is one safe `fn(str) -> str` (event JSON in, response
-JSON out) and `lambda_run(handler)` is the entire loop. Install it by name:
+JSON out) and `lambda_run(handler)` is the entire loop. Install it by name —
+declare it in `turbo.toml` (the version is the monorepo release tag) and run
+`turbolang install`:
 
-```bash
-turbolang install turbo-lambda
+```toml
+[dependencies]
+turbo-lambda = "0.15"
 ```
 
 See the package README for how it speaks the runtime API (`http_get_raw` for

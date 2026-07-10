@@ -4,6 +4,14 @@ AWS Lambda custom-runtime adapter, in pure Turbo. Your function is one safe
 `fn(str) -> str` — event JSON in, response JSON out — and `lambda_run(handler)`
 is the entire runtime loop. No `@unsafe` anywhere.
 
+Install: add the registry dependency to `turbo.toml` (the version is the
+monorepo release tag, `0.15` or later) and run `turbolang install`:
+
+```toml
+[dependencies]
+turbo-lambda = "0.15"
+```
+
 ```turbo
 import { lambda_run } from "turbo-lambda"
 
