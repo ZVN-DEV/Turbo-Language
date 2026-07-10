@@ -1,6 +1,6 @@
 [package]
 name = "turbo-formatter"
-version = "0.14.0"
+version = "0.15.0"
 edition = "2021"
 rust-version.workspace = true
 description.workspace = true
@@ -10,9 +10,9 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-turbo-lexer = { version = "0.14.0", path = "../turbo-lexer" }
-turbo-parser = { version = "0.14.0", path = "../turbo-parser" }
-turbo-ast = { version = "0.14.0", path = "../turbo-ast" }
+turbo-lexer = { version = "0.15.0", path = "../turbo-lexer" }
+turbo-parser = { version = "0.15.0", path = "../turbo-parser" }
+turbo-ast = { version = "0.15.0", path = "../turbo-ast" }
 
 [dev-dependencies]
 # Matches the version pinned by turbo-parser's proptest suite.

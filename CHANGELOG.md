@@ -5,6 +5,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-10
+
 Serverless as a first-class deployment target: a Lambda adapter package,
 tested deploy walkthroughs for three platforms, reproducible cold-start
 benchmarks, and the client-side HTTP builtin the adapter needed.

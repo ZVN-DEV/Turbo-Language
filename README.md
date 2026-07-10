@@ -53,7 +53,7 @@ turbolang build hello.tb      # AOT — produce a native binary
 ./hello
 ```
 
-### Known Limitations (v0.12.x)
+### Known Limitations (v0.15)
 
 > **Note — runtime string allocation:** Strings, arrays, structs, results, and optionals use the runtime ARC header and are released at scope exit, reassignment, and typed container drops. HTTP servers still use per-request arenas for request-scoped allocations, so handler temporaries are reclaimed in bulk at the end of each request while server state held in hashmaps persists correctly across requests.
 >
