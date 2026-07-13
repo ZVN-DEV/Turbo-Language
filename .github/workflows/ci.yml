@@ -463,7 +463,7 @@ jobs:
       # Pinned, prebuilt cargo-audit binary — a couple of seconds to install
       # and decoupled from the project lockfile so the cache doesn't bust on
       # every unrelated PR. Bump the version deliberately.
-      - uses: taiki-e/install-action@9545a0634ccdca487a09cde61d362f0bc5fb5df9 # v2.61.4
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
         with:
           tool: cargo-audit@0.22.1
 
