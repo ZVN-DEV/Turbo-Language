@@ -37,7 +37,7 @@ homepage = "https://turbolang.dev"
 logos = "0.14"
 cranelift = "0.113"
 cranelift-jit = "0.113"
-cranelift-module = "0.113"
+cranelift-module = "0.133"
 cranelift-codegen = { version = "0.113", features = ["all-arch"] }
 cranelift-frontend = "0.113"
 cranelift-native = "0.113"
