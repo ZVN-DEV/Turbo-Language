@@ -198,6 +198,24 @@ silently included in the balanced-allocation claim. The v5 timed tree workload
 now exercises these corrected recursive operations, with its own frozen seed
 rules, Rust counterpart and independent traversal oracle.
 
+### JSON extraction prerequisites
+
+The JSON workload exposed an AOT round-trip defect before timing: `json_get`
+returned escaped text instead of decoding output from `json_stringify`. The C
+runtime now decodes strings/keys, validates complete objects before returning a
+selection, respects last-key-wins semantics and returns complete spans for nested
+containers. Native tests compare extracted strings and acceptance/rejection
+against `serde_json`, including truncated/mutated documents, Unicode escapes,
+invalid UTF-8 in C-level tests, long numbers and empty/nonempty nesting limits.
+Validation-only string scans do not allocate; decoded buffers are bounded to
+their encoded string spans. Numeric range checks use local C-locale objects
+without changing process-wide locale settings.
+
+This is not JSON benchmark completion or whole-parser parity certification.
+Non-string AOT results preserve raw spelling, while JIT uses `serde_json`
+serialization; canonical number/container formatting and the C-string NUL
+limitation remain open. No parse-once typed JSON API has been introduced.
+
 ### Building and collecting profiles
 
 Build a separate diagnostic compiler. Keep it separate from the ordinary release

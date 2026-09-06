@@ -42,6 +42,10 @@
 #include <string.h>
 #include <limits.h>
 #include <math.h>
+#include <locale.h>
+#ifdef __APPLE__
+#include <xlocale.h>
+#endif
 #include <time.h>
 #include <sys/stat.h>
 
@@ -2209,103 +2213,433 @@ const char *rt_json_quote(const char *s) {
     return rt_json_encode_string(s, 1);
 }
 
+static const char *json_ws(const char *p, const char *end) {
+    while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+    return p;
+}
+
+static int json_hex(unsigned char c) {
+    if (c >= '0' && c <= '9') return (int)(c - '0');
+    if (c >= 'a' && c <= 'f') return 10 + (int)(c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (int)(c - 'A');
+    return -1;
+}
+
+static int json_hex4(const char *p, const char *end, unsigned *out) {
+    if (end - p < 4) return 0;
+    unsigned v = 0;
+    for (int i = 0; i < 4; i++) {
+        int h = json_hex((unsigned char)p[i]);
+        if (h < 0) return 0;
+        v = (v << 4) | (unsigned)h;
+    }
+    *out = v;
+    return 1;
+}
+
+static int json_append_utf8(char *out, size_t *j, unsigned cp) {
+    if (cp <= 0x7F) {
+        out[(*j)++] = (char)cp;
+    } else if (cp <= 0x7FF) {
+        out[(*j)++] = (char)(0xC0 | (cp >> 6));
+        out[(*j)++] = (char)(0x80 | (cp & 0x3F));
+    } else if (cp >= 0xD800 && cp <= 0xDFFF) {
+        return 0;
+    } else if (cp <= 0xFFFF) {
+        out[(*j)++] = (char)(0xE0 | (cp >> 12));
+        out[(*j)++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[(*j)++] = (char)(0x80 | (cp & 0x3F));
+    } else if (cp <= 0x10FFFF) {
+        out[(*j)++] = (char)(0xF0 | (cp >> 18));
+        out[(*j)++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        out[(*j)++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[(*j)++] = (char)(0x80 | (cp & 0x3F));
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
+static int json_copy_valid_utf8(const char **p, const char *end, char *out, size_t *j) {
+    const unsigned char *s = (const unsigned char *)*p;
+    unsigned char c = *s;
+    unsigned cp = 0;
+    size_t len = 0;
+    if (c <= 0x7F) {
+        if (c < 0x20) return 0;
+        out[(*j)++] = (char)c;
+        (*p)++;
+        return 1;
+    }
+    if (c >= 0xC2 && c <= 0xDF) {
+        cp = (unsigned)(c & 0x1F);
+        len = 2;
+    } else if (c >= 0xE0 && c <= 0xEF) {
+        cp = (unsigned)(c & 0x0F);
+        len = 3;
+    } else if (c >= 0xF0 && c <= 0xF4) {
+        cp = (unsigned)(c & 0x07);
+        len = 4;
+    } else {
+        return 0;
+    }
+    if ((size_t)(end - *p) < len) return 0;
+    for (size_t i = 1; i < len; i++) {
+        unsigned char cc = s[i];
+        if ((cc & 0xC0) != 0x80) return 0;
+        cp = (cp << 6) | (unsigned)(cc & 0x3F);
+    }
+    if ((len == 3 && cp < 0x800) || (len == 4 && cp < 0x10000) ||
+        (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) {
+        return 0;
+    }
+    memcpy(out + *j, *p, len);
+    *j += len;
+    *p += len;
+    return 1;
+}
+
+static int json_skip_valid_utf8(const char **p, const char *end) {
+    char scratch[4];
+    size_t j = 0;
+    return json_copy_valid_utf8(p, end, scratch, &j);
+}
+
+static int json_skip_string(const char *p, const char *end, const char **after) {
+    if (p >= end || *p != '"') return 0;
+    p++;
+    while (p < end) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"') {
+            *after = p + 1;
+            return 1;
+        }
+        if (c == '\\') {
+            p++;
+            if (p >= end) return 0;
+            switch (*p) {
+                case '"':
+                case '\\':
+                case '/':
+                case 'b':
+                case 'f':
+                case 'n':
+                case 'r':
+                case 't':
+                    p++;
+                    break;
+                case 'u': {
+                    unsigned cp = 0;
+                    p++;
+                    if (!json_hex4(p, end, &cp)) return 0;
+                    p += 4;
+                    if (cp >= 0xD800 && cp <= 0xDBFF) {
+                        unsigned low = 0;
+                        if (end - p < 6 || p[0] != '\\' || p[1] != 'u' ||
+                            !json_hex4(p + 2, end, &low) ||
+                            low < 0xDC00 || low > 0xDFFF) {
+                            return 0;
+                        }
+                        p += 6;
+                    } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+                        return 0;
+                    }
+                    break;
+                }
+                default:
+                    return 0;
+            }
+            continue;
+        }
+        if (!json_skip_valid_utf8(&p, end)) return 0;
+    }
+    return 0;
+}
+
+static int json_decode_string_span(const char *p, const char *end,
+                                   char **out, size_t *out_len,
+                                   int *has_nul, const char **after) {
+    if (p >= end || *p != '"') return 0;
+    const char *string_end = NULL;
+    if (!json_skip_string(p, end, &string_end)) return 0;
+    const char *content = p + 1;
+    char *buf = (char *)malloc((size_t)(string_end - content));
+    if (!buf) {
+        fprintf(stderr, "runtime error: out of memory\n");
+        exit(1);
+    }
+    size_t j = 0;
+    int nul = 0;
+    p = content;
+    end = string_end - 1;
+    while (p < end) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"') {
+            buf[j] = '\0';
+            *out = buf;
+            *out_len = j;
+            *has_nul = nul;
+            *after = p + 1;
+            return 1;
+        }
+        if (c == '\\') {
+            p++;
+            if (p >= end) { free(buf); return 0; }
+            switch (*p) {
+                case '"': buf[j++] = '"'; p++; break;
+                case '\\': buf[j++] = '\\'; p++; break;
+                case '/': buf[j++] = '/'; p++; break;
+                case 'b': buf[j++] = '\b'; p++; break;
+                case 'f': buf[j++] = '\f'; p++; break;
+                case 'n': buf[j++] = '\n'; p++; break;
+                case 'r': buf[j++] = '\r'; p++; break;
+                case 't': buf[j++] = '\t'; p++; break;
+                case 'u': {
+                    unsigned cp = 0;
+                    p++;
+                    if (!json_hex4(p, end, &cp)) { free(buf); return 0; }
+                    p += 4;
+                    if (cp >= 0xD800 && cp <= 0xDBFF) {
+                        unsigned low = 0;
+                        if (end - p < 6 || p[0] != '\\' || p[1] != 'u' ||
+                            !json_hex4(p + 2, end, &low) ||
+                            low < 0xDC00 || low > 0xDFFF) {
+                            free(buf);
+                            return 0;
+                        }
+                        p += 6;
+                        cp = 0x10000 + (((cp - 0xD800) << 10) | (low - 0xDC00));
+                    } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+                        free(buf);
+                        return 0;
+                    }
+                    if (cp == 0) nul = 1;
+                    if (!json_append_utf8(buf, &j, cp)) { free(buf); return 0; }
+                    break;
+                }
+                default:
+                    free(buf);
+                    return 0;
+            }
+            continue;
+        }
+        if (!json_copy_valid_utf8(&p, end, buf, &j)) {
+            free(buf);
+            return 0;
+        }
+    }
+    buf[j] = '\0';
+    *out = buf;
+    *out_len = j;
+    *has_nul = nul;
+    *after = string_end;
+    return 1;
+}
+
+static int json_skip_value(const char *p, const char *end, int depth, const char **after);
+
+static int json_number_is_finite_c_locale(const char *start, const char *token_end) {
+#ifdef _WIN32
+    _locale_t loc = _create_locale(LC_NUMERIC, "C");
+    if (!loc) {
+        fprintf(stderr, "runtime error: cannot initialize JSON numeric locale\n");
+        exit(1);
+    }
+    char *parsed_end = NULL;
+    double n = _strtod_l(start, &parsed_end, loc);
+    _free_locale(loc);
+#else
+    locale_t loc = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
+    if (!loc) {
+        fprintf(stderr, "runtime error: cannot initialize JSON numeric locale\n");
+        exit(1);
+    }
+    char *parsed_end = NULL;
+    double n = strtod_l(start, &parsed_end, loc);
+    freelocale(loc);
+#endif
+    return parsed_end == token_end && !isinf(n) && !isnan(n);
+}
+
+static int json_skip_number(const char *p, const char *end, const char **after) {
+    const char *s = p;
+    if (p < end && *p == '-') p++;
+    if (p >= end) return 0;
+    if (*p == '0') {
+        p++;
+    } else if (*p >= '1' && *p <= '9') {
+        while (p < end && *p >= '0' && *p <= '9') p++;
+    } else {
+        return 0;
+    }
+    if (p < end && *p == '.') {
+        p++;
+        if (p >= end || *p < '0' || *p > '9') return 0;
+        while (p < end && *p >= '0' && *p <= '9') p++;
+    }
+    if (p < end && (*p == 'e' || *p == 'E')) {
+        p++;
+        if (p < end && (*p == '+' || *p == '-')) p++;
+        if (p >= end || *p < '0' || *p > '9') return 0;
+        while (p < end && *p >= '0' && *p <= '9') p++;
+    }
+    if (p == s) return 0;
+    if (!json_number_is_finite_c_locale(s, p)) return 0;
+    *after = p;
+    return 1;
+}
+
+static int json_skip_array(const char *p, const char *end, int depth, const char **after) {
+    if (depth >= 128 || p >= end || *p != '[') return 0;
+    p = json_ws(p + 1, end);
+    if (p < end && *p == ']') {
+        *after = p + 1;
+        return 1;
+    }
+    for (;;) {
+        if (!json_skip_value(p, end, depth + 1, &p)) return 0;
+        p = json_ws(p, end);
+        if (p < end && *p == ',') {
+            p = json_ws(p + 1, end);
+            continue;
+        }
+        if (p < end && *p == ']') {
+            *after = p + 1;
+            return 1;
+        }
+        return 0;
+    }
+}
+
+static int json_skip_object(const char *p, const char *end, int depth, const char **after) {
+    if (depth >= 128 || p >= end || *p != '{') return 0;
+    p = json_ws(p + 1, end);
+    if (p < end && *p == '}') {
+        *after = p + 1;
+        return 1;
+    }
+    for (;;) {
+        if (!json_skip_string(p, end, &p)) return 0;
+        p = json_ws(p, end);
+        if (p >= end || *p != ':') return 0;
+        p = json_ws(p + 1, end);
+        if (!json_skip_value(p, end, depth + 1, &p)) return 0;
+        p = json_ws(p, end);
+        if (p < end && *p == ',') {
+            p = json_ws(p + 1, end);
+            continue;
+        }
+        if (p < end && *p == '}') {
+            *after = p + 1;
+            return 1;
+        }
+        return 0;
+    }
+}
+
+static int json_skip_value(const char *p, const char *end, int depth, const char **after) {
+    if (depth > 128) return 0;
+    p = json_ws(p, end);
+    if (p >= end) return 0;
+    if (*p == '"') {
+        return json_skip_string(p, end, after);
+    }
+    if (*p == '{') return json_skip_object(p, end, depth, after);
+    if (*p == '[') return json_skip_array(p, end, depth, after);
+    if (end - p >= 4 && memcmp(p, "true", 4) == 0) {
+        *after = p + 4;
+        return 1;
+    }
+    if (end - p >= 5 && memcmp(p, "false", 5) == 0) {
+        *after = p + 5;
+        return 1;
+    }
+    if (end - p >= 4 && memcmp(p, "null", 4) == 0) {
+        *after = p + 4;
+        return 1;
+    }
+    return json_skip_number(p, end, after);
+}
+
+static const char *json_copy_runtime_span(const char *start, const char *end) {
+    return rt_str_copy_len(start, (size_t)(end - start));
+}
+
 /* json_get(json, key) -> str — extract top-level key value from JSON string.
- * Walks the JSON character-by-character, tracking brace/bracket depth so that
- * only keys at depth 1 (the top-level object) are matched. Properly skips
- * over string literals including escaped quotes. */
+ * Validates the entire input as one top-level object, decodes keys for
+ * comparison, and returns the last matching top-level value. String values are
+ * decoded; non-string values preserve their validated raw JSON span. */
 const char *rt_json_get(const char *json, const char *key) {
-    if (!json || !key) return turbo_strdup("");
+    if (!json || !key) return rt_str_empty();
     size_t json_len = strlen(json);
     const char *json_end = json + json_len;
     size_t klen = strlen(key);
-
-    /* Walk the JSON, tracking depth. We want to match "key" only at depth 1. */
-    int depth = 0;
-    const char *p = json;
-    const char *pos = NULL;
-
-    while (p < json_end) {
-        char c = *p;
-
-        /* Skip over string literals */
-        if (c == '"') {
-            const char *str_start = p;
-            p++; /* skip opening quote */
-            /* Scan to closing quote, handling backslash escapes */
-            while (p < json_end) {
-                if (*p == '\\') {
-                    p += 2; /* skip escaped character */
-                    continue;
-                }
-                if (*p == '"') break;
-                p++;
+    const char *p = json_ws(json, json_end);
+    if (p >= json_end || *p != '{') return rt_str_empty();
+    p = json_ws(p + 1, json_end);
+    const char *selected = NULL;
+    if (p < json_end && *p == '}') return rt_str_empty();
+    for (;;) {
+        char *decoded_key = NULL;
+        size_t decoded_key_len = 0;
+        int key_has_nul = 0;
+        if (!json_decode_string_span(p, json_end, &decoded_key, &decoded_key_len, &key_has_nul, &p)) {
+            if (selected) rt_release((void *)selected);
+            return rt_str_empty();
+        }
+        p = json_ws(p, json_end);
+        if (p >= json_end || *p != ':') {
+            free(decoded_key);
+            if (selected) rt_release((void *)selected);
+            return rt_str_empty();
+        }
+        p = json_ws(p + 1, json_end);
+        const char *value_start = p;
+        const char *value_end = NULL;
+        int value_is_string = (p < json_end && *p == '"');
+        int key_matches = !key_has_nul && decoded_key_len == klen &&
+                          memcmp(decoded_key, key, klen) == 0;
+        char *decoded_value = NULL;
+        size_t decoded_value_len = 0;
+        int value_has_nul = 0;
+        if (value_is_string && key_matches) {
+            if (!json_decode_string_span(p, json_end, &decoded_value, &decoded_value_len,
+                                         &value_has_nul, &value_end)) {
+                free(decoded_key);
+                if (selected) rt_release((void *)selected);
+                return rt_str_empty();
             }
-            /* p now points at closing quote (or end of string) */
-            if (p >= json_end) break;
-
-            /* Check if this quoted string is our key at depth 1 */
-            if (depth == 1) {
-                /* The string content is between str_start+1 and p */
-                size_t slen = (size_t)(p - str_start - 1);
-                if (slen == klen && memcmp(str_start + 1, key, klen) == 0) {
-                    /* Verify this is a key by checking for ':' after the quote */
-                    const char *after = p + 1;
-                    while (after < json_end && (*after == ' ' || *after == '\t' ||
-                           *after == '\n' || *after == '\r')) after++;
-                    if (after < json_end && *after == ':') {
-                        pos = p; /* found our key — pos points at closing quote */
-                        break;
-                    }
-                }
+        } else if (!json_skip_value(p, json_end, 2, &value_end)) {
+            free(decoded_key);
+            if (selected) rt_release((void *)selected);
+            return rt_str_empty();
+        }
+        if (key_matches) {
+            if (selected) rt_release((void *)selected);
+            if (value_is_string) {
+                selected = value_has_nul ? rt_str_empty()
+                                         : rt_str_copy_len(decoded_value, decoded_value_len);
+            } else {
+                selected = json_copy_runtime_span(value_start, value_end);
             }
-            p++; /* skip closing quote */
+        }
+        free(decoded_key);
+        free(decoded_value);
+        p = json_ws(value_end, json_end);
+        if (p < json_end && *p == ',') {
+            p = json_ws(p + 1, json_end);
             continue;
         }
-
-        if (c == '{' || c == '[') {
-            depth++;
-        } else if (c == '}' || c == ']') {
-            depth--;
+        if (p < json_end && *p == '}') {
+            p = json_ws(p + 1, json_end);
+            if (p != json_end) {
+                if (selected) rt_release((void *)selected);
+                return rt_str_empty();
+            }
+            return selected ? selected : rt_str_empty();
         }
-        p++;
-    }
-
-    if (!pos) return turbo_strdup("");
-
-    /* Advance past closing quote of the key, skip whitespace and colon */
-    pos += 1;
-    if (pos >= json_end) return turbo_strdup("");
-    while (pos < json_end && (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r')) pos++;
-    if (pos >= json_end || *pos != ':') return turbo_strdup("");
-    pos++;
-    if (pos >= json_end) return turbo_strdup("");
-    while (pos < json_end && (*pos == ' ' || *pos == '\t' || *pos == '\n' || *pos == '\r')) pos++;
-    if (pos >= json_end) return turbo_strdup("");
-
-    if (*pos == '"') {
-        /* String value — use proper escape scanning like the key scanner */
-        pos++;
-        const char *start = pos;
-        while (pos < json_end) {
-            if (*pos == '\\') { pos += 2; continue; }
-            if (*pos == '"') break;
-            pos++;
-        }
-        size_t vlen = pos - start;
-        char *val = rt_str_alloc(vlen);
-        memcpy(val, start, vlen);
-        val[vlen] = '\0';
-        return val;
-    } else {
-        /* Number, bool, or null */
-        const char *start = pos;
-        while (*pos && *pos != ',' && *pos != '}' && *pos != ']' &&
-               *pos != ' ' && *pos != '\n' && *pos != '\r' && *pos != '\t') pos++;
-        size_t vlen = pos - start;
-        char *val = rt_str_alloc(vlen);
-        memcpy(val, start, vlen);
-        val[vlen] = '\0';
-        return val;
+        if (selected) rt_release((void *)selected);
+        return rt_str_empty();
     }
 }
 
@@ -2413,34 +2747,23 @@ const char *rt_json_build(const char *pairs) {
 }
 
 const char *rt_json_root(const char *json) {
-    if (!json) return turbo_strdup("");
+    if (!json) return rt_str_empty();
     while (*json == ' ' || *json == '\n' || *json == '\r' || *json == '\t') json++;
     size_t len = strlen(json);
     while (len > 0 && (json[len - 1] == ' ' || json[len - 1] == '\n' || json[len - 1] == '\r' || json[len - 1] == '\t')) len--;
     if (len >= 2 && json[0] == '"' && json[len - 1] == '"') {
-        /* Escape sequences shrink (e.g. \\n -> \n), so output <= input size.
-           len-2 chars of content + NUL = len-1 bytes is always sufficient. */
-        char *out = rt_str_alloc(len - 2);
-        size_t j = 0;
-        for (size_t i = 1; i + 1 < len; i++) {
-            if (json[i] == '\\' && i + 1 < len - 1) {
-                i++;
-                switch (json[i]) {
-                    case 'n': out[j++] = '\n'; break;
-                    case 'r': out[j++] = '\r'; break;
-                    case 't': out[j++] = '\t'; break;
-                    case 'b': out[j++] = '\b'; break;
-                    case 'f': out[j++] = '\f'; break;
-                    case '"': out[j++] = '"'; break;
-                    case '\\': out[j++] = '\\'; break;
-                    default: out[j++] = json[i]; break;
-                }
-            } else {
-                out[j++] = json[i];
-            }
+        char *decoded = NULL;
+        size_t decoded_len = 0;
+        int has_nul = 0;
+        const char *after = NULL;
+        const char *end = json + len;
+        if (json_decode_string_span(json, end, &decoded, &decoded_len, &has_nul, &after) &&
+            after == end) {
+            const char *out = has_nul ? rt_str_empty() : rt_str_copy_len(decoded, decoded_len);
+            free(decoded);
+            return out;
         }
-        out[j] = '\0';
-        return out;
+        free(decoded);
     }
     char *out = rt_str_alloc(len);
     memcpy(out, json, len);

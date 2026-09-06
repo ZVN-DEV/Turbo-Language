@@ -751,7 +751,25 @@ let json = "{\"name\":\"Turbo\",\"version\":\"0.3\"}"
 let name = json_get(json, "name")    // "Turbo"
 ```
 
-Extracts a value from a JSON string by key. Returns the value as a string.
+Extracts a top-level object value by its decoded key. Strings are returned
+decoded (including Unicode escapes and surrogate pairs); numbers, booleans,
+null and containers are returned as text. Duplicate keys use the last matching
+top-level key; nested keys do not shadow it. Missing keys and malformed or
+unsupported documents return an empty string, including malformed data after
+the selected field or numbers outside the parser's finite range.
+
+The native extraction path validates JSON string/number/container syntax with
+bounded nesting. Its string rules follow [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259.html#section-7).
+The current NUL-terminated string ABI cannot represent embedded NUL: a decoded
+value containing `\u0000` returns empty rather than a truncated prefix. This is
+not a lossless arbitrary-JSON string API.
+
+**Remaining native formatting difference:** AOT preserves raw spelling for
+non-string selected values, while JIT serializes them through `serde_json`.
+Nested container extraction is semantically checked, not byte-canonical;
+floating-point spelling and object-key ordering are not yet normalized across
+modes. A parse-once typed JSON value API and full formatting parity remain future
+work; this string-returning lookup validates/parses again on each call.
 
 ### json_stringify
 

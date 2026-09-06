@@ -1,0 +1,16 @@
+fn main() {
+    let key = "key\té🙂\""
+    let original = "line\nslash\\quote\""
+    let encoded = json_stringify(key, original)
+    assert(json_get(encoded, key) == original)
+    let empty_key = json_stringify("", original)
+    assert(json_get(empty_key, "") == original)
+    let arguments = args()
+    let mut i = 0
+    while i < len(arguments) {
+        let input = read_file(arguments[i])
+        let value = json_get(input, "target")
+        print(to_json(value))
+        i += 1
+    }
+}
