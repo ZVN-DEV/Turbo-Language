@@ -38,6 +38,9 @@
  * include turbo_rt.c via a header — the runtime intentionally has no
  * .h file (it is consumed via include_str! in the codegen crate). */
 extern const char *rt_str_repeat(const char *s, long long count);
+extern const char *rt_json_quote(const char *s);
+extern const char *rt_json_stringify(const char *key, const char *value);
+extern const char *rt_request_body(const char *req);
 extern const char *rt_str_concat(const char *a, const char *b);
 extern const char *rt_str_concat_inplace(const char *a, const char *b);
 extern const char *rt_str_replace(const char *s, const char *from, const char *to);
@@ -1186,8 +1189,38 @@ static void test_sqlite_column_str_release_loop(void) {
           ok && total == 100000LL * 30);
 }
 
+static void test_json_control_encoding(void) {
+    char controls[32];
+    for (int i = 1; i < 32; i++) controls[i - 1] = (char)i;
+    controls[31] = '\0';
+    const char *expected = "\"\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007"
+        "\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012"
+        "\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a"
+        "\\u001b\\u001c\\u001d\\u001e\\u001f\"";
+    const char *encoded = rt_json_quote(controls);
+    assert(strcmp(encoded, expected) == 0);
+    rt_release((void *)encoded);
+    encoded = rt_json_quote("café 🌍 \\\"");
+    assert(strcmp(encoded, "\"café 🌍 \\\\\\\"\"") == 0);
+    rt_release((void *)encoded);
+    encoded = rt_json_quote(NULL);
+    assert(strcmp(encoded, "\"\"") == 0);
+    rt_release((void *)encoded);
+    encoded = rt_json_stringify("\002", "\003");
+    assert(strcmp(encoded, "{\"\\u0002\":\"\\u0003\"}") == 0);
+    rt_release((void *)encoded);
+}
+
+static void test_request_body_preserves_separator(void) {
+    const char *body = rt_request_body("POST\001/todos\001\001\001left\001right");
+    assert(strcmp(body, "left\001right") == 0);
+    rt_release((void *)body);
+}
+
 int main(void) {
     printf("== turbo_rt C runtime tests ==\n");
+    test_json_control_encoding();
+    test_request_body_preserves_separator();
 
     test_str_repeat_overflow();
     test_str_repeat_normal();

@@ -395,8 +395,15 @@ pub(crate) fn compile_builtin_to_json<M: Module>(
 
     if let TurboTy::Struct(ref struct_name) = tty {
         compile_struct_to_json(cx, val, struct_name)
+    } else if matches!(tty, TurboTy::Str) {
+        let fid = cx.rt_fns["rt_json_quote"];
+        let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+        let call = cx.builder.ins().call(fref, &[val]);
+        let quoted = cx.builder.inst_results(call)[0];
+        crate::release_expr_temp_if_needed(cx, val, &tty, &args[0]);
+        Ok(Some((quoted, TurboTy::Str)))
     } else {
-        // For non-structs, just convert to string
+        // Preserve the existing rendering of other scalar values.
         let str_val = convert_to_str(cx, val, &tty)?;
         Ok(Some((str_val, TurboTy::Str)))
     }
@@ -444,17 +451,10 @@ pub(crate) fn compile_struct_to_json<M: Module>(
         // For string fields, wrap the value in quotes; for numeric/bool, emit raw
         let field_json_str = match field_ty {
             TurboTy::Str => {
-                let quote_str = cx.create_string("\"")?;
-                let concat_ref = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
-                let call = cx.builder.ins().call(concat_ref, &[quote_str, raw_val]);
-                let with_open_quote = cx.builder.inst_results(call)[0];
-                let quote_str2 = cx.create_string("\"")?;
-                let concat_ref2 = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
-                let call2 = cx
-                    .builder
-                    .ins()
-                    .call(concat_ref2, &[with_open_quote, quote_str2]);
-                cx.builder.inst_results(call2)[0]
+                let fid = cx.rt_fns["rt_json_quote"];
+                let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                let call = cx.builder.ins().call(fref, &[raw_val]);
+                cx.builder.inst_results(call)[0]
             }
             TurboTy::Int => {
                 let fid = cx.rt_fns["rt_i64_to_str"];
@@ -486,6 +486,9 @@ pub(crate) fn compile_struct_to_json<M: Module>(
         let concat_ref = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
         let call = cx.builder.ins().call(concat_ref, &[result, field_json_str]);
         result = cx.builder.inst_results(call)[0];
+        if matches!(field_ty, TurboTy::Str) {
+            crate::release_if_needed(cx, field_json_str, &TurboTy::Str);
+        }
     }
 
     // Close with "}"
@@ -651,18 +654,10 @@ pub(crate) fn compile_builtin_to_json_array<M: Module>(
 
         let field_json_str = match fty {
             TurboTy::Str => {
-                let q = cx.create_string("\"")?;
-                let cr = cx
-                    .module
-                    .declare_func_in_func(inner_concat_fid, cx.builder.func);
-                let c1 = cx.builder.ins().call(cr, &[q, raw_val]);
-                let wq = cx.builder.inst_results(c1)[0];
-                let q2 = cx.create_string("\"")?;
-                let cr2 = cx
-                    .module
-                    .declare_func_in_func(inner_concat_fid, cx.builder.func);
-                let c2 = cx.builder.ins().call(cr2, &[wq, q2]);
-                cx.builder.inst_results(c2)[0]
+                let fid = cx.rt_fns["rt_json_quote"];
+                let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
+                let call = cx.builder.ins().call(fref, &[raw_val]);
+                cx.builder.inst_results(call)[0]
             }
             TurboTy::Int => {
                 let fid = cx.rt_fns["rt_i64_to_str"];
@@ -695,6 +690,9 @@ pub(crate) fn compile_builtin_to_json_array<M: Module>(
             .declare_func_in_func(inner_concat_fid, cx.builder.func);
         let c = cx.builder.ins().call(cr, &[elem_json, field_json_str]);
         elem_json = cx.builder.inst_results(c)[0];
+        if matches!(fty, TurboTy::Str) {
+            crate::release_if_needed(cx, field_json_str, &TurboTy::Str);
+        }
     }
 
     let close_brace = cx.create_string("}")?;

@@ -2094,6 +2094,22 @@ pub(crate) extern "C" fn rt_json_get(json: *const u8, key: *const u8) -> *const 
     }
 }
 
+/// Encode a string as a complete JSON string literal, including its quotes.
+/// Borrows a NUL-terminated UTF-8 input (null means empty); returns a fresh
+/// ARC/arena-owned string. Keep byte-for-byte parity with C rt_json_quote,
+/// pinned by the CLI serializer conformance test.
+pub(crate) extern "C" fn rt_json_quote(value: *const u8) -> *const u8 {
+    let value = if value.is_null() {
+        ""
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(value.cast()) }
+            .to_str()
+            .unwrap_or("")
+    };
+    // Serializing a string cannot fail. The encoded result contains no NUL.
+    arena_str(cstring_or_empty(serde_json::to_string(value).unwrap()))
+}
+
 /// Build a JSON object string from a key and value: {"key": "value"}
 pub(crate) extern "C" fn rt_json_stringify(key: *const u8, value: *const u8) -> *const u8 {
     let key_str = unsafe { std::ffi::CStr::from_ptr(key as *const std::ffi::c_char) }

@@ -2125,15 +2125,28 @@ const char *rt_env_get(const char *name) {
     return turbo_strdup(val);
 }
 
-static char *rt_json_escape_dup(const char *s) {
-    if (!s) {
-        return rt_str_empty();
-    }
+/* Encode a C-string as JSON, optionally including the surrounding quotes.
+ * Size exactly: uncommon control bytes need six bytes (\u00XX), while UTF-8
+ * bytes pass through unchanged. The runtime string ABI cannot contain NUL. */
+static char *rt_json_encode_string(const char *s, int quoted) {
+    if (!s) s = "";
     size_t len = strlen(s);
-    char *out = rt_str_alloc(len * 2);
-    size_t j = 0;
+    size_t encoded_len = quoted ? 2 : 0;
     for (size_t i = 0; i < len; i++) {
-        char c = s[i];
+        unsigned char c = (unsigned char)s[i];
+        size_t width = (c == '\\' || c == '"' || c == '\n' || c == '\r' ||
+                        c == '\t' || c == '\b' || c == '\f') ? 2 : (c < 32 ? 6 : 1);
+        if (encoded_len > SIZE_MAX - width) {
+            fprintf(stderr, "runtime error: JSON string allocation overflow\n");
+            exit(1);
+        }
+        encoded_len += width;
+    }
+    char *out = rt_str_alloc(encoded_len);
+    size_t j = 0;
+    if (quoted) out[j++] = '"';
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
         if (c == '\\' || c == '"') {
             out[j++] = '\\';
             out[j++] = c;
@@ -2152,12 +2165,31 @@ static char *rt_json_escape_dup(const char *s) {
         } else if (c == '\f') {
             out[j++] = '\\';
             out[j++] = 'f';
+        } else if (c < 32) {
+            static const char hex[] = "0123456789abcdef";
+            out[j++] = '\\';
+            out[j++] = 'u';
+            out[j++] = '0';
+            out[j++] = '0';
+            out[j++] = hex[c >> 4];
+            out[j++] = hex[c & 15];
         } else {
-            out[j++] = c;
+            out[j++] = (char)c;
         }
     }
+    if (quoted) out[j++] = '"';
     out[j] = '\0';
     return out;
+}
+
+static char *rt_json_escape_dup(const char *s) {
+    return rt_json_encode_string(s, 0);
+}
+
+/* Borrows NUL-terminated UTF-8 (NULL means empty); returns a fresh ARC/arena
+ * string. The CLI conformance fixture pins byte-identical JIT/AOT encoding. */
+const char *rt_json_quote(const char *s) {
+    return rt_json_encode_string(s, 1);
 }
 
 /* json_get(json, key) -> str — extract top-level key value from JSON string.
@@ -4236,8 +4268,9 @@ static const char* req_field(const char *req, int field_index) {
         if (!sep) return rt_str_empty();
         start = sep + 1;
     }
-    /* Find end of this field */
-    const char *end = strchr(start, '\x01');
+    /* Body is the final field; separator bytes inside it are payload, not
+     * framing. Match the JIT runtime's splitn(5, '\x01') contract. */
+    const char *end = field_index == 4 ? NULL : strchr(start, '\x01');
     if (!end) {
         /* Last field — copy to end of string */
         size_t len = strlen(start);

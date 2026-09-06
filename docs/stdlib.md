@@ -771,7 +771,11 @@ let p = Point { x: 1, y: 2 }
 let json = to_json(p)    // "{\"x\":1,\"y\":2}"
 ```
 
-Serializes a struct to a JSON string.
+Serializes a struct to a JSON string. String fields are escaped, including quotes,
+backslashes and control characters. `to_json(s)` also serializes a standalone
+string as a quoted JSON string literal (it no longer returns unquoted text).
+Strings use the current NUL-terminated runtime ABI; embedded NUL bytes are not
+supported. Other existing scalar rendering behavior is unchanged.
 
 ### to_json_array
 

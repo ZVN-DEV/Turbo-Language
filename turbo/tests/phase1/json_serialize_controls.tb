@@ -1,0 +1,13 @@
+struct Message { title: str, count: i64, active: bool }
+
+fn main() {
+    let mut title = "quote: \" slash: \\ Unicode: café 🌍 "
+    for i in 1..32 {
+        title = title + str_from_char(i)
+    }
+    let message = Message { title: title, count: 7, active: true }
+    print(to_json(message))
+    print(to_json_array([message]))
+    print(json_stringify("title", title))
+    print(to_json(title))
+}

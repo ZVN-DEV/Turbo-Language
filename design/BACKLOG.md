@@ -15,6 +15,13 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
 
 ## P1 — correctness & credibility
 
+### Approved native-platform execution (2026-09-06)
+
+User-directed sequence: [master plan](TURBO-MASTER-PLAN.md), [acceptance spec](TURBO-ACCEPTANCE-SPEC.md). Preserve prior BL history; BL-27B/BL-28 remain owned by their existing entries. Native goal tracking is active; OMX CLI is not installed and no matching Circular project is exposed. No shadow OMX ledger has been fabricated.
+
+- [x] **G1.1 — HTTP/SQLite JSON round trips. DONE** on `codex/g1-json-roundtrip`, implementation in this commit (`Preserve JSON payloads across native serialization and HTTP`). Three initial regressions failed before the fix; five CLI tests now cover byte-identical JIT/AOT serializer output, POST→GET→restart, port collision recovery and non-retry compiler errors. Fixed native struct/array/root string quoting and C control escaping, retained SQL binding, and corrected AOT body truncation at byte0x01. Fresh verification: workspace tests,350 integration passes/10 helper skips,37 native parity,11 existing WASM tests, C-runtime ASan, Clippy/fmt, C embedding smoke. Independent `code-reviewer` APPROVE and `architect` CLEAR after feedback fixes. Embedded NUL remains unsupported by the existing C-string ABI; no broader serializer/WASM/production qualification is claimed.
+- [ ] **G2.1 — Performance/allocation evaluator.** Pending G1.1. Establish current-capability baselines and freeze future controlled fixture specifications as pending capability; follow E2 measurement rules. Remaining G1–G8 outcomes stay open in the master plan and are not implied complete by these initial slices.
+
 - [x] **BL-1 — Finish retiring the `?.unwrap()` panic class in codegen.** _Status: DONE (Claude, 2026-06-28, commit `47bef1ce68adbc2be4640fc5ad8f012c06e81a6e`)._
   The 0.9.2 sprint fixed the 2 reachable panics but ~152 `compile_expr(...)?.unwrap()` remain in
   `turbo/crates/turbo-codegen-cranelift/src/builtins.rs` (+5 in `src/expr.rs`: ~1595/1620/1646/1851/1890).
