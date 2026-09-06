@@ -141,6 +141,40 @@ class ProcessTests(unittest.TestCase):
 
 
 class OracleTests(unittest.TestCase):
+    def test_tree_oracle_matches_recursive_reference(self):
+        def visit(depth, seed):
+            value = seed % 1000
+            if depth == 0:
+                return value
+            left = visit(depth - 1, (seed * 48271 + 17) % 2147483647)
+            right = visit(depth - 1, (seed * 69621 + 31) % 2147483647)
+            return (left * 33 + value * 17 + right * 97) % 1_000_000_007
+
+        for depth, rounds in ((1, 1), (2, 3), (6, 2), (8, 4)):
+            checksum = 0
+            for step in range(rounds):
+                checksum = (checksum * 65599 + visit(depth, 7 + step * 7919)) % 1_000_000_007
+            nodes = ((1 << (depth + 1)) - 1) * rounds
+            self.assertEqual(ev.tree_oracle(depth, rounds), f"{checksum}\n{nodes}\n{rounds}\n".encode())
+
+    def test_tree_oracle_rejects_unbounded_work(self):
+        for depth, rounds in ((0, 1), (21, 1), (1, 0), (1, 65)):
+            with self.assertRaises(ValueError):
+                ev.tree_oracle(depth, rounds)
+
+    def test_tree_manifest_requires_bounded_parameters_and_boolean_contract(self):
+        for changes in ({"environment": {}},
+                        {"environment": {"TURBO_BENCH_SIZE": "21", "TURBO_BENCH_STEPS": "1"}},
+                        {"environment": {"TURBO_BENCH_SIZE": "1", "TURBO_BENCH_STEPS": "65"}},
+                        {"require_zero_live": "true"}):
+            with tempfile.TemporaryDirectory() as temp:
+                manifest = ev.load_manifest()
+                manifest["cases"]["tree_walk"].update(changes)
+                path = Path(temp) / "cases.json"
+                path.write_text(json.dumps(manifest))
+                with self.assertRaises(ValueError):
+                    ev.load_manifest(path)
+
     def test_string_oracle_matches_literal_record_processing(self):
         import re
         corpus = ev.ROOT / "turbo/benchmarks/string_tokens_corpus.txt"
@@ -277,6 +311,21 @@ class OracleTests(unittest.TestCase):
                         stderr="TURBO_ALLOC_PROFILE " + json.dumps(record) + "\n")
 
         self.assertEqual(ev.parse_allocation_profile(sample(base), b"ok\n"), base)
+        self.assertEqual(ev.parse_allocation_profile(sample(base), b"ok\n", require_zero_live=True), base)
+        live = dict(base, heap_frees=0, live_allocations=1, live_data_bytes=32, live_header_bytes=16)
+        self.assertEqual(ev.parse_allocation_profile(sample(live), b"ok\n"), live)
+        with self.assertRaisesRegex(ev.EvaluationError, "live allocations"):
+            ev.parse_allocation_profile(sample(live), b"ok\n", require_zero_live=True)
+        with tempfile.TemporaryDirectory() as temp:
+            events = []
+            with patch.object(ev, "run_process", side_effect=[dict(status="ok"), sample(live)]), \
+                 patch.object(ev, "file_digest", return_value="binary-fingerprint"):
+                with self.assertRaisesRegex(ev.EvaluationError, "live allocations"):
+                    ev.profile_case("tree_walk", dict(turbo_source="turbo/benchmarks/bench_tree_walk.tb",
+                        require_zero_live=True), dict(env={}, expected=b"ok\n"),
+                        Path(temp), "/compiler", 1, 10, events.append)
+            self.assertEqual(events[-1]["kind"], "allocation_profile")
+            self.assertEqual(events[-1]["sample"], sample(live))
         for changes in [dict(valid=False), dict(heap_frees=0), dict(total_data_bytes=1),
                         dict(allocations=True), dict(errors=1), dict(coverage="all_heap"),
                         dict(schema_version=True), dict(schema_version=1.0)]:

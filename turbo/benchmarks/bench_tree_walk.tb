@@ -1,0 +1,51 @@
+// Construct, postorder-hash and reclaim actual recursive managed trees.
+type Tree { Leaf(i64), Branch(i64, Tree, Tree) }
+
+fn build(depth: i64, seed: i64) -> Tree {
+    if depth == 0 { Tree.Leaf(seed % 1000) } else {
+        Tree.Branch(seed % 1000,
+            build(depth - 1, (seed * 48271 + 17) % 2147483647),
+            build(depth - 1, (seed * 69621 + 31) % 2147483647))
+    }
+}
+
+fn digest(tree: Tree) -> i64 {
+    match tree {
+        Leaf(value) => value
+        Branch(value, left, right) => (digest(left) * 33 + value * 17 + digest(right) * 97) % 1000000007
+    }
+}
+
+fn run_round(depth: i64, seed: i64) -> i64 {
+    let tree = build(depth, seed)
+    digest(tree)
+}
+
+fn parameter(name: str, fallback: i64) -> i64 {
+    let configured = env_get(name)
+    if configured == "" { fallback } else {
+        match str_to_int(configured) { ok(value) => value err(e) => 0 }
+    }
+}
+
+fn main() {
+    let depth = parameter("TURBO_BENCH_SIZE", 19)
+    let rounds = parameter("TURBO_BENCH_STEPS", 16)
+    assert(depth > 0 && depth <= 20)
+    assert(rounds > 0 && rounds <= 64)
+    let mut nodes = 1
+    let mut level = 0
+    while level < depth {
+        nodes = nodes * 2 + 1
+        level += 1
+    }
+    let mut checksum: i64 = 0
+    let mut step = 0
+    while step < rounds {
+        checksum = (checksum * 65599 + run_round(depth, 7 + step * 7919)) % 1000000007
+        step += 1
+    }
+    print(checksum)
+    print(nodes * rounds)
+    print(rounds)
+}

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "suite_version": "g2.1-v4",
+  "suite_version": "g2.1-v5",
   "cases": {
     "fib": {
       "category": "cpu",
@@ -107,11 +107,19 @@
     },
     "tree_walk": {
       "category": "cpu",
-      "status": "pending_fixture",
+      "status": "runnable",
       "controlled_status": "pending_capability",
-      "workload": "Seeded acyclic allocation-heavy tree, deterministic traversal/drop.",
-      "oracle": "Reference traversal result and balanced allocation accounting.",
-      "prerequisite": "fixture implementation and independent review"
+      "workload": "Sixteen build/walk/drop rounds of full depth19 binary trees (1048575 nodes each). Root seed7+round*7919; left(seed*48271+17)%2147483647, right(seed*69621+31)%2147483647. Node value seed%1000. Leaves hash to value; branches (33*left+17*value+97*right)%1000000007; round digest (65599*h+tree_hash)%1000000007.",
+      "oracle": "Independent flat breadth-first seed construction and bottom-up reduction, cross-checked against recursive reference at small sizes; exact digest/node-count/rounds and native allocation balance.",
+      "turbo_source": "turbo/benchmarks/bench_tree_walk.tb",
+      "rust_source": "turbo/benchmarks/rust/tree_walk.rs",
+      "source_sha256": {
+        "turbo/benchmarks/bench_tree_walk.tb": "6e082b2441f81f2cb5738956cee258391d08f58886957f08c00b15174d662ac1",
+        "turbo/benchmarks/rust/tree_walk.rs": "608f83792b5907a112ccd34119e3d7980a937e62eddeaef94bd1fb298e833eab"
+      },
+      "environment": { "TURBO_BENCH_SIZE": "19", "TURBO_BENCH_STEPS": "16" },
+      "require_zero_live": true,
+      "comparison_caveat": "Same actual recursive tree and postorder algorithm; Turbo managed tagged allocations vs safe Rust Box per node with borrowed traversal. Construction and drop are included, not traversal-only. No arena, shared-cycle, arbitrary-depth, closure reclamation or whole-heap qualification claim."
     },
     "sqlite": {
       "category": "application",

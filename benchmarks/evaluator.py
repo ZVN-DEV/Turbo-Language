@@ -26,7 +26,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path(__file__).with_name("evaluator-cases.json")
-IMPLEMENTED = {"fib", "wordcount", "buffer_scan", "hashmap_churn", "particle_update", "string_tokens"}
+IMPLEMENTED = {"fib", "wordcount", "buffer_scan", "hashmap_churn", "particle_update", "string_tokens", "tree_walk"}
 
 
 class EvaluationError(Exception):
@@ -174,7 +174,7 @@ def check_output(sample, expected):
         raise EvaluationError(f"unexpected stderr: {sample['stderr']!r}")
 
 
-def parse_allocation_profile(sample, expected):
+def parse_allocation_profile(sample, expected, *, require_zero_live=False):
     """Only the explicit instrumented phase may accept an observer stderr line."""
     check_output(dict(sample, stderr=""), expected)
     lines = sample["stderr"].splitlines()
@@ -205,6 +205,8 @@ def parse_allocation_profile(sample, expected):
             or not p["live_data_bytes"] <= p["peak_live_data_bytes"] <= p["total_data_bytes"]
             or p["live_header_bytes"] > p["total_header_bytes"]):
         raise EvaluationError("allocation accounting invariants failed")
+    if require_zero_live and any(p[key] for key in ("live_allocations", "live_data_bytes", "live_header_bytes")):
+        raise EvaluationError("workload left live allocations at entry return")
     return profile
 
 
@@ -315,6 +317,8 @@ def load_manifest(path=MANIFEST):
             raise ValueError(f"invalid case status: {name}")
         if case["status"] == "runnable" and name not in IMPLEMENTED:
             raise ValueError(f"no runner implementation: {name}")
+        if type(case.get("require_zero_live", False)) is not bool:
+            raise ValueError(f"invalid allocation contract: {name}")
         parameters = case.get("environment", {})
         if (not isinstance(parameters, dict)
                 or not set(parameters) <= {"TURBO_BENCH_SIZE", "TURBO_BENCH_STEPS"}
@@ -326,6 +330,11 @@ def load_manifest(path=MANIFEST):
                     or int(parameters["TURBO_BENCH_SIZE"]) > 10000
                     or int(parameters["TURBO_BENCH_STEPS"]) > 65536):
                 raise ValueError("particle parameters outside exact lattice contract")
+        if name == "tree_walk" and case["status"] == "runnable":
+            if (set(parameters) != {"TURBO_BENCH_SIZE", "TURBO_BENCH_STEPS"}
+                    or int(parameters["TURBO_BENCH_SIZE"]) > 20
+                    or int(parameters["TURBO_BENCH_STEPS"]) > 64):
+                raise ValueError("tree parameters outside workload contract")
         if name == "string_tokens" and case["status"] == "runnable":
             if (set(parameters) != {"TURBO_BENCH_STEPS"}
                     or int(parameters["TURBO_BENCH_STEPS"]) > 16777216):
@@ -393,6 +402,34 @@ def hashmap_oracle(steps):
             counts.pop((key + 17) % 4096, None)
     checksum = sum((key + 1) * value for key, value in counts.items())
     return f"{checksum}\n{checksum}\n{len(counts)}\n{len(counts)}\n".encode()
+
+
+def tree_oracle(depth, rounds):
+    """Independent flat, breadth-first construction and bottom-up reduction.
+
+    Native workloads allocate recursive enum nodes and walk/drop recursively.
+    The oracle instead assigns children by heap indices in a flat array.
+    """
+    if not 0 < depth <= 20 or not 0 < rounds <= 64:
+        raise ValueError("tree parameters outside workload contract")
+    nodes = (1 << (depth + 1)) - 1
+    parents = nodes // 2
+    checksum = 0
+    for step in range(rounds):
+        values = [0] * nodes
+        values[0] = 7 + step * 7919
+        for index in range(parents):
+            seed = values[index]
+            values[index * 2 + 1] = (seed * 48271 + 17) % 2147483647
+            values[index * 2 + 2] = (seed * 69621 + 31) % 2147483647
+        for index in range(nodes - 1, -1, -1):
+            value = values[index] % 1000
+            if index < parents:
+                value = (values[index * 2 + 1] * 33 + value * 17
+                         + values[index * 2 + 2] * 97) % 1_000_000_007
+            values[index] = value
+        checksum = (checksum * 65599 + values[0]) % 1_000_000_007
+    return f"{checksum}\n{nodes * rounds}\n{rounds}\n".encode()
 
 
 def string_tokens_oracle(path, steps):
@@ -493,6 +530,8 @@ def prepare_case(name, case, work, compiler, emit):
         expected = hashmap_oracle(int(env["TURBO_BENCH_STEPS"]))
     elif name == "particle_update":
         expected = particle_oracle(int(env["TURBO_BENCH_SIZE"]), int(env["TURBO_BENCH_STEPS"]))
+    elif name == "tree_walk":
+        expected = tree_oracle(int(env["TURBO_BENCH_SIZE"]), int(env["TURBO_BENCH_STEPS"]))
     else:
         expected = b"102334155\n"
     for language in ("turbo", "rust"):
@@ -529,7 +568,8 @@ def profile_case(name, spec, case, work, compiler, count, timeout, emit):
         for iteration in range(count):
             sample = run_process(command, cwd=work, env=env, timeout_s=timeout)
             emit(dict(kind="allocation_profile", case=name, mode=mode, iteration=iteration, sample=sample))
-            profile = parse_allocation_profile(sample, case["expected"])
+            profile = parse_allocation_profile(sample, case["expected"],
+                                               require_zero_live=spec.get("require_zero_live", False))
             result["samples"].append(dict(mode=mode, iteration=iteration, counters=profile,
                 instrumented_elapsed_ns=sample["elapsed_ns"], instrumented_peak_rss_bytes=sample["peak_rss_bytes"]))
     return result
@@ -645,7 +685,7 @@ def evaluate(args, manifest, emit):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cases", default="fib,wordcount,buffer_scan,hashmap_churn,particle_update,string_tokens")
+    parser.add_argument("--cases", default="fib,wordcount,buffer_scan,hashmap_churn,particle_update,string_tokens,tree_walk")
     parser.add_argument("--samples", type=int, default=20)
     parser.add_argument("--batches", type=int, default=3)
     parser.add_argument("--warmups", type=int, default=3)

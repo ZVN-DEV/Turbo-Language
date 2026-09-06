@@ -118,12 +118,22 @@ intentional fixture revision must update the manifest and retain old results.
   hashing and string representations remain language/runtime costs. This CPU
   workload includes one small corpus read and final ordering, not general I/O
   throughput. Native tests also run a separate corpus with a ZWJ emoji.
-- The fixed v4 manifest pins `TURBO_BENCH_SIZE` / `TURBO_BENCH_STEPS` for evaluation.
+- `tree_walk`:16 build/walk/drop rounds over seeded depth19 full binary trees,
+  1,048,575 nodes per tree. Both programs allocate actual recursive enum nodes;
+  Turbo manages them with ARC, Rust uses safe `Box` nodes and borrowed traversal.
+  The oracle uses a flat breadth-first representation and bottom-up hashing,
+  independently cross-checked against a recursive reference. Ordered subtree
+  hashes and a round digest include every node value. This measures construction,
+  traversal and reclamation together, not traversal-only or arena allocation.
+  Small native profile tests prove zero tracked live allocations and unchanged
+  peak live allocations when repeating the same-depth tree four times instead
+  of once. The declared zero-live contract also rejects leaking evaluator profile
+  samples; an uninstrumented run cannot certify this allocation contract.
+- The fixed v5 manifest pins `TURBO_BENCH_SIZE` / `TURBO_BENCH_STEPS` for evaluation.
   Small positive values can be used when invoking fixtures directly for tests.
   Unknown, non-string, non-ASCII or non-positive overrides are rejected by the
   evaluator. File-input bytes and logical in-memory input bytes are distinguished.
-- JSON transform and tree walk still need
-  fixtures/oracles and workload sizing. SQLite, HTTP and
+- JSON transform still needs its fixture/oracle and workload sizing. SQLite, HTTP and
   worker suites remain separate application/service qualification work.
 - Controlled profiles remain pending G3 capabilities. Their presence in the
   manifest does not mean borrowed/region/noalloc code has compiled or passed.
@@ -184,8 +194,9 @@ zero live shared-header allocations/bytes and allocations equal to frees after
 cycle collector, arbitrary-depth stack guarantee, WASM qualification or whole-heap
 proof. The separate indirect-call test proves argument safety only; reclamation
 of function/closure environment allocations remains outstanding and is not
-silently included in the balanced-allocation claim. The timed tree workload
-itself remains pending until its dataset, Rust counterpart and oracle are added.
+silently included in the balanced-allocation claim. The v5 timed tree workload
+now exercises these corrected recursive operations, with its own frozen seed
+rules, Rust counterpart and independent traversal oracle.
 
 ### Building and collecting profiles
 
