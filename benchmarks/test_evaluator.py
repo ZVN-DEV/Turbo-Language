@@ -141,6 +141,58 @@ class ProcessTests(unittest.TestCase):
 
 
 class OracleTests(unittest.TestCase):
+    def test_string_oracle_matches_literal_record_processing(self):
+        import re
+        corpus = ev.ROOT / "turbo/benchmarks/string_tokens_corpus.txt"
+        lines = corpus.read_text().splitlines()
+        for steps in (1, 2, 7, 8, 9, 31):
+            counts = {}
+            processed_bytes = 0
+            for step in range(steps):
+                line = lines[step % len(lines)]
+                processed_bytes += len(line.encode())
+                for raw in line.split("|"):
+                    token = re.sub(r"^[ \t\r\n]+|[ \t\r\n]+$", "", raw)
+                    token = re.sub("INFO:", "info:", token)
+                    token = re.sub("WARN:", "warn:", token).replace("—", "-")
+                    if token:
+                        counts[token] = counts.get(token, 0) + 1
+            expected = "".join(f"{key} {counts[key]}\n" for key in sorted(counts))
+            expected += f"TOTAL {sum(counts.values())} {len(counts)} {processed_bytes}\n"
+            self.assertEqual(ev.string_tokens_oracle(corpus, steps), expected.encode())
+
+    def test_string_oracle_preserves_unicode_and_rejects_invalid_corpus(self):
+        with tempfile.TemporaryDirectory() as temp:
+            corpus = Path(temp) / "tokens.txt"
+            corpus.write_text(" INFO: É | WARN: é | INFO: 🙂 | INFO: a—b \n")
+            self.assertEqual(ev.string_tokens_oracle(corpus, 1),
+                             "info: a-b 1\ninfo: É 1\ninfo: 🙂 1\nwarn: é 1\nTOTAL 4 4 49\n".encode())
+            for contents in ("", "no trailing newline", "nul\0\n", "\u00a0INFO: x\n"):
+                corpus.write_text(contents)
+                with self.assertRaises(ValueError):
+                    ev.string_tokens_oracle(corpus, 1)
+
+    def test_string_golden_and_manifest_contract(self):
+        corpus = ev.ROOT / "turbo/benchmarks/string_tokens_corpus.txt"
+        golden = ev.ROOT / "turbo/benchmarks/string_tokens_corpus.expected"
+        self.assertEqual(ev.string_tokens_oracle(corpus, 8), golden.read_bytes())
+        for parameters in ({}, {"TURBO_BENCH_STEPS": "16777217"},
+                           {"TURBO_BENCH_STEPS": "1", "TURBO_BENCH_SIZE": "1"}):
+            with tempfile.TemporaryDirectory() as temp:
+                manifest = ev.load_manifest()
+                manifest["cases"]["string_tokens"]["environment"] = parameters
+                path = Path(temp) / "cases.json"
+                path.write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(ValueError, "string token parameters"):
+                    ev.load_manifest(path)
+        with tempfile.TemporaryDirectory() as temp:
+            manifest = ev.load_manifest()
+            del manifest["cases"]["string_tokens"]["source_sha256"]["turbo/benchmarks/string_tokens_corpus.txt"]
+            path = Path(temp) / "cases.json"
+            path.write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, "unfingerprinted string token corpus"):
+                ev.load_manifest(path)
+
     def test_particle_oracle_matches_exact_fixed_step_simulation(self):
         # Integer lattice simulation is independent of the closed-form oracle.
         # Velocity/acceleration units are 1/1024, position units are 1/65536.

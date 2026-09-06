@@ -26,7 +26,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path(__file__).with_name("evaluator-cases.json")
-IMPLEMENTED = {"fib", "wordcount", "buffer_scan", "hashmap_churn", "particle_update"}
+IMPLEMENTED = {"fib", "wordcount", "buffer_scan", "hashmap_churn", "particle_update", "string_tokens"}
 
 
 class EvaluationError(Exception):
@@ -326,6 +326,12 @@ def load_manifest(path=MANIFEST):
                     or int(parameters["TURBO_BENCH_SIZE"]) > 10000
                     or int(parameters["TURBO_BENCH_STEPS"]) > 65536):
                 raise ValueError("particle parameters outside exact lattice contract")
+        if name == "string_tokens" and case["status"] == "runnable":
+            if (set(parameters) != {"TURBO_BENCH_STEPS"}
+                    or int(parameters["TURBO_BENCH_STEPS"]) > 16777216):
+                raise ValueError("string token parameters outside workload contract")
+            if "turbo/benchmarks/string_tokens_corpus.txt" not in case.get("source_sha256", {}):
+                raise ValueError("unfingerprinted string token corpus")
         if case["status"] == "runnable":
             for language in ("turbo", "rust"):
                 relative = case.get(language + "_source")
@@ -389,6 +395,33 @@ def hashmap_oracle(steps):
     return f"{checksum}\n{checksum}\n{len(counts)}\n{len(counts)}\n".encode()
 
 
+def string_tokens_oracle(path, steps):
+    """Count each frozen record once and weight by its cyclic visit count.
+
+    Preserve Unicode except the explicit em-dash replacement; reject whitespace
+    outside the shared native trim subset rather than conceal JIT/AOT drift.
+    """
+    text = Path(path).read_bytes().decode("utf-8")
+    if (not 0 < steps <= 16777216 or not text or not text.endswith("\n") or "\0" in text
+            or any(c.isspace() and c not in " \t\r\n" for c in text)):
+        raise ValueError("string corpus outside UTF-8/ASCII-margin workload contract")
+    lines = text[:-1].split("\n")
+    counts, input_bytes = Counter(), 0
+    rounds, remainder = divmod(steps, len(lines))
+    for i, line in enumerate(lines):
+        visits = rounds + (i < remainder)
+        input_bytes += len(line.encode()) * visits
+        if not visits:
+            continue
+        for field in line.split("|"):
+            token = field.strip(" \t\r\n").replace("INFO:", "info:").replace("WARN:", "warn:")
+            token = token.replace("—", "-")
+            if token:
+                counts[token] += visits
+    result = "".join(f"{key} {counts[key]}\n" for key in sorted(counts))
+    return (result + f"TOTAL {sum(counts.values())} {len(counts)} {input_bytes}\n").encode()
+
+
 def particle_oracle(size, steps):
     """Closed-form integer trajectory, independent of native f64 update loops.
 
@@ -450,6 +483,10 @@ def prepare_case(name, case, work, compiler, emit):
         check_output(generated, b"")
         env["WORDCOUNT_INPUT"] = str(data)
         expected = wordcount_oracle(data)
+    elif name == "string_tokens":
+        data = source_path("turbo/benchmarks/string_tokens_corpus.txt")
+        env["STRING_TOKENS_INPUT"] = str(data)
+        expected = string_tokens_oracle(data, int(env["TURBO_BENCH_STEPS"]))
     elif name == "buffer_scan":
         expected = buffer_oracle(int(env["TURBO_BENCH_SIZE"]))
     elif name == "hashmap_churn":
@@ -608,7 +645,7 @@ def evaluate(args, manifest, emit):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cases", default="fib,wordcount,buffer_scan,hashmap_churn,particle_update")
+    parser.add_argument("--cases", default="fib,wordcount,buffer_scan,hashmap_churn,particle_update,string_tokens")
     parser.add_argument("--samples", type=int, default=20)
     parser.add_argument("--batches", type=int, default=3)
     parser.add_argument("--warmups", type=int, default=3)

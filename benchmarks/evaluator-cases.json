@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "suite_version": "g2.1-v3",
+  "suite_version": "g2.1-v4",
   "cases": {
     "fib": {
       "category": "cpu",
@@ -40,11 +40,19 @@
     },
     "string_tokens": {
       "category": "cpu",
-      "status": "pending_fixture",
+      "status": "runnable",
       "controlled_status": "pending_capability",
-      "workload": "Fixed ASCII and Unicode token corpus with explicit normalization rules.",
-      "oracle": "Exact token/count sequence and digest; freeze corpus before optimization.",
-      "prerequisite": "fixture implementation and independent review"
+      "workload": "1048576 cyclic visits over eight frozen UTF-8 log records. Split literal pipe, trim ASCII space/tab/CR/LF margins, replace INFO:/WARN: labels and em dash literally, skip empty fields, count tokens, emit lexical token/count sequence and total tokens/unique/processed input bytes (excluding record newlines).",
+      "oracle": "Independent weighted per-record Counter (no native iteration loop); exact UTF-8 stdout and SHA256 verified every sample.",
+      "turbo_source": "turbo/benchmarks/bench_string_tokens.tb",
+      "rust_source": "turbo/benchmarks/rust/string_tokens.rs",
+      "source_sha256": {
+        "turbo/benchmarks/bench_string_tokens.tb": "df04299115c9dd1794a390d84d70afe48c53ee380ecc75b96a8a0fa6655c233a",
+        "turbo/benchmarks/rust/string_tokens.rs": "385a65fbbb8ae7fcadbc373cad610f5286d5948004f84d4382ade5742b2b6875",
+        "turbo/benchmarks/string_tokens_corpus.txt": "762f2c9eb8fa76aff5018cc5acb76c21b0a954fa348e3f77d9710c02ed679c83"
+      },
+      "environment": { "TURBO_BENCH_STEPS": "1048576" },
+      "comparison_caveat": "Same safe token/count algorithm; string allocation and hashing implementations differ. Includes a small corpus file read and final ordering. Unicode text is preserved except explicit em-dash replacement: no Unicode case-fold/NFC/general whitespace parity claim."
     },
     "hashmap_churn": {
       "category": "cpu",

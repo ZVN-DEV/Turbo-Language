@@ -107,11 +107,22 @@ intentional fixture revision must update the manifest and retain old results.
   rendering performance or frame-latency qualification. Step count was sized with
   a preliminary512-step smoke before freezing v3; outputs are unchanged per step,
   not padded with sleeps. Any samples under200ms still block qualification.
-- The fixed v3 manifest pins `TURBO_BENCH_SIZE` / `TURBO_BENCH_STEPS` for evaluation.
+- `string_tokens`: frozen eight-record UTF-8 log corpus,1,048,576 cyclic visits,
+  literal pipe splitting, ASCII-margin trim, literal `INFO:`/`WARN:` label and
+  em-dash replacement, empty-field removal and token counts in lexical order.
+  Unicode is otherwise preserved byte-for-byte, including combining marks and
+  mixed scripts. The independent oracle weights each record by its visit count
+  instead of replaying the native loop. Exact output includes every token/count
+  and processed input bytes (record separators excluded), with a SHA256 check.
+  Both implementations use the same safe token/count algorithm; allocation,
+  hashing and string representations remain language/runtime costs. This CPU
+  workload includes one small corpus read and final ordering, not general I/O
+  throughput. Native tests also run a separate corpus with a ZWJ emoji.
+- The fixed v4 manifest pins `TURBO_BENCH_SIZE` / `TURBO_BENCH_STEPS` for evaluation.
   Small positive values can be used when invoking fixtures directly for tests.
   Unknown, non-string, non-ASCII or non-positive overrides are rejected by the
   evaluator. File-input bytes and logical in-memory input bytes are distinguished.
-- JSON transform, string tokens and tree walk still need
+- JSON transform and tree walk still need
   fixtures/oracles and workload sizing. SQLite, HTTP and
   worker suites remain separate application/service qualification work.
 - Controlled profiles remain pending G3 capabilities. Their presence in the
@@ -122,6 +133,33 @@ intentional fixture revision must update the manifest and retain old results.
 Future slices must close these gaps rather than deleting them from the report.
 The purpose of this slice is reliable evidence on existing code—not an easier
 definition of the master plan's success.
+
+### Known Unicode parity work (not covered by the token fixture)
+
+Current JIT `upper`/`lower`/`trim` use Rust Unicode operations; the AOT C
+counterparts only change ASCII case and trim space/tab/CR/LF. Empty-separator
+`split` also differs (Rust scalar boundaries with empty ends versus C byte
+elements). These are unresolved runtime behavior gaps, not a license to claim
+general Unicode parity from this benchmark. The fixed corpus and oracle reject
+NUL, non-UTF-8 and whitespace outside the shared ASCII-margin subset. Literal
+label replacement is the declared log-processing task, **not** a substitute
+implementation of Unicode case folding or normalization. G1 native semantic
+parity must settle and test these operations before broader qualification.
+
+Native probe on the unchanged compiler at `5e1c1ba` confirmed these differences:
+
+| Expression | JIT output | AOT output |
+| --- | --- | --- |
+| `upper("Straße")` | `STRASSE` | `STRAßE` |
+| `lower("É")` | `é` | `É` |
+| `len(trim(" x "))` (U+00A0 margins) | `1` | `5` |
+| `len(split("é", ""))` | `3` | `2` |
+
+To reproduce, put these four expressions in `print(...)` statements inside
+`fn main()`, then compare `turbolang run` against `turbolang build` and the native
+binary. The token benchmark does not exercise these unsupported parity cases;
+its success must not close this defect list. The corpus's trailing spaces and
+tabs are intentional data for trimming tests, not formatting whitespace.
 
 ## Shared-header allocation profiling (G2.1 next slice)
 

@@ -1,0 +1,53 @@
+// UTF-8 log fields: ASCII-margin trim, literal label/dash replacement, counts.
+// No Unicode case folding or canonical normalization is claimed.
+fn process(line: str, counts: i64) -> i64 {
+    let parts = split(line, "|")
+    let mut total = 0
+    let mut i = 0
+    while i < len(parts) {
+        let field = trim(parts[i])
+        let label = replace(replace(field, "INFO:", "info:"), "WARN:", "warn:")
+        let token = replace(label, "—", "-")
+        if len(token) > 0 {
+            hashmap_inc(counts, token)
+            total += 1
+        }
+        i += 1
+    }
+    total
+}
+
+fn main() {
+    let configured = env_get("TURBO_BENCH_STEPS")
+    let steps = if configured == "" { 1048576 } else {
+        match str_to_int(configured) {
+            ok(value) => value
+            err(e) => 0
+        }
+    }
+    assert(steps > 0 && steps <= 16777216)
+    let configured_path = env_get("STRING_TOKENS_INPUT")
+    let path = if configured_path == "" { "turbo/benchmarks/string_tokens_corpus.txt" } else { configured_path }
+    let text = read_file(path)
+    assert(len(text) > 0 && ends_with(text, "\n"))
+    let lines = split(text, "\n")
+    let n = len(lines) - 1
+    let counts = hashmap()
+    let mut total = 0
+    let mut input_bytes = 0
+    let mut step = 0
+    while step < steps {
+        let line = lines[step % n]
+        total += process(line, counts)
+        input_bytes += len(line)
+        step += 1
+    }
+    let keys = hashmap_keys(counts)
+    let mut i = 0
+    while i < len(keys) {
+        let key = keys[i]
+        print(key + " " + to_str(hashmap_get_int(counts, key)))
+        i += 1
+    }
+    print("TOTAL " + to_str(total) + " " + to_str(len(keys)) + " " + to_str(input_bytes))
+}
