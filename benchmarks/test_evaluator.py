@@ -118,6 +118,13 @@ class ProcessTests(unittest.TestCase):
         with self.assertRaises(ChildProcessError):
             os.waitpid(sample["pid"], os.WNOHANG)
 
+    def test_group_signal_denial_still_reaps_owned_child(self):
+        with patch.object(ev.os, "killpg", side_effect=PermissionError("group already gone or denied")):
+            sample = ev.run_process([sys.executable, "-c", "import time;time.sleep(30)"], timeout_s=.05)
+        self.assertEqual(sample["status"], "timeout")
+        with self.assertRaises(ChildProcessError):
+            os.waitpid(sample["pid"], os.WNOHANG)
+
     def test_bounded_output_and_launch_failure(self):
         sample = ev.run_process([sys.executable, "-c", "print('x'*4096)"], max_output_bytes=100)
         self.assertEqual(sample["status"], "output_limit")
@@ -134,6 +141,58 @@ class ProcessTests(unittest.TestCase):
 
 
 class OracleTests(unittest.TestCase):
+    def test_buffer_oracle_matches_independent_literal_simulation(self):
+        for n in (1, 2, 255, 256, 257, 513, 1025):
+            data = bytearray((i * 17 + 23) % 256 for i in range(n))
+            checksum = 0
+            for step in range(4):
+                for i in range(n):
+                    data[i] = (data[i] + step + 1) % 256
+                    checksum = (checksum * 33 + data[i]) % 1_000_000_007
+            expected = f"{checksum}\n{data[0]}\n{data[-1]}\n".encode()
+            self.assertEqual(ev.buffer_oracle(n), expected)
+
+    def test_hashmap_oracle_matches_two_independent_key_domains(self):
+        for n in (1, 7, 31, 1000):
+            numeric, textual = {}, {}
+            seed = 7
+            for step in range(n):
+                seed = (seed * 1103515245 + 12345) % 2147483648
+                key = seed % 4096
+                name = f"k{key}"
+                numeric[key] = numeric.get(key, 0) + 1
+                textual[name] = textual.get(name, 0) + 1
+                if step % 7 == 0:
+                    numeric.pop((key + 17) % 4096, None)
+                    textual.pop(f"k{(key + 17) % 4096}", None)
+            a = sum((key + 1) * value for key, value in numeric.items())
+            b = sum((int(key[1:]) + 1) * value for key, value in textual.items())
+            expected = f"{a}\n{b}\n{len(numeric)}\n{len(textual)}\n".encode()
+            self.assertEqual(ev.hashmap_oracle(n), expected)
+
+    def test_allocation_profile_rejects_missing_invalid_and_unbalanced_evidence(self):
+        base = dict(schema_version=1, coverage="shared_header_arc", scope_end="entry_return", valid=True,
+                    allocations=1, heap_allocations=1, arena_allocations=0, heap_frees=1,
+                    arena_reclaims=0, total_data_bytes=32, total_header_bytes=16,
+                    live_allocations=0, peak_live_allocations=1, live_data_bytes=0,
+                    peak_live_data_bytes=32, live_header_bytes=0, retain_calls=1,
+                    release_calls=2, retain_ops=1, release_ops=2, unknown_frees=0,
+                    errors=0, peak_observer_bytes=524328)
+
+        def sample(record):
+            return dict(status="ok", stdout="ok\n", stdout_sha256=ev.digest(b"ok\n"),
+                        stderr="TURBO_ALLOC_PROFILE " + json.dumps(record) + "\n")
+
+        self.assertEqual(ev.parse_allocation_profile(sample(base), b"ok\n"), base)
+        for changes in [dict(valid=False), dict(heap_frees=0), dict(total_data_bytes=1),
+                        dict(allocations=True), dict(errors=1), dict(coverage="all_heap"),
+                        dict(schema_version=True), dict(schema_version=1.0)]:
+            with self.subTest(changes=changes), self.assertRaises(ev.EvaluationError):
+                ev.parse_allocation_profile(sample(dict(base, **changes)), b"ok\n")
+        for stderr in ["", "warning\n" + sample(base)["stderr"], sample(base)["stderr"] * 2]:
+            with self.assertRaises(ev.EvaluationError):
+                ev.parse_allocation_profile(dict(sample(base), stderr=stderr), b"ok\n")
+
     def test_wordcount_oracle_ties_and_empty(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "input"
@@ -175,6 +234,17 @@ class OracleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "fixture changed"):
                 ev.load_manifest(path)
 
+    def test_manifest_rejects_unsafe_or_malformed_parameter_overrides(self):
+        for parameters in ({"HOME": "/tmp"}, {"TURBO_BENCH_SIZE": 1},
+                           {"TURBO_BENCH_SIZE": "-1"}, {"TURBO_BENCH_SIZE": "0"}):
+            with tempfile.TemporaryDirectory() as temp:
+                manifest = ev.load_manifest()
+                manifest["cases"]["buffer_scan"]["environment"] = parameters
+                path = Path(temp) / "cases.json"
+                path.write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(ValueError, "invalid benchmark parameters"):
+                    ev.load_manifest(path)
+
 
 class EvidenceTests(unittest.TestCase):
     def invoke(self, directory, *, corrupt_at=None, check=False):
@@ -196,7 +266,7 @@ class EvidenceTests(unittest.TestCase):
             args.append("--check")
         with patch.object(ev, "prepare_case", return_value=prepared), \
              patch.object(ev, "run_process", side_effect=sample), \
-             patch.object(ev, "tool_output", return_value="test fixture"), \
+             patch.object(ev, "tool_output", return_value="turbolang test"), \
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             code = ev.main(args)
         report = json.loads((directory / "report.json").read_text())
@@ -215,6 +285,7 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(code, 3)
             self.assertEqual(report["status"], "measured")
             self.assertEqual(report["qualification"]["status"], "incomplete")
+            self.assertEqual(report["tools"]["timing_build"], dict(flavor="standard", instrumented=False))
             self.assertIsNone(report["allocation_metrics"]["live_bytes"])
             self.assertEqual(len(events), 6)  # both warmups + both halves of each pair
             self.assertEqual(len(report["cases"]["fib"]["pairs"]), 2)
@@ -238,6 +309,18 @@ class EvidenceTests(unittest.TestCase):
                 self.invoke(path)
             self.assertEqual(error.exception.code, 2)
             self.assertEqual(before, (path / "report.json").read_bytes())
+
+    def test_unverified_or_instrumented_compiler_cannot_supply_timings(self):
+        for version in ("unavailable: timeout", "turbolang 0.15.0+allocation-profile"):
+            with tempfile.TemporaryDirectory() as temp, \
+                 patch.object(ev, "tool_output", return_value=version):
+                output = Path(temp) / "run"
+                with contextlib.redirect_stdout(io.StringIO()):
+                    code = ev.main(["--cases", "fib", "--compiler", sys.executable, "--output", str(output)])
+                self.assertEqual(code, 2)
+                report = json.loads((output / "report.json").read_text())
+                self.assertEqual(report["qualification"]["status"], "not_evaluated")
+                self.assertEqual((output / "samples.jsonl").read_text(), "")
 
 
 if __name__ == "__main__":

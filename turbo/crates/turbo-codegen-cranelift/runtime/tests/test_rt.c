@@ -33,6 +33,9 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#ifdef TURBO_ALLOCATION_PROFILE
+#include "../turbo_alloc_profile.h"
+#endif
 
 /* Forward declarations of the runtime functions we exercise. We don't
  * include turbo_rt.c via a header — the runtime intentionally has no
@@ -1219,6 +1222,31 @@ static void test_request_body_preserves_separator(void) {
 
 int main(void) {
     printf("== turbo_rt C runtime tests ==\n");
+#ifdef TURBO_ALLOCATION_PROFILE
+    TurboAllocationProfile profile;
+    assert(turbo_profile_begin());
+    void *profile_arr = rt_array_alloc(3);
+    rt_retain(profile_arr);
+    rt_release(profile_arr);
+    rt_release(profile_arr);
+    turbo_profile_end(&profile);
+    assert(profile.valid && profile.allocations == 1 && profile.heap_frees == 1);
+    assert(profile.total_data_bytes == 32 && profile.total_header_bytes == 16);
+    assert(profile.retain_ops == 1 && profile.release_ops == 2);
+    assert(profile.live_allocations == 0);
+    assert(turbo_profile_begin());
+    rt_arena_begin();
+    profile_arr = rt_array_alloc(3);
+    rt_retain(profile_arr);
+    rt_release(profile_arr);
+    rt_arena_end();
+    turbo_profile_end(&profile);
+    assert(profile.valid && profile.arena_allocations == 1 && profile.arena_reclaims == 1);
+    assert(profile.live_allocations == 0 && profile.heap_frees == 0);
+    assert(profile.retain_calls == 1 && profile.release_calls == 1);
+    assert(profile.retain_ops == 0 && profile.release_ops == 0);
+    printf("  [PASS] shared-header profile calibration and arena reclamation\n");
+#endif
     test_json_control_encoding();
     test_request_body_preserves_separator();
 

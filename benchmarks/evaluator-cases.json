@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "suite_version": "g2.1-v1",
+  "suite_version": "g2.1-v2",
   "cases": {
     "fib": {
       "category": "cpu",
@@ -48,19 +48,36 @@
     },
     "hashmap_churn": {
       "category": "cpu",
-      "status": "pending_fixture",
+      "status": "runnable",
       "controlled_status": "pending_capability",
-      "workload": "Seeded integer/string key insert/update/remove/read sequence.",
+      "workload": "2097152 steps; LCG31 seed7/multiplier1103515245/increment12345;4096 integer and precomputed string keys; increment current key, remove(key+17)%4096 every seventh step; weighted final digests and lengths.",
       "oracle": "Reference dictionary results plus final digest; fixed live working set.",
-      "prerequisite": "fixture implementation and independent review"
+      "turbo_source": "turbo/benchmarks/bench_hashmap_churn.tb",
+      "rust_source": "turbo/benchmarks/rust/hashmap_churn.rs",
+      "source_sha256": {
+        "turbo/benchmarks/bench_hashmap_churn.tb": "c7ee21a3937f31cec1f8d850e2796427a9a64c7829a4997f90c14f8062b1fcfa",
+        "turbo/benchmarks/rust/hashmap_churn.rs": "5ad82fdb175daf409560385651bfc304259db261f988ebb672c10eb740ba22d0"
+      },
+      "environment": {
+        "TURBO_BENCH_STEPS": "2097152"
+      },
+      "comparison_caveat": "Same abstract operation trace; hashing/container implementations and key ownership differ. Rust borrows precomputed immutable string keys; Turbo runtime manages key storage. Measures language plus runtime, not backend in isolation."
     },
     "buffer_scan": {
       "category": "cpu",
-      "status": "pending_fixture",
+      "status": "runnable",
       "controlled_status": "pending_capability",
-      "workload": "At least32MiB deterministic byte data, checksummed scanning and mutation.",
-      "oracle": "Independent byte checksum and exact final selected positions.",
-      "prerequisite": "fixture implementation and independent review"
+      "workload": "33554432 logical u8 values; initial (17*i+23)%256, four in-place passes adding pass+1 modulo256; dependent checksum (33*h+value)%1000000007.",
+      "oracle": "Periodic affine composition, independently cross-checked against literal bytearray simulation; checksum, first and last byte.",
+      "turbo_source": "turbo/benchmarks/bench_buffer_scan.tb",
+      "rust_source": "turbo/benchmarks/rust/buffer_scan.rs",
+      "source_sha256": {
+        "turbo/benchmarks/bench_buffer_scan.tb": "26e0da46b96b38fdd314bf2458386fef048e306a1c06d56882d8d7549e412cc0",
+        "turbo/benchmarks/rust/buffer_scan.rs": "ad935dd06e15fd65f37c5a2ca58e41176611f0f97f6025457869d24618e07c2e"
+      },
+      "environment": {
+        "TURBO_BENCH_SIZE": "33554432"
+      }
     },
     "particle_update": {
       "category": "cpu",

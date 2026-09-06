@@ -36,7 +36,11 @@ use turbo_ast::*;
 mod turbo_types;
 pub(crate) use turbo_types::*;
 
+#[cfg(feature = "allocation-profile")]
+mod allocation_profile;
 mod runtime;
+/// Instrumented builds are diagnostic-only and must not supply timing baselines.
+pub const ALLOCATION_PROFILE_BUILD: bool = cfg!(feature = "allocation-profile");
 pub(crate) use runtime::*;
 // Public so the CLI can install the program's CLI args before `jit_run`
 // (the JIT twin of the AOT `main(argc, argv)` -> rt_set_args path).
@@ -80,6 +84,10 @@ pub(crate) use compile::compile_module;
 // ── Runtime C source for AOT linking ────────────────────────────────
 
 const RUNTIME_C: &str = include_str!("../runtime/turbo_rt.c");
+#[cfg(feature = "allocation-profile")]
+const PROFILE_C: &str = include_str!("../runtime/turbo_alloc_profile.c");
+#[cfg(feature = "allocation-profile")]
+const PROFILE_H: &str = include_str!("../runtime/turbo_alloc_profile.h");
 const RUNTIME_WASM_C: &str = include_str!("../runtime/turbo_rt_wasm.c");
 /// Shared overflow/cap guard header `#include`d by both C runtimes. The C
 /// sources are written to a temp dir and compiled there, so this header must

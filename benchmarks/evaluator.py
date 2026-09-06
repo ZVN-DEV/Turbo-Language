@@ -26,7 +26,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path(__file__).with_name("evaluator-cases.json")
-IMPLEMENTED = {"fib", "wordcount"}
+IMPLEMENTED = {"fib", "wordcount", "buffer_scan", "hashmap_churn"}
 
 
 class EvaluationError(Exception):
@@ -75,6 +75,32 @@ def rss_bytes(raw, system):
     raise ValueError("per-child RSS is currently supported only on macOS/Linux")
 
 
+def stop_owned_child(child):
+    """Fall back to the known child PID if its process group rejects signaling.
+
+    The caller has not reaped this child, so the PID cannot be reused. A group
+    denial never turns a timeout/output-limit sample into success.
+    """
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        pid, status, usage = os.wait4(child.pid, os.WNOHANG)
+        if pid:
+            child.returncode = os.waitstatus_to_exitcode(status)
+            return status, usage
+        try:
+            # Do not use Popen.kill(): its internal poll can consume the
+            # resource-usage record before this collector receives wait4.
+            os.kill(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    _, status, usage = os.wait4(child.pid, 0)
+    child.returncode = os.waitstatus_to_exitcode(status)
+    return status, usage
+
+
 def run_process(argv, *, cwd=None, env=None, timeout_s=30, max_output_bytes=1_048_576):
     """Measure one owned child with wait4, not cumulative RUSAGE_CHILDREN.
 
@@ -116,23 +142,14 @@ def run_process(argv, *, cwd=None, env=None, timeout_s=30, max_output_bytes=1_04
                 if outcome:
                     # Child has not been reaped: its PID/session still belong
                     # to this invocation. Kill only that owned process group.
-                    try:
-                        os.killpg(child.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    _, status, usage = os.wait4(child.pid, 0)
-                    child.returncode = os.waitstatus_to_exitcode(status)
+                    status, usage = stop_owned_child(child)
                     break
                 time.sleep(.001)
         finally:
             # Also reap on cancellation/errors; poll handles an already-reaped
             # child without targeting an unrelated process group.
             if child.returncode is None and child.poll() is None:
-                try:
-                    os.killpg(child.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                child.wait()
+                stop_owned_child(child)
         sample.update(elapsed_ns=time.perf_counter_ns() - start,
                       exit_code=child.returncode,
                       peak_rss_bytes=rss_bytes(usage.ru_maxrss, sys.platform))
@@ -155,6 +172,40 @@ def check_output(sample, expected):
         raise EvaluationError(f"output mismatch: {sample['stdout']!r}; expected {expected!r}")
     if sample["stderr"]:
         raise EvaluationError(f"unexpected stderr: {sample['stderr']!r}")
+
+
+def parse_allocation_profile(sample, expected):
+    """Only the explicit instrumented phase may accept an observer stderr line."""
+    check_output(dict(sample, stderr=""), expected)
+    lines = sample["stderr"].splitlines()
+    prefix = "TURBO_ALLOC_PROFILE "
+    if len(lines) != 1 or not lines[0].startswith(prefix):
+        raise EvaluationError("missing, duplicate or noisy allocation profile")
+    try:
+        profile = json.loads(lines[0][len(prefix):])
+    except ValueError as error:
+        raise EvaluationError("invalid allocation profile JSON") from error
+    if (not isinstance(profile, dict) or type(profile.get("schema_version")) is not int
+            or profile.get("schema_version") != 1
+            or profile.get("coverage") != "shared_header_arc" or profile.get("valid") is not True
+            or profile.get("scope_end") != "entry_return"):
+        raise EvaluationError("invalid allocation profile scope or observer state")
+    counters = ("allocations heap_allocations arena_allocations heap_frees arena_reclaims "
+                "total_data_bytes total_header_bytes live_allocations peak_live_allocations "
+                "live_data_bytes peak_live_data_bytes live_header_bytes retain_calls release_calls "
+                "retain_ops release_ops unknown_frees errors peak_observer_bytes").split()
+    if any(type(profile.get(key)) is not int or not 0 <= profile[key] <= 2**64 - 1 for key in counters):
+        raise EvaluationError("missing or invalid allocation counters")
+    p = profile
+    if (p["errors"] or p["unknown_frees"]
+            or p["allocations"] != p["heap_allocations"] + p["arena_allocations"]
+            or p["allocations"] != p["heap_frees"] + p["arena_reclaims"] + p["live_allocations"]
+            or p["heap_frees"] > p["heap_allocations"] or p["arena_reclaims"] > p["arena_allocations"]
+            or not p["live_allocations"] <= p["peak_live_allocations"] <= p["allocations"]
+            or not p["live_data_bytes"] <= p["peak_live_data_bytes"] <= p["total_data_bytes"]
+            or p["live_header_bytes"] > p["total_header_bytes"]):
+        raise EvaluationError("allocation accounting invariants failed")
+    return profile
 
 
 def percentile(values, quantile):
@@ -264,6 +315,12 @@ def load_manifest(path=MANIFEST):
             raise ValueError(f"invalid case status: {name}")
         if case["status"] == "runnable" and name not in IMPLEMENTED:
             raise ValueError(f"no runner implementation: {name}")
+        parameters = case.get("environment", {})
+        if (not isinstance(parameters, dict)
+                or not set(parameters) <= {"TURBO_BENCH_SIZE", "TURBO_BENCH_STEPS"}
+                or any(not isinstance(v, str) or not v.isascii() or not v.isdecimal()
+                       or not 0 < int(v) <= 2**63 - 1 for v in parameters.values())):
+            raise ValueError(f"invalid benchmark parameters: {name}")
         if case["status"] == "runnable":
             for language in ("turbo", "rust"):
                 relative = case.get(language + "_source")
@@ -280,6 +337,51 @@ def wordcount_oracle(path):
     top = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[:20]
     return ("".join(f"{word} {count}\n" for word, count in top)
             + f"TOTAL {sum(counts.values())} {len(counts)}\n").encode()
+
+
+def buffer_oracle(size):
+    """Compose periodic affine checksum blocks; cross-tested against literal bytes.
+
+    Avoid making the Python oracle perform 134M byte updates for the default
+    fixture. This algebra is independent of the native loop implementations.
+    """
+    if size <= 0:
+        raise ValueError("buffer size must be positive")
+    modulus = 1_000_000_007
+    checksum = 0
+    offset = 0
+    for step in range(4):
+        offset += step + 1
+        block = [(i * 17 + 23 + offset) % 256 for i in range(256)]
+        a, b = 1, 0
+        for value in block:
+            a, b = a * 33 % modulus, (b * 33 + value) % modulus
+        count = size // 256
+        mul, addend = 1, 0
+        while count:
+            if count & 1:
+                mul, addend = a * mul % modulus, (a * addend + b) % modulus
+            a, b = a * a % modulus, (a * b + b) % modulus
+            count >>= 1
+        checksum = (mul * checksum + addend) % modulus
+        for value in block[:size % 256]:
+            checksum = (checksum * 33 + value) % modulus
+    return f"{checksum}\n{(23 + offset) % 256}\n{((size - 1) * 17 + 23 + offset) % 256}\n".encode()
+
+
+def hashmap_oracle(steps):
+    if steps <= 0:
+        raise ValueError("churn steps must be positive")
+    counts = {}
+    state = 7
+    for step in range(steps):
+        state = (state * 1103515245 + 12345) % 2147483648
+        key = state % 4096
+        counts[key] = counts.get(key, 0) + 1
+        if step % 7 == 0:
+            counts.pop((key + 17) % 4096, None)
+    checksum = sum((key + 1) * value for key, value in counts.items())
+    return f"{checksum}\n{checksum}\n{len(counts)}\n{len(counts)}\n".encode()
 
 
 def tool_output(command):
@@ -304,6 +406,10 @@ def prepare_case(name, case, work, compiler, emit):
     builds = {}
     env = os.environ.copy()
     env["LC_ALL"] = "C"
+    parameters = case.get("environment", {})
+    if not set(parameters) <= {"TURBO_BENCH_SIZE", "TURBO_BENCH_STEPS"}:
+        raise EvaluationError("unsupported benchmark environment override")
+    env.update(parameters)
     data = None
     if name == "wordcount":
         data = work / "wordcount_input.txt"
@@ -313,6 +419,10 @@ def prepare_case(name, case, work, compiler, emit):
         check_output(generated, b"")
         env["WORDCOUNT_INPUT"] = str(data)
         expected = wordcount_oracle(data)
+    elif name == "buffer_scan":
+        expected = buffer_oracle(int(env["TURBO_BENCH_SIZE"]))
+    elif name == "hashmap_churn":
+        expected = hashmap_oracle(int(env["TURBO_BENCH_STEPS"]))
     else:
         expected = b"102334155\n"
     for language in ("turbo", "rust"):
@@ -329,15 +439,41 @@ def prepare_case(name, case, work, compiler, emit):
                                 binary_sha256=file_digest(binary), command=built["command"])
         commands[language] = [str(binary)]
     return dict(commands=commands, env=env, expected=expected, builds=builds,
+                input_kind="file" if data else "generated_in_memory",
+                logical_input_bytes=int(env["TURBO_BENCH_SIZE"]) if name == "buffer_scan" else None,
                 input_sha256=file_digest(data) if data else None,
                 input_bytes=data.stat().st_size if data else 0,
                 expected_stdout=expected.decode(), expected_sha256=digest(expected))
+
+
+def profile_case(name, spec, case, work, compiler, count, timeout, emit):
+    binary = work / (name + "-profile")
+    source = source_path(spec["turbo_source"])
+    built = run_process([compiler, "build", source, "-o", binary], cwd=ROOT, timeout_s=180)
+    emit(dict(kind="profile_build", case=name, sample=built))
+    if built["status"] != "ok":
+        raise EvaluationError(f"profile build failed: {built['stderr']}")
+    result = dict(binary_sha256=file_digest(binary), build=built, samples=[])
+    env = dict(case["env"], TURBO_ALLOC_PROFILE="1")
+    for mode, command in (("aot", [str(binary)]), ("jit", [compiler, "run", str(source)])):
+        for iteration in range(count):
+            sample = run_process(command, cwd=work, env=env, timeout_s=timeout)
+            emit(dict(kind="allocation_profile", case=name, mode=mode, iteration=iteration, sample=sample))
+            profile = parse_allocation_profile(sample, case["expected"])
+            result["samples"].append(dict(mode=mode, iteration=iteration, counters=profile,
+                instrumented_elapsed_ns=sample["elapsed_ns"], instrumented_peak_rss_bytes=sample["peak_rss_bytes"]))
+    return result
 
 
 def evaluate(args, manifest, emit):
     compiler = Path(args.compiler).resolve()
     if not compiler.is_file():
         raise EvaluationError("build turbo/target/release/turbolang before measuring")
+    compiler_version = tool_output([str(compiler), "--version"])
+    if not compiler_version.startswith("turbolang "):
+        raise EvaluationError("could not verify compiler build flavor before measurement")
+    if "+allocation-profile" in compiler_version:
+        raise EvaluationError("instrumented compiler cannot supply timing baselines; use --profile-compiler separately")
     report = dict(schema_version=1, suite_version=manifest["suite_version"], status="running",
                   scope="initial measurement subset; G2.1 remains incomplete",
                   created_at=datetime.now(timezone.utc).isoformat(),
@@ -349,7 +485,8 @@ def evaluate(args, manifest, emit):
                             cpu=tool_output(["sysctl", "-n", "machdep.cpu.brand_string"])
                             if sys.platform == "darwin" else platform.processor(),
                             power_and_load_control="not validated automatically"),
-                  tools=dict(turbo=tool_output([str(compiler), "--version"]),
+                  tools=dict(turbo=compiler_version,
+                             timing_build=dict(flavor="standard", instrumented=False),
                              turbo_binary_sha256=file_digest(compiler),
                              compiler_source_revision="unverified; supplied binary is fingerprinted",
                              rust=tool_output(["rustc", "--version", "--verbose"]),
@@ -398,13 +535,27 @@ def evaluate(args, manifest, emit):
                                     turbo_peak_rss_bytes=measured["turbo"]["peak_rss_bytes"],
                                     rust_peak_rss_bytes=measured["rust"]["peak_rss_bytes"]))
                     print(f"batch {batch + 1}/{args.batches}: {name} outputs verified", flush=True)
+            if args.profile_compiler:
+                profiler = str(Path(args.profile_compiler).resolve())
+                version = tool_output([profiler, "--version"])
+                if not version.startswith("turbolang ") or "+allocation-profile" not in version:
+                    raise EvaluationError("--profile-compiler must be an allocation-profile build")
+                report["allocation_metrics"].update(status="collecting", coverage="shared_header_arc",
+                    build=dict(flavor="allocation-profile", instrumented=True),
+                    compiler_version=version, compiler_sha256=file_digest(profiler), profiles={},
+                    exclusions=["foreign/native library heaps", "Rust library temporaries", "non-header runtime storage",
+                                "observer bookkeeping", "compiler allocations"])
+                for name in args.cases:
+                    report["allocation_metrics"]["profiles"][name] = profile_case(name, manifest["cases"][name],
+                        prepared[name], work, profiler, args.profile_samples, args.timeout, emit)
+                    report["allocation_metrics"]["status"] = "measured_partial"
         for category in sorted({manifest["cases"][name]["category"] for name in args.cases}):
             group = {name: rows[name] for name in args.cases
                      if manifest["cases"][name]["category"] == category}
             report["groups"][category] = summarize(group, draws=args.bootstrap, seed=args.seed)
         blockers = [f"{name}: {case['status']}" for name, case in manifest["cases"].items()
                     if name not in args.cases or case["status"] != "runnable"]
-        blockers += ["controlled profiles pending G3", "allocation counters not instrumented",
+        blockers += ["controlled profiles pending G3", "allocation coverage incomplete" if args.profile_compiler else "allocation counters not instrumented",
                      "cross-host qualification not established", "host power/load conditions unvalidated"]
         blockers.append("compiler source provenance not independently attested")
         if args.samples < 20 or args.batches < 3 or args.warmups < 3 or args.bootstrap < 2000:
@@ -424,7 +575,7 @@ def evaluate(args, manifest, emit):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cases", default="fib,wordcount")
+    parser.add_argument("--cases", default="fib,wordcount,buffer_scan,hashmap_churn")
     parser.add_argument("--samples", type=int, default=20)
     parser.add_argument("--batches", type=int, default=3)
     parser.add_argument("--warmups", type=int, default=3)
@@ -432,10 +583,12 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, default=20260906)
     parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument("--compiler", default=str(ROOT / "turbo/target/release/turbolang"))
+    parser.add_argument("--profile-compiler", help="separate allocation-profile build; never used for timing samples")
+    parser.add_argument("--profile-samples", type=int, default=3)
     parser.add_argument("--output", type=Path, required=True, help="new evidence directory; never overwritten")
     parser.add_argument("--check", action="store_true", help="require full plan qualification (currently incomplete)")
     args = parser.parse_args(argv)
-    if min(args.samples, args.batches, args.warmups, args.bootstrap) < 1:
+    if min(args.samples, args.batches, args.warmups, args.bootstrap, args.profile_samples) < 1:
         parser.error("sample/batch/warmup/bootstrap counts must be positive")
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("timeout must be finite and positive")
@@ -444,7 +597,7 @@ def main(argv=None):
         args.cases = args.cases.split(",")
         if (len(set(args.cases)) != len(args.cases) or not set(args.cases) <= IMPLEMENTED
                 or any(manifest["cases"].get(name, {}).get("status") != "runnable" for name in args.cases)):
-            parser.error("choose distinct implemented cases: fib,wordcount")
+            parser.error("choose distinct implemented cases: " + ",".join(sorted(IMPLEMENTED)))
         args.output.mkdir(parents=True, exist_ok=False)
     except (OSError, ValueError) as error:
         parser.error(str(error))

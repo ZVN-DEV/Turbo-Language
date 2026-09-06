@@ -356,9 +356,13 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
             message: "no `main` function found".to_string(),
         });
     }
+    #[cfg(feature = "allocation-profile")]
+    let profile = crate::allocation_profile::Session::start();
     program.call_zero_arg_void("main")?;
     // Free all runtime-allocated strings
     crate::runtime::rt_arena_reset();
+    #[cfg(feature = "allocation-profile")]
+    profile.finish();
 
     Ok(())
 }
@@ -374,9 +378,13 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
             message: format!("no function `{fn_name}` found"),
         });
     }
+    #[cfg(feature = "allocation-profile")]
+    let profile = crate::allocation_profile::Session::start();
     program.call_zero_arg_void(fn_name)?;
     // Free all runtime-allocated strings
     crate::runtime::rt_arena_reset();
+    #[cfg(feature = "allocation-profile")]
+    profile.finish();
 
     Ok(())
 }

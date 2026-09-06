@@ -226,6 +226,8 @@ thread_local! {
 
 /// Register a raw allocation pointer and its layout for later deallocation.
 fn register_alloc(raw_ptr: *mut u8, layout: std::alloc::Layout) {
+    #[cfg(feature = "allocation-profile")]
+    crate::allocation_profile::allocation(raw_ptr, layout.size());
     ALLOC_REGISTRY.with(|reg| {
         reg.borrow_mut().insert(raw_ptr as usize, layout);
     });
@@ -480,6 +482,8 @@ pub(crate) extern "C" fn rt_array_set(arr: *mut u8, index: i64, value: i64) -> *
         // Decrement old refcount
         unsafe {
             (*rc_ptr).fetch_sub(1, std::sync::atomic::Ordering::Release);
+            #[cfg(feature = "allocation-profile")]
+            crate::allocation_profile::rc(3);
         }
         new_data
     } else {
@@ -719,6 +723,8 @@ pub(crate) extern "C" fn rt_struct_cow(s: *mut u8, num_fields: i64) -> *mut u8 {
     // Drop our reference to the shared original now that this binding owns a copy.
     unsafe {
         (*rc_ptr).fetch_sub(1, std::sync::atomic::Ordering::Release);
+        #[cfg(feature = "allocation-profile")]
+        crate::allocation_profile::rc(3);
     }
     new_data
 }
@@ -3568,6 +3574,8 @@ pub(crate) extern "C" fn rt_hashmap_gkeys(map_ptr: *const u8) -> *mut u8 {
 /// Increment the reference count of a heap-allocated object.
 /// The refcount lives at data_ptr - 8 (the header before the data).
 pub(crate) extern "C" fn rt_retain(data_ptr: *mut u8) {
+    #[cfg(feature = "allocation-profile")]
+    crate::allocation_profile::rc(0);
     if data_ptr.is_null() {
         return;
     }
@@ -3577,6 +3585,8 @@ pub(crate) extern "C" fn rt_retain(data_ptr: *mut u8) {
             return;
         }
         (*header).fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        #[cfg(feature = "allocation-profile")]
+        crate::allocation_profile::rc(2);
     }
 }
 
@@ -3584,6 +3594,8 @@ pub(crate) extern "C" fn rt_retain(data_ptr: *mut u8) {
 /// When the refcount reaches 0, the memory is freed using the layout
 /// stored in the thread-local allocation registry.
 pub(crate) extern "C" fn rt_release(data_ptr: *mut u8) {
+    #[cfg(feature = "allocation-profile")]
+    crate::allocation_profile::rc(1);
     if data_ptr.is_null() {
         return;
     }
@@ -3594,12 +3606,16 @@ pub(crate) extern "C" fn rt_release(data_ptr: *mut u8) {
         }
     }
     let prev = unsafe { (*header).fetch_sub(1, std::sync::atomic::Ordering::Release) };
+    #[cfg(feature = "allocation-profile")]
+    crate::allocation_profile::rc(3);
     if prev == 1 {
         std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
         // Refcount reached 0 — free the allocation.
         // Raw allocation base is at data_ptr - 16 (cap + refcount header)
         let raw_ptr = unsafe { data_ptr.sub(16) };
         if let Some(layout) = unregister_alloc(raw_ptr) {
+            #[cfg(feature = "allocation-profile")]
+            crate::allocation_profile::deallocation(raw_ptr);
             unsafe {
                 std::alloc::dealloc(raw_ptr, layout);
             }

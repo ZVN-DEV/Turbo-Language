@@ -123,7 +123,10 @@ mod http {
                 .spawn()
                 .unwrap(),
         );
-        let deadline = Instant::now() + Duration::from_secs(10);
+        // Fresh native binaries can be delayed by host code validation (and
+        // slow CI). This is a correctness/readiness guard, not a startup
+        // performance benchmark; per-request I/O deadlines remain unchanged.
+        let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             if let Some(status) = server.0.try_wait().unwrap() {
                 let stderr = std::fs::read_to_string(&error_path).unwrap();

@@ -85,8 +85,7 @@ fn main() {
         "-DSQLITE_OMIT_SHARED_CACHE",
     ]);
 
-    let mut compile = Command::new(&cc);
-    compile.args(&cflags);
+    let mut target_flags = Vec::<String>::new();
 
     // Cross-compilation: a bare `cc` compiles for the HOST arch, but cargo
     // may be building a different TARGET (the release matrix cross-builds
@@ -99,14 +98,16 @@ fn main() {
             } else {
                 "x86_64"
             };
-            compile.arg("-arch").arg(arch);
+            target_flags.extend(["-arch".to_string(), arch.to_string()]);
         } else {
             // clang accepts a bare triple via --target; gcc-based cross
             // setups are expected to provide a target-specific $CC instead.
-            compile.arg(format!("--target={target}"));
+            target_flags.push(format!("--target={target}"));
         }
     }
 
+    let mut compile = Command::new(&cc);
+    compile.args(&cflags).args(&target_flags);
     compile.arg("-c").arg(&sqlite_c).arg("-o").arg(&obj_path);
 
     let status = compile
@@ -116,7 +117,29 @@ fn main() {
         panic!("cc failed compiling vendored sqlite3.c (exit {status})");
     }
 
-    // Archive the object so cargo can link it as a static library. Remove any
+    let mut archive_objects = vec![obj_path.clone()];
+    if std::env::var_os("CARGO_FEATURE_ALLOCATION_PROFILE").is_some() {
+        let runtime = Path::new(&manifest_dir).join("runtime");
+        let profile_c = runtime.join("turbo_alloc_profile.c");
+        let profile_h = runtime.join("turbo_alloc_profile.h");
+        println!("cargo:rerun-if-changed={}", profile_c.display());
+        println!("cargo:rerun-if-changed={}", profile_h.display());
+        let profile_obj = Path::new(&out_dir).join("turbo_alloc_profile.o");
+        let status = Command::new(&cc)
+            .args(&cflags)
+            .args(&target_flags)
+            .arg("-std=c11")
+            .arg("-c")
+            .arg(&profile_c)
+            .arg("-o")
+            .arg(&profile_obj)
+            .status()
+            .expect("compile allocation observer");
+        assert!(status.success(), "allocation observer C compilation failed");
+        archive_objects.push(profile_obj);
+    }
+
+    // Archive the objects so cargo can link them as a static library. Remove any
     // stale archive first so the archiver never appends to an old member set.
     // The archiver and its argument syntax differ by toolchain:
     //   - Unix / windows-gnu: `ar crs libturbosqlite.a sqlite3.o`
@@ -129,7 +152,7 @@ fn main() {
         Command::new(&ar)
             .arg("/NOLOGO")
             .arg(format!("/OUT:{}", lib_path.display()))
-            .arg(&obj_path)
+            .args(&archive_objects)
             .status()
             .unwrap_or_else(|e| panic!("failed to spawn '{ar}' to archive sqlite3.o: {e}"))
     } else {
@@ -137,7 +160,7 @@ fn main() {
         Command::new(&ar)
             .arg("crs")
             .arg(&lib_path)
-            .arg(&obj_path)
+            .args(&archive_objects)
             .status()
             .unwrap_or_else(|e| panic!("failed to spawn '{ar}' to archive sqlite3.o: {e}"))
     };

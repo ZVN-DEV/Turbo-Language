@@ -45,6 +45,19 @@
 #include <time.h>
 #include <sys/stat.h>
 
+#ifdef TURBO_ALLOCATION_PROFILE
+#include "turbo_alloc_profile.h"
+#define TP_ALLOC(raw, total, header, arena) turbo_profile_alloc(raw, total, header, arena)
+#define TP_FREE(raw) turbo_profile_free(raw)
+#define TP_ARENA_RESET(arena) turbo_profile_arena_reset(arena)
+#define TP_RC(operation) turbo_profile_rc(operation)
+#else
+#define TP_ALLOC(raw, total, header, arena) ((void)0)
+#define TP_FREE(raw) ((void)0)
+#define TP_ARENA_RESET(arena) ((void)0)
+#define TP_RC(operation) ((void)0)
+#endif
+
 #ifdef _WIN32
 /* ── Windows (MSVC/UCRT) portability shims — Tier B AOT ──────────────────
  *
@@ -242,6 +255,7 @@ static void *turbo_arena_alloc(turbo_arena *a, size_t size) {
 }
 
 static void turbo_arena_free_all(turbo_arena *a) {
+    TP_ARENA_RESET(a);
     turbo_arena_block *blk = a->head;
     while (blk) {
         turbo_arena_block *next = blk->next;
@@ -573,6 +587,7 @@ static void *rt_rc_alloc(size_t data_size, long long cap) {
     }
     size_t total = RT_RC_HEADER_BYTES + data_size;
     void *raw = turbo_calloc(1, total);
+    TP_ALLOC(raw, total, RT_RC_HEADER_BYTES, t_current_arena);
     *(long long *)raw = cap;              /* cap at raw + 0 */
     *(long long *)((char *)raw + 8) =
         (t_current_arena != NULL) ? RT_RC_ARENA : 1;
@@ -658,6 +673,7 @@ void* rt_array_set(void *arr, long long index, long long value) {
         memcpy(new_data, arr, data_size);
         if (rc != RT_RC_ARENA && rc != RT_RC_IMMORTAL) {
             __sync_fetch_and_sub(rc_ptr, 1);
+            TP_RC(TURBO_RELEASE_OP);
         }
         target = new_data;
     } else {
@@ -775,6 +791,7 @@ void* rt_struct_cow(void *s, long long num_fields) {
     memcpy(new_data, s, data_size);
     if (rc != RT_RC_ARENA && rc != RT_RC_IMMORTAL) {
         __sync_fetch_and_sub(rc_ptr, 1);
+        TP_RC(TURBO_RELEASE_OP);
     }
     return new_data;
 }
@@ -4365,6 +4382,7 @@ const char* rt_request_body(const char *req) {
 /* ── ARC (Automatic Reference Counting) runtime ─────────────────────── */
 
 void rt_retain(void *data_ptr) {
+    TP_RC(TURBO_RETAIN_CALL);
     if (!data_ptr) return;
     long long *rc = rt_rc_refcount_ptr(data_ptr);
     long long current = __atomic_load_n(rc, __ATOMIC_ACQUIRE);
@@ -4372,9 +4390,11 @@ void rt_retain(void *data_ptr) {
         return;
     }
     __sync_fetch_and_add(rc, 1);
+    TP_RC(TURBO_RETAIN_OP);
 }
 
 void rt_release(void *data_ptr) {
+    TP_RC(TURBO_RELEASE_CALL);
     if (!data_ptr) return;
     long long *rc = rt_rc_refcount_ptr(data_ptr);
     long long current = __atomic_load_n(rc, __ATOMIC_ACQUIRE);
@@ -4382,9 +4402,11 @@ void rt_release(void *data_ptr) {
         return;
     }
     long long prev = __sync_fetch_and_sub(rc, 1);
+    TP_RC(TURBO_RELEASE_OP);
     if (prev == 1) {
         /* Free from the raw allocation base, which sits RT_RC_HEADER_BYTES
          * below the data pointer (cap slot at raw+0, refcount at raw+8). */
+        TP_FREE((char *)data_ptr - RT_RC_HEADER_BYTES);
         free((char *)data_ptr - RT_RC_HEADER_BYTES);
     }
 }
@@ -4398,8 +4420,14 @@ void rt_release(void *data_ptr) {
 #ifndef RT_TEST_BUILD
 extern void turbo_main(void);
 int main(int argc, char **argv) {
+#ifdef TURBO_ALLOCATION_PROFILE
+    int profiling = turbo_profile_start_if_requested();
+#endif
     rt_set_args(argc, argv);
     turbo_main();
+#ifdef TURBO_ALLOCATION_PROFILE
+    if (profiling) turbo_profile_finish();
+#endif
     return 0;
 }
 #endif

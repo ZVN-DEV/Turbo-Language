@@ -15,7 +15,7 @@ python3 -m unittest discover -s benchmarks -p test_evaluator.py -v
 python3 benchmarks/evaluator.py --samples 2 --batches 1 --warmups 1 --bootstrap 100 \
   --output /tmp/turbo-evaluator-smoke
 
-# Three batches of20 measured pairs, with three warmup pairs per case/batch:
+# Three batches of20 measured pairs across the four implemented cases:
 python3 benchmarks/evaluator.py --output benchmarks/results/my-new-run
 
 # Explicitly require qualification; currently exits3 (incomplete):
@@ -89,17 +89,96 @@ intentional fixture revision must update the manifest and retain old results.
   repeatedly scans to select top20; Rust sorts all entries and uses different
   token/storage operations. Matching output does not make these identical
   implementations. Word count is not included in the pure CPU geometric mean.
-- JSON transform, string tokens, hashmap churn, buffer scan, particle update and
-  tree walk still need fixtures/oracles and workload sizing. SQLite, HTTP and
+- `buffer_scan`:32MiB logical `[u8]` data, four dependent checksum/mutation passes.
+  Current Turbo storage is not assumed packed. The oracle uses affine composition
+  of the256-byte repeating pattern, cross-checked against a literal bytearray
+  simulation at boundary sizes. Same safe algorithm and output in Turbo/Rust.
+- `hashmap_churn`:2,097,152 seeded operations on4096 integer and precomputed string
+  keys, including reads/updates/removals. Independent final weighted digests and
+  lengths validate both key domains. Hashing/storage and key ownership differ
+  between runtimes; this measures language+runtime, not backend code alone.
+- The fixed v2 manifest pins `TURBO_BENCH_SIZE` / `TURBO_BENCH_STEPS` for evaluation.
+  Small positive values can be used when invoking fixtures directly for tests.
+  Unknown, non-string, non-ASCII or non-positive overrides are rejected by the
+  evaluator. File-input bytes and logical in-memory input bytes are distinguished.
+- JSON transform, string tokens, particle update and tree walk still need
+  fixtures/oracles and workload sizing. SQLite, HTTP and
   worker suites remain separate application/service qualification work.
 - Controlled profiles remain pending G3 capabilities. Their presence in the
   manifest does not mean borrowed/region/noalloc code has compiled or passed.
-- Runtime allocation/live-byte/RC counters, held-out corpus, full CPU suite,
+- Whole-runtime allocation/live-byte/RC coverage, held-out corpus, full CPU suite,
   clean host/provenance attestation and cross-host qualification are outstanding.
 
 Future slices must close these gaps rather than deleting them from the report.
 The purpose of this slice is reliable evidence on existing code—not an easier
 definition of the master plan's success.
+
+## Shared-header allocation profiling (G2.1 next slice)
+
+Build a separate diagnostic compiler. Keep it separate from the ordinary release
+compiler used for timing; the feature changes `--version` to include
+`+allocation-profile`, and the evaluator rejects that flavor as `--compiler`.
+Normal builds compile out all observer hooks and do not link observer code.
+Reports also carry structured `tools.timing_build` and `allocation_metrics.build`
+fields identifying standard versus instrumented flavors. These identify the
+verified flavor handshake, not an independent attestation of source provenance.
+
+```sh
+# A separate target directory keeps instrumented binaries out of the normal path.
+cargo build --release -p turbo-cli --features allocation-profile \
+  --manifest-path turbo/Cargo.toml --target-dir /tmp/turbo-allocation-build
+
+python3 benchmarks/evaluator.py \
+  --profile-compiler /tmp/turbo-allocation-build/release/turbolang \
+  --output benchmarks/results/a-new-profile-run
+```
+
+The evaluator first finishes ordinary timing samples. It then builds an
+instrumented AOT executable and collects separate AOT/JIT profiles (three each
+by default, configurable with `--profile-samples`). These diagnostic durations
+and RSS values are not mixed into timing summaries. JIT diagnostic duration also
+includes compilation. Exact overhead is workload/build-dependent; retain these
+times rather than presenting instrumented timings as production performance.
+
+Profiling requires both the Cargo feature and `TURBO_ALLOC_PROFILE=1` at program
+execution. The evaluator supplies the environment switch only in its profile
+phase. A returning entry point emits one `TURBO_ALLOC_PROFILE` JSON line on
+stderr. Missing/duplicate records, other stderr, invalid observer state, negative
+or missing counters, and unbalanced accounting fail validation. A trap or early
+process exit without a returned entry does not become a zero-allocation report.
+
+Coverage is deliberately **shared-header ARC**, not the whole process heap:
+
+- Allocations, actual heap frees and arena reclamations; live/peak tracked object
+  counts and data-region bytes; cumulative data and header bytes separately.
+- Data-region bytes include allocated capacity, terminators and container
+  metadata. They are not merely logical user payload. The existing16-byte ARC
+  header and allocation layouts are unchanged.
+- Retain/release call counts include no-op calls; operation counts cover actual
+  shared-header counter mutations, including direct COW decrements.
+- JIT hooks use the existing allocation registry and actual deallocation path;
+  AOT hooks use shared-header allocation/free and arena reset. The same C observer
+  implements accounting for both. Unknown frees, duplicate registrations,
+  overlapping profile scopes and overflow invalidate evidence, not program state.
+- Requested registry storage (bucket table plus entries) is tracked separately as
+  `peak_observer_bytes`; this is not total observer RSS or allocator metadata. Observer
+  bookkeeping is never counted as program allocation or used to free user data.
+
+Excluded: compiler memory, non-header hashmap/thread/synchronization backing
+storage, Rust-library temporaries, I/O buffers and foreign libraries such as
+SQLite. JIT and AOT may legitimately allocate differently; no general count parity
+is assumed. A scope ends at entry return, not proof that detached tasks completed.
+The CLI/native entry calibration is exact in both modes: one array,32 data bytes,16 header
+bytes, one retain, two releases and no live allocation. C tests also cover real
+arena reclamation, overflow, unknown frees and concurrent observer updates.
+
+Reports use `allocation_metrics.status="measured_partial"` after successful
+collection, while whole-heap fields remain null and qualification stays
+incomplete. Full allocation coverage, reference-language instrumentation and the
+remaining fixture/host/provenance work are still required. This is not a memory
+safety proof or a claim that all runtime allocations are tracked.
+Direct `libturbo` C-API entry calls and fork-without-exec profiling are not supported
+measurement entry points in this slice.
 
 ## API/reference basis
 

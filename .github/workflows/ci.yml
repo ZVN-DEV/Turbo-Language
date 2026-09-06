@@ -99,6 +99,9 @@ jobs:
       - name: Benchmark evaluator contract tests
         run: python3 -m unittest discover -s benchmarks -p test_evaluator.py -v
 
+      - name: Allocation observer calibration (JIT and AOT)
+        run: cargo test -p turbo-cli --features allocation-profile --manifest-path turbo/Cargo.toml --test allocation_profile
+
   test-windows:
     name: test-windows (experimental, advisory)
     runs-on: windows-latest

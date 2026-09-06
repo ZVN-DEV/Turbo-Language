@@ -12,6 +12,9 @@ homepage.workspace = true
 [lib]
 crate-type = ["rlib", "cdylib", "staticlib"]
 
+[features]
+allocation-profile = []
+
 [dependencies]
 turbo-ast = { version = "0.15.0", path = "../turbo-ast" }
 turbo-lexer = { version = "0.15.0", path = "../turbo-lexer" }
