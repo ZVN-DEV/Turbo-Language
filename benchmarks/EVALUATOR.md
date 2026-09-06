@@ -97,11 +97,21 @@ intentional fixture revision must update the manifest and retain old results.
   keys, including reads/updates/removals. Independent final weighted digests and
   lengths validate both key domains. Hashing/storage and key ownership differ
   between runtimes; this measures language+runtime, not backend code alone.
-- The fixed v2 manifest pins `TURBO_BENCH_SIZE` / `TURBO_BENCH_STEPS` for evaluation.
+- `particle_update`:10,000 seeded six-field `f64` particles,32,768 fixed steps of
+  symplectic Euler with dt=1/64. A closed-form integer oracle checks the digest of
+  **all six fields**, independently tested against a literal step simulation.
+  Seeds and updates stay on an exact dyadic lattice (1/65536) through the permitted
+  65,536-step maximum: no floating-point tolerance can conceal drift. Turbo uses
+  managed struct values; Rust uses inline `Vec<Particle>` storage. This deliberately
+  exposes current ownership/layout costs; it does not claim packed/noalloc Turbo,
+  rendering performance or frame-latency qualification. Step count was sized with
+  a preliminary512-step smoke before freezing v3; outputs are unchanged per step,
+  not padded with sleeps. Any samples under200ms still block qualification.
+- The fixed v3 manifest pins `TURBO_BENCH_SIZE` / `TURBO_BENCH_STEPS` for evaluation.
   Small positive values can be used when invoking fixtures directly for tests.
   Unknown, non-string, non-ASCII or non-positive overrides are rejected by the
   evaluator. File-input bytes and logical in-memory input bytes are distinguished.
-- JSON transform, string tokens, particle update and tree walk still need
+- JSON transform, string tokens and tree walk still need
   fixtures/oracles and workload sizing. SQLite, HTTP and
   worker suites remain separate application/service qualification work.
 - Controlled profiles remain pending G3 capabilities. Their presence in the

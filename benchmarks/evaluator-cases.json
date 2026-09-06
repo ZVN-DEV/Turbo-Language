@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "suite_version": "g2.1-v2",
+  "suite_version": "g2.1-v3",
   "cases": {
     "fib": {
       "category": "cpu",
@@ -81,11 +81,21 @@
     },
     "particle_update": {
       "category": "cpu",
-      "status": "pending_fixture",
+      "status": "runnable",
       "controlled_status": "pending_capability",
-      "workload": "10k seeded particles with fixed-step update count and layout profile.",
-      "oracle": "Reference trajectory digest/tolerance with fixed floating-point policy.",
-      "prerequisite": "fixture implementation and independent review"
+      "workload": "10000 particles,32768 symplectic Euler steps,dt=1/64; six f64 fields initialized by Park-Miller LCG seed7,multiplier48271,mod2147483647, (state%2048-1024)/1024. Update velocity before position; digest all six final fields on the exact 1/65536 lattice.",
+      "oracle": "Independent closed-form integer trajectory; cross-tested with literal fixed-step lattice simulation. Exact digest,size,steps; no float tolerance.",
+      "turbo_source": "turbo/benchmarks/bench_particle_update.tb",
+      "rust_source": "turbo/benchmarks/rust/particle_update.rs",
+      "source_sha256": {
+        "turbo/benchmarks/bench_particle_update.tb": "7c0fca41a52788e59936e94f251387dcd21d745803189aceb032c70d2dd25644",
+        "turbo/benchmarks/rust/particle_update.rs": "254ecbc0b99b12b27c3c9d9152182fec3f6cb4ba47f921e10e93bacb736700fe"
+      },
+      "environment": {
+        "TURBO_BENCH_SIZE": "10000",
+        "TURBO_BENCH_STEPS": "32768"
+      },
+      "comparison_caveat": "Same safe AoS update algorithm; current Turbo managed records and Rust inline Vec records have different physical storage/ownership costs. Baseline is not packed/noalloc Turbo or a renderer/frame-latency test. Sub-200ms samples remain unqualified."
     },
     "tree_walk": {
       "category": "cpu",

@@ -26,7 +26,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path(__file__).with_name("evaluator-cases.json")
-IMPLEMENTED = {"fib", "wordcount", "buffer_scan", "hashmap_churn"}
+IMPLEMENTED = {"fib", "wordcount", "buffer_scan", "hashmap_churn", "particle_update"}
 
 
 class EvaluationError(Exception):
@@ -321,6 +321,11 @@ def load_manifest(path=MANIFEST):
                 or any(not isinstance(v, str) or not v.isascii() or not v.isdecimal()
                        or not 0 < int(v) <= 2**63 - 1 for v in parameters.values())):
             raise ValueError(f"invalid benchmark parameters: {name}")
+        if name == "particle_update" and case["status"] == "runnable":
+            if (set(parameters) != {"TURBO_BENCH_SIZE", "TURBO_BENCH_STEPS"}
+                    or int(parameters["TURBO_BENCH_SIZE"]) > 10000
+                    or int(parameters["TURBO_BENCH_STEPS"]) > 65536):
+                raise ValueError("particle parameters outside exact lattice contract")
         if case["status"] == "runnable":
             for language in ("turbo", "rust"):
                 relative = case.get(language + "_source")
@@ -384,6 +389,32 @@ def hashmap_oracle(steps):
     return f"{checksum}\n{checksum}\n{len(counts)}\n{len(counts)}\n".encode()
 
 
+def particle_oracle(size, steps):
+    """Closed-form integer trajectory, independent of native f64 update loops.
+
+    Position is represented in 1/65536 units. Initial position, velocity and
+    acceleration are seeded integers divided by 1024; dt is 1/64. At <=65536
+    steps the largest lattice coordinate is below 2**42, hence exactly
+    representable in f64, including intermediates. No tolerance hides drift.
+    """
+    if not 0 < size <= 10000 or not 0 < steps <= 65536:
+        raise ValueError("particle parameters outside exact lattice contract")
+    seed, checksum = 7, 0
+    for _ in range(size):
+        values = []
+        for _ in range(6):
+            seed = (seed * 48271) % 2147483647
+            values.append(seed % 2048 - 1024)
+        x, y, vx, vy, ax, ay = values
+        triangle = steps * (steps + 1) // 2
+        final = (64 * x + steps * vx + triangle * ax,
+                 64 * y + steps * vy + triangle * ay,
+                 64 * (vx + steps * ax), 64 * (vy + steps * ay), 64 * ax, 64 * ay)
+        for value in final:
+            checksum = (checksum * 33 + value) % 1_000_000_007
+    return f"{checksum}\n{size}\n{steps}\n".encode()
+
+
 def tool_output(command):
     try:
         result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=10, check=True)
@@ -423,6 +454,8 @@ def prepare_case(name, case, work, compiler, emit):
         expected = buffer_oracle(int(env["TURBO_BENCH_SIZE"]))
     elif name == "hashmap_churn":
         expected = hashmap_oracle(int(env["TURBO_BENCH_STEPS"]))
+    elif name == "particle_update":
+        expected = particle_oracle(int(env["TURBO_BENCH_SIZE"]), int(env["TURBO_BENCH_STEPS"]))
     else:
         expected = b"102334155\n"
     for language in ("turbo", "rust"):
@@ -575,7 +608,7 @@ def evaluate(args, manifest, emit):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cases", default="fib,wordcount,buffer_scan,hashmap_churn")
+    parser.add_argument("--cases", default="fib,wordcount,buffer_scan,hashmap_churn,particle_update")
     parser.add_argument("--samples", type=int, default=20)
     parser.add_argument("--batches", type=int, default=3)
     parser.add_argument("--warmups", type=int, default=3)

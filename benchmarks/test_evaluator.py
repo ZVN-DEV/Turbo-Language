@@ -141,6 +141,47 @@ class ProcessTests(unittest.TestCase):
 
 
 class OracleTests(unittest.TestCase):
+    def test_particle_oracle_matches_exact_fixed_step_simulation(self):
+        # Integer lattice simulation is independent of the closed-form oracle.
+        # Velocity/acceleration units are 1/1024, position units are 1/65536.
+        for size, steps in ((1, 1), (3, 7), (17, 64), (257, 513), (1, 65536), (10000, 1)):
+            seed = 7
+            checksum = 0
+            for _ in range(size):
+                values = []
+                for _ in range(6):
+                    seed = (seed * 48271) % 2147483647
+                    values.append(seed % 2048 - 1024)
+                x, y, vx, vy, ax, ay = values
+                x *= 64
+                y *= 64
+                for _ in range(steps):
+                    vx += ax
+                    vy += ay
+                    x += vx
+                    y += vy
+                for value in (x, y, vx * 64, vy * 64, ax * 64, ay * 64):
+                    checksum = (checksum * 33 + value) % 1_000_000_007
+            expected = f"{checksum}\n{size}\n{steps}\n".encode()
+            self.assertEqual(ev.particle_oracle(size, steps), expected)
+
+    def test_particle_oracle_rejects_outside_exact_lattice_contract(self):
+        for size, steps in ((0, 1), (1, 0), (10001, 1), (1, 65537)):
+            with self.assertRaises(ValueError):
+                ev.particle_oracle(size, steps)
+
+    def test_particle_manifest_requires_both_bounded_parameters(self):
+        for parameters in ({}, {"TURBO_BENCH_SIZE": "1"},
+                           {"TURBO_BENCH_SIZE": "10001", "TURBO_BENCH_STEPS": "1"},
+                           {"TURBO_BENCH_SIZE": "1", "TURBO_BENCH_STEPS": "65537"}):
+            with tempfile.TemporaryDirectory() as temp:
+                manifest = ev.load_manifest()
+                manifest["cases"]["particle_update"]["environment"] = parameters
+                path = Path(temp) / "cases.json"
+                path.write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(ValueError, "particle parameters"):
+                    ev.load_manifest(path)
+
     def test_buffer_oracle_matches_independent_literal_simulation(self):
         for n in (1, 2, 255, 256, 257, 513, 1025):
             data = bytearray((i * 17 + 23) % 256 for i in range(n))

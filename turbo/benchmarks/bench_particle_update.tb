@@ -1,0 +1,76 @@
+// Managed array-of-structs baseline, not a packed/noalloc capability claim.
+// Symplectic Euler, dt=1/64; dyadic values make every operation exact in f64.
+struct Particle { x: f64, y: f64, vx: f64, vy: f64, ax: f64, ay: f64 }
+
+fn parameter(name: str, fallback: i64) -> i64 {
+    let configured = env_get(name)
+    if configured == "" { fallback } else {
+        match str_to_int(configured) {
+            ok(value) => value
+            err(e) => 0
+        }
+    }
+}
+
+fn advance(mut p: Particle) -> Particle {
+    p.vx = p.vx + p.ax
+    p.vy = p.vy + p.ay
+    p.x = p.x + p.vx * 0.015625
+    p.y = p.y + p.vy * 0.015625
+    p
+}
+
+fn fold(checksum: i64, value: f64) -> i64 {
+    let quantized = (value * 65536.0) as i64
+    (checksum * 33 + quantized % 1000000007 + 1000000007) % 1000000007
+}
+
+fn main() {
+    let n = parameter("TURBO_BENCH_SIZE", 10000)
+    let steps = parameter("TURBO_BENCH_STEPS", 32768)
+    assert(n > 0 && n <= 10000)
+    assert(steps > 0 && steps <= 65536)
+    let mut particles: [Particle] = []
+    let mut seed: i64 = 7
+    let mut i = 0
+    while i < n {
+        seed = (seed * 48271) % 2147483647
+        let x = ((seed % 2048 - 1024) as f64) / 1024.0
+        seed = (seed * 48271) % 2147483647
+        let y = ((seed % 2048 - 1024) as f64) / 1024.0
+        seed = (seed * 48271) % 2147483647
+        let vx = ((seed % 2048 - 1024) as f64) / 1024.0
+        seed = (seed * 48271) % 2147483647
+        let vy = ((seed % 2048 - 1024) as f64) / 1024.0
+        seed = (seed * 48271) % 2147483647
+        let ax = ((seed % 2048 - 1024) as f64) / 1024.0
+        seed = (seed * 48271) % 2147483647
+        let ay = ((seed % 2048 - 1024) as f64) / 1024.0
+        particles.push(Particle { x: x, y: y, vx: vx, vy: vy, ax: ax, ay: ay })
+        i += 1
+    }
+    let mut step = 0
+    while step < steps {
+        i = 0
+        while i < n {
+            particles[i] = advance(particles[i])
+            i += 1
+        }
+        step += 1
+    }
+    let mut checksum: i64 = 0
+    i = 0
+    while i < n {
+        let p = particles[i]
+        checksum = fold(checksum, p.x)
+        checksum = fold(checksum, p.y)
+        checksum = fold(checksum, p.vx)
+        checksum = fold(checksum, p.vy)
+        checksum = fold(checksum, p.ax)
+        checksum = fold(checksum, p.ay)
+        i += 1
+    }
+    print(checksum)
+    print(n)
+    print(steps)
+}
