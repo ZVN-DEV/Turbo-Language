@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "suite_version": "g2.1-v1",
+  "cases": {
+    "fib": {
+      "category": "cpu",
+      "status": "runnable",
+      "controlled_status": "pending_capability",
+      "workload": "Recursive fib(40), one process invocation; same recurrence in Turbo/Rust.",
+      "oracle": "102334155\\n",
+      "turbo_source": "turbo/benchmarks/bench_fib.tb",
+      "rust_source": "turbo/benchmarks/rust/fib.rs",
+      "source_sha256": {
+        "turbo/benchmarks/bench_fib.tb": "f29d55ef9f0810f89c61bc399ca012f9cfd7842bba9b44d58b1fa4cab436aee6",
+        "turbo/benchmarks/rust/fib.rs": "e70cd4050427b9646fad1ed932bd06932d896645cb37405ba4051f8a93764e1f"
+      }
+    },
+    "wordcount": {
+      "category": "application",
+      "status": "runnable",
+      "controlled_status": "pending_capability",
+      "workload": "Existing 5MiB seeded ASCII corpus, word frequencies, top20 count-desc/lexical ties.",
+      "oracle": "Independent Python Counter and ordered top20 plus total/unique.",
+      "comparison_caveat": "Idiomatic end-to-end comparison, NOT identical implementation: Turbo selects top20 by repeated scan; Rust sorts all counts; token/storage paths also differ.",
+      "turbo_source": "turbo/benchmarks/wordcount.tb",
+      "rust_source": "turbo/benchmarks/rust/wordcount.rs",
+      "source_sha256": {
+        "turbo/benchmarks/wordcount.tb": "923024e31bd97e8bf3309a6f94aa69e50eb5400480cbbd642fdf23ccfbe30bc3",
+        "turbo/benchmarks/rust/wordcount.rs": "1cfec7684105225e7869a08392f0188df397627eae8b216c9ed3646e13a12a14",
+        "turbo/benchmarks/gen_wordcount_input.py": "6a17b42dbcc74fddc71ce87e557bce3cd65c952a870deb575ca3193713d781d2"
+      }
+    },
+    "json_transform": {
+      "category": "cpu",
+      "status": "pending_fixture",
+      "controlled_status": "pending_capability",
+      "workload": "Seeded records with strings/control/Unicode, numbers and bools; parse/filter/project/serialize.",
+      "oracle": "Parsed records equal an independent semantic oracle; bytes counted; freeze dataset before implementation.",
+      "prerequisite": "fixture implementation and independent review"
+    },
+    "string_tokens": {
+      "category": "cpu",
+      "status": "pending_fixture",
+      "controlled_status": "pending_capability",
+      "workload": "Fixed ASCII and Unicode token corpus with explicit normalization rules.",
+      "oracle": "Exact token/count sequence and digest; freeze corpus before optimization.",
+      "prerequisite": "fixture implementation and independent review"
+    },
+    "hashmap_churn": {
+      "category": "cpu",
+      "status": "pending_fixture",
+      "controlled_status": "pending_capability",
+      "workload": "Seeded integer/string key insert/update/remove/read sequence.",
+      "oracle": "Reference dictionary results plus final digest; fixed live working set.",
+      "prerequisite": "fixture implementation and independent review"
+    },
+    "buffer_scan": {
+      "category": "cpu",
+      "status": "pending_fixture",
+      "controlled_status": "pending_capability",
+      "workload": "At least32MiB deterministic byte data, checksummed scanning and mutation.",
+      "oracle": "Independent byte checksum and exact final selected positions.",
+      "prerequisite": "fixture implementation and independent review"
+    },
+    "particle_update": {
+      "category": "cpu",
+      "status": "pending_fixture",
+      "controlled_status": "pending_capability",
+      "workload": "10k seeded particles with fixed-step update count and layout profile.",
+      "oracle": "Reference trajectory digest/tolerance with fixed floating-point policy.",
+      "prerequisite": "fixture implementation and independent review"
+    },
+    "tree_walk": {
+      "category": "cpu",
+      "status": "pending_fixture",
+      "controlled_status": "pending_capability",
+      "workload": "Seeded acyclic allocation-heavy tree, deterministic traversal/drop.",
+      "oracle": "Reference traversal result and balanced allocation accounting.",
+      "prerequisite": "fixture implementation and independent review"
+    },
+    "sqlite": {
+      "category": "application",
+      "status": "pending_fixture",
+      "controlled_status": "pending_capability",
+      "workload": "Seeded database, transactional batch insert and ordered query workload.",
+      "oracle": "Exact rows/transaction outcomes with matching SQLite configuration.",
+      "prerequisite": "fixture implementation and independent review"
+    },
+    "http_compute": {
+      "category": "service",
+      "status": "pending_fixture",
+      "controlled_status": "pending_capability",
+      "workload": "Fixed compute request bodies at declared rate/concurrency.",
+      "oracle": "Response oracle and error counts; measure latency separately.",
+      "prerequisite": "G4 service protocol/load harness"
+    },
+    "worker": {
+      "category": "service",
+      "status": "pending_fixture",
+      "controlled_status": "pending_capability",
+      "workload": "Fixed job set and documented retries/recovery schedule.",
+      "oracle": "Durable state/effect oracle; no acknowledged loss.",
+      "prerequisite": "G5 worker kit and fault harness"
+    }
+  }
+}

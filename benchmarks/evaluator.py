@@ -1,0 +1,476 @@
+#!/usr/bin/env python3
+"""Paired native benchmark evidence; never confuses a subset with qualification.
+
+Python 3.10+, standard library only. Process measurement supports macOS/Linux.
+See EVALUATOR.md for metric scope, limitations, protocol and exit codes.
+"""
+
+import argparse
+from collections import Counter, defaultdict
+from contextlib import contextmanager
+from datetime import datetime, timezone
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import platform
+import random
+import shutil
+import signal
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+MANIFEST = Path(__file__).with_name("evaluator-cases.json")
+IMPLEMENTED = {"fib", "wordcount"}
+
+
+class EvaluationError(Exception):
+    pass
+
+
+@contextmanager
+def measurement_lock(path=ROOT / "benchmarks/.evaluator.lock"):
+    """One evaluator per checkout; kernel releases the lock on process death.
+
+    Keep the file: unlinking a lock file can split contenders across inodes.
+    This does not assert that other programs on the host are idle.
+    """
+    if sys.platform not in ("darwin", "linux"):
+        raise EvaluationError("native evaluator currently supports macOS/Linux")
+    import fcntl
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "rb") as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise EvaluationError("another evaluator is active in this checkout") from error
+        try:
+            yield
+        finally:
+            fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def file_digest(path):
+    hasher = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def rss_bytes(raw, system):
+    if system == "darwin":
+        return int(raw)
+    if system == "linux":
+        return int(raw) * 1024
+    raise ValueError("per-child RSS is currently supported only on macOS/Linux")
+
+
+def run_process(argv, *, cwd=None, env=None, timeout_s=30, max_output_bytes=1_048_576):
+    """Measure one owned child with wait4, not cumulative RUSAGE_CHILDREN.
+
+    Wall time includes process launch/exec and up to 1ms polling delay. RSS is
+    the OS high-water mark, NOT live heap or allocation count. Temporary files
+    avoid pipe deadlocks; output is capped and a noisy child is terminated.
+    """
+    if sys.platform not in ("darwin", "linux") or not hasattr(os, "wait4"):
+        raise ValueError("native evaluator requires macOS/Linux wait4")
+    if (not math.isfinite(timeout_s) or timeout_s <= 0
+            or isinstance(max_output_bytes, bool) or not isinstance(max_output_bytes, int)
+            or max_output_bytes <= 0):
+        raise ValueError("timeout and output limit must be finite and positive")
+    sample = dict(command=[str(a) for a in argv], pid=None, status="launch_error",
+                  exit_code=None, elapsed_ns=None, peak_rss_bytes=None,
+                  stdout="", stderr="", stdout_sha256=None, stderr_sha256=None)
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        start = time.perf_counter_ns()
+        try:
+            child = subprocess.Popen(sample["command"], cwd=cwd, env=env,
+                                     stdin=subprocess.DEVNULL, stdout=stdout,
+                                     stderr=stderr, start_new_session=True)
+        except OSError as error:
+            sample.update(stderr=str(error), elapsed_ns=time.perf_counter_ns() - start)
+            return sample
+        sample["pid"] = child.pid
+        outcome = None
+        try:
+            while True:
+                pid, status, usage = os.wait4(child.pid, os.WNOHANG)
+                if pid:
+                    child.returncode = os.waitstatus_to_exitcode(status)
+                    break
+                if time.perf_counter_ns() - start >= timeout_s * 1e9:
+                    outcome = "timeout"
+                elif max(os.fstat(stdout.fileno()).st_size,
+                         os.fstat(stderr.fileno()).st_size) > max_output_bytes:
+                    outcome = "output_limit"
+                if outcome:
+                    # Child has not been reaped: its PID/session still belong
+                    # to this invocation. Kill only that owned process group.
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    _, status, usage = os.wait4(child.pid, 0)
+                    child.returncode = os.waitstatus_to_exitcode(status)
+                    break
+                time.sleep(.001)
+        finally:
+            # Also reap on cancellation/errors; poll handles an already-reaped
+            # child without targeting an unrelated process group.
+            if child.returncode is None and child.poll() is None:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                child.wait()
+        sample.update(elapsed_ns=time.perf_counter_ns() - start,
+                      exit_code=child.returncode,
+                      peak_rss_bytes=rss_bytes(usage.ru_maxrss, sys.platform))
+        for name, stream in (("stdout", stdout), ("stderr", stderr)):
+            stream.seek(0)
+            raw = stream.read(max_output_bytes + 1)
+            if len(raw) > max_output_bytes:
+                outcome = outcome or "output_limit"
+            else:
+                sample[name + "_sha256"] = digest(raw)
+            sample[name] = raw[:max_output_bytes].decode("utf-8", errors="replace")
+        sample["status"] = outcome or ("ok" if child.returncode == 0 else "failed")
+        return sample
+
+
+def check_output(sample, expected):
+    if sample["status"] != "ok":
+        raise EvaluationError(f"child {sample['status']}: {sample['stderr']}")
+    if sample["stdout_sha256"] != digest(expected):
+        raise EvaluationError(f"output mismatch: {sample['stdout']!r}; expected {expected!r}")
+    if sample["stderr"]:
+        raise EvaluationError(f"unexpected stderr: {sample['stderr']!r}")
+
+
+def percentile(values, quantile):
+    if not values or not 0 <= quantile <= 1:
+        raise ValueError("percentile requires values and a quantile in [0,1]")
+    ordered = sorted(values)
+    index = (len(ordered) - 1) * quantile
+    lo, hi = math.floor(index), math.ceil(index)
+    return ordered[lo] + (ordered[hi] - ordered[lo]) * (index - lo)
+
+
+def _ratio(rows):
+    return statistics.median(p["turbo_ns"] / p["rust_ns"] for p in rows)
+
+
+def _geomean(values):
+    return math.exp(statistics.mean(math.log(v) for v in values))
+
+
+def summarize(cases, *, draws=2000, seed=20260906):
+    """Hierarchical paired bootstrap, with common batch resampling across cases.
+
+    Point estimator is the median of within-pair elapsed ratios, not a ratio
+    chosen from independently fastest runs. Workload weights are equal.
+    """
+    if not cases or draws < 1:
+        raise ValueError("nonempty cases and positive bootstrap count required")
+    grouped = {}
+    summaries = {}
+    batch_ids = None
+    for name, rows in sorted(cases.items()):
+        if not rows:
+            raise ValueError(f"empty case {name}")
+        batches = defaultdict(list)
+        seen = set()
+        for row in rows:
+            for key in ("turbo_ns", "rust_ns"):
+                v = row[key]
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0:
+                    raise ValueError("durations must be finite positive numbers")
+            identity = (row["batch"], row["pair"])
+            if identity in seen:
+                raise ValueError("duplicate batch/pair identity")
+            seen.add(identity)
+            batches[row["batch"]].append(row)
+        ids = sorted(batches)
+        if batch_ids is not None and ids != batch_ids:
+            raise ValueError("cases must contain the same completed batches")
+        batch_ids = ids
+        grouped[name] = batches
+        summaries[name] = dict(ratio=_ratio(rows), pair_count=len(rows), batch_count=len(ids))
+        for language in ("turbo", "rust"):
+            values = [p[language + "_ns"] for p in rows]
+            summaries[name][language + "_median_ns"] = statistics.median(values)
+            summaries[name][language + "_p95_ns"] = percentile(values, .95)
+    rng = random.Random(seed)
+    bootstraps = {name: [] for name in grouped}
+    aggregate = []
+    for _ in range(draws):
+        selected = rng.choices(batch_ids, k=len(batch_ids))
+        ratios = []
+        for name, batches in grouped.items():
+            rows = [row for batch in selected
+                    for row in rng.choices(batches[batch], k=len(batches[batch]))]
+            ratio = _ratio(rows)
+            bootstraps[name].append(ratio)
+            ratios.append(ratio)
+        aggregate.append(_geomean(ratios))
+    for name, values in bootstraps.items():
+        summaries[name]["ratio_ci95"] = [percentile(values, .025), percentile(values, .975)]
+    return dict(cases=summaries,
+                geomean_ratio=_geomean(s["ratio"] for s in summaries.values()),
+                geomean_ci95=[percentile(aggregate, .025), percentile(aggregate, .975)],
+                estimator="median paired ratios; equal workload weights",
+                bootstrap=dict(draws=draws, seed=seed, method="batch then paired samples"))
+
+
+def cpu_verdict(summary, *, blockers=(), geomean_limit=1.15, individual_limit=1.35):
+    intervals = {name: (value["ratio_ci95"], individual_limit)
+                 for name, value in summary["cases"].items()}
+    intervals["geomean"] = (summary["geomean_ci95"], geomean_limit)
+    failed = [name for name, (ci, limit) in intervals.items() if ci[0] > limit]
+    uncertain = [name for name, (ci, limit) in intervals.items() if ci[0] <= limit < ci[1]]
+    observed = "fail" if failed else "inconclusive" if uncertain else "pass"
+    return dict(status="incomplete" if blockers else observed,
+                observed_subset_status=observed, failures=failed,
+                inconclusive=uncertain, blockers=list(blockers))
+
+
+def source_path(relative):
+    path = (ROOT / relative).resolve()
+    if not path.is_relative_to(ROOT) or not path.is_file():
+        raise ValueError(f"source outside repository or missing: {relative}")
+    return path
+
+
+def load_manifest(path=MANIFEST):
+    manifest = json.loads(Path(path).read_text())
+    if (not isinstance(manifest, dict) or manifest.get("schema_version") != 1
+            or not isinstance(manifest.get("cases"), dict) or not manifest["cases"]
+            or not isinstance(manifest.get("suite_version"), str)):
+        raise ValueError("unsupported or empty evaluator manifest")
+    for name, case in manifest["cases"].items():
+        if (not isinstance(case, dict) or case.get("status") not in ("runnable", "pending_fixture")
+                or case.get("controlled_status") not in ("pending_capability", "runnable")
+                or case.get("category") not in ("cpu", "application", "service")):
+            raise ValueError(f"invalid case status: {name}")
+        if case["status"] == "runnable" and name not in IMPLEMENTED:
+            raise ValueError(f"no runner implementation: {name}")
+        if case["status"] == "runnable":
+            for language in ("turbo", "rust"):
+                relative = case.get(language + "_source")
+                if not isinstance(relative, str) or relative not in case.get("source_sha256", {}):
+                    raise ValueError(f"unfingerprinted source: {name}/{language}")
+        for relative, expected_hash in case.get("source_sha256", {}).items():
+            if file_digest(source_path(relative)) != expected_hash:
+                raise ValueError(f"fixture changed; revise evaluator manifest explicitly: {relative}")
+    return manifest
+
+
+def wordcount_oracle(path):
+    counts = Counter(Path(path).read_text(encoding="ascii").split())
+    top = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[:20]
+    return ("".join(f"{word} {count}\n" for word, count in top)
+            + f"TOTAL {sum(counts.values())} {len(counts)}\n").encode()
+
+
+def tool_output(command):
+    try:
+        result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=10, check=True)
+        return result.stdout.decode(errors="replace").strip()
+    except (OSError, subprocess.SubprocessError) as error:
+        return f"unavailable: {error}"
+
+
+def working_tree_status():
+    """Porcelain records include staged, unstaged and untracked paths.
+
+    Preserve Git's quoted path representation (including unusual filenames)
+    rather than splitting paths on spaces or dumping environment contents.
+    """
+    return tool_output(["git", "status", "--porcelain=v1", "--untracked-files=all"]).splitlines()
+
+
+def prepare_case(name, case, work, compiler, emit):
+    commands = {}
+    builds = {}
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+    data = None
+    if name == "wordcount":
+        data = work / "wordcount_input.txt"
+        generator = source_path("turbo/benchmarks/gen_wordcount_input.py")
+        generated = run_process([sys.executable, generator, data, "5"], timeout_s=60)
+        emit(dict(kind="input_generation", case=name, sample=generated))
+        check_output(generated, b"")
+        env["WORDCOUNT_INPUT"] = str(data)
+        expected = wordcount_oracle(data)
+    else:
+        expected = b"102334155\n"
+    for language in ("turbo", "rust"):
+        binary = work / (name + "-" + language)
+        source = source_path(case[language + "_source"])
+        command = ([compiler, "build", source, "-o", binary] if language == "turbo" else
+                   [shutil.which("rustc") or "rustc", "-C", "opt-level=3", "-C",
+                    "target-cpu=native", "-C", "overflow-checks=off", source, "-o", binary])
+        built = run_process(command, cwd=ROOT, timeout_s=180)
+        emit(dict(kind="build", case=name, language=language, sample=built))
+        if built["status"] != "ok":
+            raise EvaluationError(f"{name}/{language} build failed: {built['stderr']}")
+        builds[language] = dict(elapsed_ns=built["elapsed_ns"], binary_bytes=binary.stat().st_size,
+                                binary_sha256=file_digest(binary), command=built["command"])
+        commands[language] = [str(binary)]
+    return dict(commands=commands, env=env, expected=expected, builds=builds,
+                input_sha256=file_digest(data) if data else None,
+                input_bytes=data.stat().st_size if data else 0,
+                expected_stdout=expected.decode(), expected_sha256=digest(expected))
+
+
+def evaluate(args, manifest, emit):
+    compiler = Path(args.compiler).resolve()
+    if not compiler.is_file():
+        raise EvaluationError("build turbo/target/release/turbolang before measuring")
+    report = dict(schema_version=1, suite_version=manifest["suite_version"], status="running",
+                  scope="initial measurement subset; G2.1 remains incomplete",
+                  created_at=datetime.now(timezone.utc).isoformat(),
+                  repository_revision=tool_output(["git", "rev-parse", "HEAD"]),
+                  working_tree_status=working_tree_status(),
+                  evaluator_sha256=file_digest(__file__), manifest_sha256=file_digest(MANIFEST),
+                  host=dict(system=platform.system(), release=platform.release(),
+                            architecture=platform.machine(), python=platform.python_version(),
+                            cpu=tool_output(["sysctl", "-n", "machdep.cpu.brand_string"])
+                            if sys.platform == "darwin" else platform.processor(),
+                            power_and_load_control="not validated automatically"),
+                  tools=dict(turbo=tool_output([str(compiler), "--version"]),
+                             turbo_binary_sha256=file_digest(compiler),
+                             compiler_source_revision="unverified; supplied binary is fingerprinted",
+                             rust=tool_output(["rustc", "--version", "--verbose"]),
+                             cc=tool_output([os.environ.get("CC", "cc"), "--version"])),
+                  protocol=dict(samples=args.samples, batches=args.batches, warmups=args.warmups,
+                                bootstrap_draws=args.bootstrap, seed=args.seed,
+                                poll_interval_ns=1_000_000, wall_scope="process start through exit",
+                                rss_scope="wait4 child high-water; not heap or sum of process tree"),
+                  allocation_metrics=dict(status="not_instrumented", live_bytes=None,
+                                          allocation_count=None, total_allocated_bytes=None),
+                  cases={}, groups={})
+    prepared = {}
+    rows = {name: [] for name in args.cases}
+    rng = random.Random(args.seed)
+    try:
+        with tempfile.TemporaryDirectory(prefix="turbo-evaluator-") as directory:
+            work = Path(directory)
+            for name in args.cases:
+                spec = manifest["cases"][name]
+                prepared[name] = prepare_case(name, spec, work, str(compiler), emit)
+                report["cases"][name] = {key: value for key, value in prepared[name].items()
+                                         if key not in ("env", "expected")}
+                report["cases"][name].update(specification=spec, pairs=rows[name])
+            for batch in range(args.batches):
+                order = list(args.cases)
+                rng.shuffle(order)
+                for name in order:
+                    case = prepared[name]
+                    for phase, count in (("warmup", args.warmups), ("measurement", args.samples)):
+                        for pair in range(count):
+                            languages = ["turbo", "rust"]
+                            rng.shuffle(languages)
+                            measured = {}
+                            for language in languages:
+                                sample = run_process(case["commands"][language], cwd=work,
+                                                     env=case["env"], timeout_s=args.timeout)
+                                emit(dict(kind=phase, batch=batch, pair=pair, case=name,
+                                          language=language, sample=sample))
+                                # Validate every sample, including warmups; retain failure in JSONL first.
+                                check_output(sample, case["expected"])
+                                measured[language] = sample
+                            if phase == "measurement":
+                                rows[name].append(dict(batch=batch, pair=pair, order=languages,
+                                    turbo_ns=measured["turbo"]["elapsed_ns"],
+                                    rust_ns=measured["rust"]["elapsed_ns"],
+                                    turbo_peak_rss_bytes=measured["turbo"]["peak_rss_bytes"],
+                                    rust_peak_rss_bytes=measured["rust"]["peak_rss_bytes"]))
+                    print(f"batch {batch + 1}/{args.batches}: {name} outputs verified", flush=True)
+        for category in sorted({manifest["cases"][name]["category"] for name in args.cases}):
+            group = {name: rows[name] for name in args.cases
+                     if manifest["cases"][name]["category"] == category}
+            report["groups"][category] = summarize(group, draws=args.bootstrap, seed=args.seed)
+        blockers = [f"{name}: {case['status']}" for name, case in manifest["cases"].items()
+                    if name not in args.cases or case["status"] != "runnable"]
+        blockers += ["controlled profiles pending G3", "allocation counters not instrumented",
+                     "cross-host qualification not established", "host power/load conditions unvalidated"]
+        blockers.append("compiler source provenance not independently attested")
+        if args.samples < 20 or args.batches < 3 or args.warmups < 3 or args.bootstrap < 2000:
+            blockers.append("smoke protocol below required sampling minimums")
+        if any(min(p["turbo_ns"], p["rust_ns"]) < 200_000_000 for data in rows.values() for p in data):
+            blockers.append("samples below 200ms; in-program batching required for qualification")
+        report["qualification"] = (cpu_verdict(report["groups"]["cpu"], blockers=blockers)
+                                     if "cpu" in report["groups"] else
+                                     dict(status="incomplete", blockers=blockers + ["no CPU cases run"]))
+        report["status"] = "measured"
+    except (EvaluationError, OSError, ValueError) as error:
+        report.update(status="failed", error=str(error), qualification=dict(status="not_evaluated"))
+    except KeyboardInterrupt:
+        report.update(status="interrupted", qualification=dict(status="not_evaluated"))
+    return report
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cases", default="fib,wordcount")
+    parser.add_argument("--samples", type=int, default=20)
+    parser.add_argument("--batches", type=int, default=3)
+    parser.add_argument("--warmups", type=int, default=3)
+    parser.add_argument("--bootstrap", type=int, default=2000)
+    parser.add_argument("--seed", type=int, default=20260906)
+    parser.add_argument("--timeout", type=float, default=30)
+    parser.add_argument("--compiler", default=str(ROOT / "turbo/target/release/turbolang"))
+    parser.add_argument("--output", type=Path, required=True, help="new evidence directory; never overwritten")
+    parser.add_argument("--check", action="store_true", help="require full plan qualification (currently incomplete)")
+    args = parser.parse_args(argv)
+    if min(args.samples, args.batches, args.warmups, args.bootstrap) < 1:
+        parser.error("sample/batch/warmup/bootstrap counts must be positive")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        parser.error("timeout must be finite and positive")
+    try:
+        manifest = load_manifest()
+        args.cases = args.cases.split(",")
+        if (len(set(args.cases)) != len(args.cases) or not set(args.cases) <= IMPLEMENTED
+                or any(manifest["cases"].get(name, {}).get("status") != "runnable" for name in args.cases)):
+            parser.error("choose distinct implemented cases: fib,wordcount")
+        args.output.mkdir(parents=True, exist_ok=False)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
+    with (args.output / "samples.jsonl").open("x") as stream:
+        def emit(event):
+            stream.write(json.dumps(event, ensure_ascii=True, allow_nan=False) + "\n")
+            stream.flush()
+        try:
+            with measurement_lock():
+                report = evaluate(args, manifest, emit)
+        except (EvaluationError, OSError, ValueError) as error:
+            report = dict(status="failed", error=str(error), qualification=dict(status="not_evaluated"))
+        except KeyboardInterrupt:
+            report = dict(status="interrupted", qualification=dict(status="not_evaluated"))
+    with (args.output / "report.json").open("x") as stream:
+        json.dump(report, stream, indent=2, ensure_ascii=True, allow_nan=False)
+        stream.write("\n")
+    print(f"{report['status']}; qualification={report['qualification']['status']}; {args.output}")
+    if report["status"] == "interrupted":
+        return 130
+    if report["status"] != "measured":
+        return 2
+    if args.check:
+        return {"pass": 0, "fail": 1, "incomplete": 3, "inconclusive": 4}[report["qualification"]["status"]]
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

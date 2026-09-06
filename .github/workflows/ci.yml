@@ -96,6 +96,9 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --manifest-path turbo/Cargo.toml
 
+      - name: Benchmark evaluator contract tests
+        run: python3 -m unittest discover -s benchmarks -p test_evaluator.py -v
+
   test-windows:
     name: test-windows (experimental, advisory)
     runs-on: windows-latest

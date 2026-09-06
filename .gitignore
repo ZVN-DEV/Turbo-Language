@@ -50,4 +50,7 @@ docs/superpowers/
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# OS-held benchmark lock (never unlink while a contender may hold its inode)
+/benchmarks/.evaluator.lock
 .omx/
