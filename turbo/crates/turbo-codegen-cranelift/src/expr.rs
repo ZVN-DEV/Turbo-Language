@@ -247,7 +247,7 @@ fn compile_expr_inner<M: Module>(
             } else if let Some(tail) = tail_expr {
                 let result = compile_expr(cx, tail)?;
                 if let Some((value, tty)) = result.as_ref() {
-                    if !expr_produces_owned_rc_temp(tail) {
+                    if !expr_produces_owned_rc_temp(cx, tail) {
                         retain_if_needed(cx, *value, tty);
                     }
                 }
@@ -333,7 +333,7 @@ fn compile_expr_inner<M: Module>(
                     }
                 }
             }
-            let rhs_borrows_existing = expr_result_borrows_existing_rc(value);
+            let rhs_borrows_existing = expr_result_borrows_existing_rc(cx, value);
             let (val, tty) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
@@ -523,7 +523,7 @@ fn compile_expr_inner<M: Module>(
             };
 
             if is_rc_managed_type(cx, &field_tty) {
-                if expr_result_borrows_existing_rc(value) {
+                if expr_result_borrows_existing_rc(cx, value) {
                     retain_if_needed(cx, val, &field_tty);
                 }
                 let old_val = cx
@@ -583,7 +583,7 @@ fn compile_expr_inner<M: Module>(
 
             let trusted = MemFlags::trusted();
             let elem_is_rc = is_rc_managed_type(cx, &elem_tty);
-            let value_borrows_existing = expr_result_borrows_existing_rc(value);
+            let value_borrows_existing = expr_result_borrows_existing_rc(cx, value);
             if elem_is_rc && value_borrows_existing {
                 retain_if_needed(cx, val, &elem_tty);
             }
@@ -753,7 +753,9 @@ fn compile_expr_inner<M: Module>(
                                 if matches!(tty, TurboTy::Str) && arg_vals.len() < 64 {
                                     ptr_mask |= 1i64 << arg_vals.len();
                                 }
-                                if matches!(tty, TurboTy::Str) && expr_produces_owned_rc_temp(arg) {
+                                if matches!(tty, TurboTy::Str)
+                                    && expr_produces_owned_rc_temp(cx, arg)
+                                {
                                     owned_string_arg_temps.push((val, tty.clone()));
                                 }
                                 let val = match tty {
@@ -922,7 +924,7 @@ fn compile_expr_inner<M: Module>(
                 if i == 0 {
                     elem_tty = tty;
                 }
-                if is_rc_managed_type(cx, &elem_tty) && expr_result_borrows_existing_rc(elem) {
+                if is_rc_managed_type(cx, &elem_tty) && expr_result_borrows_existing_rc(cx, elem) {
                     retain_if_needed(cx, val, &elem_tty);
                 }
                 let offset = cx.builder.ins().iconst(cx.ptr_type, (8 + i * 8) as i64);
@@ -1051,7 +1053,7 @@ fn compile_expr_inner<M: Module>(
                     code: ErrorCode::E0400,
                     message: "expected a value, but sub-expression has unit type".to_string(),
                 })?;
-                if expr_result_borrows_existing_rc(field_value) {
+                if expr_result_borrows_existing_rc(cx, field_value) {
                     retain_if_needed(cx, val, &tty);
                 }
                 concrete_fields.push((field_name.clone(), tty));
@@ -1343,7 +1345,7 @@ fn compile_expr_inner<M: Module>(
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
-            if expr_result_borrows_existing_rc(value) {
+            if expr_result_borrows_existing_rc(cx, value) {
                 retain_if_needed(cx, val, &tty);
             }
             // Widen to i64 if needed (bools, etc.)
@@ -1370,7 +1372,7 @@ fn compile_expr_inner<M: Module>(
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
-            if expr_result_borrows_existing_rc(value) {
+            if expr_result_borrows_existing_rc(cx, value) {
                 retain_if_needed(cx, val, &tty);
             }
             // Widen to i64 if needed
@@ -1397,7 +1399,7 @@ fn compile_expr_inner<M: Module>(
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
-            if expr_result_borrows_existing_rc(value) {
+            if expr_result_borrows_existing_rc(cx, value) {
                 retain_if_needed(cx, val, &tty);
             }
             // Widen to i64 if needed (bools, etc.)
@@ -1426,7 +1428,7 @@ fn compile_expr_inner<M: Module>(
 
         Expr::NullCoalesce { value, default } => {
             // Compile the optional value
-            let (opt_val, _opt_tty) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
+            let (opt_val, opt_tty) = compile_expr(cx, value)?.ok_or_else(|| CodegenError {
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
@@ -1456,6 +1458,10 @@ fn compile_expr_inner<M: Module>(
             let val_fref = cx.module.declare_func_in_func(val_fid, cx.builder.func);
             let val_call = cx.builder.ins().call(val_fref, &[opt_val]);
             let some_val = cx.builder.inst_results(val_call)[0];
+            if let TurboTy::Optional(inner) = &opt_tty {
+                retain_if_needed(cx, some_val, inner);
+            }
+            release_expr_temp_if_needed(cx, opt_val, &opt_tty, value);
             cx.builder.ins().jump(merge_block, &[some_val]);
 
             // None path: compile default
@@ -1465,6 +1471,12 @@ fn compile_expr_inner<M: Module>(
                 code: ErrorCode::E0400,
                 message: "expected a value, but sub-expression has unit type".to_string(),
             })?;
+            // The coalesced result owns its RC value on either branch. A
+            // borrowed fallback needs a reference just like the some payload.
+            if !expr_produces_owned_rc_temp(cx, default) {
+                retain_if_needed(cx, def_val, &def_tty);
+            }
+            release_expr_temp_if_needed(cx, opt_val, &opt_tty, value);
             // Widen default to i64 if needed for consistency
             let def_ty = cx.builder.func.dfg.value_type(def_val);
             let def_val = if def_ty.is_int() && def_ty.bits() < 64 {
@@ -1683,17 +1695,29 @@ fn match_arm_yields_subject_binding(arm: &MatchArm) -> bool {
     matches!(&arm.body.node, Expr::Ident(name) if pattern_binds_name(&arm.pattern.node, name))
 }
 
-fn match_arm_yields_owned_or_static_rc(arm: &MatchArm) -> bool {
-    expr_produces_owned_rc_temp(&arm.body)
+fn match_arm_yields_owned_or_static_rc<M: Module>(cx: &Ctx<'_, M>, arm: &MatchArm) -> bool {
+    expr_produces_owned_rc_temp(cx, &arm.body)
         || matches!(arm.body.node, Expr::StringLit(_))
         || match_arm_yields_subject_binding(arm)
 }
 
-pub(crate) fn expr_result_borrows_existing_rc(expr: &Spanned<Expr>) -> bool {
+fn is_enum_constructor_access<M: Module>(cx: &Ctx<'_, M>, expr: &Spanned<Expr>) -> bool {
+    matches!(&expr.node, Expr::FieldAccess { object, field }
+        if matches!(&object.node, Expr::Ident(name)
+            if cx.enum_variants.get(name).is_some_and(|variants| variants.contains(field))))
+}
+
+pub(crate) fn expr_result_borrows_existing_rc<M: Module>(
+    cx: &Ctx<'_, M>,
+    expr: &Spanned<Expr>,
+) -> bool {
+    if is_enum_constructor_access(cx, expr) {
+        return false;
+    }
     match &expr.node {
         Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. } => true,
         Expr::Match { subject, arms } => {
-            !expr_produces_owned_rc_temp(subject)
+            !expr_produces_owned_rc_temp(cx, subject)
                 && !arms.is_empty()
                 && arms.iter().any(match_arm_yields_subject_binding)
                 && arms.iter().all(|arm| {
@@ -1705,7 +1729,15 @@ pub(crate) fn expr_result_borrows_existing_rc(expr: &Spanned<Expr>) -> bool {
     }
 }
 
-pub(crate) fn expr_produces_owned_rc_temp(expr: &Spanned<Expr>) -> bool {
+pub(crate) fn expr_produces_owned_rc_temp<M: Module>(
+    cx: &Ctx<'_, M>,
+    expr: &Spanned<Expr>,
+) -> bool {
+    // A payload-free variant of a data enum still allocates a tagged object.
+    // The parser spells it as FieldAccess, but it is not a borrowed field.
+    if is_enum_constructor_access(cx, expr) {
+        return true;
+    }
     match &expr.node {
         Expr::Call { .. }
         | Expr::BinaryOp { .. }
@@ -1718,24 +1750,33 @@ pub(crate) fn expr_produces_owned_rc_temp(expr: &Spanned<Expr>) -> bool {
         | Expr::ErrExpr(_)
         | Expr::SomeExpr(_)
         | Expr::NoneExpr
-        | Expr::OptionalChain { .. } => true,
+        | Expr::OptionalChain { .. }
+        | Expr::NullCoalesce { .. } => true,
         Expr::If {
             then_branch,
             else_branch: Some(else_branch),
             ..
-        } => expr_produces_owned_rc_temp(then_branch) && expr_produces_owned_rc_temp(else_branch),
+        } => {
+            expr_produces_owned_rc_temp(cx, then_branch)
+                && expr_produces_owned_rc_temp(cx, else_branch)
+        }
         Expr::IfLet {
             then_branch,
             else_branch: Some(else_branch),
             ..
-        } => expr_produces_owned_rc_temp(then_branch) && expr_produces_owned_rc_temp(else_branch),
+        } => {
+            expr_produces_owned_rc_temp(cx, then_branch)
+                && expr_produces_owned_rc_temp(cx, else_branch)
+        }
         Expr::Match { subject, arms } => {
             !arms.is_empty()
                 && (arms
                     .iter()
-                    .all(|arm| expr_produces_owned_rc_temp(&arm.body))
-                    || (expr_produces_owned_rc_temp(subject)
-                        && arms.iter().all(match_arm_yields_owned_or_static_rc)))
+                    .all(|arm| expr_produces_owned_rc_temp(cx, &arm.body))
+                    || (expr_produces_owned_rc_temp(cx, subject)
+                        && arms
+                            .iter()
+                            .all(|arm| match_arm_yields_owned_or_static_rc(cx, arm))))
         }
         _ => false,
     }
@@ -1747,7 +1788,7 @@ pub(crate) fn release_expr_temp_if_needed<M: Module>(
     ty: &TurboTy,
     expr: &Spanned<Expr>,
 ) {
-    if is_rc_managed_type(cx, ty) && expr_produces_owned_rc_temp(expr) {
+    if is_rc_managed_type(cx, ty) && expr_produces_owned_rc_temp(cx, expr) {
         release_if_needed(cx, value, ty);
     }
 }
@@ -1817,6 +1858,65 @@ pub(crate) fn hashmap_value_needs_custom_release<M: Module>(cx: &Ctx<'_, M>, ty:
 
 pub(crate) fn hashmap_value_release_thunk_key(ty: &TurboTy) -> String {
     format!("{ty:?}")
+}
+
+/// Named types whose inline drop graph returns to themselves need a function
+/// call at that back edge. Discover them before compiling bodies so declaration
+/// order cannot affect whether a recursive release helper exists.
+pub(crate) fn recursive_release_types(
+    struct_fields: &HashMap<String, Vec<(String, TurboTy)>>,
+    enum_variant_fields: &HashMap<(String, String), Vec<TurboTy>>,
+    enum_max_slots: &HashMap<String, usize>,
+) -> Vec<TurboTy> {
+    let mut named: Vec<TurboTy> = struct_fields.keys().cloned().map(TurboTy::Struct).collect();
+    named.extend(enum_max_slots.keys().cloned().map(TurboTy::Enum));
+    named.sort_by_key(hashmap_value_release_thunk_key);
+    let mut graph = HashMap::new();
+    for ty in &named {
+        let mut pending: Vec<&TurboTy> = match ty {
+            TurboTy::Struct(name) => struct_fields[name].iter().map(|(_, ty)| ty).collect(),
+            TurboTy::Enum(name) => enum_variant_fields
+                .iter()
+                .filter(|((owner, _), _)| owner == name)
+                .flat_map(|(_, fields)| fields.iter())
+                .collect(),
+            _ => unreachable!(),
+        };
+        let mut edges = Vec::new();
+        while let Some(field) = pending.pop() {
+            match field {
+                TurboTy::Struct(_) | TurboTy::Enum(_) => {
+                    edges.push(hashmap_value_release_thunk_key(field))
+                }
+                TurboTy::Array(inner) | TurboTy::Optional(inner) => pending.push(inner),
+                TurboTy::Result(ok, err) => {
+                    pending.push(ok);
+                    pending.push(err);
+                }
+                // Hashmaps release through runtime callbacks, not inline
+                // expansion. Their existing callback registry handles cycles.
+                _ => {}
+            }
+        }
+        graph.insert(hashmap_value_release_thunk_key(ty), edges);
+    }
+    named
+        .into_iter()
+        .filter(|ty| {
+            let root = hashmap_value_release_thunk_key(ty);
+            let mut pending = graph[&root].clone();
+            let mut seen = std::collections::HashSet::new();
+            while let Some(key) = pending.pop() {
+                if key == root {
+                    return true;
+                }
+                if seen.insert(key.clone()) {
+                    pending.extend(graph.get(&key).into_iter().flatten().cloned());
+                }
+            }
+            false
+        })
+        .collect()
 }
 
 fn release_nested_children_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty: &TurboTy) {
@@ -2019,6 +2119,21 @@ fn release_nested_children<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty: &Tu
 }
 
 pub(crate) fn release_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty: &TurboTy) {
+    if let Some((fid, _)) = cx
+        .hashmap_value_release_thunks
+        .get(&hashmap_value_release_thunk_key(ty))
+    {
+        let fref = cx.module.declare_func_in_func(*fid, cx.builder.func);
+        cx.builder.ins().call(fref, &[value]);
+        return;
+    }
+    release_inline(cx, value, ty);
+}
+
+/// Emit one helper's body (or an acyclic inline release). Nested fields go
+/// through `release_if_needed`, so recursive types call their declared helper
+/// instead of expanding an unbounded amount of IR in the compiler.
+pub(crate) fn release_inline<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty: &TurboTy) {
     if matches!(ty, TurboTy::HashMap(_, _)) {
         let release_fid = cx.rt_fns["rt_hashmap_grelease"];
         let release_ref = cx.module.declare_func_in_func(release_fid, cx.builder.func);
@@ -2286,6 +2401,8 @@ fn compile_short_circuit<M: Module>(
 
 // ── Function calls ──────────────────────────────────────────────────
 
+// References owned by this call site: freshly produced argument values and
+// holds protecting immutable borrowed arguments until the call returns.
 struct OwnedCallArgTemp {
     value: Value,
     tty: TurboTy,
@@ -2300,7 +2417,7 @@ fn remember_owned_call_arg_temp<M: Module>(
     tty: &TurboTy,
     arg: &Spanned<Expr>,
 ) {
-    if is_rc_managed_type(cx, tty) && expr_produces_owned_rc_temp(arg) {
+    if is_rc_managed_type(cx, tty) && expr_produces_owned_rc_temp(cx, arg) {
         owned_arg_temps.push(OwnedCallArgTemp {
             value,
             tty: tty.clone(),
@@ -2313,13 +2430,21 @@ fn retain_borrowed_call_arg_if_needed<M: Module>(
     value: Value,
     tty: &TurboTy,
     arg: &Spanned<Expr>,
+    is_mut_param: bool,
+    call_refs: &mut Vec<OwnedCallArgTemp>,
 ) {
-    if matches!(
-        &arg.node,
-        Expr::Ident(_) | Expr::Index { .. } | Expr::FieldAccess { .. }
-    ) && is_rc_managed_type(cx, tty)
-    {
+    // Hold every borrowed argument through evaluation of later arguments and
+    // the call: a later argument may replace its original binding. Mutable
+    // parameters release their reference in the callee; immutable parameters
+    // borrow it, so the caller must balance it after the call instead.
+    if expr_result_borrows_existing_rc(cx, arg) && is_rc_managed_type(cx, tty) {
         retain_if_needed(cx, value, tty);
+        if !is_mut_param {
+            call_refs.push(OwnedCallArgTemp {
+                value,
+                tty: tty.clone(),
+            });
+        }
     }
 }
 
@@ -2330,7 +2455,7 @@ fn retain_owned_mut_call_arg_if_needed<M: Module>(
     arg: &Spanned<Expr>,
     is_mut_param: bool,
 ) {
-    if is_mut_param && is_rc_managed_type(cx, tty) && expr_produces_owned_rc_temp(arg) {
+    if is_mut_param && is_rc_managed_type(cx, tty) && expr_produces_owned_rc_temp(cx, arg) {
         retain_if_needed(cx, value, tty);
     }
 }
@@ -2451,7 +2576,14 @@ fn compile_call<M: Module>(
                     .map(|f_def| f_def.params.iter().map(|param| param.mutable).collect())
                     .unwrap_or_else(|| vec![false; args.len() + 1]);
                 let mut owned_arg_temps = Vec::new();
-                retain_borrowed_call_arg_if_needed(cx, obj_val, &obj_tty, object);
+                retain_borrowed_call_arg_if_needed(
+                    cx,
+                    obj_val,
+                    &obj_tty,
+                    object,
+                    param_mutable.first().copied().unwrap_or(false),
+                    &mut owned_arg_temps,
+                );
                 retain_owned_mut_call_arg_if_needed(
                     cx,
                     obj_val,
@@ -2463,7 +2595,14 @@ fn compile_call<M: Module>(
                 let mut arg_vals = vec![obj_val];
                 for (arg_index, arg) in args.iter().enumerate() {
                     if let Some((v, tty)) = compile_expr(cx, arg)? {
-                        retain_borrowed_call_arg_if_needed(cx, v, &tty, arg);
+                        retain_borrowed_call_arg_if_needed(
+                            cx,
+                            v,
+                            &tty,
+                            arg,
+                            param_mutable.get(arg_index + 1).copied().unwrap_or(false),
+                            &mut owned_arg_temps,
+                        );
                         retain_owned_mut_call_arg_if_needed(
                             cx,
                             v,
@@ -2925,7 +3064,14 @@ fn compile_ufcs_with_receiver<M: Module>(
             .map(|f_def| f_def.params.iter().map(|param| param.mutable).collect())
             .unwrap_or_else(|| vec![false; args.len()]);
         let mut owned_arg_temps = Vec::new();
-        retain_borrowed_call_arg_if_needed(cx, first_val, first_tty, receiver_arg);
+        retain_borrowed_call_arg_if_needed(
+            cx,
+            first_val,
+            first_tty,
+            receiver_arg,
+            param_mutable.first().copied().unwrap_or(false),
+            &mut owned_arg_temps,
+        );
         retain_owned_mut_call_arg_if_needed(
             cx,
             first_val,
@@ -2937,7 +3083,14 @@ fn compile_ufcs_with_receiver<M: Module>(
         let mut arg_vals = vec![first_val];
         for (arg_index, arg) in args[1..].iter().enumerate() {
             if let Some((v, tty)) = compile_expr(cx, arg)? {
-                retain_borrowed_call_arg_if_needed(cx, v, &tty, arg);
+                retain_borrowed_call_arg_if_needed(
+                    cx,
+                    v,
+                    &tty,
+                    arg,
+                    param_mutable.get(arg_index + 1).copied().unwrap_or(false),
+                    &mut owned_arg_temps,
+                );
                 remember_owned_call_arg_temp(cx, &mut owned_arg_temps, v, &tty, arg);
                 retain_owned_mut_call_arg_if_needed(
                     cx,
@@ -3149,6 +3302,9 @@ pub(crate) fn compile_indirect_call_from_value<M: Module>(
             } else {
                 val
             };
+            // Function-value signatures expose borrowed parameters. Named
+            // adapters separately acquire any mutable callee reference.
+            retain_borrowed_call_arg_if_needed(cx, val, &tty, arg, false, &mut owned_arg_temps);
             remember_owned_call_arg_temp(cx, &mut owned_arg_temps, val, &tty, arg);
             arg_values.push(val);
         }
@@ -3293,7 +3449,7 @@ fn compile_fn_call_args<M: Module>(
             } else {
                 val
             };
-            // COW/ARC: passing a borrowed refcounted value to a function
+            // COW/ARC: passing a borrowed refcounted value to a mutable parameter
             // aliases the caller's binding — the callee receives the
             // same pointer. Retain it so the shared allocation's
             // refcount reflects both references; a `mut`-param write
@@ -3303,7 +3459,14 @@ fn compile_fn_call_args<M: Module>(
             // `a[i] = ..` via rt_array_set for arrays, BL-27 Part A).
             // Fresh temporaries (non-idents) are not aliased, so they
             // are left alone to avoid needless copies.
-            retain_borrowed_call_arg_if_needed(cx, val, &tty, arg);
+            retain_borrowed_call_arg_if_needed(
+                cx,
+                val,
+                &tty,
+                arg,
+                param_mutable.get(i).copied().unwrap_or(false),
+                &mut owned_arg_temps,
+            );
             retain_owned_mut_call_arg_if_needed(
                 cx,
                 val,

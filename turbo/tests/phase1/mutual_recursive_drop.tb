@@ -1,0 +1,43 @@
+// Forward enum->struct->enum cycle and a mutually optional struct cycle.
+type Chain { End, Next(Link) }
+struct Link { text: str, rest: Chain }
+struct First { second: Second? }
+struct Second { first: First? }
+
+fn chain(n: i64) -> Chain {
+    if n == 0 { Chain.End } else {
+        Chain.Next(Link { text: to_str(n), rest: chain(n - 1) })
+    }
+}
+
+fn count(c: Chain) -> i64 {
+    match c {
+        End => 0
+        Next(link) => len(link.text) + count(link.rest)
+    }
+}
+
+fn check() -> i64 {
+    let root = chain(64)
+    let alias = root
+    let end: First? = none
+    let second = Second { first: end }
+    let first = First { second: some(second) }
+    let copied = first
+    assert(match copied.second {
+        some(s) => match s.first { none => true some(a) => false }
+        none => false
+    })
+    assert(count(root) == 119)
+    count(alias)
+}
+
+fn main() {
+    let mut total = 0
+    let mut i = 0
+    while i < 200 {
+        total += check()
+        i += 1
+    }
+    print(total)
+}

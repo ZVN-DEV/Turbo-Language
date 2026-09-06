@@ -272,6 +272,34 @@ pub(crate) fn type_annotation_label(ty_expr: &TypeExpr, resolved: &Ty) -> String
     }
 }
 
+pub(crate) fn unresolved_named_type<'a>(
+    te: &'a TypeExpr,
+    structs: Option<&HashMap<String, StructInfo>>,
+    enums: Option<&HashMap<String, EnumInfo>>,
+    type_params: &[String],
+) -> Option<&'a str> {
+    if resolve_type_expr_with_params(te, structs, enums, type_params).is_some() {
+        return None;
+    }
+    match te {
+        TypeExpr::Named(name) => Some(name),
+        TypeExpr::Array(inner) | TypeExpr::Optional(inner) | TypeExpr::Future(inner) => {
+            unresolved_named_type(&inner.node, structs, enums, type_params)
+        }
+        TypeExpr::FnType { params, ret } => params
+            .iter()
+            .find_map(|p| unresolved_named_type(&p.node, structs, enums, type_params))
+            .or_else(|| unresolved_named_type(&ret.node, structs, enums, type_params)),
+        TypeExpr::Result { ok_type, err_type } => {
+            unresolved_named_type(&ok_type.node, structs, enums, type_params)
+                .or_else(|| unresolved_named_type(&err_type.node, structs, enums, type_params))
+        }
+        TypeExpr::HashMap(k, v) => unresolved_named_type(&k.node, structs, enums, type_params)
+            .or_else(|| unresolved_named_type(&v.node, structs, enums, type_params)),
+        _ => None,
+    }
+}
+
 /// Extract the integer literal value from an expression, handling both
 /// `IntLit(n)` and `UnaryOp { Neg, IntLit(n) }` (which is how `-128` is parsed).
 pub(crate) fn extract_int_literal(expr: &Expr) -> Option<i64> {
@@ -485,26 +513,35 @@ pub(crate) fn resolve_type_expr_with_params(
         }
         TypeExpr::Unit => Some(Ty::Unit),
         TypeExpr::Array(inner) => {
-            resolve_type_expr(&inner.node, structs, enums).map(|t| Ty::Array(Box::new(t)))
+            resolve_type_expr_with_params(&inner.node, structs, enums, type_params)
+                .map(|t| Ty::Array(Box::new(t)))
         }
         TypeExpr::FnType { params, ret } => {
             let mut param_tys = Vec::new();
             for p in params {
-                param_tys.push(resolve_type_expr(&p.node, structs, enums)?);
+                param_tys.push(resolve_type_expr_with_params(
+                    &p.node,
+                    structs,
+                    enums,
+                    type_params,
+                )?);
             }
-            let ret_ty = resolve_type_expr(&ret.node, structs, enums)?;
+            let ret_ty = resolve_type_expr_with_params(&ret.node, structs, enums, type_params)?;
             Some(Ty::Fn(param_tys, Box::new(ret_ty)))
         }
         TypeExpr::Result { ok_type, err_type } => {
-            let ok_ty = resolve_type_expr(&ok_type.node, structs, enums)?;
-            let err_ty = resolve_type_expr(&err_type.node, structs, enums)?;
+            let ok_ty = resolve_type_expr_with_params(&ok_type.node, structs, enums, type_params)?;
+            let err_ty =
+                resolve_type_expr_with_params(&err_type.node, structs, enums, type_params)?;
             Some(Ty::Result(Box::new(ok_ty), Box::new(err_ty)))
         }
         TypeExpr::Optional(inner) => {
-            resolve_type_expr(&inner.node, structs, enums).map(|t| Ty::Optional(Box::new(t)))
+            resolve_type_expr_with_params(&inner.node, structs, enums, type_params)
+                .map(|t| Ty::Optional(Box::new(t)))
         }
         TypeExpr::Future(inner) => {
-            resolve_type_expr(&inner.node, structs, enums).map(|t| Ty::Future(Box::new(t)))
+            resolve_type_expr_with_params(&inner.node, structs, enums, type_params)
+                .map(|t| Ty::Future(Box::new(t)))
         }
         TypeExpr::HashMap(k, v) => {
             let key_ty = resolve_type_expr_with_params(&k.node, structs, enums, type_params)?;
@@ -1305,6 +1342,79 @@ fn main() { }"#,
     }
 
     #[test]
+    fn test_recursive_enum_payloads_keep_field_arity() {
+        assert_no_errors(
+            r#"type Tree {
+                Leaf(i64),
+                Branch(Tree, Tree)
+            }
+            fn main() {
+                let t = Tree.Branch(Tree.Leaf(1), Tree.Leaf(2))
+                match t {
+                    Leaf(v) => print(v)
+                    Branch(left, right) => print(0)
+                }
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_forward_and_mutual_enum_payload_refs_ok() {
+        assert_no_errors(
+            r#"type A { Wrap(B) }
+            type B { Wrap(A), Done }
+            fn main() {
+                let b = B.Done
+                let a = A.Wrap(b)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_nested_forward_struct_enum_refs_ok() {
+        assert_no_errors(
+            r#"struct Boxed { items: [Later] }
+            type Later { Node(Boxed) }
+            fn main() { }"#,
+        );
+    }
+
+    #[test]
+    fn test_unknown_enum_payload_type_reports_error() {
+        assert_has_error(
+            r#"type Bad { Missing(NoSuchType) }
+            fn main() { }"#,
+            "unknown type `NoSuchType` in enum `Bad`",
+        );
+    }
+
+    #[test]
+    fn test_compound_enum_payload_reports_later_unknown_type() {
+        assert_has_error(
+            r#"type Bad { Missing(fn(int) -> NoSuchType) }
+            fn main() { }"#,
+            "unknown type `NoSuchType` in enum `Bad`",
+        );
+        assert_has_error(
+            r#"type Bad { Missing(int ! NoSuchType) }
+            fn main() { }"#,
+            "unknown type `NoSuchType` in enum `Bad`",
+        );
+    }
+
+    #[test]
+    fn test_nested_type_params_in_enum_payloads_ok() {
+        assert_no_errors(
+            r#"type Box<T> {
+                Value(fn(int) -> T),
+                Maybe(T ! str),
+                Items([T])
+            }
+            fn main() { }"#,
+        );
+    }
+
+    #[test]
     fn test_match_int_guard_then_wildcard_ok() {
         // Guards + wildcard should satisfy exhaustiveness.
         assert_no_errors(
@@ -1396,6 +1506,53 @@ fn main() { pair(true, 1) }"#,
         assert_no_errors(
             r#"fn both<A, B>(a: A, b: B) -> A { a }
             fn main() { both(1, "hi") }"#,
+        );
+    }
+
+    #[test]
+    fn test_generic_array_parameter_infers_element_type() {
+        assert_no_errors(
+            r#"fn firstof<T>(xs: [T]) -> T {
+                xs[0]
+            }
+
+            fn main() {
+                let nums = [10, 20, 30]
+                let words = ["alpha", "beta"]
+                firstof(nums)
+                firstof(words)
+            }"#,
+        );
+    }
+
+    #[test]
+    fn test_generic_array_parameter_rejects_inconsistent_element_type() {
+        assert_has_error(
+            r#"fn choose<T>(xs: [T], ys: [T]) -> T {
+                xs[0]
+            }
+
+            fn main() {
+                let nums = [10, 20, 30]
+                let words = ["alpha", "beta"]
+                choose(nums, words)
+            }"#,
+            "type parameter `T` inferred as `int` but argument has type `str`",
+        );
+    }
+
+    #[test]
+    fn test_generic_array_parameter_checks_inferred_trait_bound() {
+        assert_has_error(
+            r#"fn first_display<T: Display>(xs: [T]) -> T {
+                xs[0]
+            }
+
+            fn main() {
+                let nums = [10, 20, 30]
+                first_display(nums)
+            }"#,
+            "type `int` does not implement trait `Display`",
         );
     }
 

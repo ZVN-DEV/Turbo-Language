@@ -1,0 +1,53 @@
+type Tree { Leaf(i64, str), Branch(Tree, Tree) }
+
+fn build(depth: i64, value: i64) -> Tree {
+    if depth == 0 { Tree.Leaf(value, to_str(value)) } else {
+        Tree.Branch(build(depth - 1, value * 2), build(depth - 1, value * 2 + 1))
+    }
+}
+
+fn sum(tree: Tree) -> i64 {
+    match tree {
+        Leaf(value, label) => {
+            assert(label == to_str(value))
+            value
+        }
+        Branch(left, right) => sum(left) + sum(right)
+    }
+}
+
+fn left(tree: Tree) -> Tree {
+    match tree {
+        Leaf(value, label) => tree
+        Branch(child, sibling) => child
+    }
+}
+
+fn subtree() -> Tree {
+    let root = build(4, 1)
+    left(root)
+}
+
+fn check() -> i64 {
+    let root = build(4, 1)
+    let alias = root
+    let cache: HashMap<int, Tree> = hashmap()
+    hashmap_set(cache, 1, root)
+    hashmap_set(cache, 1, subtree())
+    let held = hashmap_get(cache, 1) ?? Tree.Leaf(0, "0")
+    hashmap_remove(cache, 1)
+    assert(sum(root) == 376)
+    assert(sum(alias) == 376)
+    assert(sum(held) == 156)
+    sum(root) + sum(held)
+}
+
+fn main() {
+    let mut total = 0
+    let mut i = 0
+    while i < 200 {
+        total += check()
+        i += 1
+    }
+    print(total)
+}

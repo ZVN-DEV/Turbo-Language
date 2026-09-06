@@ -254,8 +254,9 @@ pub(crate) struct Ctx<'a, M: Module> {
     pub(crate) fn_asts: &'a HashMap<String, &'a FnDef>,
     pub(crate) fn_type_params: &'a HashMap<String, Vec<String>>,
     pub(crate) rt_fns: &'a HashMap<String, FuncId>,
-    /// Lazily declared per-concrete-`V` release thunks for typed `HashMap<K, V>`
-    /// values that need deeper cleanup than a plain top-level `rt_release`.
+    /// Shared release-helper registry: lazily declared typed-map value cleanup
+    /// and predeclared recursive-type cleanup. Bodies are emitted after user
+    /// functions; recursive children call helpers rather than expanding IR.
     pub(crate) hashmap_value_release_thunks: &'a mut HashMap<String, (FuncId, TurboTy)>,
     pub(crate) vars: HashMap<String, (Variable, cranelift::prelude::types::Type, TurboTy)>,
     pub(crate) borrowed_param_vars: Vec<Variable>,

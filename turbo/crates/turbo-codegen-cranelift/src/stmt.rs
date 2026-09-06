@@ -72,7 +72,7 @@ pub(crate) fn compile_stmt<M: Module>(
             //     Gated to refcounted element types so scalar indexing (e.g.
             //     `let x = ints[0]`) is left byte-for-byte unchanged.
             let rhs_retains =
-                expr_result_borrows_existing_rc(value) && is_rc_managed_type(cx, &turbo_ty);
+                expr_result_borrows_existing_rc(cx, value) && is_rc_managed_type(cx, &turbo_ty);
             if rhs_retains {
                 if let Some(v) = val {
                     retain_if_needed(cx, v, &turbo_ty);

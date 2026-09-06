@@ -163,6 +163,32 @@ tabs are intentional data for trimming tests, not formatting whitespace.
 
 ## Shared-header allocation profiling (G2.1 next slice)
 
+### Recursive-data prerequisites
+
+The tree fixture exposed compiler and ownership defects before timing could be
+meaningful. Nominal names are now registered before payload/layout resolution;
+unknown enum payload types produce errors without deleting payload slots. Native
+drop lowering predeclares cleanup helpers for recursive type graphs, avoiding
+unbounded compiler recursion without changing the16-byte header or field slots.
+
+Allocation-gated regressions also cover call-scoped argument references, `??`
+temporary cleanup, and payload-free data-enum constructors. Borrowed arguments
+stay alive while later arguments are evaluated: readonly holds are released by
+the caller after the call, mutable references by the callee. The same argument
+hold rule covers named calls, methods, UFCS and function-value calls.
+
+`turbo-cli/tests/recursive_types.rs` executes the actual regression fixtures in
+JIT/AOT. Under `allocation-profile`, six fixtures require matching valid counters,
+zero live shared-header allocations/bytes and allocations equal to frees after
+200 rounds of construction/traversal/aliasing/replacement. This is not a new
+cycle collector, arbitrary-depth stack guarantee, WASM qualification or whole-heap
+proof. The separate indirect-call test proves argument safety only; reclamation
+of function/closure environment allocations remains outstanding and is not
+silently included in the balanced-allocation claim. The timed tree workload
+itself remains pending until its dataset, Rust counterpart and oracle are added.
+
+### Building and collecting profiles
+
 Build a separate diagnostic compiler. Keep it separate from the ordinary release
 compiler used for timing; the feature changes `--version` to include
 `+allocation-profile`, and the evaluator rejects that flavor as `--compiler`.

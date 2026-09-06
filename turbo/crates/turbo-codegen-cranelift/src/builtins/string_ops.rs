@@ -605,7 +605,7 @@ pub(crate) fn compile_interpolation<M: Module>(
 
     match result {
         Some((val, StringCleanup::ExprTemp(expr))) => {
-            if !expr_produces_owned_rc_temp(expr) {
+            if !expr_produces_owned_rc_temp(cx, expr) {
                 retain_if_needed(cx, val, &TurboTy::Str);
             }
             Ok(Some((val, TurboTy::Str)))

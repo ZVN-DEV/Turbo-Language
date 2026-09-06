@@ -5,6 +5,53 @@ use std::ffi::{CStr, CString};
 
 // ── Helper: compile & run a Turbo program via JIT ──────────────
 
+#[test]
+fn recursive_drop_graph_finds_only_cycles_and_stops_at_runtime_handles() {
+    use crate::expr::recursive_release_types;
+    let named = |name: &str| TurboTy::Struct(name.to_owned());
+    let mut structs = HashMap::new();
+    structs.insert(
+        "Node".into(),
+        vec![("children".into(), TurboTy::Array(Box::new(named("Node"))))],
+    );
+    structs.insert(
+        "A".into(),
+        vec![("b".into(), TurboTy::Optional(Box::new(named("B"))))],
+    );
+    structs.insert(
+        "B".into(),
+        vec![(
+            "a".into(),
+            TurboTy::Result(Box::new(TurboTy::Int), Box::new(named("A"))),
+        )],
+    );
+    // This wrapper reaches a cycle but is not itself cyclic; its inline release
+    // reaches the Node helper without needing another predeclared helper.
+    structs.insert("Wrapper".into(), vec![("node".into(), named("Node"))]);
+    structs.insert(
+        "MapNode".into(),
+        vec![(
+            "map".into(),
+            TurboTy::HashMap(Box::new(TurboTy::Int), Box::new(named("MapNode"))),
+        )],
+    );
+    let enums = HashMap::from([(
+        ("Tree".into(), "Branch".into()),
+        vec![TurboTy::Enum("Tree".into())],
+    )]);
+    let slots = HashMap::from([("Tree".into(), 1)]);
+    let found = recursive_release_types(&structs, &enums, &slots);
+    assert_eq!(
+        found,
+        vec![
+            TurboTy::Enum("Tree".into()),
+            named("A"),
+            named("B"),
+            named("Node")
+        ]
+    );
+}
+
 fn jit_run_source(source: &str) {
     let (tokens, lex_errors) = turbo_lexer::tokenize(source);
     assert!(lex_errors.is_empty(), "Lex errors: {:?}", lex_errors);

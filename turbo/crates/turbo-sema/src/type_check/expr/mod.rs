@@ -482,22 +482,12 @@ impl Checker {
                     let arg_ty = self.check_expr_expecting(arg, param_ty);
                     arg_types.push(arg_ty.clone());
 
-                    // If param type is a type parameter, infer its concrete type
-                    if let Ty::TypeParam(ref tp_name) = param_ty {
-                        if let Some(existing) = substitutions.get(tp_name) {
-                            // T already inferred -- check consistency
-                            if !arg_ty.is_error() && !existing.is_error() && arg_ty != *existing {
-                                self.error(ErrorCode::E0100,
-                                            format!(
-                                                "type parameter `{tp_name}` inferred as `{existing}` but argument has type `{arg_ty}`"
-                                            ),
-                                            arg.span.clone(),
-                                        );
-                            }
-                        } else if !arg_ty.is_error() {
-                            substitutions.insert(tp_name.clone(), arg_ty.clone());
-                        }
-                    }
+                    self.infer_type_params_from_arg(
+                        param_ty,
+                        &arg_ty,
+                        &mut substitutions,
+                        &arg.span,
+                    );
                 }
 
                 // Now check argument types against substituted parameter types

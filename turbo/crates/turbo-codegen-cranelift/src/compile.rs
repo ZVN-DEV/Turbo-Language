@@ -15,7 +15,9 @@ use turbo_ast::*;
 
 use crate::closures::{extract_all_closures, extract_all_spawn_sites, CaptureInfo};
 use crate::expr::{
-    compile_expr, release_if_needed, release_mutable_param_vars, retain_generic_return_if_needed,
+    compile_expr, hashmap_value_release_thunk_key, is_rc_managed_type_with_layouts,
+    recursive_release_types, release_inline, release_mutable_param_vars,
+    retain_generic_return_if_needed,
 };
 use crate::turbo_types::*;
 use crate::type_conv::{coerce_value, resolve_cl_type, resolve_cl_type_ffi, turbo_ty_to_cl_type};
@@ -1111,13 +1113,21 @@ pub(crate) fn compile_module<M: Module>(
         Some(types::I64),
     )?;
 
-    // Build enum variants map
+    // Register every enum name before translating any payload types. Otherwise
+    // self/forward references are misclassified as structs by type conversion.
     let mut enum_variants: HashMap<String, Vec<String>> = HashMap::new();
+    for item in &ast_module.items {
+        if let Item::Enum(e) = &item.node {
+            enum_variants.insert(
+                e.name.clone(),
+                e.variants.iter().map(|v| v.name.clone()).collect(),
+            );
+        }
+    }
     let mut enum_variant_fields: HashMap<(String, String), Vec<TurboTy>> = HashMap::new();
     let mut enum_max_slots: HashMap<String, usize> = HashMap::new();
     for item in &ast_module.items {
         if let Item::Enum(e) = &item.node {
-            let variant_names: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
             let tp_names: Vec<String> = e.type_param_names();
             let mut max_fields: usize = 0;
             for v in &e.variants {
@@ -1136,7 +1146,6 @@ pub(crate) fn compile_module<M: Module>(
             if max_fields > 0 {
                 enum_max_slots.insert(e.name.clone(), max_fields);
             }
-            enum_variants.insert(e.name.clone(), variant_names);
         }
     }
 
@@ -1604,6 +1613,25 @@ pub(crate) fn compile_module<M: Module>(
     }
 
     let mut hashmap_value_release_thunks: HashMap<String, (FuncId, TurboTy)> = HashMap::new();
+    for (index, ty) in
+        recursive_release_types(&struct_fields, &enum_variant_fields, &enum_max_slots)
+            .into_iter()
+            .enumerate()
+    {
+        let mut sig = module.make_signature();
+        sig.params.push(AbiParam::new(ptr_type));
+        let fid = module
+            .declare_function(
+                &format!("__recursive_release${index}"),
+                Linkage::Local,
+                &sig,
+            )
+            .map_err(|e| CodegenError {
+                code: ErrorCode::E0405,
+                message: e.to_string(),
+            })?;
+        hashmap_value_release_thunks.insert(hashmap_value_release_thunk_key(&ty), (fid, ty));
+    }
 
     // Define all user functions (and closures)
     let mut cl_ctx = module.make_context();
@@ -2595,26 +2623,19 @@ pub(crate) fn compile_module<M: Module>(
 
             // Forward every user parameter (skip block_params[0], the env ptr).
             let forwarded: Vec<Value> = builder.block_params(entry)[1..].to_vec();
-            let retain_ref = rt_fns
-                .get("rt_retain")
-                .map(|fid| module.declare_func_in_func(*fid, builder.func));
             for (i, param) in f.params.iter().enumerate() {
                 if !param.mutable {
                     continue;
                 }
                 let param_turbo = turbo_ty_from_type_expr(&param.ty.node, &enum_variants);
-                let needs_retain = matches!(
-                    &param_turbo,
-                    TurboTy::Str
-                        | TurboTy::Array(_)
-                        | TurboTy::Struct(_)
-                        | TurboTy::Result(_, _)
-                        | TurboTy::Optional(_)
-                ) || matches!(&param_turbo, TurboTy::Enum(name) if enum_max_slots.contains_key(name.as_str()));
-                if needs_retain {
-                    if let Some(retain_ref) = retain_ref {
-                        builder.ins().call(retain_ref, &[forwarded[i]]);
-                    }
+                if is_rc_managed_type_with_layouts(&param_turbo, &enum_max_slots) {
+                    let retain_name = if matches!(param_turbo, TurboTy::HashMap(_, _)) {
+                        "rt_hashmap_gretain"
+                    } else {
+                        "rt_retain"
+                    };
+                    let retain_ref = module.declare_func_in_func(rt_fns[retain_name], builder.func);
+                    builder.ins().call(retain_ref, &[forwarded[i]]);
                 }
             }
             let target_ref = module.declare_func_in_func(target_fid, builder.func);
@@ -2701,7 +2722,7 @@ pub(crate) fn compile_module<M: Module>(
                 cx.builder.seal_block(entry);
                 cx.builder.ensure_inserted_block();
                 let value = cx.builder.block_params(entry)[0];
-                release_if_needed(&mut cx, value, &value_ty);
+                release_inline(&mut cx, value, &value_ty);
                 cx.builder.ins().return_(&[]);
                 cx.builder.finalize();
             }
