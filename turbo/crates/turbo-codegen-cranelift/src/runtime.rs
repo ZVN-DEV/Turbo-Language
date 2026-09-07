@@ -2112,8 +2112,16 @@ pub(crate) extern "C" fn rt_json_quote(value: *const u8) -> *const u8 {
             .to_str()
             .unwrap_or("")
     };
-    // Serializing a string cannot fail. The encoded result contains no NUL.
-    arena_str(cstring_or_empty(serde_json::to_string(value).unwrap()))
+    // A string serializer should not fail. Never turn an internal failure
+    // into a successful empty value or unwind across this C ABI boundary.
+    let encoded = match serde_json::to_string(value) {
+        Ok(encoded) => encoded,
+        Err(error) => {
+            eprintln!("turbo: fatal: JSON string serialization failed: {error}");
+            std::process::exit(1);
+        }
+    };
+    arena_str(cstring_or_empty(encoded))
 }
 
 /// Build a JSON object string from a key and value: {"key": "value"}

@@ -60,6 +60,11 @@ adds repeatable benchmarks that describe the remaining gap honestly.
 - **Release automation handles prerelease tags correctly.** Suffix tags such as
   `v0.16.0-pre.1` now create GitHub prereleases, stay out of Latest, and do not
   update the Homebrew tap.
+- **Release security checks remain enforced.** Updated existing website and
+  bundled editor dependencies to clear the September 7 audit findings. Removed
+  two newly introduced explicit compiler/runtime panic sites without increasing
+  the panic budget; an internal JSON serialization error fails visibly rather
+  than returning successful empty data.
 
 ### Known gaps
 - JSON remains bounded by the current C-string ABI in places that see embedded

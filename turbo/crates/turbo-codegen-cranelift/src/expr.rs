@@ -1880,7 +1880,9 @@ pub(crate) fn recursive_release_types(
                 .filter(|((owner, _), _)| owner == name)
                 .flat_map(|(_, fields)| fields.iter())
                 .collect(),
-            _ => unreachable!(),
+            // The list above contains only nominal types; other types have
+            // no named layout to contribute to this graph.
+            _ => Vec::new(),
         };
         let mut edges = Vec::new();
         while let Some(field) = pending.pop() {
