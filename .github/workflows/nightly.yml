@@ -52,7 +52,7 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --no-deps --workspace --manifest-path turbo/Cargo.toml
 
-      - uses: taiki-e/install-action@9545a0634ccdca487a09cde61d362f0bc5fb5df9 # v2.61.4
+      - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
         with:
           tool: cargo-audit@0.22.1
 
