@@ -1,0 +1,17 @@
+// Exact shared-header calibration: one 3-element array owns 32 data bytes
+// (length + 3 i64 slots) and a 16-byte ARC header. No language-owned alias.
+@unsafe
+extern "C" {
+    fn rt_array_alloc(n: i64) -> i64
+    fn rt_retain(p: i64)
+    fn rt_release(p: i64)
+}
+
+@unsafe
+fn main() {
+    let p = rt_array_alloc(3)
+    rt_retain(p)
+    rt_release(p)
+    rt_release(p)
+    print("profile-probe")
+}

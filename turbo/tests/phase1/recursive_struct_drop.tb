@@ -1,0 +1,44 @@
+// Recursive type graph must generate finite drop code, not compiler recursion.
+struct Node { value: i64, label: str, children: [Node] }
+
+fn build(depth: i64, value: i64) -> Node {
+    let mut children: [Node] = []
+    if depth > 0 {
+        children.push(build(depth - 1, value * 2))
+        children.push(build(depth - 1, value * 2 + 1))
+    }
+    Node { value: value, label: to_str(value), children: children }
+}
+
+fn sum(node: Node) -> i64 {
+    assert(node.label == to_str(node.value))
+    let mut total = node.value
+    let mut i = 0
+    while i < len(node.children) {
+        total += sum(node.children[i])
+        i += 1
+    }
+    total
+}
+
+fn check() -> i64 {
+    let root = build(4, 1)
+    let alias = root
+    let mut changed = root
+    changed.value = 100
+    changed.label = "100"
+    assert(sum(root) == 496)
+    assert(sum(alias) == 496)
+    assert(sum(changed) == 595)
+    sum(root)
+}
+
+fn main() {
+    let mut total = 0
+    let mut i = 0
+    while i < 200 {
+        total += check()
+        i += 1
+    }
+    print(total)
+}

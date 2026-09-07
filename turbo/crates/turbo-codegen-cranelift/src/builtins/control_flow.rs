@@ -722,7 +722,7 @@ pub(crate) fn compile_match<M: Module>(
         message: "compile_match: `subject` produced no value during code generation".to_string(),
     })?;
     let release_owned_subject =
-        is_rc_managed_type(cx, &subj_tty) && expr_produces_owned_rc_temp(subject);
+        is_rc_managed_type(cx, &subj_tty) && expr_produces_owned_rc_temp(cx, subject);
 
     if arms.is_empty() {
         if release_owned_subject {
@@ -1090,7 +1090,7 @@ fn retain_match_result_if_subject_binding<M: Module>(
     if !release_owned_subject || cx.builder.is_unreachable() {
         return;
     }
-    if expr_produces_owned_rc_temp(body_expr) {
+    if expr_produces_owned_rc_temp(cx, body_expr) {
         return;
     }
     let Some((result_val, result_tty)) = body_result else {

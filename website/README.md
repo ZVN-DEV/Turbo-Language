@@ -23,7 +23,7 @@ npm run build
 npm audit --audit-level=high
 ```
 
-As of the 2026-06-27 product cycle, the high-severity audit gate passes. `npm audit` still reports known low/moderate transitive findings in the Next.js toolchain; do not treat those as a high-severity release blocker without a fresh audit result.
+As of the 2026-09-07 security closeout, `npm audit --audit-level=high` reports 0 vulnerabilities after the compatible Next.js / `eslint-config-next` 16.3.4 update. Re-run the audit before treating a future advisory as cleared or blocked.
 
 ## Deployment
 

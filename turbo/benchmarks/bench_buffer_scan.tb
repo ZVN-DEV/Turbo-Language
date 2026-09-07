@@ -1,0 +1,33 @@
+// Fixed byte trace: 32MiB logical bytes, four dependent checksum/update passes.
+// Existing Turbo [u8] storage is measured honestly; it is not assumed packed.
+fn main() {
+    let configured = env_get("TURBO_BENCH_SIZE")
+    let n = if configured == "" { 33554432 } else {
+        match str_to_int(configured) {
+            ok(value) => value
+            err(e) => 0
+        }
+    }
+    assert(n > 0)
+    let mut bytes: [u8] = []
+    let mut i = 0
+    while i < n {
+        bytes.push(((i * 17 + 23) % 256) as u8)
+        i += 1
+    }
+    let mut checksum: i64 = 0
+    let mut pass = 0
+    while pass < 4 {
+        i = 0
+        while i < n {
+            let value = ((bytes[i] as i64) + pass + 1) % 256
+            bytes[i] = value as u8
+            checksum = (checksum * 33 + value) % 1000000007
+            i += 1
+        }
+        pass += 1
+    }
+    print(checksum)
+    print(bytes[0] as i64)
+    print(bytes[n - 1] as i64)
+}

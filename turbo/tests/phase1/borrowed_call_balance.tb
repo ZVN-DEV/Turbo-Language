@@ -1,0 +1,41 @@
+// Read-only calls borrow their arguments; no unmatched call-site retain.
+struct Reader { label: str }
+impl Reader {
+    fn measure(self, text: str, values: [int]) -> i64 {
+        len(self.label) + len(text) + len(values)
+    }
+}
+fn read(reader: Reader, text: str, values: [int]) -> i64 {
+    len(reader.label) + len(text) + len(values)
+}
+fn retained(text: str) -> str { text }
+fn mutate(mut values: [int]) -> i64 {
+    values[0] = 99
+    values[0]
+}
+fn check() -> i64 {
+    let label = "item" + to_str(3)
+    let reader = Reader { label: label }
+    let values = [1, 2, 3]
+    let held = retained(label)
+    let mut total = 0
+    let mut i = 0
+    while i < 100 {
+        total += read(reader, held, values)
+        total += reader.measure(held, values)
+        total += measure(reader, held, values)
+        i += 1
+    }
+    assert(mutate(values) == 99)
+    assert(values[0] == 1)
+    total
+}
+fn main() {
+    let mut total = 0
+    let mut i = 0
+    while i < 200 {
+        total += check()
+        i += 1
+    }
+    print(total)
+}

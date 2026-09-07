@@ -456,7 +456,7 @@ pub(crate) fn compile_to_str_builtin<M: Module>(
     })?;
     let str_val = convert_to_str(cx, val, &tty)?;
     if tty == TurboTy::Str {
-        if !expr_produces_owned_rc_temp(&args[0]) {
+        if !expr_produces_owned_rc_temp(cx, &args[0]) {
             retain_if_needed(cx, str_val, &TurboTy::Str);
         }
     } else {

@@ -1,0 +1,39 @@
+fn first(values: [int], ignored: int) -> i64 { values[0] }
+fn mutate(mut values: [int]) -> i64 { values[0] = 99 values[0] }
+fn touch(mut values: HashMap<int, int>) -> i64 {
+    hashmap_set(values, 1, 8)
+    hashmap_len(values)
+}
+struct Handler { f: fn([int], int) -> i64 }
+fn main() {
+    let named = first
+    let closure = |items: [int], ignored: int| -> i64 { items[0] }
+    let handler = Handler { f: first }
+    let mut values = [7]
+    assert(named(values, {
+        values = [9]
+        let replacement = [55]
+        assert(replacement[0] == 55)
+        0
+    }) == 7)
+    assert(closure(values, {
+        values = [11]
+        let replacement = [66]
+        assert(replacement[0] == 66)
+        0
+    }) == 9)
+    assert(handler.f(values, {
+        values = [13]
+        let replacement = [77]
+        assert(replacement[0] == 77)
+        0
+    }) == 11)
+    let mutator = mutate
+    assert(mutator(values) == 99)
+    assert(values[0] == 13)
+    let map: HashMap<int, int> = hashmap()
+    let touch_value = touch
+    assert(touch_value(map) == 1)
+    assert((hashmap_get(map, 1) ?? 0) == 8)
+    print("indirect holds verified")
+}

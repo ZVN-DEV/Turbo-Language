@@ -33,11 +33,19 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#ifdef TURBO_ALLOCATION_PROFILE
+#include "../turbo_alloc_profile.h"
+#endif
 
 /* Forward declarations of the runtime functions we exercise. We don't
  * include turbo_rt.c via a header — the runtime intentionally has no
  * .h file (it is consumed via include_str! in the codegen crate). */
 extern const char *rt_str_repeat(const char *s, long long count);
+extern const char *rt_json_quote(const char *s);
+extern const char *rt_json_get(const char *json, const char *key);
+extern const char *rt_json_root(const char *json);
+extern const char *rt_json_stringify(const char *key, const char *value);
+extern const char *rt_request_body(const char *req);
 extern const char *rt_str_concat(const char *a, const char *b);
 extern const char *rt_str_concat_inplace(const char *a, const char *b);
 extern const char *rt_str_replace(const char *s, const char *from, const char *to);
@@ -1186,8 +1194,215 @@ static void test_sqlite_column_str_release_loop(void) {
           ok && total == 100000LL * 30);
 }
 
+static void test_json_control_encoding(void) {
+    char controls[32];
+    for (int i = 1; i < 32; i++) controls[i - 1] = (char)i;
+    controls[31] = '\0';
+    const char *expected = "\"\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007"
+        "\\b\\t\\n\\u000b\\f\\r\\u000e\\u000f\\u0010\\u0011\\u0012"
+        "\\u0013\\u0014\\u0015\\u0016\\u0017\\u0018\\u0019\\u001a"
+        "\\u001b\\u001c\\u001d\\u001e\\u001f\"";
+    const char *encoded = rt_json_quote(controls);
+    assert(strcmp(encoded, expected) == 0);
+    rt_release((void *)encoded);
+    encoded = rt_json_quote("café 🌍 \\\"");
+    assert(strcmp(encoded, "\"café 🌍 \\\\\\\"\"") == 0);
+    rt_release((void *)encoded);
+    encoded = rt_json_quote(NULL);
+    assert(strcmp(encoded, "\"\"") == 0);
+    rt_release((void *)encoded);
+    encoded = rt_json_stringify("\002", "\003");
+    assert(strcmp(encoded, "{\"\\u0002\":\"\\u0003\"}") == 0);
+    rt_release((void *)encoded);
+}
+
+static void expect_json_get(const char *name, const char *json, const char *key,
+                            const char *expected) {
+    const char *got = rt_json_get(json, key);
+    check(name, got && strcmp(got, expected) == 0);
+    rt_release((void *)got);
+}
+
+static void test_json_get_decodes_unicode_strings(void) {
+    expect_json_get("test_json_get_decodes_unicode_strings surrogate pair",
+                    "{\"emoji\":\"\\uD83C\\uDF0D\",\"accent\":\"caf\\u00e9\"}",
+                    "emoji", "\xF0\x9F\x8C\x8D");
+    expect_json_get("test_json_get_decodes_unicode_strings bmp",
+                    "{\"emoji\":\"\\uD83C\\uDF0D\",\"accent\":\"caf\\u00e9\"}",
+                    "accent", "caf\xC3\xA9");
+}
+
+static void test_json_get_escaped_keys_and_duplicates(void) {
+    expect_json_get("test_json_get_escaped_keys_and_duplicates last top-level wins",
+                    "{\"a\\u002eb\":1,\"nested\":{\"a.b\":2},\"a.b\":\"last\"}",
+                    "a.b", "last");
+    expect_json_get("test_json_get_escaped_keys_and_duplicates nul key does not truncate",
+                    "{\"a\\u0000b\":\"bad\",\"a\":\"good\"}",
+                    "a", "good");
+}
+
+static void test_json_get_validates_malformed_input(void) {
+    expect_json_get("test_json_get_validates_malformed_input trailing data",
+                    "{\"a\":1} true", "a", "");
+    expect_json_get("test_json_get_validates_malformed_input unescaped control",
+                    "{\"a\":\"bad\001\"}", "a", "");
+    expect_json_get("test_json_get_validates_malformed_input truncated unicode escape",
+                    "{\"a\":\"\\u12\"}", "a", "");
+    expect_json_get("test_json_get_validates_malformed_input invalid high surrogate",
+                    "{\"a\":\"\\uD800x\"}", "a", "");
+    expect_json_get("test_json_get_validates_malformed_input lone low surrogate",
+                    "{\"a\":\"\\uDC00\"}", "a", "");
+    expect_json_get("test_json_get_validates_malformed_input nonfinite_number",
+                    "{\"target\":\"ok\",\"broken\":1e9999}", "target", "");
+    expect_json_get("test_json_get_validates_malformed_input underflow_number_ok",
+                    "{\"target\":\"ok\",\"small\":1e-9999}", "target", "ok");
+}
+
+static void test_json_get_accepts_long_finite_numbers(void) {
+    char long_fraction[260];
+    strcpy(long_fraction, "{\"target\":\"ok\",\"n\":0.");
+    size_t pos = strlen(long_fraction);
+    for (int i = 0; i < 200; i++) long_fraction[pos++] = '0';
+    long_fraction[pos++] = '1';
+    strcpy(long_fraction + pos, "}");
+    expect_json_get("test_json_get_accepts_long_finite_numbers long fraction",
+                    long_fraction, "target", "ok");
+
+    char long_underflow[260];
+    strcpy(long_underflow, "{\"target\":\"ok\",\"n\":1e-");
+    pos = strlen(long_underflow);
+    for (int i = 0; i < 200; i++) long_underflow[pos++] = '0';
+    long_underflow[pos++] = '2';
+    strcpy(long_underflow + pos, "}");
+    expect_json_get("test_json_get_accepts_long_finite_numbers long exponent",
+                    long_underflow, "target", "ok");
+
+    char long_mantissa[720];
+    strcpy(long_mantissa, "{\"target\":\"ok\",\"n\":0.");
+    pos = strlen(long_mantissa);
+    for (int i = 0; i < 600; i++) long_mantissa[pos++] = '0';
+    strcpy(long_mantissa + pos, "1e600}");
+    expect_json_get("test_json_get_accepts_long_finite_numbers long mantissa positive exponent",
+                    long_mantissa, "target", "ok");
+}
+
+static void test_json_get_rejects_nonfinite_numbers_precisely(void) {
+    expect_json_get("test_json_get_rejects_nonfinite_numbers_precisely 1e309",
+                    "{\"target\":\"ok\",\"n\":1e309}", "target", "");
+
+    char huge_integer[460];
+    strcpy(huge_integer, "{\"target\":\"ok\",\"n\":");
+    size_t pos = strlen(huge_integer);
+    for (int i = 0; i < 400; i++) huge_integer[pos++] = '9';
+    strcpy(huge_integer + pos, "}");
+    expect_json_get("test_json_get_rejects_nonfinite_numbers_precisely huge integer",
+                    huge_integer, "target", "");
+}
+
+static void test_json_get_depth_counts_empty_containers(void) {
+    char nested[420];
+    size_t pos = 0;
+    pos += (size_t)sprintf(nested + pos, "{\"target\":\"ok\",\"d\":");
+    for (int i = 0; i < 126; i++) nested[pos++] = '[';
+    for (int i = 0; i < 126; i++) nested[pos++] = ']';
+    nested[pos++] = '}';
+    nested[pos] = '\0';
+    expect_json_get("test_json_get_depth_counts_empty_containers depth126 empty ok",
+                    nested, "target", "ok");
+
+    pos = 0;
+    pos += (size_t)sprintf(nested + pos, "{\"target\":\"ok\",\"d\":");
+    for (int i = 0; i < 127; i++) nested[pos++] = '[';
+    for (int i = 0; i < 127; i++) nested[pos++] = ']';
+    nested[pos++] = '}';
+    nested[pos] = '\0';
+    expect_json_get("test_json_get_depth_counts_empty_containers depth127 empty rejects",
+                    nested, "target", "");
+
+    pos = 0;
+    pos += (size_t)sprintf(nested + pos, "{\"target\":\"ok\",\"d\":");
+    for (int i = 0; i < 127; i++) nested[pos++] = '[';
+    strcpy(nested + pos, "0");
+    pos++;
+    for (int i = 0; i < 127; i++) nested[pos++] = ']';
+    nested[pos++] = '}';
+    nested[pos] = '\0';
+    expect_json_get("test_json_get_depth_counts_empty_containers depth127 nonempty rejects",
+                    nested, "target", "");
+}
+
+static void test_json_get_rejects_invalid_utf8(void) {
+    expect_json_get("test_json_get_rejects_invalid_utf8 lone ff in selected field",
+                    "{\"a\":\"\xFF\"}", "a", "");
+    expect_json_get("test_json_get_rejects_invalid_utf8 overlong slash in selected field",
+                    "{\"a\":\"\xC0\xAF\"}", "a", "");
+    expect_json_get("test_json_get_rejects_invalid_utf8 raw surrogate bytes in ignored field",
+                    "{\"ignored\":\"\xED\xA0\x80\",\"a\":\"ok\"}", "a", "");
+}
+
+static void test_json_get_selected_value_shapes(void) {
+    expect_json_get("test_json_get_selected_value_shapes raw structured value",
+                    "{\"a\":{\"b\":[true,false,null]},\"c\":0}",
+                    "a", "{\"b\":[true,false,null]}");
+    expect_json_get("test_json_get_selected_value_shapes nul decoded string empty",
+                    "{\"a\":\"x\\u0000y\"}", "a", "");
+}
+
+static void test_json_root_shared_string_decoder(void) {
+    const char *root = rt_json_root("  \"\\uD83C\\uDF0D\"  ");
+    check("test_json_root_shared_string_decoder valid surrogate pair",
+          root && strcmp(root, "\xF0\x9F\x8C\x8D") == 0);
+    rt_release((void *)root);
+    root = rt_json_root("  \"\\uD800\"  ");
+    check("test_json_root_shared_string_decoder invalid keeps trimmed input",
+          root && strcmp(root, "\"\\uD800\"") == 0);
+    rt_release((void *)root);
+}
+
+static void test_request_body_preserves_separator(void) {
+    const char *body = rt_request_body("POST\001/todos\001\001\001left\001right");
+    assert(strcmp(body, "left\001right") == 0);
+    rt_release((void *)body);
+}
+
 int main(void) {
     printf("== turbo_rt C runtime tests ==\n");
+#ifdef TURBO_ALLOCATION_PROFILE
+    TurboAllocationProfile profile;
+    assert(turbo_profile_begin());
+    void *profile_arr = rt_array_alloc(3);
+    rt_retain(profile_arr);
+    rt_release(profile_arr);
+    rt_release(profile_arr);
+    turbo_profile_end(&profile);
+    assert(profile.valid && profile.allocations == 1 && profile.heap_frees == 1);
+    assert(profile.total_data_bytes == 32 && profile.total_header_bytes == 16);
+    assert(profile.retain_ops == 1 && profile.release_ops == 2);
+    assert(profile.live_allocations == 0);
+    assert(turbo_profile_begin());
+    rt_arena_begin();
+    profile_arr = rt_array_alloc(3);
+    rt_retain(profile_arr);
+    rt_release(profile_arr);
+    rt_arena_end();
+    turbo_profile_end(&profile);
+    assert(profile.valid && profile.arena_allocations == 1 && profile.arena_reclaims == 1);
+    assert(profile.live_allocations == 0 && profile.heap_frees == 0);
+    assert(profile.retain_calls == 1 && profile.release_calls == 1);
+    assert(profile.retain_ops == 0 && profile.release_ops == 0);
+    printf("  [PASS] shared-header profile calibration and arena reclamation\n");
+#endif
+    test_json_control_encoding();
+    test_json_get_decodes_unicode_strings();
+    test_json_get_escaped_keys_and_duplicates();
+    test_json_get_validates_malformed_input();
+    test_json_get_accepts_long_finite_numbers();
+    test_json_get_rejects_nonfinite_numbers_precisely();
+    test_json_get_depth_counts_empty_containers();
+    test_json_get_rejects_invalid_utf8();
+    test_json_get_selected_value_shapes();
+    test_json_root_shared_string_decoder();
+    test_request_body_preserves_separator();
 
     test_str_repeat_overflow();
     test_str_repeat_normal();

@@ -231,6 +231,7 @@ fn register_runtime_symbols(jit_builder: &mut JITBuilder) {
         rt_http_post_with_headers as *const u8,
     );
     jit_builder.symbol("rt_json_get", rt_json_get as *const u8);
+    jit_builder.symbol("rt_json_quote", rt_json_quote as *const u8);
     jit_builder.symbol("rt_json_stringify", rt_json_stringify as *const u8);
     jit_builder.symbol("rt_json_build", rt_json_build as *const u8);
     jit_builder.symbol("rt_json_root", rt_json_root as *const u8);
@@ -355,9 +356,13 @@ pub fn jit_run(ast_module: &turbo_ast::Module) -> Result<(), CodegenError> {
             message: "no `main` function found".to_string(),
         });
     }
+    #[cfg(feature = "allocation-profile")]
+    let profile = crate::allocation_profile::Session::start();
     program.call_zero_arg_void("main")?;
     // Free all runtime-allocated strings
     crate::runtime::rt_arena_reset();
+    #[cfg(feature = "allocation-profile")]
+    profile.finish();
 
     Ok(())
 }
@@ -373,9 +378,13 @@ pub fn jit_run_function(ast_module: &turbo_ast::Module, fn_name: &str) -> Result
             message: format!("no function `{fn_name}` found"),
         });
     }
+    #[cfg(feature = "allocation-profile")]
+    let profile = crate::allocation_profile::Session::start();
     program.call_zero_arg_void(fn_name)?;
     // Free all runtime-allocated strings
     crate::runtime::rt_arena_reset();
+    #[cfg(feature = "allocation-profile")]
+    profile.finish();
 
     Ok(())
 }

@@ -36,7 +36,11 @@ use turbo_ast::*;
 mod turbo_types;
 pub(crate) use turbo_types::*;
 
+#[cfg(feature = "allocation-profile")]
+mod allocation_profile;
 mod runtime;
+/// Instrumented builds are diagnostic-only and must not supply timing baselines.
+pub const ALLOCATION_PROFILE_BUILD: bool = cfg!(feature = "allocation-profile");
 pub(crate) use runtime::*;
 // Public so the CLI can install the program's CLI args before `jit_run`
 // (the JIT twin of the AOT `main(argc, argv)` -> rt_set_args path).
@@ -80,6 +84,10 @@ pub(crate) use compile::compile_module;
 // ── Runtime C source for AOT linking ────────────────────────────────
 
 const RUNTIME_C: &str = include_str!("../runtime/turbo_rt.c");
+#[cfg(feature = "allocation-profile")]
+const PROFILE_C: &str = include_str!("../runtime/turbo_alloc_profile.c");
+#[cfg(feature = "allocation-profile")]
+const PROFILE_H: &str = include_str!("../runtime/turbo_alloc_profile.h");
 const RUNTIME_WASM_C: &str = include_str!("../runtime/turbo_rt_wasm.c");
 /// Shared overflow/cap guard header `#include`d by both C runtimes. The C
 /// sources are written to a temp dir and compiled there, so this header must
@@ -246,8 +254,9 @@ pub(crate) struct Ctx<'a, M: Module> {
     pub(crate) fn_asts: &'a HashMap<String, &'a FnDef>,
     pub(crate) fn_type_params: &'a HashMap<String, Vec<String>>,
     pub(crate) rt_fns: &'a HashMap<String, FuncId>,
-    /// Lazily declared per-concrete-`V` release thunks for typed `HashMap<K, V>`
-    /// values that need deeper cleanup than a plain top-level `rt_release`.
+    /// Shared release-helper registry: lazily declared typed-map value cleanup
+    /// and predeclared recursive-type cleanup. Bodies are emitted after user
+    /// functions; recursive children call helpers rather than expanding IR.
     pub(crate) hashmap_value_release_thunks: &'a mut HashMap<String, (FuncId, TurboTy)>,
     pub(crate) vars: HashMap<String, (Variable, cranelift::prelude::types::Type, TurboTy)>,
     pub(crate) borrowed_param_vars: Vec<Variable>,

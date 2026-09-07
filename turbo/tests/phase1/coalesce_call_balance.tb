@@ -1,0 +1,33 @@
+fn text(n: i64) -> str { "value" + to_str(n) }
+fn keep(value: str?) -> str? { value }
+fn unexpected() -> str {
+    assert(false)
+    "unreachable"
+}
+fn check() {
+    let original = text(7)
+    let wrapped = some(original)
+    let first = wrapped ?? unexpected()
+    let second = keep(wrapped) ?? original
+    let empty: str? = none
+    let fallback = empty ?? original
+    let temporary = some(text(8)) ?? original
+    let other = none ?? text(9)
+    assert(first == "value7")
+    assert(second == "value7")
+    assert(fallback == "value7")
+    assert(original == "value7")
+    assert((wrapped ?? "missing") == "value7")
+    assert(temporary == "value8")
+    assert(other == "value9")
+    let floats: float? = some(1.5)
+    assert((floats ?? 0.0) == 1.5)
+}
+fn main() {
+    let mut i = 0
+    while i < 200 {
+        check()
+        i += 1
+    }
+    print(i)
+}

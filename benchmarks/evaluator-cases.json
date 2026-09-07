@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "suite_version": "g2.1-v6",
+  "cases": {
+    "fib": {
+      "category": "cpu",
+      "status": "runnable",
+      "controlled_status": "pending_capability",
+      "workload": "Recursive fib(40), one process invocation; same recurrence in Turbo/Rust.",
+      "oracle": "102334155\\n",
+      "turbo_source": "turbo/benchmarks/bench_fib.tb",
+      "rust_source": "turbo/benchmarks/rust/fib.rs",
+      "source_sha256": {
+        "turbo/benchmarks/bench_fib.tb": "f29d55ef9f0810f89c61bc399ca012f9cfd7842bba9b44d58b1fa4cab436aee6",
+        "turbo/benchmarks/rust/fib.rs": "e70cd4050427b9646fad1ed932bd06932d896645cb37405ba4051f8a93764e1f"
+      }
+    },
+    "wordcount": {
+      "category": "application",
+      "status": "runnable",
+      "controlled_status": "pending_capability",
+      "workload": "Existing 5MiB seeded ASCII corpus, word frequencies, top20 count-desc/lexical ties.",
+      "oracle": "Independent Python Counter and ordered top20 plus total/unique.",
+      "comparison_caveat": "Idiomatic end-to-end comparison, NOT identical implementation: Turbo selects top20 by repeated scan; Rust sorts all counts; token/storage paths also differ.",
+      "turbo_source": "turbo/benchmarks/wordcount.tb",
+      "rust_source": "turbo/benchmarks/rust/wordcount.rs",
+      "source_sha256": {
+        "turbo/benchmarks/wordcount.tb": "923024e31bd97e8bf3309a6f94aa69e50eb5400480cbbd642fdf23ccfbe30bc3",
+        "turbo/benchmarks/rust/wordcount.rs": "1cfec7684105225e7869a08392f0188df397627eae8b216c9ed3646e13a12a14",
+        "turbo/benchmarks/gen_wordcount_input.py": "6a17b42dbcc74fddc71ce87e557bce3cd65c952a870deb575ca3193713d781d2"
+      }
+    },
+    "json_transform": {
+      "category": "cpu",
+      "status": "runnable",
+      "controlled_status": "pending_capability",
+      "workload": "2048 seeded NDJSON records over256 rounds. LCG seed7/multiplier48271/mod2147483647; integer id=index-1024,score=state%2001-1000,active=state%4!=0; eight Unicode/control title patterns, escaped keys and ignored nested metadata. Keep active and id%5!=0; project id,score*3+id,title prefixed task:. Serialize and count every resulting record; emit sorted full-record/count multiset and selected/serialized-byte/processed totals.",
+      "oracle": "Independent Python schema validation and one-pass projection weighted by rounds; exact complete serialized-record multiset, counts and byte totals. Not a length-only checksum.",
+      "turbo_source": "turbo/benchmarks/bench_json_transform.tb",
+      "rust_source": "turbo/crates/turbo-cli/examples/bench_json_transform.rs",
+      "rust_build": "workspace_example",
+      "source_sha256": {
+        "turbo/benchmarks/bench_json_transform.tb": "54ba869c91eb669dc92a19600dc545af8f2ba0f790c987e0329b6213c6230ccb",
+        "turbo/crates/turbo-cli/examples/bench_json_transform.rs": "2eff8ec42d50a7813f4cc593c46210a5551ffc4f4af03eeba8a34faeda4013c2",
+        "turbo/benchmarks/gen_json_input.py": "7d37fa360745e1c12492e6d1a168a97633a627bbabe727784404457cd9dde95b",
+        "turbo/Cargo.toml": "b00b7e4a4a2c60f262acd0bfd7431ea240a1ce317c6cb4bb7ec7a9bc2a749cfd",
+        "turbo/Cargo.lock": "89aa7aeb4fd4d8a0cea0fe4f030a56b698934b989823390f7c63b96984449acf",
+        "turbo/crates/turbo-cli/Cargo.toml": "85620f0a7cac93ca994cd001225464e7a578d3445efaa5cd2f084f42bb9027c2"
+      },
+      "environment": { "TURBO_BENCH_SIZE": "2048", "TURBO_BENCH_STEPS": "256" },
+      "require_zero_live": true,
+      "qualification_blockers": ["equivalent parse-once JSON and counter-entry API paths remain unimplemented"],
+      "comparison_caveat": "API/runtime workflow comparison, not backend-only or algorithm-parity certification: Turbo validates on each json_get and uses typed-map get/set; Rust serde_json parses once and uses entry updates. Serialization, multiset aggregation and output are included. Rust reuses an existing locked dependency through a cached workspace example build, not a minimal clean compilation measurement."
+    },
+    "string_tokens": {
+      "category": "cpu",
+      "status": "runnable",
+      "controlled_status": "pending_capability",
+      "workload": "1048576 cyclic visits over eight frozen UTF-8 log records. Split literal pipe, trim ASCII space/tab/CR/LF margins, replace INFO:/WARN: labels and em dash literally, skip empty fields, count tokens, emit lexical token/count sequence and total tokens/unique/processed input bytes (excluding record newlines).",
+      "oracle": "Independent weighted per-record Counter (no native iteration loop); exact UTF-8 stdout and SHA256 verified every sample.",
+      "turbo_source": "turbo/benchmarks/bench_string_tokens.tb",
+      "rust_source": "turbo/benchmarks/rust/string_tokens.rs",
+      "source_sha256": {
+        "turbo/benchmarks/bench_string_tokens.tb": "df04299115c9dd1794a390d84d70afe48c53ee380ecc75b96a8a0fa6655c233a",
+        "turbo/benchmarks/rust/string_tokens.rs": "385a65fbbb8ae7fcadbc373cad610f5286d5948004f84d4382ade5742b2b6875",
+        "turbo/benchmarks/string_tokens_corpus.txt": "762f2c9eb8fa76aff5018cc5acb76c21b0a954fa348e3f77d9710c02ed679c83"
+      },
+      "environment": { "TURBO_BENCH_STEPS": "1048576" },
+      "comparison_caveat": "Same safe token/count algorithm; string allocation and hashing implementations differ. Includes a small corpus file read and final ordering. Unicode text is preserved except explicit em-dash replacement: no Unicode case-fold/NFC/general whitespace parity claim."
+    },
+    "hashmap_churn": {
+      "category": "cpu",
+      "status": "runnable",
+      "controlled_status": "pending_capability",
+      "workload": "2097152 steps; LCG31 seed7/multiplier1103515245/increment12345;4096 integer and precomputed string keys; increment current key, remove(key+17)%4096 every seventh step; weighted final digests and lengths.",
+      "oracle": "Reference dictionary results plus final digest; fixed live working set.",
+      "turbo_source": "turbo/benchmarks/bench_hashmap_churn.tb",
+      "rust_source": "turbo/benchmarks/rust/hashmap_churn.rs",
+      "source_sha256": {
+        "turbo/benchmarks/bench_hashmap_churn.tb": "c7ee21a3937f31cec1f8d850e2796427a9a64c7829a4997f90c14f8062b1fcfa",
+        "turbo/benchmarks/rust/hashmap_churn.rs": "5ad82fdb175daf409560385651bfc304259db261f988ebb672c10eb740ba22d0"
+      },
+      "environment": {
+        "TURBO_BENCH_STEPS": "2097152"
+      },
+      "comparison_caveat": "Same abstract operation trace; hashing/container implementations and key ownership differ. Rust borrows precomputed immutable string keys; Turbo runtime manages key storage. Measures language plus runtime, not backend in isolation."
+    },
+    "buffer_scan": {
+      "category": "cpu",
+      "status": "runnable",
+      "controlled_status": "pending_capability",
+      "workload": "33554432 logical u8 values; initial (17*i+23)%256, four in-place passes adding pass+1 modulo256; dependent checksum (33*h+value)%1000000007.",
+      "oracle": "Periodic affine composition, independently cross-checked against literal bytearray simulation; checksum, first and last byte.",
+      "turbo_source": "turbo/benchmarks/bench_buffer_scan.tb",
+      "rust_source": "turbo/benchmarks/rust/buffer_scan.rs",
+      "source_sha256": {
+        "turbo/benchmarks/bench_buffer_scan.tb": "26e0da46b96b38fdd314bf2458386fef048e306a1c06d56882d8d7549e412cc0",
+        "turbo/benchmarks/rust/buffer_scan.rs": "ad935dd06e15fd65f37c5a2ca58e41176611f0f97f6025457869d24618e07c2e"
+      },
+      "environment": {
+        "TURBO_BENCH_SIZE": "33554432"
+      }
+    },
+    "particle_update": {
+      "category": "cpu",
+      "status": "runnable",
+      "controlled_status": "pending_capability",
+      "workload": "10000 particles,32768 symplectic Euler steps,dt=1/64; six f64 fields initialized by Park-Miller LCG seed7,multiplier48271,mod2147483647, (state%2048-1024)/1024. Update velocity before position; digest all six final fields on the exact 1/65536 lattice.",
+      "oracle": "Independent closed-form integer trajectory; cross-tested with literal fixed-step lattice simulation. Exact digest,size,steps; no float tolerance.",
+      "turbo_source": "turbo/benchmarks/bench_particle_update.tb",
+      "rust_source": "turbo/benchmarks/rust/particle_update.rs",
+      "source_sha256": {
+        "turbo/benchmarks/bench_particle_update.tb": "7c0fca41a52788e59936e94f251387dcd21d745803189aceb032c70d2dd25644",
+        "turbo/benchmarks/rust/particle_update.rs": "254ecbc0b99b12b27c3c9d9152182fec3f6cb4ba47f921e10e93bacb736700fe"
+      },
+      "environment": {
+        "TURBO_BENCH_SIZE": "10000",
+        "TURBO_BENCH_STEPS": "32768"
+      },
+      "comparison_caveat": "Same safe AoS update algorithm; current Turbo managed records and Rust inline Vec records have different physical storage/ownership costs. Baseline is not packed/noalloc Turbo or a renderer/frame-latency test. Sub-200ms samples remain unqualified."
+    },
+    "tree_walk": {
+      "category": "cpu",
+      "status": "runnable",
+      "controlled_status": "pending_capability",
+      "workload": "Sixteen build/walk/drop rounds of full depth19 binary trees (1048575 nodes each). Root seed7+round*7919; left(seed*48271+17)%2147483647, right(seed*69621+31)%2147483647. Node value seed%1000. Leaves hash to value; branches (33*left+17*value+97*right)%1000000007; round digest (65599*h+tree_hash)%1000000007.",
+      "oracle": "Independent flat breadth-first seed construction and bottom-up reduction, cross-checked against recursive reference at small sizes; exact digest/node-count/rounds and native allocation balance.",
+      "turbo_source": "turbo/benchmarks/bench_tree_walk.tb",
+      "rust_source": "turbo/benchmarks/rust/tree_walk.rs",
+      "source_sha256": {
+        "turbo/benchmarks/bench_tree_walk.tb": "6e082b2441f81f2cb5738956cee258391d08f58886957f08c00b15174d662ac1",
+        "turbo/benchmarks/rust/tree_walk.rs": "608f83792b5907a112ccd34119e3d7980a937e62eddeaef94bd1fb298e833eab"
+      },
+      "environment": { "TURBO_BENCH_SIZE": "19", "TURBO_BENCH_STEPS": "16" },
+      "require_zero_live": true,
+      "comparison_caveat": "Same actual recursive tree and postorder algorithm; Turbo managed tagged allocations vs safe Rust Box per node with borrowed traversal. Construction and drop are included, not traversal-only. No arena, shared-cycle, arbitrary-depth, closure reclamation or whole-heap qualification claim."
+    },
+    "sqlite": {
+      "category": "application",
+      "status": "pending_fixture",
+      "controlled_status": "pending_capability",
+      "workload": "Seeded database, transactional batch insert and ordered query workload.",
+      "oracle": "Exact rows/transaction outcomes with matching SQLite configuration.",
+      "prerequisite": "fixture implementation and independent review"
+    },
+    "http_compute": {
+      "category": "service",
+      "status": "pending_fixture",
+      "controlled_status": "pending_capability",
+      "workload": "Fixed compute request bodies at declared rate/concurrency.",
+      "oracle": "Response oracle and error counts; measure latency separately.",
+      "prerequisite": "G4 service protocol/load harness"
+    },
+    "worker": {
+      "category": "service",
+      "status": "pending_fixture",
+      "controlled_status": "pending_capability",
+      "workload": "Fixed job set and documented retries/recovery schedule.",
+      "oracle": "Durable state/effect oracle; no acknowledged loss.",
+      "prerequisite": "G5 worker kit and fault harness"
+    }
+  }
+}

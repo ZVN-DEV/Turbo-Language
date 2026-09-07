@@ -1,0 +1,19 @@
+info: a-b 1
+info: alpha 2
+info: café 1
+info: path\name 1
+info: tabs 1
+info: é 1
+info: İstanbul 1
+info: Ελληνικά 1
+info: 中文 1
+info: 東京 1
+info: 🙂 1
+warn: "quoted" 1
+warn: Straße 1
+warn: a-b 1
+warn: café 1
+warn: é 1
+warn: مرحبا 1
+warn: ẞ 1
+TOTAL 19 18 289

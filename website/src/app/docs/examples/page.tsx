@@ -137,7 +137,7 @@ let upper = cleaned |> upper`}
         </div>
         <p className="text-gray-400 text-sm mb-4">Intermediate</p>
         <p className="mb-4">
-          A high-performance HTTP server example showcasing Turbo&apos;s current
+          An HTTP server example showcasing Turbo&apos;s current
           HTTP primitives, JSON responses, and benchmark-style endpoints.
         </p>
         <p className="mb-2 text-white font-medium text-sm">Key features demonstrated:</p>

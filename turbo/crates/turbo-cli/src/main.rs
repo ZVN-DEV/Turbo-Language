@@ -45,10 +45,18 @@ use crate::explain::explain_error;
 use crate::pipeline::{bench_file, build_file, check_file, run_file, test_file, test_run_fn};
 use crate::project::init_project;
 
+fn compiler_version() -> &'static str {
+    if turbo_codegen_cranelift::ALLOCATION_PROFILE_BUILD {
+        concat!(env!("CARGO_PKG_VERSION"), "+allocation-profile")
+    } else {
+        env!("CARGO_PKG_VERSION")
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "turbolang",
-    version = env!("CARGO_PKG_VERSION"),
+    version = compiler_version(),
     about = "The Turbo programming language compiler"
 )]
 struct Cli {

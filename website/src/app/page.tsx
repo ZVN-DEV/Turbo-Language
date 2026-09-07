@@ -77,36 +77,23 @@ fn main() {
   },
 ];
 
-// fib(40), best of 5 wall-clock runs on an Apple M5 Max (macOS 26.5.1,
-// 2026-06-27). Turbo (AOT) vs native and interpreted baselines. This is a
-// CPU microbenchmark, not a real-world workload.
+// Committed G2.1 initial diagnostic baseline, 2026-09-06. This is an incomplete
+// measurement subset, not a Rust-parity claim or release guarantee.
 const benchmarks = [
-  { label: "C (clang -O2)", ms: 265, size: "33 KB", highlight: false },
-  { label: "Rust (rustc -O)", ms: 265, size: "455 KB", highlight: false },
-  { label: "Turbo (AOT)", ms: 330, size: "93 KB", highlight: true },
-  { label: "Go (go build)", ms: 340, size: "--", highlight: false },
-  { label: "Node.js 22", ms: 680, size: "--", highlight: false },
-  { label: "Python 3.10", ms: 13300, size: "--", highlight: false },
+  { label: "Rust baseline", ms: 161.09, detail: "1.000×", highlight: false },
+  { label: "Turbo AOT", ms: 233.31, detail: "1.444× paired", highlight: true },
 ];
 
-// word-count: read a ~5 MB text file, tokenize on whitespace, count word
-// frequencies in a hashmap, print the top-20 + a total. An end-to-end workload
-// (file I/O + strings + hashmaps + sorting), best of 5 on the same machine.
-// The C/Rust/Go baselines run the identical algorithm over the identical input;
-// run_wordcount.sh enforces byte-for-byte identical output across all four.
 const wordcountBenchmarks = [
-  { label: "C (clang -O2)", ms: 108, size: "1.00x", highlight: false },
-  { label: "Rust (rustc -O)", ms: 110, size: "1.02x", highlight: false },
-  { label: "Go (go build)", ms: 120, size: "1.11x", highlight: false },
-  { label: "Turbo (AOT)", ms: 150, size: "1.4x", highlight: true },
-  { label: "Turbo (JIT)", ms: 205, size: "1.9x", highlight: false },
+  { label: "Rust baseline", ms: 22.64, detail: "1.000×", highlight: false },
+  { label: "Turbo AOT", ms: 88.62, detail: "3.871× paired", highlight: true },
 ];
 
 const features = [
   {
-    title: "Native Speed",
+    title: "Native Execution",
     description:
-      "Compiles to machine code via Cranelift. No interpreter, no VM. Within ~1.3x of C and Rust on simple CPU microbenchmarks.",
+      "Compiles to machine code through Cranelift for JIT development and AOT binaries. The current focus is closing measured gaps against Rust with reproducible workloads.",
     icon: (
       <svg
         className="w-6 h-6"
@@ -146,7 +133,7 @@ const features = [
   {
     title: "Small, Honest Core",
     description:
-      "Turbo keeps the compiler focused on a general-purpose, compiled language. Framework-shaped features (agents, GPU kernels, distributed actors) live in sidecar libraries, not keywords — so the core stays stable.",
+      "Turbo is strongest today as a general-purpose native language for CLIs, tools, small services, and compute workers. GUI, game, embedded, and OS-level work remain gated by explicit runtime and library milestones.",
     icon: (
       <svg
         className="w-6 h-6"
@@ -184,9 +171,9 @@ const features = [
     ),
   },
   {
-    title: "Zero GC",
+    title: "Progressive Control",
     description:
-      "No garbage collector pauses. Deterministic memory management with ~93 KB binaries. Deploys to AWS Lambda, Cloud Run, and Fly.io as a single native binary — cold start is just process start.",
+      "The shipped model avoids a tracing GC and uses owned values, ARC, and copy-on-write. The roadmap adds cost attribution, borrowed views, owned buffers, and no-allocation regions for Rust-class control where it matters.",
     icon: (
       <svg
         className="w-6 h-6"
@@ -225,9 +212,8 @@ const features = [
   },
 ];
 
-// Max ms for the bar chart scale (Python excluded from visual scale)
-const BAR_MAX = 700;
-const WORDCOUNT_BAR_MAX = 230;
+const BAR_MAX = 250;
+const WORDCOUNT_BAR_MAX = 95;
 
 // Flagship demo quickstart — single source of truth for both the rendered
 // block and the copy button, so the two can never drift.
@@ -287,7 +273,7 @@ function InstallLines({ lines }: { lines: InstallLine[] }) {
 
 export default function Home() {
   return (
-    <div className="font-[family-name:var(--font-geist-sans)]">
+    <div className="overflow-x-hidden font-[family-name:var(--font-geist-sans)]">
       {/* ── Hero ────────────────────────────────────────────── */}
       <section className="relative overflow-hidden">
         {/* Gradient orb background */}
@@ -302,17 +288,21 @@ export default function Home() {
               </div>
 
               <h1 className="text-5xl md:text-[3.75rem] font-bold text-white leading-[1.05] tracking-tight mb-6">
-                JavaScript&apos;s Soul.
+                Familiar code.
                 <br />
                 <span className="bg-gradient-to-r from-[#00ff88] to-[#00d4ff] bg-clip-text text-transparent">
-                  Rust&apos;s Speed.
+                  Native execution.
                 </span>
               </h1>
 
+              <p className="mb-3 text-xl font-semibold text-gray-100">
+                A path to deeper control.
+              </p>
               <p className="text-lg md:text-xl text-gray-400 leading-relaxed mb-8 max-w-lg">
-                A compiled, type-safe language with native performance and a
-                modern toolchain. Small, honest core. No VM, no GC, no
-                compromise.
+                Turbo is a compiled, type-safe language for people who like
+                TypeScript and JavaScript ergonomics and want native compilation
+                today, with deeper performance and memory controls on the
+                roadmap.
               </p>
 
               <div className="flex flex-wrap items-center gap-x-6 gap-y-4">
@@ -337,6 +327,22 @@ export default function Home() {
                   className="inline-flex items-center gap-1.5 text-sm text-gray-300 hover:text-[#00ff88] transition-colors"
                 >
                   Try in browser
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <path d="M5 12h14M12 5l7 7-7 7" />
+                  </svg>
+                </Link>
+                <Link
+                  href="/roadmap"
+                  className="inline-flex items-center gap-1.5 text-sm text-gray-300 hover:text-[#00ff88] transition-colors"
+                >
+                  Read the roadmap
                   <svg
                     width="16"
                     height="16"
@@ -457,8 +463,9 @@ export default function Home() {
             Why Turbo?
           </h2>
           <p className="text-gray-400 text-lg max-w-2xl mx-auto">
-            A language designed from scratch for the next era of software --
-            fast today, with a small core the authors are willing to freeze.
+            A language designed around progressive disclosure: readable syntax
+            first, native execution underneath, deeper control only when the
+            program needs it.
           </p>
         </div>
 
@@ -506,16 +513,15 @@ export default function Home() {
         <div className="max-w-5xl mx-auto px-6 py-24 md:py-32">
           <div className="text-center mb-16">
             <h2 className="text-3xl md:text-4xl font-bold text-white mb-4">
-              Performance
+              Performance status
             </h2>
             <p className="text-gray-400 text-lg max-w-2xl mx-auto">
-              Best of 5 wall-clock runs on an Apple M5 Max (macOS 26.5.1,
-              2026-06-27). Every baseline runs the same algorithm over the same
-              input and the harnesses enforce byte-for-byte identical output —
-              honest numbers, not best-case marketing. Run them yourself with
-              the benchmark scripts in{" "}
+              The current committed baseline is intentionally diagnostic:
+              paired runs, warmups, randomized order, bootstrap intervals, and
+              output-oracle checks on Apple M5 Max / macOS 26.5.1. It is not yet
+              a Rust-parity claim. Raw evidence lives in{" "}
               <code className="font-[family-name:var(--font-geist-mono)] text-gray-300">
-                turbo/benchmarks
+                benchmarks/results/g2-initial-20260906
               </code>
               .
             </p>
@@ -526,9 +532,9 @@ export default function Home() {
               fib(40) — recursion microbenchmark
             </h3>
             <p className="text-gray-400 text-sm mt-1">
-              Pure function-call overhead. Turbo&apos;s native build lands within
-              ~1.3x of C and Rust, in the same range as Go, and far ahead of
-              interpreted runtimes.
+              Pure function-call and recursion overhead. Turbo AOT median wall
+              time was 233.31ms vs Rust at 161.09ms, with a paired elapsed ratio
+              of 1.444× and a 95% interval of 1.4325–1.4618.
             </p>
           </div>
 
@@ -550,7 +556,7 @@ export default function Home() {
                       {b.label}
                     </span>
                     <div className="flex items-center gap-3">
-                      <span className="text-xs text-gray-400">{b.size}</span>
+                      <span className="text-xs text-gray-400">{b.detail}</span>
                       <span
                         className={`text-sm font-[family-name:var(--font-geist-mono)] font-medium ${
                           b.highlight ? "text-[#00ff88]" : "text-gray-400"
@@ -580,13 +586,11 @@ export default function Home() {
               word-count — real-world workload
             </h3>
             <p className="text-gray-400 text-sm mt-1">
-              Read a ~5 MB file (1.05M words), tokenize, count frequencies in a
-              hashmap, print the top 20 — file I/O, strings, hashmaps, sorting.
-              On this string/hashmap-heavy work Turbo&apos;s native build is about
-              1.4x slower than C, down from ~2.2x: int values now live inline in
-              the hashmap entry, so the counter loop no longer re-stringifies,
-              re-parses, or re-allocates on every increment. Real, reproducible
-              numbers.
+              Read a ~5 MB file, tokenize, count frequencies in a hashmap, and
+              print top words. Output equivalence is proven, but the
+              implementation shapes are not identical, so this is an application
+              diagnostic rather than a CPU parity result. Turbo AOT median wall
+              time was 88.62ms vs Rust at 22.64ms, paired ratio 3.871×.
             </p>
           </div>
 
@@ -605,7 +609,7 @@ export default function Home() {
                       {b.label}
                     </span>
                     <div className="flex items-center gap-3">
-                      <span className="text-xs text-gray-400">{b.size}</span>
+                      <span className="text-xs text-gray-400">{b.detail}</span>
                       <span
                         className={`text-sm font-[family-name:var(--font-geist-mono)] font-medium ${
                           b.highlight ? "text-[#00ff88]" : "text-gray-400"
@@ -628,6 +632,20 @@ export default function Home() {
                 </div>
               );
             })}
+          </div>
+          <div className="max-w-2xl mx-auto mt-10 flex flex-wrap gap-4">
+            <Link
+              href="/performance"
+              className="inline-flex items-center gap-2 bg-[#00ff88] text-[#0a0a0a] font-semibold px-5 py-3 rounded-lg hover:bg-[#00cc6a] transition-colors text-sm"
+            >
+              Read performance plan
+            </Link>
+            <Link
+              href="/roadmap"
+              className="inline-flex items-center gap-2 border border-[#1a1a2e] text-gray-300 px-5 py-3 rounded-lg hover:border-[#00ff88] hover:text-[#00ff88] transition-colors text-sm"
+            >
+              See what ships next
+            </Link>
           </div>
         </div>
       </section>
@@ -685,8 +703,9 @@ export default function Home() {
             Ready to build?
           </h2>
           <p className="text-gray-400 text-xl mb-12 max-w-lg mx-auto">
-            Start writing Turbo today. Native speed, modern syntax, and a
-            roadmap that stays honest about what&apos;s shipped.
+            Start writing Turbo today. Familiar syntax, native binaries, and a
+            roadmap that says plainly what is shipped, what is measured, and
+            what still has to earn its claim.
           </p>
           <div className="flex flex-wrap justify-center gap-4">
             <Link

@@ -1,0 +1,1692 @@
+{
+  "schema_version": 1,
+  "suite_version": "g2.1-v1",
+  "status": "measured",
+  "scope": "initial measurement subset; G2.1 remains incomplete",
+  "created_at": "2026-09-06T02:49:19.396674+00:00",
+  "repository_revision": "75f27e5e293c7c7f89e64ca06621287ab24600b3",
+  "working_tree_status": [
+    "?? benchmarks/results/g2-initial-20260906/samples.jsonl"
+  ],
+  "evaluator_sha256": "347f179b34e17e1a318d9bbbcf79d692b4654f027d8307620ddd1706b4ad1690",
+  "manifest_sha256": "5093eb22dd6f5fcf321049082b2a48297459d17b1a196b0ad8200e378172038e",
+  "host": {
+    "system": "Darwin",
+    "release": "25.5.0",
+    "architecture": "arm64",
+    "python": "3.10.3",
+    "cpu": "Apple M5 Max",
+    "power_and_load_control": "not validated automatically"
+  },
+  "tools": {
+    "turbo": "turbolang 0.15.0",
+    "turbo_binary_sha256": "51aedc0637117f417f9b1b55fbd45ab80aa297dde63e96304590372bbd32901f",
+    "compiler_source_revision": "unverified; supplied binary is fingerprinted",
+    "rust": "rustc 1.97.0 (2d8144b78 2026-07-07)\nbinary: rustc\ncommit-hash: 2d8144b7880597b6e6d3dfd63a9a9efae3f533d3\ncommit-date: 2026-07-07\nhost: aarch64-apple-darwin\nrelease: 1.97.0\nLLVM version: 22.1.6",
+    "cc": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.5.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+  },
+  "protocol": {
+    "samples": 20,
+    "batches": 3,
+    "warmups": 3,
+    "bootstrap_draws": 2000,
+    "seed": 20260906,
+    "poll_interval_ns": 1000000,
+    "wall_scope": "process start through exit",
+    "rss_scope": "wait4 child high-water; not heap or sum of process tree"
+  },
+  "allocation_metrics": {
+    "status": "not_instrumented",
+    "live_bytes": null,
+    "allocation_count": null,
+    "total_allocated_bytes": null
+  },
+  "cases": {
+    "fib": {
+      "commands": {
+        "turbo": [
+          "/var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-1jbhflb2/fib-turbo"
+        ],
+        "rust": [
+          "/var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-1jbhflb2/fib-rust"
+        ]
+      },
+      "builds": {
+        "turbo": {
+          "elapsed_ns": 377929417,
+          "binary_bytes": 114504,
+          "binary_sha256": "8fa7a10a3da5dab64a465de826267552db16da1ead94416bafb2728ba14573cc",
+          "command": [
+            "/Users/macbookpro-kirby/Desktop/Coding/ZVN/TurboLang/turbo/target/release/turbolang",
+            "build",
+            "/Users/macbookpro-kirby/Desktop/Coding/ZVN/TurboLang/turbo/benchmarks/bench_fib.tb",
+            "-o",
+            "/var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-1jbhflb2/fib-turbo"
+          ]
+        },
+        "rust": {
+          "elapsed_ns": 306082417,
+          "binary_bytes": 466488,
+          "binary_sha256": "722f7acffcaf4e131b588ae5d830e99b1c60f1e57255b693b4f1d19d8c705af8",
+          "command": [
+            "/Users/macbookpro-kirby/.cargo/bin/rustc",
+            "-C",
+            "opt-level=3",
+            "-C",
+            "target-cpu=native",
+            "-C",
+            "overflow-checks=off",
+            "/Users/macbookpro-kirby/Desktop/Coding/ZVN/TurboLang/turbo/benchmarks/rust/fib.rs",
+            "-o",
+            "/var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-1jbhflb2/fib-rust"
+          ]
+        }
+      },
+      "input_sha256": null,
+      "input_bytes": 0,
+      "expected_stdout": "102334155\n",
+      "expected_sha256": "a9c936c441fe6280cabd79ab1abac782a93ac7ad3495f87b8040d653a046ff36",
+      "specification": {
+        "category": "cpu",
+        "status": "runnable",
+        "controlled_status": "pending_capability",
+        "workload": "Recursive fib(40), one process invocation; same recurrence in Turbo/Rust.",
+        "oracle": "102334155\\n",
+        "turbo_source": "turbo/benchmarks/bench_fib.tb",
+        "rust_source": "turbo/benchmarks/rust/fib.rs",
+        "source_sha256": {
+          "turbo/benchmarks/bench_fib.tb": "f29d55ef9f0810f89c61bc399ca012f9cfd7842bba9b44d58b1fa4cab436aee6",
+          "turbo/benchmarks/rust/fib.rs": "e70cd4050427b9646fad1ed932bd06932d896645cb37405ba4051f8a93764e1f"
+        }
+      },
+      "pairs": [
+        {
+          "batch": 0,
+          "pair": 0,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 221752000,
+          "rust_ns": 154990250,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 1,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 223162833,
+          "rust_ns": 154541792,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 2,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 223009167,
+          "rust_ns": 156541792,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 3,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 221165083,
+          "rust_ns": 153334125,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 4,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 225791042,
+          "rust_ns": 156282292,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 5,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 224572917,
+          "rust_ns": 154283875,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 6,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 220970375,
+          "rust_ns": 153901625,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 7,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 229262500,
+          "rust_ns": 152894375,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 8,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 228375542,
+          "rust_ns": 157496167,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 9,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 236478208,
+          "rust_ns": 162245125,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 10,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 239006875,
+          "rust_ns": 159686750,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 11,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 235482916,
+          "rust_ns": 164070917,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1654784
+        },
+        {
+          "batch": 0,
+          "pair": 12,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 232243125,
+          "rust_ns": 165423916,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 13,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 229785667,
+          "rust_ns": 162295417,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 14,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 230115500,
+          "rust_ns": 159281167,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 15,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 222361292,
+          "rust_ns": 155774666,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 16,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 221638584,
+          "rust_ns": 153717459,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 17,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 222325875,
+          "rust_ns": 153979500,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 18,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 220094542,
+          "rust_ns": 154371625,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 0,
+          "pair": 19,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 224460750,
+          "rust_ns": 160237708,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 0,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 232317459,
+          "rust_ns": 154455666,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 1,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 227314833,
+          "rust_ns": 160422125,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 2,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 229097458,
+          "rust_ns": 157203709,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 3,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 229748542,
+          "rust_ns": 160045334,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 4,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 226126875,
+          "rust_ns": 159549292,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 5,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 230462166,
+          "rust_ns": 160120584,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 6,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 234096542,
+          "rust_ns": 188060459,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 7,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 248115084,
+          "rust_ns": 168034416,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 8,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 237077500,
+          "rust_ns": 168707916,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 9,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 249640291,
+          "rust_ns": 167861958,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 10,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 243115375,
+          "rust_ns": 169845083,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 11,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 317462167,
+          "rust_ns": 181224833,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 12,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 249686584,
+          "rust_ns": 192521250,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 13,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 246520750,
+          "rust_ns": 203416375,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 14,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 238695125,
+          "rust_ns": 164697917,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 15,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 237083709,
+          "rust_ns": 161397833,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 16,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 228076625,
+          "rust_ns": 166139583,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 17,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 235579083,
+          "rust_ns": 159885666,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 18,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 232525459,
+          "rust_ns": 171775125,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 1,
+          "pair": 19,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 242807375,
+          "rust_ns": 168077417,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 0,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 246550916,
+          "rust_ns": 164259125,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 1,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 244771416,
+          "rust_ns": 171667583,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1654784
+        },
+        {
+          "batch": 2,
+          "pair": 2,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 244315709,
+          "rust_ns": 167807250,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 3,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 243019084,
+          "rust_ns": 169648500,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 4,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 241492125,
+          "rust_ns": 170498333,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 5,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 240760791,
+          "rust_ns": 163082334,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 6,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 248393250,
+          "rust_ns": 164987833,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 7,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 238010166,
+          "rust_ns": 160370292,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 8,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 235298041,
+          "rust_ns": 157659500,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 9,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 237009708,
+          "rust_ns": 162131542,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 10,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 231186416,
+          "rust_ns": 161895458,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 11,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 236937167,
+          "rust_ns": 160781958,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 12,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 240285583,
+          "rust_ns": 165415417,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 13,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 236590875,
+          "rust_ns": 164330833,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 14,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 244390792,
+          "rust_ns": 163004958,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 15,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 241334291,
+          "rust_ns": 160374125,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 16,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 224258666,
+          "rust_ns": 158647500,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 17,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 222414167,
+          "rust_ns": 153820333,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 18,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 226198833,
+          "rust_ns": 154457834,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        },
+        {
+          "batch": 2,
+          "pair": 19,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 225570583,
+          "rust_ns": 162066875,
+          "turbo_peak_rss_bytes": 1523712,
+          "rust_peak_rss_bytes": 1638400
+        }
+      ]
+    },
+    "wordcount": {
+      "commands": {
+        "turbo": [
+          "/var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-1jbhflb2/wordcount-turbo"
+        ],
+        "rust": [
+          "/var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-1jbhflb2/wordcount-rust"
+        ]
+      },
+      "builds": {
+        "turbo": {
+          "elapsed_ns": 118650417,
+          "binary_bytes": 131184,
+          "binary_sha256": "c736cdd4859c3bf9dc073483e847dd73be91abc42359a1da894b43cbd57a06ee",
+          "command": [
+            "/Users/macbookpro-kirby/Desktop/Coding/ZVN/TurboLang/turbo/target/release/turbolang",
+            "build",
+            "/Users/macbookpro-kirby/Desktop/Coding/ZVN/TurboLang/turbo/benchmarks/wordcount.tb",
+            "-o",
+            "/var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-1jbhflb2/wordcount-turbo"
+          ]
+        },
+        "rust": {
+          "elapsed_ns": 334348375,
+          "binary_bytes": 493264,
+          "binary_sha256": "e2223bf27695d6dcc8cf5fa9c17e37f413a09c906b5b1f40a3b7d963212edacc",
+          "command": [
+            "/Users/macbookpro-kirby/.cargo/bin/rustc",
+            "-C",
+            "opt-level=3",
+            "-C",
+            "target-cpu=native",
+            "-C",
+            "overflow-checks=off",
+            "/Users/macbookpro-kirby/Desktop/Coding/ZVN/TurboLang/turbo/benchmarks/rust/wordcount.rs",
+            "-o",
+            "/var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-1jbhflb2/wordcount-rust"
+          ]
+        }
+      },
+      "input_sha256": "0cb152dd26d2767a56605d84a3db041211e26524159398b809e39c83791f7d7b",
+      "input_bytes": 5242882,
+      "expected_stdout": "the 173838\nand 87269\nthat 58003\nhave 43208\nfor 34805\nnot 28876\nwith 24598\nyou 21983\nthis 19531\nbut 17496\nhis 15745\nfrom 14358\nthey 13514\nsay 12527\nher 11665\nshe 10862\nwill 10378\none 9596\nall 9191\nwould 8865\nTOTAL 1054295 240\n",
+      "expected_sha256": "1f6cb6231e2aa1860ebd6470dd2061dfc8e786c2434fb1361b1a44c2225786a3",
+      "specification": {
+        "category": "application",
+        "status": "runnable",
+        "controlled_status": "pending_capability",
+        "workload": "Existing 5MiB seeded ASCII corpus, word frequencies, top20 count-desc/lexical ties.",
+        "oracle": "Independent Python Counter and ordered top20 plus total/unique.",
+        "comparison_caveat": "Idiomatic end-to-end comparison, NOT identical implementation: Turbo selects top20 by repeated scan; Rust sorts all counts; token/storage paths also differ.",
+        "turbo_source": "turbo/benchmarks/wordcount.tb",
+        "rust_source": "turbo/benchmarks/rust/wordcount.rs",
+        "source_sha256": {
+          "turbo/benchmarks/wordcount.tb": "923024e31bd97e8bf3309a6f94aa69e50eb5400480cbbd642fdf23ccfbe30bc3",
+          "turbo/benchmarks/rust/wordcount.rs": "1cfec7684105225e7869a08392f0188df397627eae8b216c9ed3646e13a12a14",
+          "turbo/benchmarks/gen_wordcount_input.py": "6a17b42dbcc74fddc71ce87e557bce3cd65c952a870deb575ca3193713d781d2"
+        }
+      },
+      "pairs": [
+        {
+          "batch": 0,
+          "pair": 0,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 88451542,
+          "rust_ns": 21762208,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 0,
+          "pair": 1,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 87087958,
+          "rust_ns": 23519042,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 0,
+          "pair": 2,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 86164917,
+          "rust_ns": 21877208,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 0,
+          "pair": 3,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 87850625,
+          "rust_ns": 23120792,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 0,
+          "pair": 4,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 85073667,
+          "rust_ns": 23178583,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 0,
+          "pair": 5,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 86471417,
+          "rust_ns": 21362083,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 0,
+          "pair": 6,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 87420709,
+          "rust_ns": 21971667,
+          "turbo_peak_rss_bytes": 54525952,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 0,
+          "pair": 7,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 90757958,
+          "rust_ns": 21993333,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 0,
+          "pair": 8,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 86872250,
+          "rust_ns": 23507042,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 0,
+          "pair": 9,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 88605833,
+          "rust_ns": 22373667,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 0,
+          "pair": 10,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 91063750,
+          "rust_ns": 23595500,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 0,
+          "pair": 11,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 88946875,
+          "rust_ns": 23310125,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7028736
+        },
+        {
+          "batch": 0,
+          "pair": 12,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 91765958,
+          "rust_ns": 23273334,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 0,
+          "pair": 13,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 90627958,
+          "rust_ns": 21829209,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 0,
+          "pair": 14,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 89840292,
+          "rust_ns": 23526167,
+          "turbo_peak_rss_bytes": 54525952,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 0,
+          "pair": 15,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 91932292,
+          "rust_ns": 23287292,
+          "turbo_peak_rss_bytes": 54509568,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 0,
+          "pair": 16,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 89717375,
+          "rust_ns": 21647292,
+          "turbo_peak_rss_bytes": 54591488,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 0,
+          "pair": 17,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 91322458,
+          "rust_ns": 23805833,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7077888
+        },
+        {
+          "batch": 0,
+          "pair": 18,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 89898458,
+          "rust_ns": 23585542,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7077888
+        },
+        {
+          "batch": 0,
+          "pair": 19,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 101117916,
+          "rust_ns": 31533417,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 1,
+          "pair": 0,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 103299250,
+          "rust_ns": 36254125,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7077888
+        },
+        {
+          "batch": 1,
+          "pair": 1,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 98808375,
+          "rust_ns": 25733750,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 1,
+          "pair": 2,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 100012083,
+          "rust_ns": 29820875,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 1,
+          "pair": 3,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 94939958,
+          "rust_ns": 25279417,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 1,
+          "pair": 4,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 106497208,
+          "rust_ns": 22245041,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7077888
+        },
+        {
+          "batch": 1,
+          "pair": 5,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 97355250,
+          "rust_ns": 26095125,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 1,
+          "pair": 6,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 97379125,
+          "rust_ns": 24770125,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7077888
+        },
+        {
+          "batch": 1,
+          "pair": 7,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 95159666,
+          "rust_ns": 23416667,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 1,
+          "pair": 8,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 85517875,
+          "rust_ns": 22812292,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 1,
+          "pair": 9,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 91154417,
+          "rust_ns": 21850500,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 1,
+          "pair": 10,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 92846125,
+          "rust_ns": 23359666,
+          "turbo_peak_rss_bytes": 54591488,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 1,
+          "pair": 11,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 95285459,
+          "rust_ns": 24632958,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 1,
+          "pair": 12,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 92581333,
+          "rust_ns": 23039542,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 1,
+          "pair": 13,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 92566750,
+          "rust_ns": 26640292,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 1,
+          "pair": 14,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 87424250,
+          "rust_ns": 25323917,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 1,
+          "pair": 15,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 88026875,
+          "rust_ns": 21860209,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 1,
+          "pair": 16,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 88632917,
+          "rust_ns": 24487834,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 1,
+          "pair": 17,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 85699083,
+          "rust_ns": 21973000,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 1,
+          "pair": 18,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 86334834,
+          "rust_ns": 23140625,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 1,
+          "pair": 19,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 90662958,
+          "rust_ns": 24576167,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 2,
+          "pair": 0,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 86616667,
+          "rust_ns": 23306541,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 2,
+          "pair": 1,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 88154000,
+          "rust_ns": 21707708,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 2,
+          "pair": 2,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 86188458,
+          "rust_ns": 22345416,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 2,
+          "pair": 3,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 86200167,
+          "rust_ns": 22165583,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 2,
+          "pair": 4,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 86415125,
+          "rust_ns": 21817958,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 2,
+          "pair": 5,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 86541917,
+          "rust_ns": 21645708,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 2,
+          "pair": 6,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 87045834,
+          "rust_ns": 22858458,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 2,
+          "pair": 7,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 83446250,
+          "rust_ns": 22046792,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 2,
+          "pair": 8,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 84154542,
+          "rust_ns": 22081750,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 2,
+          "pair": 9,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 82699916,
+          "rust_ns": 22030917,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 2,
+          "pair": 10,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 84453458,
+          "rust_ns": 21800166,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 2,
+          "pair": 11,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 87319875,
+          "rust_ns": 22472542,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 2,
+          "pair": 12,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 84532417,
+          "rust_ns": 22231500,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 2,
+          "pair": 13,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 84925709,
+          "rust_ns": 22236041,
+          "turbo_peak_rss_bytes": 54525952,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 2,
+          "pair": 14,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 89138125,
+          "rust_ns": 22076542,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7045120
+        },
+        {
+          "batch": 2,
+          "pair": 15,
+          "order": [
+            "rust",
+            "turbo"
+          ],
+          "turbo_ns": 88254959,
+          "rust_ns": 22315291,
+          "turbo_peak_rss_bytes": 54542336,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 2,
+          "pair": 16,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 93105833,
+          "rust_ns": 21872125,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 2,
+          "pair": 17,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 89574458,
+          "rust_ns": 21753667,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 2,
+          "pair": 18,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 88500000,
+          "rust_ns": 22293292,
+          "turbo_peak_rss_bytes": 54558720,
+          "rust_peak_rss_bytes": 7061504
+        },
+        {
+          "batch": 2,
+          "pair": 19,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 90894167,
+          "rust_ns": 22149875,
+          "turbo_peak_rss_bytes": 54575104,
+          "rust_peak_rss_bytes": 7045120
+        }
+      ]
+    }
+  },
+  "groups": {
+    "application": {
+      "cases": {
+        "wordcount": {
+          "ratio": 3.8710962599132355,
+          "pair_count": 60,
+          "batch_count": 3,
+          "turbo_median_ns": 88619375.0,
+          "turbo_p95_ns": 100067374.64999999,
+          "rust_median_ns": 22642417.0,
+          "rust_p95_ns": 26799321.14999999,
+          "ratio_ci95": [
+            3.7976038826406757,
+            3.9549096178042222
+          ]
+        }
+      },
+      "geomean_ratio": 3.871096259913236,
+      "geomean_ci95": [
+        3.797603882640676,
+        3.954909617804222
+      ],
+      "estimator": "median paired ratios; equal workload weights",
+      "bootstrap": {
+        "draws": 2000,
+        "seed": 20260906,
+        "method": "batch then paired samples"
+      }
+    },
+    "cpu": {
+      "cases": {
+        "fib": {
+          "ratio": 1.4439478697887962,
+          "pair_count": 60,
+          "batch_count": 3,
+          "turbo_median_ns": 233311000.5,
+          "turbo_p95_ns": 248455602.04999998,
+          "rust_median_ns": 161089895.5,
+          "rust_p95_ns": 181566614.29999998,
+          "ratio_ci95": [
+            1.4324858987848403,
+            1.4618358961885405
+          ]
+        }
+      },
+      "geomean_ratio": 1.4439478697887962,
+      "geomean_ci95": [
+        1.4324858987848403,
+        1.4618358961885405
+      ],
+      "estimator": "median paired ratios; equal workload weights",
+      "bootstrap": {
+        "draws": 2000,
+        "seed": 20260906,
+        "method": "batch then paired samples"
+      }
+    }
+  },
+  "qualification": {
+    "status": "incomplete",
+    "observed_subset_status": "fail",
+    "failures": [
+      "fib",
+      "geomean"
+    ],
+    "inconclusive": [],
+    "blockers": [
+      "json_transform: pending_fixture",
+      "string_tokens: pending_fixture",
+      "hashmap_churn: pending_fixture",
+      "buffer_scan: pending_fixture",
+      "particle_update: pending_fixture",
+      "tree_walk: pending_fixture",
+      "sqlite: pending_fixture",
+      "http_compute: pending_fixture",
+      "worker: pending_fixture",
+      "controlled profiles pending G3",
+      "allocation counters not instrumented",
+      "cross-host qualification not established",
+      "host power/load conditions unvalidated",
+      "compiler source provenance not independently attested",
+      "samples below 200ms; in-program batching required for qualification"
+    ]
+  }
+}

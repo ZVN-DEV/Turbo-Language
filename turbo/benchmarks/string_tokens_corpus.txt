@@ -1,0 +1,8 @@
+ INFO: alpha | WARN: café | INFO: 東京 
+ INFO: café | | WARN: Straße | INFO: 🙂 
+ WARN: é | INFO: Ελληνικά | WARN: مرحبا 
+ INFO: path\name | WARN: "quoted" | INFO: a—b 
+| INFO: alpha ||
+ INFO: İstanbul | WARN: ẞ | INFO: é 
+ 	INFO: tabs	 | WARN: a-b | INFO: 中文 
+|||

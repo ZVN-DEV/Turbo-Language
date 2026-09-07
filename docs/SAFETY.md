@@ -213,9 +213,19 @@ The `exec` / `shell_exec` built-in rejects commands containing shell metacharact
 
 Turbo is honest about what it does not protect against. The following areas require programmer awareness and discipline.
 
-### Memory Lifecycle in JIT Mode
+### Memory Lifecycle
 
-Turbo's runtime uses a thread-local string arena. HTTP servers reclaim per-request memory on every request — the JIT (`turbolang run`) resets the arena to a per-request high-water mark and AOT (`turbolang build`) uses a per-request arena — so a long-running server's memory stays bounded, and state held in hashmaps persists correctly across requests (server-state maps are allocated outside the per-request arena, so they survive the per-request reset). The remaining case is a *non-server* long-running program that loops forever while continuously allocating strings: those arena allocations are freed when the program exits, not individually — ensure such a loop terminates or periodically restart the process. Proper ARC-based string deallocation is planned for a future release.
+Turbo's safe runtime uses reference-counted heap values with copy-on-write value
+semantics. Strings, arrays, structs, enums, optionals, results, and typed
+container values are retained and released by generated runtime paths at scope
+exit, reassignment, and container destruction. HTTP servers still add
+per-request arenas for request-scoped allocations, so handler temporaries can be
+reclaimed in bulk while state held outside the request arena persists.
+
+This is not the same guarantee as Rust's borrow checker. Reference-counted
+values can still carry runtime retain/release overhead, cycle handling is not a
+compile-time proof, and the allocation-profile observer currently covers tracked
+Turbo shared-header values rather than every byte the process allocates.
 
 ### File I/O Safety
 
@@ -268,7 +278,11 @@ Turbo provides `mutex`, `channel`, `send`, and `recv` for concurrent programming
 | Integer overflow | Silent wraparound | Checked in `pow`; standard arithmetic wraps (matching hardware behavior) |
 | Shell injection | Easy (via `system()`) | Metacharacter blocking on `exec`; no shell invocation |
 
-**Turbo eliminates the top 5 vulnerability classes in C code** (buffer overflows, null dereferences, use-after-free, double free, format string bugs) while maintaining comparable performance.
+Turbo is designed to remove several common C failure modes from safe code —
+notably null dereferences, unchecked buffer access, uninitialized variables, and
+manual double-free mistakes — while still compiling to native code. That is a
+safety direction, not a universal proof about every unsafe/FFI path or every
+performance workload.
 
 ### vs. Go
 
@@ -299,7 +313,8 @@ Turbo and Go offer similar levels of runtime safety. Turbo catches more at compi
 **Rust provides stronger guarantees.** Rust's borrow checker prevents data races at compile time and guarantees memory safety without runtime cost. Turbo's CoW value semantics are simpler to learn and use but do not provide the same level of compile-time proof. In particular:
 
 - Turbo cannot statically prevent data races in concurrent code.
-- Turbo's arena-based allocation frees memory in bulk (per-request for HTTP servers, at exit otherwise) rather than freeing each allocation individually.
+- Turbo's runtime ARC/COW model has retain/release overhead and does not provide
+  Rust's static lifetime or data-race proof.
 - Turbo does not track lifetimes, so dangling references in `@unsafe` code are the programmer's problem.
 
 The tradeoff is deliberate: Turbo trades Rust's maximum safety for a dramatically lower learning curve. For most application-level code (web servers, CLI tools, data processing), Turbo's safety level is sufficient. For kernel code, safety-critical systems, or adversarial environments, Rust's guarantees are worth the complexity.
@@ -322,7 +337,7 @@ The tradeoff is deliberate: Turbo trades Rust's maximum safety for a dramaticall
 | Division by zero | **Runtime check** -- division by zero aborts |
 | Shell injection | **Runtime blocked** -- metacharacters rejected |
 | Data races | **Programmer responsibility** -- use mutex/channel |
-| Memory lifecycle | **Per-request for servers** -- arena reclaimed each request; freed at exit otherwise |
+| Memory lifecycle | **Runtime-managed** -- ARC/COW for tracked values, plus per-request arenas in HTTP handlers |
 | File I/O paths | **Programmer responsibility** -- no sandboxing |
 | HTTP security | **Programmer responsibility** -- use reverse proxy |
 | FFI safety | **Programmer responsibility** -- `@unsafe` voids guarantees |

@@ -16,32 +16,24 @@
 //
 // See README.md for curl commands.
 
-// Escape a string for embedding inside a JSON string literal. Handles the two
-// characters that would otherwise break the JSON: backslash and double-quote.
-fn json_escape(s: str) -> str {
-    replace(replace(s, "\\", "\\\\"), "\"", "\\\"")
-}
+struct Todo { id: i64, title: str, done: i64 }
+struct ApiError { error: str }
 
 // Build the JSON array of all todos, ordered by id.
 fn list_todos(db: i64) -> str {
     match sqlite_prepare(db, "SELECT id, title, done FROM todos ORDER BY id") {
         ok(stmt) => {
-            let mut out = "["
-            let mut first = true
+            let mut todos: [Todo] = []
             while sqlite_step(stmt) == 1 {
                 let id = sqlite_column_int(stmt, 0)
                 let title = sqlite_column_str(stmt, 1)
                 let done = sqlite_column_int(stmt, 2)
-                if !first {
-                    out = out + ","
-                }
-                out = out + "\{\"id\":" + to_str(id) + ",\"title\":\"" + json_escape(title) + "\",\"done\":" + to_str(done) + "\}"
-                first = false
+                todos.push(Todo { id: id, title: title, done: done })
             }
             sqlite_finalize(stmt)
-            out + "]"
+            to_json_array(todos)
         }
-        err(e) => "\{\"error\":\"" + json_escape(e) + "\"\}"
+        err(e) => to_json(ApiError { error: e })
     }
 }
 
@@ -53,12 +45,14 @@ fn add_todo(db: i64, title: str) -> str {
             let rc = sqlite_step(stmt)
             sqlite_finalize(stmt)
             if rc == 0 {
-                "\{\"ok\":true,\"title\":\"" + json_escape(title) + "\"\}"
+                // `ok` is a reserved identifier, so keep the fixed envelope
+                // here and let the JSON serializer encode all user content.
+                "\{\"ok\":true,\"title\":" + to_json(title) + "\}"
             } else {
-                "\{\"error\":\"insert failed\"\}"
+                to_json(ApiError { error: "insert failed" })
             }
         }
-        err(e) => "\{\"error\":\"" + json_escape(e) + "\"\}"
+        err(e) => to_json(ApiError { error: e })
     }
 }
 

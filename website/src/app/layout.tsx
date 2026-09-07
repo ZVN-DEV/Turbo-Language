@@ -18,24 +18,24 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: "Turbo — Fast, Type-Safe, Compiled Language",
+    default: "Turbo — Familiar Code. Native Execution.",
     template: "%s — Turbo",
   },
   description:
-    "A compiled programming language with JavaScript's developer experience and Rust's performance. Native speed, tiny binaries, zero GC, small core.",
+    "Familiar code. Native execution. A path to deeper control. Turbo is a compiled language for people who like TypeScript and JavaScript ergonomics and want native binaries.",
   openGraph: {
     type: "website",
     siteName: "Turbo",
     url: "/",
-    title: "Turbo — Fast, Type-Safe, Compiled Language",
+    title: "Turbo — Familiar Code. Native Execution.",
     description:
-      "JavaScript's soul. Rust's speed. A small, honest core that ships today.",
+      "Familiar code. Native execution. A path to deeper control.",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Turbo — Fast, Type-Safe, Compiled Language",
+    title: "Turbo — Familiar Code. Native Execution.",
     description:
-      "JavaScript's soul. Rust's speed. A small, honest core that ships today.",
+      "Familiar code. Native execution. A path to deeper control.",
   },
 };
 

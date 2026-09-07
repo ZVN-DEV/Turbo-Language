@@ -161,6 +161,16 @@ pub fn aot_compile(
         code: ErrorCode::E0400,
         message: format!("failed to write runtime: {e}"),
     })?;
+    #[cfg(feature = "allocation-profile")]
+    for (name, contents) in [
+        ("turbo_alloc_profile.c", PROFILE_C),
+        ("turbo_alloc_profile.h", PROFILE_H),
+    ] {
+        std::fs::write(tmp_dir.path().join(name), contents).map_err(|e| CodegenError {
+            code: ErrorCode::E0400,
+            message: format!("failed to write allocation observer: {e}"),
+        })?;
+    }
 
     let (cc_cmd, cc_args) = resolve_cross_compiler(target)?;
 
@@ -261,6 +271,9 @@ pub fn aot_compile(
     for arg in &cc_args {
         cmd.arg(arg);
     }
+    #[cfg(feature = "allocation-profile")]
+    cmd.arg("-DTURBO_ALLOCATION_PROFILE")
+        .arg(tmp_dir.path().join("turbo_alloc_profile.c"));
     if cfg!(windows) {
         // The POSIX runtime uses standard C names the UCRT marks "deprecated"
         // (fopen, getenv, strerror, isatty, fileno, ...). Silence that noise so

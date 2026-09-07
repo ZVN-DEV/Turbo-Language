@@ -95,6 +95,29 @@ jobs:
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
 
+      - name: Classify release channel
+        id: release-channel
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "error: release tags must look like vX.Y.Z or vX.Y.Z-pre.N; got ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+          if [[ "${VERSION}" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+            echo "homebrew=false" >> "$GITHUB_OUTPUT"
+            echo "Release ${GITHUB_REF_NAME} classified as prerelease."
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+            echo "homebrew=true" >> "$GITHUB_OUTPUT"
+            echo "Release ${GITHUB_REF_NAME} classified as stable."
+          fi
+
       - name: Generate checksums
         run: |
           cd turbolang-aarch64-apple-darwin && sha256sum *.tar.gz >> ../checksums.txt && cd ..
@@ -191,7 +214,8 @@ jobs:
             checksums.txt.sig
           body_path: RELEASE_NOTES.md
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.release-channel.outputs.prerelease }}
+          make_latest: ${{ steps.release-channel.outputs.make_latest }}
           fail_on_unmatched_files: false
 
       # Push an updated Homebrew formula to the ZVN-DEV/homebrew-turbo tap.
@@ -201,7 +225,7 @@ jobs:
       # ZVN-DEV/homebrew-turbo repository. If the secret is missing the step is
       # skipped so the release itself never fails on a missing token.
       - name: Update Homebrew tap
-        if: success() && steps.probe-secrets.outputs.has_tap == 'true'
+        if: success() && steps.probe-secrets.outputs.has_tap == 'true' && steps.release-channel.outputs.homebrew == 'true'
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
@@ -254,7 +278,7 @@ jobs:
           # bash script with `class TurboLang < Formula` as a flush-left line.
           cat > "${TAP_DIR}/Formula/turbo-lang.rb" <<EOF
           class TurboLang < Formula
-            desc "Compiled, type-safe language with TypeScript DX and Rust performance"
+            desc "Native compiled language with familiar syntax"
             homepage "https://turbolang.dev"
             version "${VERSION}"
             license "MIT"
@@ -300,5 +324,11 @@ jobs:
             exit 0
           fi
 
-          git commit -m "turbo-lang ${VERSION}"
+          git commit -m "Prepare the tap for Turbo ${VERSION}" \
+            -m "Constraint: release artifacts and checksums are produced before the tap formula can be regenerated." \
+            -m "Confidence: high" \
+            -m "Scope-risk: narrow" \
+            -m "Directive: keep prerelease tags out of the Homebrew tap unless an explicit prerelease formula policy is added." \
+            -m "Tested: formula URLs and sha256 values were generated from this release job's checksums.txt." \
+            -m "Not-tested: end-user brew install smoke runs after the tap push."
           git push origin HEAD

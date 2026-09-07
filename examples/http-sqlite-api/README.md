@@ -86,3 +86,19 @@ sqlite_finalize(ins)
 Failures surface as `Result` errors carrying the SQLite error message, so
 nothing panics — the handlers turn any error into a JSON `{"error": ...}`
 response.
+
+Response strings are encoded by `to_json` / `to_json_array`, including quotes,
+backslashes, Unicode and non-NUL control characters. Embedded NUL bytes remain
+outside the current runtime string contract.
+
+## Regression tests
+
+The CLI integration tests build and run this example in both JIT and native AOT
+on macOS/Linux, then exercise POST, GET and persistence across a forced restart:
+
+```bash
+cargo test -p turbo-cli --manifest-path turbo/Cargo.toml --test http_sqlite_api
+```
+
+They use temporary databases and isolated ports. The serializer-only test also
+runs on Windows; HTTP tests wait for native Windows networking support.

@@ -188,7 +188,8 @@ impl Checker {
     }
 
     pub(crate) fn check_module(&mut self, module: &Module) {
-        // Pass 0: register all struct definitions
+        // Pass 0: predeclare nominal type names so field and payload layouts can
+        // refer to later, recursive, and mutually-recursive structs/enums.
         for item in &module.items {
             let Item::Struct(s) = &item.node else {
                 continue;
@@ -199,6 +200,45 @@ impl Checker {
                     format!("struct `{}` is already defined", s.name),
                     item.span.clone(),
                 );
+                continue;
+            }
+            self.structs.insert(
+                s.name.clone(),
+                StructInfo {
+                    fields: Vec::new(),
+                    type_params: s.type_param_names(),
+                    derives: s.derives.clone(),
+                },
+            );
+        }
+        for item in &module.items {
+            let Item::Enum(e) = &item.node else { continue };
+            if self.enums.contains_key(&e.name) {
+                self.error(
+                    ErrorCode::E0307,
+                    format!("enum `{}` is already defined", e.name),
+                    item.span.clone(),
+                );
+                continue;
+            }
+            self.enums.insert(
+                e.name.clone(),
+                EnumInfo {
+                    variants: Vec::new(),
+                    type_params: e.type_param_names(),
+                },
+            );
+        }
+
+        // Pass 0a: resolve struct layouts now that every nominal type name is
+        // visible. Duplicate definitions were diagnosed during predeclaration;
+        // keep the first definition as the source of layout truth.
+        let mut resolved_structs = std::collections::HashSet::new();
+        for item in &module.items {
+            let Item::Struct(s) = &item.node else {
+                continue;
+            };
+            if !resolved_structs.insert(s.name.as_str()) {
                 continue;
             }
             let tp_names: Vec<String> = s.type_param_names();
@@ -220,7 +260,12 @@ impl Checker {
                 ) {
                     Some(ty) => fields.push((field.name.clone(), ty)),
                     None => {
-                        if let TypeExpr::Named(name) = &field.ty.node {
+                        if let Some(name) = crate::unresolved_named_type(
+                            &field.ty.node,
+                            Some(&self.structs),
+                            Some(&self.enums),
+                            &tp_names,
+                        ) {
                             self.error(
                                 ErrorCode::E0305,
                                 format!("unknown type `{name}` in struct `{}`", s.name),
@@ -244,25 +289,20 @@ impl Checker {
                     }
                 }
             }
-            self.structs.insert(
-                s.name.clone(),
-                StructInfo {
-                    fields,
-                    type_params: tp_names,
-                    derives: s.derives.clone(),
-                },
-            );
+            if let Some(info) = self.structs.get_mut(&s.name) {
+                info.fields = fields;
+                info.type_params = tp_names;
+                info.derives = s.derives.clone();
+            }
         }
 
-        // Pass 0b: register all enum definitions
+        // Pass 0b: resolve enum payload layouts using the same complete nominal
+        // type table. Keep a Ty::Error slot for bad payloads so variant arity is
+        // stable and downstream diagnostics do not see a shortened payload list.
+        let mut resolved_enums = std::collections::HashSet::new();
         for item in &module.items {
             let Item::Enum(e) = &item.node else { continue };
-            if self.enums.contains_key(&e.name) {
-                self.error(
-                    ErrorCode::E0307,
-                    format!("enum `{}` is already defined", e.name),
-                    item.span.clone(),
-                );
+            if !resolved_enums.insert(e.name.as_str()) {
                 continue;
             }
             let tp_names: Vec<String> = e.type_param_names();
@@ -273,25 +313,39 @@ impl Checker {
                     let field_tys: Vec<Ty> = v
                         .fields
                         .iter()
-                        .filter_map(|f| {
-                            resolve_type_expr_with_params(
+                        .map(|f| {
+                            match resolve_type_expr_with_params(
                                 &f.node,
                                 Some(&self.structs),
                                 Some(&self.enums),
                                 &tp_names,
-                            )
+                            ) {
+                                Some(ty) => ty,
+                                None => {
+                                    if let Some(name) = crate::unresolved_named_type(
+                                        &f.node,
+                                        Some(&self.structs),
+                                        Some(&self.enums),
+                                        &tp_names,
+                                    ) {
+                                        self.error(
+                                            ErrorCode::E0305,
+                                            format!("unknown type `{name}` in enum `{}`", e.name),
+                                            f.span.clone(),
+                                        );
+                                    }
+                                    Ty::Error
+                                }
+                            }
                         })
                         .collect();
                     (v.name.clone(), field_tys)
                 })
                 .collect();
-            self.enums.insert(
-                e.name.clone(),
-                EnumInfo {
-                    variants,
-                    type_params: tp_names,
-                },
-            );
+            if let Some(info) = self.enums.get_mut(&e.name) {
+                info.variants = variants;
+                info.type_params = tp_names;
+            }
         }
 
         // Pass 0b2: validate that every `HashMap<K, V>` annotation anywhere in
@@ -905,10 +959,82 @@ impl Checker {
         }
     }
 
+    /// Bind generic type parameters by walking a declared parameter type and
+    /// the concrete argument type with matching shape. This keeps direct `T`
+    /// inference and nested forms like `[T]`, `fn(int) -> T`, and `T ! str`
+    /// on the same path without making unrelated concrete mismatches pass.
+    pub(crate) fn infer_type_params_from_arg(
+        &mut self,
+        param_ty: &Ty,
+        arg_ty: &Ty,
+        substitutions: &mut HashMap<String, Ty>,
+        span: &Span,
+    ) {
+        match (param_ty, arg_ty) {
+            (Ty::TypeParam(tp_name), _) => {
+                if let Some(existing) = substitutions.get(tp_name) {
+                    if !arg_ty.is_error() && !existing.is_error() && arg_ty != existing {
+                        self.error(
+                            ErrorCode::E0100,
+                            format!(
+                                "type parameter `{tp_name}` inferred as `{existing}` but argument has type `{arg_ty}`"
+                            ),
+                            span.clone(),
+                        );
+                    }
+                } else if !arg_ty.is_error() {
+                    substitutions.insert(tp_name.clone(), arg_ty.clone());
+                }
+            }
+            (Ty::Array(param_inner), Ty::Array(arg_inner))
+            | (Ty::Optional(param_inner), Ty::Optional(arg_inner))
+            | (Ty::Future(param_inner), Ty::Future(arg_inner)) => {
+                self.infer_type_params_from_arg(param_inner, arg_inner, substitutions, span);
+            }
+            (Ty::Result(param_ok, param_err), Ty::Result(arg_ok, arg_err)) => {
+                self.infer_type_params_from_arg(param_ok, arg_ok, substitutions, span);
+                self.infer_type_params_from_arg(param_err, arg_err, substitutions, span);
+            }
+            (Ty::HashMap(param_key, param_val), Ty::HashMap(arg_key, arg_val)) => {
+                self.infer_type_params_from_arg(param_key, arg_key, substitutions, span);
+                self.infer_type_params_from_arg(param_val, arg_val, substitutions, span);
+            }
+            (Ty::Fn(param_params, param_ret), Ty::Fn(arg_params, arg_ret)) => {
+                if param_params.len() == arg_params.len() {
+                    for (param_param, arg_param) in param_params.iter().zip(arg_params) {
+                        self.infer_type_params_from_arg(
+                            param_param,
+                            arg_param,
+                            substitutions,
+                            span,
+                        );
+                    }
+                }
+                self.infer_type_params_from_arg(param_ret, arg_ret, substitutions, span);
+            }
+            _ => {}
+        }
+    }
+
     /// Substitute type parameters using a substitution map
     pub(crate) fn substitute_ty(&self, ty: &Ty, subs: &HashMap<String, Ty>) -> Ty {
         match ty {
             Ty::TypeParam(name) => subs.get(name).cloned().unwrap_or_else(|| ty.clone()),
+            Ty::Array(inner) => Ty::Array(Box::new(self.substitute_ty(inner, subs))),
+            Ty::Optional(inner) => Ty::Optional(Box::new(self.substitute_ty(inner, subs))),
+            Ty::Future(inner) => Ty::Future(Box::new(self.substitute_ty(inner, subs))),
+            Ty::Result(ok, err) => Ty::Result(
+                Box::new(self.substitute_ty(ok, subs)),
+                Box::new(self.substitute_ty(err, subs)),
+            ),
+            Ty::HashMap(key, val) => Ty::HashMap(
+                Box::new(self.substitute_ty(key, subs)),
+                Box::new(self.substitute_ty(val, subs)),
+            ),
+            Ty::Fn(params, ret) => Ty::Fn(
+                params.iter().map(|p| self.substitute_ty(p, subs)).collect(),
+                Box::new(self.substitute_ty(ret, subs)),
+            ),
             other => other.clone(),
         }
     }

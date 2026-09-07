@@ -1,0 +1,294 @@
+{
+  "schema_version": 1,
+  "suite_version": "g2.1-v5",
+  "status": "measured",
+  "scope": "initial measurement subset; G2.1 remains incomplete",
+  "created_at": "2026-09-06T18:11:19.391041+00:00",
+  "repository_revision": "fb118a035517990f0640f4457b2a828a57735350",
+  "working_tree_status": [
+    "M .github/workflows/ci.yml",
+    " M benchmarks/EVALUATOR.md",
+    " M benchmarks/evaluator-cases.json",
+    " M benchmarks/evaluator.py",
+    " M benchmarks/test_evaluator.py",
+    "?? turbo/benchmarks/bench_tree_walk.tb",
+    "?? turbo/benchmarks/rust/tree_walk.rs",
+    "?? turbo/crates/turbo-cli/tests/tree_workload.rs"
+  ],
+  "evaluator_sha256": "0411797b3056b23024fefe1de8eee3bae3f63cbc7236e48b42247889b874d865",
+  "manifest_sha256": "9a564b349973ae51f59f7241b0c10a1083217f1847e4af064aea80db607f815e",
+  "host": {
+    "system": "Darwin",
+    "release": "25.5.0",
+    "architecture": "arm64",
+    "python": "3.10.3",
+    "cpu": "Apple M5 Max",
+    "power_and_load_control": "not validated automatically"
+  },
+  "tools": {
+    "turbo": "turbolang 0.15.0",
+    "timing_build": {
+      "flavor": "standard",
+      "instrumented": false
+    },
+    "turbo_binary_sha256": "1a63c93317146938aba6a2ea59cbb481f0e472d217831d806f86fd3b59b2fb04",
+    "compiler_source_revision": "unverified; supplied binary is fingerprinted",
+    "rust": "rustc 1.97.0 (2d8144b78 2026-07-07)\nbinary: rustc\ncommit-hash: 2d8144b7880597b6e6d3dfd63a9a9efae3f533d3\ncommit-date: 2026-07-07\nhost: aarch64-apple-darwin\nrelease: 1.97.0\nLLVM version: 22.1.6",
+    "cc": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.5.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+  },
+  "protocol": {
+    "samples": 1,
+    "batches": 1,
+    "warmups": 1,
+    "bootstrap_draws": 100,
+    "seed": 20260906,
+    "poll_interval_ns": 1000000,
+    "wall_scope": "process start through exit",
+    "rss_scope": "wait4 child high-water; not heap or sum of process tree"
+  },
+  "allocation_metrics": {
+    "status": "measured_partial",
+    "live_bytes": null,
+    "allocation_count": null,
+    "total_allocated_bytes": null,
+    "coverage": "shared_header_arc",
+    "build": {
+      "flavor": "allocation-profile",
+      "instrumented": true
+    },
+    "compiler_version": "turbolang 0.15.0+allocation-profile",
+    "compiler_sha256": "2e9612d87ee05dc5584cda88d945148f7c3fd045a37cd902596d994f2643be78",
+    "profiles": {
+      "tree_walk": {
+        "binary_sha256": "fe5c7cf242f0453b669c40e35f22c27a1925f012e64e173d3fb1f67ec9676d32",
+        "build": {
+          "command": [
+            "/Users/macbookpro-kirby/Desktop/Coding/ZVN/TurboLang/turbo/target/debug/turbolang",
+            "build",
+            "/Users/macbookpro-kirby/Desktop/Coding/ZVN/TurboLang/turbo/benchmarks/bench_tree_walk.tb",
+            "-o",
+            "/var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-7ve5ae10/tree_walk-profile"
+          ],
+          "pid": 85268,
+          "status": "ok",
+          "exit_code": 0,
+          "elapsed_ns": 544055125,
+          "peak_rss_bytes": 56639488,
+          "stdout": "",
+          "stderr": "\u001b[32m\u2713\u001b[0m Compiled to /var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-7ve5ae10/tree_walk-profile (Cranelift)\n",
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderr_sha256": "642fa0d98e5c737dcc787c98f25c1008783c0f05ae314d6874955cd77f642024"
+        },
+        "samples": [
+          {
+            "mode": "aot",
+            "iteration": 0,
+            "counters": {
+              "schema_version": 1,
+              "coverage": "shared_header_arc",
+              "scope_end": "entry_return",
+              "valid": true,
+              "allocations": 16777204,
+              "heap_allocations": 16777204,
+              "arena_allocations": 0,
+              "heap_frees": 16777204,
+              "arena_reclaims": 0,
+              "total_data_bytes": 536870438,
+              "total_header_bytes": 268435264,
+              "live_allocations": 0,
+              "peak_live_allocations": 1048575,
+              "live_data_bytes": 0,
+              "peak_live_data_bytes": 33554400,
+              "live_header_bytes": 0,
+              "retain_calls": 16777200,
+              "release_calls": 33554404,
+              "retain_ops": 16777200,
+              "release_ops": 33554404,
+              "unknown_frees": 0,
+              "errors": 0,
+              "peak_observer_bytes": 42467288
+            },
+            "instrumented_elapsed_ns": 6381552583,
+            "instrumented_peak_rss_bytes": 103481344
+          },
+          {
+            "mode": "jit",
+            "iteration": 0,
+            "counters": {
+              "schema_version": 1,
+              "coverage": "shared_header_arc",
+              "scope_end": "entry_return",
+              "valid": true,
+              "allocations": 16777204,
+              "heap_allocations": 16777204,
+              "arena_allocations": 0,
+              "heap_frees": 16777204,
+              "arena_reclaims": 0,
+              "total_data_bytes": 536870438,
+              "total_header_bytes": 268435264,
+              "live_allocations": 0,
+              "peak_live_allocations": 1048575,
+              "live_data_bytes": 0,
+              "peak_live_data_bytes": 33554400,
+              "live_header_bytes": 0,
+              "retain_calls": 16777200,
+              "release_calls": 33554404,
+              "retain_ops": 16777200,
+              "release_ops": 33554404,
+              "unknown_frees": 0,
+              "errors": 0,
+              "peak_observer_bytes": 42467288
+            },
+            "instrumented_elapsed_ns": 19838416959,
+            "instrumented_peak_rss_bytes": 227180544
+          }
+        ]
+      }
+    },
+    "exclusions": [
+      "foreign/native library heaps",
+      "Rust library temporaries",
+      "non-header runtime storage",
+      "observer bookkeeping",
+      "compiler allocations"
+    ]
+  },
+  "cases": {
+    "tree_walk": {
+      "commands": {
+        "turbo": [
+          "/var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-7ve5ae10/tree_walk-turbo"
+        ],
+        "rust": [
+          "/var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-7ve5ae10/tree_walk-rust"
+        ]
+      },
+      "builds": {
+        "turbo": {
+          "elapsed_ns": 347423584,
+          "binary_bytes": 131760,
+          "binary_sha256": "8f80e39a47ce057381f5159507782ade0782e9f1ee7b0814f231dc70d0ff31b3",
+          "command": [
+            "/Users/macbookpro-kirby/Desktop/Coding/ZVN/TurboLang/turbo/target/release/turbolang",
+            "build",
+            "/Users/macbookpro-kirby/Desktop/Coding/ZVN/TurboLang/turbo/benchmarks/bench_tree_walk.tb",
+            "-o",
+            "/var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-7ve5ae10/tree_walk-turbo"
+          ]
+        },
+        "rust": {
+          "elapsed_ns": 360655000,
+          "binary_bytes": 467744,
+          "binary_sha256": "4c3a8a0f83ba1d36c3f7ca19465cc5957f3b24617f046a753608250f4c07606b",
+          "command": [
+            "/Users/macbookpro-kirby/.cargo/bin/rustc",
+            "-C",
+            "opt-level=3",
+            "-C",
+            "target-cpu=native",
+            "-C",
+            "overflow-checks=off",
+            "/Users/macbookpro-kirby/Desktop/Coding/ZVN/TurboLang/turbo/benchmarks/rust/tree_walk.rs",
+            "-o",
+            "/var/folders/qd/40lr_64x54j6f8fgjjndwf000000gn/T/turbo-evaluator-7ve5ae10/tree_walk-rust"
+          ]
+        }
+      },
+      "input_kind": "generated_in_memory",
+      "logical_input_bytes": null,
+      "input_sha256": null,
+      "input_bytes": 0,
+      "expected_stdout": "85785962\n16777200\n16\n",
+      "expected_sha256": "f530738204d3a33435bc70d43f8baf8f52de013107a036f8791f7a89f46cfffd",
+      "specification": {
+        "category": "cpu",
+        "status": "runnable",
+        "controlled_status": "pending_capability",
+        "workload": "Sixteen build/walk/drop rounds of full depth19 binary trees (1048575 nodes each). Root seed7+round*7919; left(seed*48271+17)%2147483647, right(seed*69621+31)%2147483647. Node value seed%1000. Leaves hash to value; branches (33*left+17*value+97*right)%1000000007; round digest (65599*h+tree_hash)%1000000007.",
+        "oracle": "Independent flat breadth-first seed construction and bottom-up reduction, cross-checked against recursive reference at small sizes; exact digest/node-count/rounds and native allocation balance.",
+        "turbo_source": "turbo/benchmarks/bench_tree_walk.tb",
+        "rust_source": "turbo/benchmarks/rust/tree_walk.rs",
+        "source_sha256": {
+          "turbo/benchmarks/bench_tree_walk.tb": "6e082b2441f81f2cb5738956cee258391d08f58886957f08c00b15174d662ac1",
+          "turbo/benchmarks/rust/tree_walk.rs": "608f83792b5907a112ccd34119e3d7980a937e62eddeaef94bd1fb298e833eab"
+        },
+        "environment": {
+          "TURBO_BENCH_SIZE": "19",
+          "TURBO_BENCH_STEPS": "16"
+        },
+        "require_zero_live": true,
+        "comparison_caveat": "Same actual recursive tree and postorder algorithm; Turbo managed tagged allocations vs safe Rust Box per node with borrowed traversal. Construction and drop are included, not traversal-only. No arena, shared-cycle, arbitrary-depth, closure reclamation or whole-heap qualification claim."
+      },
+      "pairs": [
+        {
+          "batch": 0,
+          "pair": 0,
+          "order": [
+            "turbo",
+            "rust"
+          ],
+          "turbo_ns": 507602167,
+          "rust_ns": 385339166,
+          "turbo_peak_rss_bytes": 52248576,
+          "rust_peak_rss_bytes": 35454976
+        }
+      ]
+    }
+  },
+  "groups": {
+    "cpu": {
+      "cases": {
+        "tree_walk": {
+          "ratio": 1.3172867224194906,
+          "pair_count": 1,
+          "batch_count": 1,
+          "turbo_median_ns": 507602167,
+          "turbo_p95_ns": 507602167.0,
+          "rust_median_ns": 385339166,
+          "rust_p95_ns": 385339166.0,
+          "ratio_ci95": [
+            1.3172867224194906,
+            1.3172867224194906
+          ]
+        }
+      },
+      "geomean_ratio": 1.3172867224194906,
+      "geomean_ci95": [
+        1.3172867224194906,
+        1.3172867224194906
+      ],
+      "estimator": "median paired ratios; equal workload weights",
+      "bootstrap": {
+        "draws": 100,
+        "seed": 20260906,
+        "method": "batch then paired samples"
+      }
+    }
+  },
+  "qualification": {
+    "status": "incomplete",
+    "observed_subset_status": "fail",
+    "failures": [
+      "geomean"
+    ],
+    "inconclusive": [],
+    "blockers": [
+      "fib: runnable",
+      "wordcount: runnable",
+      "json_transform: pending_fixture",
+      "string_tokens: runnable",
+      "hashmap_churn: runnable",
+      "buffer_scan: runnable",
+      "particle_update: runnable",
+      "sqlite: pending_fixture",
+      "http_compute: pending_fixture",
+      "worker: pending_fixture",
+      "controlled profiles pending G3",
+      "allocation coverage incomplete",
+      "cross-host qualification not established",
+      "host power/load conditions unvalidated",
+      "compiler source provenance not independently attested",
+      "smoke protocol below required sampling minimums"
+    ]
+  }
+}

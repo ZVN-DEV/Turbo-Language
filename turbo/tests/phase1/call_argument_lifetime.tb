@@ -1,0 +1,38 @@
+fn first(values: [int], ignored: int) -> i64 { values[0] }
+struct Reader { values: [int] }
+impl Reader {
+    fn item(self, ignored: int) -> i64 { self.values[0] }
+}
+fn check() {
+    let mut values = [7]
+    assert(first(values, {
+        values = [9]
+        let replacement = [55]
+        assert(replacement[0] == 55)
+        0
+    }) == 7)
+    assert(values[0] == 9)
+    let mut reader = Reader { values: [11] }
+    assert(reader.item({
+        reader = Reader { values: [12] }
+        let replacement = Reader { values: [99] }
+        assert(replacement.values[0] == 99)
+        0
+    }) == 11)
+    assert(reader.values[0] == 12)
+    assert(item(reader, {
+        reader = Reader { values: [13] }
+        let replacement = Reader { values: [100] }
+        assert(replacement.values[0] == 100)
+        0
+    }) == 12)
+    assert(reader.values[0] == 13)
+}
+fn main() {
+    let mut i = 0
+    while i < 200 {
+        check()
+        i += 1
+    }
+    print(i)
+}

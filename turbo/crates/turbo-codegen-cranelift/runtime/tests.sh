@@ -21,10 +21,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 CC="${CC:-cc}"
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+test_dir="$(mktemp -d)"
+trap 'rm -rf "$test_dir"' EXIT
 
-OUT="$TMPDIR/test_rt"
+OUT="$test_dir/test_rt"
 SANITIZE_FLAGS=(-fsanitize=address -fno-omit-frame-pointer)
 
 # SQLite compile flags — keep in sync with build.rs and src/lib.rs SQLITE_CFLAGS.
@@ -39,7 +39,7 @@ SQLITE_FLAGS=(
 
 # 1) Compile the vendored SQLite amalgamation once (relaxed warnings — it is
 #    generated upstream code, not warning-clean under -Werror).
-SQLITE_O="$TMPDIR/sqlite3.o"
+SQLITE_O="$test_dir/sqlite3.o"
 echo "== compiling vendored sqlite3.c =="
 "$CC" -O2 -fPIC "${SQLITE_FLAGS[@]}" -c vendor/sqlite3.c -o "$SQLITE_O"
 
@@ -70,4 +70,15 @@ echo "== running $OUT =="
 # allocated (we test memory *safety* — use-after-free, overflow — not leaks;
 # and macOS LSan is unsupported anyway). halt_on_error=1 fails fast.
 ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0:halt_on_error=1}" "$OUT"
+echo "== compiling instrumented runtime calibration with ASan =="
+"$CC" -std=c11 -Wall -Wextra -Werror -Wno-unused-function -Wno-unused-parameter \
+    "${SANITIZE_FLAGS[@]}" -DRT_TEST_BUILD -DTURBO_WITH_SQLITE -DTURBO_ALLOCATION_PROFILE \
+    -Ivendor -o "$test_dir/test_rt_profile" tests/test_rt.c turbo_rt.c \
+    turbo_alloc_profile.c "$SQLITE_O" -lpthread -lm
+ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0:halt_on_error=1}" "$test_dir/test_rt_profile"
+
+echo "== allocation observer invariants + concurrency (ASan/UBSan) =="
+"$CC" -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer \
+    tests/test_alloc_profile.c turbo_alloc_profile.c -lpthread -o "$test_dir/test_alloc_profile"
+ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=0:halt_on_error=1}" "$test_dir/test_alloc_profile"
 echo "== c-runtime-tests OK =="

@@ -1,0 +1,63 @@
+struct Projected { id: i64, score: i64, title: str }
+
+fn integer(text: str) -> i64 {
+    match str_to_int(text) {
+        ok(value) => value
+        err(e) => { assert(false) 0 }
+    }
+}
+
+fn transform(line: str, counts: HashMap<str, int>) -> i64 {
+    let active = json_get(line, "active")
+    assert(active == "true" || active == "false")
+    let id = integer(json_get(line, "id"))
+    if active == "true" && id % 5 != 0 {
+        let score = integer(json_get(line, "score"))
+        let title = json_get(line, "title")
+        let projected = Projected { id: id, score: score * 3 + id, title: "task:" + title }
+        let encoded = to_json(projected)
+        let previous = hashmap_get(counts, encoded) ?? 0
+        hashmap_set(counts, encoded, previous + 1)
+        len(encoded)
+    } else { 0 }
+}
+
+fn parameter(name: str, fallback: i64) -> i64 {
+    let value = env_get(name)
+    if value == "" { fallback } else { integer(value) }
+}
+
+fn main() {
+    let size = parameter("TURBO_BENCH_SIZE", 2048)
+    let rounds = parameter("TURBO_BENCH_STEPS", 256)
+    assert(size > 0 && size <= 4096)
+    assert(rounds > 0 && rounds <= 512)
+    let configured = env_get("JSON_TRANSFORM_INPUT")
+    let path = if configured == "" { "json_transform_input.ndjson" } else { configured }
+    let input = read_file(path)
+    assert(ends_with(input, "\n"))
+    let lines = split(input, "\n")
+    assert(len(lines) == size + 1)
+    let counts: HashMap<str, int> = hashmap()
+    let mut bytes = 0
+    let mut round = 0
+    while round < rounds {
+        let mut i = 0
+        while i < size {
+            bytes += transform(lines[i], counts)
+            i += 1
+        }
+        round += 1
+    }
+    let keys = hashmap_keys(counts)
+    let mut selected = 0
+    let mut i = 0
+    while i < len(keys) {
+        let key = keys[i]
+        let count = hashmap_get(counts, key) ?? 0
+        selected += count
+        print(key + "\t" + to_str(count))
+        i += 1
+    }
+    print("TOTAL " + to_str(selected) + " " + to_str(bytes) + " " + to_str(size * rounds))
+}

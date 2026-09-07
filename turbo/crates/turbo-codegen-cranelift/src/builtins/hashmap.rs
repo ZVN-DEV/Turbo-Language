@@ -54,7 +54,7 @@ fn release_owned_rc_temp_top_level<M: Module>(
     tty: &TurboTy,
     expr: &Spanned<Expr>,
 ) {
-    if is_rc_managed_type(cx, tty) && expr_produces_owned_rc_temp(expr) {
+    if is_rc_managed_type(cx, tty) && expr_produces_owned_rc_temp(cx, expr) {
         let fid = if matches!(tty, TurboTy::HashMap(_, _)) {
             cx.rt_fns["rt_hashmap_grelease"]
         } else {
