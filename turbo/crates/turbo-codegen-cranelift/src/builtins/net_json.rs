@@ -394,7 +394,9 @@ pub(crate) fn compile_builtin_to_json<M: Module>(
     })?;
 
     if let TurboTy::Struct(ref struct_name) = tty {
-        compile_struct_to_json(cx, val, struct_name)
+        let result = compile_struct_to_json(cx, val, struct_name)?;
+        crate::release_expr_temp_if_needed(cx, val, &tty, &args[0]);
+        Ok(result)
     } else if matches!(tty, TurboTy::Str) {
         let fid = cx.rt_fns["rt_json_quote"];
         let fref = cx.module.declare_func_in_func(fid, cx.builder.func);
@@ -405,6 +407,7 @@ pub(crate) fn compile_builtin_to_json<M: Module>(
     } else {
         // Preserve the existing rendering of other scalar values.
         let str_val = convert_to_str(cx, val, &tty)?;
+        crate::release_expr_temp_if_needed(cx, val, &tty, &args[0]);
         Ok(Some((str_val, TurboTy::Str)))
     }
 }
@@ -439,7 +442,10 @@ pub(crate) fn compile_struct_to_json<M: Module>(
         let prefix_str = cx.create_string(&prefix)?;
         let concat_ref = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
         let call = cx.builder.ins().call(concat_ref, &[result, prefix_str]);
-        result = cx.builder.inst_results(call)[0];
+        let prefixed = cx.builder.inst_results(call)[0];
+        crate::release_if_needed(cx, result, &TurboTy::Str);
+        crate::release_if_needed(cx, prefix_str, &TurboTy::Str);
+        result = prefixed;
 
         // Load field value from struct
         let offset = (i * 8) as i32;
@@ -485,17 +491,20 @@ pub(crate) fn compile_struct_to_json<M: Module>(
         // Concat the field value
         let concat_ref = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
         let call = cx.builder.ins().call(concat_ref, &[result, field_json_str]);
-        result = cx.builder.inst_results(call)[0];
-        if matches!(field_ty, TurboTy::Str) {
-            crate::release_if_needed(cx, field_json_str, &TurboTy::Str);
-        }
+        let with_value = cx.builder.inst_results(call)[0];
+        crate::release_if_needed(cx, result, &TurboTy::Str);
+        crate::release_if_needed(cx, field_json_str, &TurboTy::Str);
+        result = with_value;
     }
 
     // Close with "}"
     let suffix = cx.create_string("}")?;
     let concat_ref = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
     let call = cx.builder.ins().call(concat_ref, &[result, suffix]);
-    result = cx.builder.inst_results(call)[0];
+    let closed = cx.builder.inst_results(call)[0];
+    crate::release_if_needed(cx, result, &TurboTy::Str);
+    crate::release_if_needed(cx, suffix, &TurboTy::Str);
+    result = closed;
 
     Ok(Some((result, TurboTy::Str)))
 }
@@ -597,6 +606,8 @@ pub(crate) fn compile_builtin_to_json_array<M: Module>(
         .ins()
         .call(concat_ref, &[with_comma_result, comma_str]);
     let after_comma = cx.builder.inst_results(call)[0];
+    crate::release_if_needed(cx, with_comma_result, &TurboTy::Str);
+    crate::release_if_needed(cx, comma_str, &TurboTy::Str);
     cx.builder.ins().jump(merge_block, &[after_comma]);
 
     // no_comma_block: pass through
@@ -644,7 +655,10 @@ pub(crate) fn compile_builtin_to_json_array<M: Module>(
             .builder
             .ins()
             .call(inner_concat_ref, &[elem_json, prefix_str]);
-        elem_json = cx.builder.inst_results(c)[0];
+        let prefixed = cx.builder.inst_results(c)[0];
+        crate::release_if_needed(cx, elem_json, &TurboTy::Str);
+        crate::release_if_needed(cx, prefix_str, &TurboTy::Str);
+        elem_json = prefixed;
 
         let foffset = (fi * 8) as i32;
         let raw_val = cx
@@ -689,10 +703,10 @@ pub(crate) fn compile_builtin_to_json_array<M: Module>(
             .module
             .declare_func_in_func(inner_concat_fid, cx.builder.func);
         let c = cx.builder.ins().call(cr, &[elem_json, field_json_str]);
-        elem_json = cx.builder.inst_results(c)[0];
-        if matches!(fty, TurboTy::Str) {
-            crate::release_if_needed(cx, field_json_str, &TurboTy::Str);
-        }
+        let with_value = cx.builder.inst_results(c)[0];
+        crate::release_if_needed(cx, elem_json, &TurboTy::Str);
+        crate::release_if_needed(cx, field_json_str, &TurboTy::Str);
+        elem_json = with_value;
     }
 
     let close_brace = cx.create_string("}")?;
@@ -700,7 +714,10 @@ pub(crate) fn compile_builtin_to_json_array<M: Module>(
         .module
         .declare_func_in_func(inner_concat_fid, cx.builder.func);
     let c = cx.builder.ins().call(cr, &[elem_json, close_brace]);
-    elem_json = cx.builder.inst_results(c)[0];
+    let closed_elem = cx.builder.inst_results(c)[0];
+    crate::release_if_needed(cx, elem_json, &TurboTy::Str);
+    crate::release_if_needed(cx, close_brace, &TurboTy::Str);
+    elem_json = closed_elem;
 
     // Concat element JSON to accumulated result
     let concat_ref2 = cx.module.declare_func_in_func(concat_fid, cx.builder.func);
@@ -709,6 +726,8 @@ pub(crate) fn compile_builtin_to_json_array<M: Module>(
         .ins()
         .call(concat_ref2, &[merged_result, elem_json]);
     let new_result = cx.builder.inst_results(call2)[0];
+    crate::release_if_needed(cx, merged_result, &TurboTy::Str);
+    crate::release_if_needed(cx, elem_json, &TurboTy::Str);
     cx.builder.def_var(result_var, new_result);
 
     // Increment idx
@@ -732,6 +751,9 @@ pub(crate) fn compile_builtin_to_json_array<M: Module>(
         .ins()
         .call(concat_ref3, &[final_result, close_bracket]);
     let result = cx.builder.inst_results(call3)[0];
+    crate::release_if_needed(cx, final_result, &TurboTy::Str);
+    crate::release_if_needed(cx, close_bracket, &TurboTy::Str);
+    crate::release_expr_temp_if_needed(cx, arr_ptr, &arr_tty, &args[0]);
 
     Ok(Some((result, TurboTy::Str)))
 }

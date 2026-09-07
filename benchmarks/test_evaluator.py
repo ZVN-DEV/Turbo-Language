@@ -141,6 +141,98 @@ class ProcessTests(unittest.TestCase):
 
 
 class OracleTests(unittest.TestCase):
+    def test_rust_host_selection_fails_closed(self):
+        self.assertEqual(ev.rust_host_target("rustc 1.90\nhost: aarch64-apple-darwin\n"),
+                         "aarch64-apple-darwin")
+        for version in ("unavailable: timeout", "host: ", "host: ../target.json",
+                        "host: linux\nhost: darwin"):
+            with self.assertRaises(ev.EvaluationError):
+                ev.rust_host_target(version)
+
+    def test_cargo_reference_uses_reported_target_artifact(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "reference.rs"
+            artifact = root / "configured-target" / "reference.exe"
+            artifact.parent.mkdir()
+            artifact.write_bytes(b"reported build")
+            message = dict(reason="compiler-artifact",
+                           target=dict(kind=["example"], src_path=str(source)),
+                           executable=str(artifact), fresh=True)
+            encoded = json.dumps(message)
+            self.assertEqual(ev.cargo_example_artifact("build output\n" + encoded, source), artifact.resolve())
+            for output in ("", encoded + "\n" + encoded,
+                           json.dumps(dict(message, executable=None)),
+                           json.dumps(dict(message, executable=str(root / "missing"))),
+                           json.dumps(dict(message, target=dict(kind=["example"], src_path="wrong.rs")))):
+                with self.subTest(output=output), self.assertRaises(ev.EvaluationError):
+                    ev.cargo_example_artifact(output, source)
+
+    def test_json_manifest_rejects_unbounded_or_unpinned_builds(self):
+        mutations = [
+            ("environment", {}, "JSON parameters"),
+            ("environment", {"TURBO_BENCH_SIZE": "4097", "TURBO_BENCH_STEPS": "1"}, "JSON parameters"),
+            ("environment", {"TURBO_BENCH_SIZE": "1", "TURBO_BENCH_STEPS": "513"}, "JSON parameters"),
+            ("rust_build", "shell", "unsupported Rust build"),
+            ("rust_source", "turbo/benchmarks/rust/fib.rs", "workspace example source"),
+            ("qualification_blockers", [""], "invalid qualification blockers"),
+            ("qualification_blockers", "pending", "invalid qualification blockers"),
+        ]
+        for key, value, error in mutations:
+            with self.subTest(key=key, value=value), tempfile.TemporaryDirectory() as temp:
+                manifest = ev.load_manifest()
+                manifest["cases"]["json_transform"][key] = value
+                path = Path(temp) / "cases.json"
+                path.write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(ValueError, error):
+                    ev.load_manifest(path)
+        for dependency in ("turbo/benchmarks/gen_json_input.py", "turbo/Cargo.toml",
+                           "turbo/Cargo.lock", "turbo/crates/turbo-cli/Cargo.toml"):
+            with self.subTest(dependency=dependency), tempfile.TemporaryDirectory() as temp:
+                manifest = ev.load_manifest()
+                del manifest["cases"]["json_transform"]["source_sha256"][dependency]
+                path = Path(temp) / "cases.json"
+                path.write_text(json.dumps(manifest))
+                with self.assertRaisesRegex(ValueError, "unfingerprinted JSON input/dependency"):
+                    ev.load_manifest(path)
+
+    def test_json_transform_oracle_matches_literal_rounds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "input.ndjson"
+            generated = ev.run_process([sys.executable, ev.ROOT / "turbo/benchmarks/gen_json_input.py", path, "8"])
+            ev.check_output(generated, b"")
+            first = path.read_bytes()
+            ev.check_output(ev.run_process([sys.executable, ev.ROOT / "turbo/benchmarks/gen_json_input.py", path, "8"]), b"")
+            self.assertEqual(first, path.read_bytes())
+            rows = [json.loads(line) for line in path.read_text().split("\n")[:-1]]
+            for rounds in (1, 2, 5):
+                counts = {}
+                size = 0
+                for _ in range(rounds):
+                    for row in rows:
+                        if row["active"] and row["id"] % 5 != 0:
+                            result = dict(id=row["id"], score=row["score"] * 3 + row["id"],
+                                          title="task:" + row["title"])
+                            encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+                            counts[encoded] = counts.get(encoded, 0) + 1
+                            size += len(encoded.encode())
+                expected = "".join(f"{row}\t{counts[row]}\n" for row in sorted(counts))
+                expected += f"TOTAL {sum(counts.values())} {size} {8 * rounds}\n"
+                self.assertEqual(ev.json_transform_oracle(path, 8, rounds), expected.encode())
+
+    def test_json_transform_oracle_rejects_wrong_schema_and_bounds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "input"
+            for row in (dict(id=1, active=1, score=0, title="x"),
+                        dict(id=1, active=True, score=1001, title="x"),
+                        dict(id=1, active=True, score=0, title="\0"), dict(id=1)):
+                path.write_text(json.dumps(row) + "\n")
+                with self.assertRaises(ValueError):
+                    ev.json_transform_oracle(path, 1, 1)
+            for size, rounds in ((0,1), (4097,1), (1,0), (1,513)):
+                with self.assertRaises(ValueError):
+                    ev.json_transform_oracle(path, size, rounds)
+
     def test_tree_oracle_matches_recursive_reference(self):
         def visit(depth, seed):
             value = seed % 1000
@@ -389,7 +481,7 @@ class OracleTests(unittest.TestCase):
 
 
 class EvidenceTests(unittest.TestCase):
-    def invoke(self, directory, *, corrupt_at=None, check=False):
+    def invoke(self, directory, *, corrupt_at=None, check=False, case="fib"):
         prepared = dict(commands={"turbo": ["fixture-turbo"], "rust": ["fixture-rust"]},
                         env={}, expected=b"ok\n", builds={}, input_sha256=None,
                         input_bytes=0, expected_stdout="ok\n", expected_sha256=ev.digest(b"ok\n"))
@@ -402,11 +494,14 @@ class EvidenceTests(unittest.TestCase):
                         peak_rss_bytes=1024, stdout=output.decode(), stderr="",
                         stdout_sha256=ev.digest(output))
 
-        args = ["--cases", "fib", "--samples", "2", "--batches", "1", "--warmups", "1",
+        args = ["--cases", case, "--samples", "2", "--batches", "1", "--warmups", "1",
                 "--bootstrap", "100", "--compiler", sys.executable, "--output", str(directory)]
         if check:
             args.append("--check")
+        # These children are mocked: do not contend with a real evaluator in
+        # this checkout. ProcessTests separately exercises the real OS lock.
         with patch.object(ev, "prepare_case", return_value=prepared), \
+             patch.object(ev, "measurement_lock", return_value=contextlib.nullcontext()), \
              patch.object(ev, "run_process", side_effect=sample), \
              patch.object(ev, "tool_output", return_value="turbolang test"), \
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -414,6 +509,14 @@ class EvidenceTests(unittest.TestCase):
         report = json.loads((directory / "report.json").read_text())
         events = [json.loads(line) for line in (directory / "samples.jsonl").read_text().splitlines()]
         return code, report, events
+
+    def test_json_api_comparability_remains_a_qualification_blocker(self):
+        with tempfile.TemporaryDirectory() as temp:
+            code, report, _ = self.invoke(Path(temp) / "run", check=True, case="json_transform")
+            self.assertEqual(code, 3)
+            self.assertEqual(report["qualification"]["status"], "incomplete")
+            self.assertIn("json_transform: equivalent parse-once JSON and counter-entry API paths remain unimplemented",
+                          report["qualification"]["blockers"])
 
     def test_working_tree_provenance_includes_untracked_files(self):
         with tempfile.NamedTemporaryFile(dir=Path(__file__).parent,

@@ -2,16 +2,20 @@
 
 # Turbo
 
-**JavaScript's soul. Rust's speed. No GC, no borrow checker.**
+**Familiar code. Native execution. A path to deeper control.**
 
-A compiled, type-safe programming language with familiar syntax and native performance. Compiles to machine code via Cranelift -- no VM, no garbage collector, no overhead.
+Turbo is an early-stage compiled, type-safe programming language for developers
+who like the feel of TypeScript/JavaScript but want native binaries, explicit
+static types, and an increasingly direct path toward Rust-class performance and
+memory control. It compiles through Cranelift and runs without a VM or garbage
+collector; performance claims are measured and scoped, not assumed.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](#testing)
 [![Built with Rust](https://img.shields.io/badge/built%20with-Rust-orange.svg)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](#installation)
 
-[Getting Started](docs/GETTING-STARTED.md) &middot; [Documentation](docs/stdlib.md) &middot; [Examples](#examples) &middot; [Safety](docs/SAFETY.md) &middot; [Security](SECURITY.md) &middot; [Contributing](CONTRIBUTING.md)
+[Getting Started](docs/GETTING-STARTED.md) &middot; [Documentation](docs/stdlib.md) &middot; [Roadmap](docs/ROADMAP.md) &middot; [Performance](docs/PERFORMANCE.md) &middot; [Examples](#examples) &middot; [Safety](docs/SAFETY.md) &middot; [Security](SECURITY.md) &middot; [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -48,18 +52,18 @@ fn main() {
 ```
 
 ```bash
-turbolang run hello.tb        # JIT — compile and run instantly
+turbolang run hello.tb        # JIT — compile and run in one step
 turbolang build hello.tb      # AOT — produce a native binary
 ./hello
 ```
 
-### Known Limitations (v0.15)
+### Known Limitations
 
 > **Note — runtime string allocation:** Strings, arrays, structs, results, and optionals use the runtime ARC header and are released at scope exit, reassignment, and typed container drops. HTTP servers still use per-request arenas for request-scoped allocations, so handler temporaries are reclaimed in bulk at the end of each request while server state held in hashmaps persists correctly across requests.
 >
-> **Note — HTTP server is behind-proxy production-grade:** The built-in HTTP server binds to `127.0.0.1` by default, enforces body/header/connection caps and read/write/idle timeouts, does graceful shutdown on `SIGTERM`/`SIGINT`, and exposes tunables via `http_config`. It provides no TLS/HTTP2 — put it behind a reverse proxy (nginx, Caddy) for public exposure. See [`docs/production-server.md`](docs/production-server.md) for deployment and [`SECURITY.md`](SECURITY.md) for the threat model.
+> **Note — HTTP server is designed for behind-proxy deployment:** The built-in HTTP server binds to `127.0.0.1` by default, enforces body/header/connection caps and read/write/idle timeouts, does graceful shutdown on `SIGTERM`/`SIGINT`, and exposes tunables via `http_config`. It provides no TLS/HTTP2 — put it behind a reverse proxy (nginx, Caddy) for public exposure. See [`docs/production-server.md`](docs/production-server.md) for deployment and [`SECURITY.md`](SECURITY.md) for the threat model.
 
-> **Roadmap note — agent/tool features live in a sidecar, not the compiler.** Earlier design sketches explored `agent` and `tool fn` keywords. Those are no longer planned as core-language features — they'll ship (post-1.0) as a separate `turbo-agent` library that builds on Turbo's async, HTTP, and typed-serialization primitives. The compiler itself stays focused on being a fast, small, general-purpose systems/application language. Today's release ships native compilation, WASM output, thread-per-`spawn` concurrency, a hardened HTTP server, built-in SQLite, a typed generic `HashMap<K,V>`, first-class function values, a package registry, REPL/playground, formatter, and LSP.
+> **Roadmap note — agent/tool features live in a sidecar, not the compiler.** Earlier design sketches explored `agent` and `tool fn` keywords. Those are no longer planned as core-language features — they belong in a future `turbo-agent` library that builds on Turbo's async, HTTP, and typed-serialization primitives. The compiler itself stays focused on being a fast, small, general-purpose systems/application language. The current public capability set is native compilation, WASM output, thread-per-`spawn` concurrency, a behind-proxy HTTP server, built-in SQLite, a typed generic `HashMap<K,V>`, first-class function values, a package registry, REPL/playground, formatter, and LSP.
 
 ### Security Model
 
@@ -97,54 +101,67 @@ async fn main() {
 
 ## What Turbo is for
 
-Turbo is a general-purpose compiled language whose sweet spot is small, fast,
-self-contained programs and services — the kind of thing you want to hand
-someone as a single native binary with no runtime to install.
+Turbo's best near-term wedge is native application infrastructure for
+TypeScript/JavaScript-shaped teams: CLIs, automation tools, small services,
+single-binary utilities, local data processing, and compute-heavy worker code
+where static types and native deployment matter.
 
-What it does well today:
+Strong fits today:
 
-- **Long-running programs stay memory-bounded.** Strings, arrays, structs,
-  results, and optionals are reference-counted and freed *during* execution, not
-  at process exit — so a server or a churning loop holds flat RSS instead of
-  climbing until it's killed.
-- **Real data structures and dispatch.** A typed generic `HashMap<K,V>` (int or
-  `str` keys, any value type) gives you honest maps, and first-class function
-  values let you build callback tables and `HashMap<str, fn(i64) -> i64>`
-  dispatch tables without a `match` ladder.
-- **Single-binary HTTP + SQLite + JSON services.** SQLite is vendored and
-  statically linked, the HTTP server does timeouts, graceful shutdown, and
-  tunable limits via `http_config`, and JSON serialization is built in — so an
-  HTTP-in, SQLite-under, JSON-out service compiles to one native binary. See
-  the flagship [`examples/http-sqlite-api`](examples/http-sqlite-api) and
-  [`docs/production-server.md`](docs/production-server.md) for running it behind
-  nginx/Caddy.
-- **A growing package ecosystem.** Browse the curated index at
-  [turbolang.dev/packages](https://turbolang.dev/packages), search it from the
-  CLI with `turbolang search <query>`, and install with `turbolang install`.
-- **Serverless deploys as native binaries.** Cold start is process start — no
-  runtime boots first. An AWS Lambda custom-runtime adapter
-  ([`turbo-lambda`](packages/turbo-lambda)) plus tested deploy walkthroughs
-  for Lambda, Cloud Run, and Fly.io live in
-  [`examples/deploy`](examples/deploy); see
-  [`docs/serverless.md`](docs/serverless.md).
+- **CLI tools and developer utilities.** Turbo produces small native binaries,
+  has a familiar expression syntax, and avoids a separate runtime install.
+- **Local tools and system-adjacent apps.** File I/O, environment access,
+  process execution, SQLite, JSON, HashMaps, and the LSP/formatter/test runner
+  make it a good fit for package managers, indexers, migration tools, data
+  converters, and internal automation.
+- **Small HTTP + SQLite + JSON services.** The built-in server has caps,
+  timeouts, graceful shutdown, and configuration knobs. Use it behind a reverse
+  proxy for public exposure; see [`docs/production-server.md`](docs/production-server.md).
+- **CPU-oriented worker kernels that fit today's runtime.** Recursive compute,
+  tree traversal, string processing, and allocation-heavy managed workloads are
+  now measured by committed benchmark fixtures. Some are close enough to Rust to
+  be promising; others expose the next optimization targets.
 
-Honest caveats that still hold:
+Promising, but still needs roadmap work:
 
-- Concurrency is **thread-per-`spawn`** on real OS threads (plus channels and
-  mutex) — there is no async event loop yet, so it's not the tool for tens of
-  thousands of concurrent connections on one process.
-- The HTTP server provides **no TLS or HTTP/2** — run it behind a reverse proxy
-  (nginx, Caddy) for public exposure.
-- The **WASM** target is partial, and **Windows** support is experimental: JIT
-  (`turbolang run`) and native AOT (`turbolang build`) work for the core
-  language and stdlib, but the concurrency and HTTP builtins are not yet ported
-  to Windows AOT. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+- **Native desktop apps.** Turbo can support native-app backends, local
+  services, and tooling today. A first-class native GUI story still requires
+  platform bindings, packaging/signing smoke tests, accessibility checks, and
+  macOS/Linux/Windows conformance.
+- **Durable task servers.** The shape is attractive: typed jobs, native
+  deployment, SQLite-backed state, bounded resources. Production qualification
+  still needs a durable queue contract, cancellation, worker recovery, and
+  24-hour soak evidence.
+- **Game development.** Turbo is most credible first for game tools, asset
+  pipelines, procedural generation, simulation kernels, and simple 2D runtime
+  experiments. Engines, frame-critical gameplay, hard real-time audio, and GPU
+  paths require explicit no-allocation controls, tighter layouts, graphics
+  bindings, and long-session frame-budget tests.
+- **System and freestanding software.** Turbo is native and type-safe, but it is
+  not yet a kernel, driver, embedded, or `no_std` language. That requires an
+  explicit freestanding profile with no heap/RC/OS dependencies and hardware or
+  emulator proof.
+
+Current caveats:
+
+- Concurrency is **thread-per-`spawn`** on real OS threads, plus channels and a
+  mutex. There is no bounded async event-loop runtime yet.
+- The HTTP server provides **no TLS or HTTP/2**. Run it behind nginx, Caddy, or
+  another reverse proxy for public exposure.
+- **Windows** and **WASM** are not yet promoted to the same support level as the
+  macOS/Linux native path. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+- Rust-class speed and deep memory-control are goals with concrete gates in
+  [docs/PERFORMANCE.md](docs/PERFORMANCE.md), not a blanket claim about every
+  current Turbo program.
 
 ## Features
 
 ### Native Compilation
 
-Turbo compiles directly to machine code. Programs start instantly and run at native speed.
+Turbo compiles directly to machine code through Cranelift. The goal is fast
+startup, predictable native deployment, and a clear optimization path toward
+Rust-class execution where the language has enough ownership and layout
+information to compete honestly.
 
 - **JIT execution** via `turbolang run` for rapid development (Cranelift)
 - **AOT compilation** via `turbolang build` for production binaries (Cranelift)
@@ -443,64 +460,19 @@ Full reference: [`docs/errors.md`](docs/errors.md)
 
 ## Performance
 
-All figures below are the best of 5 wall-clock runs on an Apple M5 Max
-(macOS 26.5.1, 2026-06-27), comparing Turbo's AOT (`turbolang build`) output
-against native and interpreted baselines. Every baseline implements the same
-algorithm over the same input and the harnesses enforce byte-for-byte output
-equality, so these are honest apples-to-apples numbers, not best-case marketing.
+Turbo is not yet allowed to claim blanket Rust parity. The current committed
+benchmark evidence is diagnostic but useful:
 
-### fib(40) — recursion microbenchmark
+| Evidence set | What it says | Status |
+|---|---|---|
+| `g2-initial-20260906` | `fib(40)` median paired elapsed ratio **1.444× Rust**; existing word-count **3.871× Rust** with different implementation shape | Reproducible diagnostic subset; qualification incomplete |
+| `g2-tree-diagnostic-20260906` | recursive tree workload one-pair timing **1.317× Rust** plus balanced tracked ARC allocations/frees | One-pair diagnostic, not statistical proof |
+| `g2-particle-allocation-20260906` | 10,000-particle managed update reports **5,130,018 allocations and frees**, zero tracked live allocations at return | Allocation diagnostic, not timing/frame-budget proof |
 
-`fib(40)` is a single recursive microbenchmark — it stresses function-call and
-recursion overhead, not a real-world workload. Reproduce it with
-`./turbo/benchmarks/run_comparison.sh` and `./turbo/benchmarks/run_external_baselines.sh`.
-
-| Language | fib(40) | Binary size |
-|----------|---------|-------------|
-| C (clang -O2) | ~265 ms | 33 KB |
-| Rust (rustc -O) | ~265 ms | 455 KB |
-| **Turbo (AOT, Cranelift)** | **~330 ms** | **~113 KB** |
-| Go (go build) | ~340 ms | — |
-| Node.js 22 | ~680 ms | — |
-| Ruby 3.1 | ~5.4 s | — |
-| Python 3.10 | ~13.3 s | — |
-
-On this microbenchmark Turbo's native output runs about 1.25–1.3x slower than C
-and Rust, lands in the same range as Go, and is far ahead of the interpreted
-runtimes — while emitting a self-contained ~113 KB binary with no runtime and no
-VM. Turbo uses a single Cranelift backend: a fast JIT for `turbolang run` and AOT
-for `turbolang build`.
-
-### word-count — real-world workload
-
-`fib(40)` only exercises the integer call stack. This benchmark is an
-end-to-end workload that touches the parts of the language real programs lean
-on: read a ~5 MB text file, tokenize it on whitespace, count word frequencies in
-a hashmap, and print the top-20 words plus a total — exercising file I/O,
-strings, hashmaps, and sorting. The `.tb` source and the C/Rust/Go baselines all
-implement the identical algorithm over the identical, deterministically
-generated input. Reproduce it with `./turbo/benchmarks/run_wordcount.sh` (the
-runner generates the input, warms up, takes the best of 5, and **fails the run
-unless all four languages produce byte-for-byte identical output**).
-
-| Language | word-count (~5 MB, 1.05M words) | vs C |
-|----------|---------|------|
-| C (clang -O2) | ~108 ms | 1.00x |
-| Rust (rustc -O) | ~110 ms | ~1.02x |
-| Go (go build) | ~120 ms | ~1.11x |
-| **Turbo (AOT, Cranelift)** | **~150 ms** | **~1.4x** |
-| Turbo (JIT, `turbolang run`) | ~205 ms | ~1.9x |
-
-Honest framing: on this string/hashmap-heavy workload Turbo's native output runs
-about **1.4x slower than C** (down from ~2.2x). The earlier gap was dominated by
-the str→int map re-stringifying, re-parsing, and re-allocating the value on every
-increment; int values are now stored inline in the hashmap entry, so
-`hashmap_get_int` / `hashmap_set_int` (and the fused `hashmap_inc`) do a single
-hash + single probe with no per-update allocation. The JIT still round-trips
-strings for `get_int`/`set_int`, so it's roughly unchanged at ~1.9x. It's a real
-workload with real, reproducible numbers — run the harness to measure on yours.
-
-These are numbers from one machine; run the harnesses above to measure on yours.
+The public performance contract, target gates, benchmark method, and current
+evidence live in [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Short version:
+Turbo is native and promising, but Rust-class speed and memory control are still
+engineering goals with explicit acceptance gates.
 
 ## Project Structure
 

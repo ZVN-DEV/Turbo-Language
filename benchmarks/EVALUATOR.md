@@ -15,7 +15,7 @@ python3 -m unittest discover -s benchmarks -p test_evaluator.py -v
 python3 benchmarks/evaluator.py --samples 2 --batches 1 --warmups 1 --bootstrap 100 \
   --output /tmp/turbo-evaluator-smoke
 
-# Three batches of20 measured pairs across the four implemented cases:
+# Three batches of20 measured pairs across the implemented cases:
 python3 benchmarks/evaluator.py --output benchmarks/results/my-new-run
 
 # Explicitly require qualification; currently exits3 (incomplete):
@@ -129,12 +129,35 @@ intentional fixture revision must update the manifest and retain old results.
   peak live allocations when repeating the same-depth tree four times instead
   of once. The declared zero-live contract also rejects leaking evaluator profile
   samples; an uninstrumented run cannot certify this allocation contract.
-- The fixed v5 manifest pins `TURBO_BENCH_SIZE` / `TURBO_BENCH_STEPS` for evaluation.
+- `json_transform`:2048 seeded NDJSON records over256 rounds. Each program
+  filters active records whose integer id is not divisible by five, projects
+  id/score/title, serializes every selected record and counts the complete output
+  multiset. Unicode, escaped keys, controls, empty titles and ignored nested
+  metadata are generated deterministically. An independent Python oracle
+  transforms once and weights by rounds; every serialized record/count and the
+  selected/byte/processed totals must match. Literal LF separates records;
+  U+2028 remains string content. Native profile tests require zero live tracked
+  allocations at entry return.
+  **API workflow comparison, not algorithm-parity certification:** Turbo currently
+  validates on each `json_get` and uses map get/set, whereas Rust parses once
+  with `serde_json` and uses map entry updates. The manifest carries an explicit
+  qualification blocker for these missing equivalent APIs. A timing ratio cannot
+  close that blocker. The Rust reference uses the CLI's existing locked dependency
+  via a release Cargo example, with LTO disabled and explicit optimization flags.
+  Its build time includes shared cached workspace dependencies; it is not a clean
+  minimal Rust compilation comparison. Input generation and build happen outside
+  execution timing. Generator, sources and dependency manifests/lockfile are pinned.
+  Cargo builds explicitly for the selected `rustc` host; inherited Rust flags
+  and compiler wrappers are overridden and those overrides are recorded. The
+  executable is selected from Cargo's source-matched JSON artifact message,
+  including cached builds, never from an assumed target-directory filename.
+- The fixed v6 manifest pins `TURBO_BENCH_SIZE` / `TURBO_BENCH_STEPS` for evaluation.
   Small positive values can be used when invoking fixtures directly for tests.
   Unknown, non-string, non-ASCII or non-positive overrides are rejected by the
   evaluator. File-input bytes and logical in-memory input bytes are distinguished.
-- JSON transform still needs its fixture/oracle and workload sizing. SQLite, HTTP and
-  worker suites remain separate application/service qualification work.
+- SQLite, HTTP and worker suites remain separate application/service
+  qualification work. Eight runnable fixtures do not complete the eleven-case
+  suite or qualify the language's performance.
 - Controlled profiles remain pending G3 capabilities. Their presence in the
   manifest does not mean borrowed/region/noalloc code has compiled or passed.
 - Whole-runtime allocation/live-byte/RC coverage, held-out corpus, full CPU suite,
@@ -290,3 +313,6 @@ and [resource usage fields](https://docs.python.org/3/library/resource.html), wi
 Linux's [getrusage](https://man7.org/linux/man-pages/man2/getrusage.2.html) RSS units.
 The collector tests execute real child processes, including timeout/reaping and
 output overflow, in addition to deterministic statistical and evidence tests.
+The workspace reference build uses Cargo's documented
+[artifact messages](https://doc.rust-lang.org/cargo/reference/external-tools.html#artifact-messages)
+and [encoded Rust flag precedence](https://doc.rust-lang.org/cargo/reference/config.html#buildrustflags).

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "suite_version": "g2.1-v5",
+  "suite_version": "g2.1-v6",
   "cases": {
     "fib": {
       "category": "cpu",
@@ -32,11 +32,25 @@
     },
     "json_transform": {
       "category": "cpu",
-      "status": "pending_fixture",
+      "status": "runnable",
       "controlled_status": "pending_capability",
-      "workload": "Seeded records with strings/control/Unicode, numbers and bools; parse/filter/project/serialize.",
-      "oracle": "Parsed records equal an independent semantic oracle; bytes counted; freeze dataset before implementation.",
-      "prerequisite": "fixture implementation and independent review"
+      "workload": "2048 seeded NDJSON records over256 rounds. LCG seed7/multiplier48271/mod2147483647; integer id=index-1024,score=state%2001-1000,active=state%4!=0; eight Unicode/control title patterns, escaped keys and ignored nested metadata. Keep active and id%5!=0; project id,score*3+id,title prefixed task:. Serialize and count every resulting record; emit sorted full-record/count multiset and selected/serialized-byte/processed totals.",
+      "oracle": "Independent Python schema validation and one-pass projection weighted by rounds; exact complete serialized-record multiset, counts and byte totals. Not a length-only checksum.",
+      "turbo_source": "turbo/benchmarks/bench_json_transform.tb",
+      "rust_source": "turbo/crates/turbo-cli/examples/bench_json_transform.rs",
+      "rust_build": "workspace_example",
+      "source_sha256": {
+        "turbo/benchmarks/bench_json_transform.tb": "54ba869c91eb669dc92a19600dc545af8f2ba0f790c987e0329b6213c6230ccb",
+        "turbo/crates/turbo-cli/examples/bench_json_transform.rs": "2eff8ec42d50a7813f4cc593c46210a5551ffc4f4af03eeba8a34faeda4013c2",
+        "turbo/benchmarks/gen_json_input.py": "7d37fa360745e1c12492e6d1a168a97633a627bbabe727784404457cd9dde95b",
+        "turbo/Cargo.toml": "b00b7e4a4a2c60f262acd0bfd7431ea240a1ce317c6cb4bb7ec7a9bc2a749cfd",
+        "turbo/Cargo.lock": "89aa7aeb4fd4d8a0cea0fe4f030a56b698934b989823390f7c63b96984449acf",
+        "turbo/crates/turbo-cli/Cargo.toml": "85620f0a7cac93ca994cd001225464e7a578d3445efaa5cd2f084f42bb9027c2"
+      },
+      "environment": { "TURBO_BENCH_SIZE": "2048", "TURBO_BENCH_STEPS": "256" },
+      "require_zero_live": true,
+      "qualification_blockers": ["equivalent parse-once JSON and counter-entry API paths remain unimplemented"],
+      "comparison_caveat": "API/runtime workflow comparison, not backend-only or algorithm-parity certification: Turbo validates on each json_get and uses typed-map get/set; Rust serde_json parses once and uses entry updates. Serialization, multiset aggregation and output are included. Rust reuses an existing locked dependency through a cached workspace example build, not a minimal clean compilation measurement."
     },
     "string_tokens": {
       "category": "cpu",

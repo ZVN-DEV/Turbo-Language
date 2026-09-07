@@ -2,7 +2,7 @@
 
 > **Status: Planned (design vision).** This document describes a target memory model — Auto-Clone with Compile-Time Reference Counting (CTRC) and a four-level escape-hatch ladder — that is **not** what Turbo ships today. None of the following exist in the compiler: CTRC / compile-time refcount elision, auto-clone dataflow analysis, `let ref` borrows, `region` blocks, `Shared<T>` / `WeakRef<T>`, `@no_clone` / `@manual`, the ownership/borrow checker, and the `--memory-report` / `turbolang profile` tooling.
 >
-> **What actually ships today:** a **runtime ARC** model. Heap values (arrays, structs, enums) are reference-counted at runtime via `rt_rc_alloc` / `rt_release`, with **copy-on-write** for arrays/structs/enums (see the COW builtins). The built-in HTTP server adds **per-request bump arenas** that reset between requests. Strings currently **malloc-and-leak until process exit** — runtime string ARC is **in development** in a parallel branch. There is no compile-time elision: reference counting happens at runtime.
+> **What actually ships today:** a **runtime ARC** model. Heap values (strings, arrays, structs, enums, optionals, results, and typed container values) are reference-counted at runtime via the Turbo shared-header runtime, with **copy-on-write** for managed values (see the COW builtins). The built-in HTTP server also uses **per-request bump arenas** for request-scoped temporaries that reset between requests. There is no compile-time elision: reference counting happens at runtime.
 >
 > Read the rest of this file as the design north star, not a description of current behavior. Unbuilt sections are marked **Planned** inline.
 
@@ -369,7 +369,7 @@ The question developers will ask is: "If Turbo feels like JavaScript, why not ju
 
 ## Default Memory Model: Auto-Clone + CTRC
 
-> **Planned — not yet implemented.** Despite the "Turbo ships with…" wording below, Turbo does **not** ship auto-clone or CTRC. The shipping default is runtime ARC + copy-on-write (plus per-request arenas in the HTTP server); strings currently leak until exit (string ARC in development). The ownership/region/hybrid "opt-in performance profiles" below are also unbuilt.
+> **Planned — not yet implemented.** Despite the "Turbo ships with…" wording below, Turbo does **not** ship auto-clone or CTRC. The shipping default is runtime ARC + copy-on-write (plus per-request arenas in the HTTP server). The ownership/region/hybrid "opt-in performance profiles" below are also unbuilt.
 
 Turbo ships with auto-clone and compile-time reference counting (CTRC) as the default memory model for all Turbo code. This is the model described in "The JavaScript Promise" section above: values auto-clone when shared, the compiler elides reference counting operations where ownership can be statically proven, and developers never need to think about memory unless they choose to optimize.
 

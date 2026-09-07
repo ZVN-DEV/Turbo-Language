@@ -4,7 +4,7 @@ import Link from "next/link";
 export const metadata: Metadata = {
   title: "Concurrency",
   description:
-    "Turbo's concurrency runs on real OS threads: spawn starts a thread, await joins it. Plus channels, mutex, and sleep — no event loop, no GC runtime.",
+    "Turbo's concurrency runs on real OS threads: spawn starts a thread, await joins it. Plus channels, mutex, and sleep — no event loop runtime.",
 };
 
 export default function AsyncPage() {

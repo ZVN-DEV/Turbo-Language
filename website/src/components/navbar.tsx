@@ -34,6 +34,18 @@ export default function Navbar() {
             Examples
           </Link>
           <Link
+            href="/roadmap"
+            className="hidden text-sm text-gray-400 hover:text-white transition-colors font-[family-name:var(--font-geist-sans)] md:inline"
+          >
+            Roadmap
+          </Link>
+          <Link
+            href="/performance"
+            className="hidden text-sm text-gray-400 hover:text-white transition-colors font-[family-name:var(--font-geist-sans)] md:inline"
+          >
+            Performance
+          </Link>
+          <Link
             href="/packages"
             className="text-sm text-gray-400 hover:text-white transition-colors font-[family-name:var(--font-geist-sans)]"
           >

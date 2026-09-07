@@ -108,7 +108,7 @@ export default function CodeBlock({
   filename?: string;
 }) {
   return (
-    <div className="relative rounded-xl border border-border overflow-hidden bg-surface">
+    <div className="relative min-w-0 max-w-full rounded-xl border border-border overflow-hidden bg-surface">
       <CopyButton text={code} label="Copy code" />
       {filename && (
         <div className="px-4 py-2 border-b border-border text-xs text-gray-400 font-[family-name:var(--font-geist-mono)]">

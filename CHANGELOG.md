@@ -5,6 +5,77 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-07
+
+This release is a correctness and observability checkpoint for Turbo's
+native-performance track. It does not claim Rust parity. It makes JSON behavior
+safer, closes several ownership bugs found while measuring real programs, and
+adds repeatable benchmarks that describe the remaining gap honestly.
+
+### Added
+- **Paired evaluator benchmarks.** The benchmark harness now runs paired
+  Turbo/Rust samples, records raw evidence, and fails closed when a case is not
+  comparable enough to support a claim. The initial report is diagnostic: on
+  this Mac sample, `fib` measured about 1.44× Rust and `wordcount` about 3.87×
+  Rust. These numbers are useful engineering evidence, not proof of
+  language-wide Rust parity. The JSON transform case is included as an eighth
+  diagnostic workload, but it is not yet a parity claim because Turbo currently
+  re-queries JSON fields while the Rust comparison parses once into a JSON
+  value tree.
+- **Allocation-profile test mode.** A compile-time `allocation-profile`
+  feature exposes shared-header allocation, retain, release, peak, and live
+  counters for JIT and AOT test workloads without changing the normal release
+  runtime. The counters cover Turbo shared-header allocations, not whole-process
+  heap activity.
+- **Recursive workload evidence.** Tree and particle-style workloads now carry
+  allocation/reclamation evidence so optimization work can distinguish
+  throughput gaps from retained-memory bugs.
+
+### Changed
+- **JSON strings now serialize as JSON strings.** `to_json(str)` returns a
+  quoted JSON string literal instead of returning the raw string unchanged. Code
+  that depended on raw string passthrough should use the string value directly
+  rather than routing it through `to_json`.
+- **JSON extraction is stricter and more faithful.** Native JSON lookup now
+  validates whole-object input, handles escaped and Unicode object keys,
+  preserves duplicate-key last-wins behavior, rejects malformed UTF-8 tails, and
+  keeps string decoding aligned with `serde_json` across the covered cases.
+
+### Fixed
+- **HTTP and SQLite JSON round trips keep full bodies.** AOT HTTP payloads no
+  longer truncate at embedded control bytes while moving through request,
+  response, and SQLite storage paths covered by the new round-trip tests.
+- **Recursive values reclaim safely.** Recursive structs/enums now predeclare
+  their layouts, recursive drop helpers terminate, and ownership is balanced
+  across direct calls, method calls, UFCS, enum payload constructors, borrowed
+  argument evaluation, and the covered indirect-call argument lifetime cases.
+- **Borrowed arguments survive later argument evaluation.** Read-only borrowed
+  arguments are retained long enough to prevent a use-after-free when a later
+  argument expression mutates or releases related storage.
+- **JSON serialization releases intermediate strings.** `to_json` no longer
+  retains temporary strings produced while serializing objects or sibling array
+  elements, and owned temporary arguments are released after calls. Targeted
+  normal and allocation-profile JSON workload gates now pass in both JIT and
+  AOT modes.
+- **Release automation handles prerelease tags correctly.** Suffix tags such as
+  `v0.16.0-pre.1` now create GitHub prereleases, stay out of Latest, and do not
+  update the Homebrew tap.
+
+### Known gaps
+- JSON remains bounded by the current C-string ABI in places that see embedded
+  NUL bytes. Some non-string AOT extraction paths intentionally preserve a raw
+  source span where JIT returns canonical JSON serialization.
+- Native Unicode string operation parity for helpers such as case conversion,
+  trimming, and splitting is still a roadmap item.
+- Windows AOT remains advisory for non-core runtime surfaces; compatibility
+  caveats live in the platform compatibility documentation.
+- The new benchmark results are diagnostic only. The tracked performance goal
+  remains: managed Turbo within 1.15× Rust geomean and controlled-memory Turbo
+  within 1.05× Rust geomean under the published benchmark contract.
+- Compact typed layouts, borrowed views/owned buffers, region-style explicit
+  memory control, durable task-server recovery, and native GUI/game SDK layers
+  remain roadmap work, not shipped capability in this release.
+
 ## [0.15.0] - 2026-07-10
 
 Serverless as a first-class deployment target: a Lambda adapter package,

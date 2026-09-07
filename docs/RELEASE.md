@@ -2,6 +2,12 @@
 
 Everything that must happen when shipping a new version. **A release is not done until every box is checked.**
 
+Prerelease tags are allowed for release candidates and public preview builds.
+Use `vX.Y.Z-pre.N` for those builds. The release workflow marks them as
+GitHub prereleases, prevents them from becoming the repository's Latest
+release, and skips the Homebrew tap update. Use plain `vX.Y.Z` only when the
+build is intended to become the stable release and Homebrew formula.
+
 ---
 
 ## Repositories Involved
@@ -32,7 +38,7 @@ All must agree on the same version:
 | `turbo/crates/turbo-lsp/Cargo.toml` | `version` |
 | `turbo/Cargo.lock` | auto-updated by `cargo build` |
 | `CHANGELOG.md` | `[X.Y.Z] - YYYY-MM-DD` section header |
-| `distribution/homebrew/turbo-lang.rb` | `version`, URLs, sha256, test assertion |
+| `distribution/homebrew/turbo-lang.rb` | `version`, URLs, placeholder sha256 policy, test assertion |
 | `editors/vscode/turbo-lang/package.json` | `"version"` |
 | `~/Desktop/Coding/ZVN/homebrew-turbo/Formula/turbo-lang.rb` | same as above (tap copy) |
 | `~/Desktop/Coding/ZVN/turbo-vscode/package.json` | `"version"` |
@@ -166,7 +172,8 @@ git push origin master
 ### 2.2 Tag and Trigger Release CI
 
 ```bash
-git tag vX.Y.Z
+git tag vX.Y.Z          # stable release
+# or: git tag vX.Y.Z-pre.N  # prerelease candidate/public preview
 git push origin vX.Y.Z
 ```
 
@@ -174,6 +181,13 @@ This triggers `.github/workflows/release.yml` which builds:
 - macOS ARM (aarch64-apple-darwin) — Cranelift
 - macOS Intel (x86_64-apple-darwin) — Cranelift
 - Linux x86_64 (x86_64-unknown-linux-gnu) — Cranelift
+
+Channel routing:
+- Plain `vX.Y.Z` tags create stable GitHub releases, can become Latest, and
+  update the Homebrew tap when the tap secret is configured.
+- Suffix tags such as `vX.Y.Z-pre.N`, `vX.Y.Z-rc.N`, or
+  `vX.Y.Z-beta.N` create GitHub prereleases, do not become Latest, and do not
+  update Homebrew.
 
 ### 2.3 Wait for Release CI
 
@@ -188,6 +202,9 @@ Confirm: 3 tarballs + `checksums.txt` attached to the release. `checksums.txt.si
 ---
 
 ## Phase 3: Homebrew
+
+Skip this phase for prerelease tags. Homebrew is stable-only until an explicit
+prerelease formula/channel policy exists.
 
 ### 3.1 Get Checksums
 
@@ -209,13 +226,13 @@ Update version string, download URLs, SHA256 hashes, and test assertion in:
 # Main repo
 cd ~/Desktop/Coding/ZVN/TurboLang
 git add distribution/homebrew/turbo-lang.rb
-git commit -m "Update local Homebrew formula with vX.Y.Z SHA256 hashes"
+git commit -m "Prepare the local formula for Turbo X.Y.Z"
 git push
 
 # Tap repo
 cd ~/Desktop/Coding/ZVN/homebrew-turbo
 git add Formula/turbo-lang.rb
-git commit -m "turbo-lang X.Y.Z"
+git commit -m "Prepare the tap for Turbo X.Y.Z"
 git push
 ```
 
@@ -310,5 +327,6 @@ grep 'version "' ~/Desktop/Coding/ZVN/homebrew-turbo/Formula/turbo-lang.rb
 - **Both runtimes**: Any runtime change must update BOTH `turbo_rt.c` (C/AOT) AND `runtime.rs` (Rust/JIT)
 - **Never skip the tag**: The tag triggers release CI. No tag = no release binaries = can't update Homebrew.
 - **Homebrew depends on CI**: Release CI must complete before you can get SHA256 checksums. Don't try to update the formula before the release is built.
+- **Prereleases are not Homebrew updates**: Tags with a suffix (`-pre.N`, `-rc.N`, `-beta.N`) must stay out of the tap and must not become Latest.
 - **Version sync is non-negotiable**: All workspace crates, Homebrew formula, VS Code extension, and CHANGELOG must all show the same version.
 - **Test before tagging**: Once tagged and pushed, the release is public. Run all tests first.

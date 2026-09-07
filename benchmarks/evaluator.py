@@ -26,7 +26,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path(__file__).with_name("evaluator-cases.json")
-IMPLEMENTED = {"fib", "wordcount", "buffer_scan", "hashmap_churn", "particle_update", "string_tokens", "tree_walk"}
+IMPLEMENTED = {"fib", "wordcount", "buffer_scan", "hashmap_churn", "particle_update", "string_tokens", "tree_walk", "json_transform"}
 
 
 class EvaluationError(Exception):
@@ -319,6 +319,14 @@ def load_manifest(path=MANIFEST):
             raise ValueError(f"no runner implementation: {name}")
         if type(case.get("require_zero_live", False)) is not bool:
             raise ValueError(f"invalid allocation contract: {name}")
+        reasons = case.get("qualification_blockers", [])
+        if not isinstance(reasons, list) or any(not isinstance(reason, str) or not reason.strip() for reason in reasons):
+            raise ValueError(f"invalid qualification blockers: {name}")
+        method = case.get("rust_build", "rustc")
+        if method not in ("rustc", "workspace_example"):
+            raise ValueError(f"unsupported Rust build method: {name}")
+        if method == "workspace_example" and case.get("rust_source") != "turbo/crates/turbo-cli/examples/bench_json_transform.rs":
+            raise ValueError("workspace example source must identify the compiled JSON reference")
         parameters = case.get("environment", {})
         if (not isinstance(parameters, dict)
                 or not set(parameters) <= {"TURBO_BENCH_SIZE", "TURBO_BENCH_STEPS"}
@@ -335,6 +343,15 @@ def load_manifest(path=MANIFEST):
                     or int(parameters["TURBO_BENCH_SIZE"]) > 20
                     or int(parameters["TURBO_BENCH_STEPS"]) > 64):
                 raise ValueError("tree parameters outside workload contract")
+        if name == "json_transform" and case["status"] == "runnable":
+            if (set(parameters) != {"TURBO_BENCH_SIZE", "TURBO_BENCH_STEPS"}
+                    or int(parameters["TURBO_BENCH_SIZE"]) > 4096
+                    or int(parameters["TURBO_BENCH_STEPS"]) > 512):
+                raise ValueError("JSON parameters outside workload contract")
+            for required in ("turbo/benchmarks/gen_json_input.py", "turbo/Cargo.toml",
+                             "turbo/Cargo.lock", "turbo/crates/turbo-cli/Cargo.toml"):
+                if required not in case.get("source_sha256", {}):
+                    raise ValueError(f"unfingerprinted JSON input/dependency contract: {required}")
         if name == "string_tokens" and case["status"] == "runnable":
             if (set(parameters) != {"TURBO_BENCH_STEPS"}
                     or int(parameters["TURBO_BENCH_STEPS"]) > 16777216):
@@ -402,6 +419,38 @@ def hashmap_oracle(steps):
             counts.pop((key + 17) % 4096, None)
     checksum = sum((key + 1) * value for key, value in counts.items())
     return f"{checksum}\n{checksum}\n{len(counts)}\n{len(counts)}\n".encode()
+
+
+def json_transform_oracle(path, size, rounds):
+    """Validate the frozen schema, transform once, then weight the multiset.
+
+    The native programs process every round. The independent oracle weights
+    each projected record; U+2028 is string content, never a record delimiter.
+    """
+    if not 0 < size <= 4096 or not 0 < rounds <= 512:
+        raise ValueError("JSON parameters outside workload contract")
+    text = Path(path).read_bytes().decode("utf-8")
+    if not text.endswith("\n"):
+        raise ValueError("JSON input must end in a record newline")
+    lines = text[:-1].split("\n")
+    if len(lines) != size:
+        raise ValueError("JSON input record count mismatch")
+    counts, total_bytes = Counter(), 0
+    for line in lines:
+        row = json.loads(line)
+        if (not isinstance(row, dict) or type(row.get("id")) is not int
+                or not -4096 <= row["id"] <= 4096 or type(row.get("score")) is not int
+                or not -1000 <= row["score"] <= 1000 or type(row.get("active")) is not bool
+                or not isinstance(row.get("title"), str) or "\0" in row["title"]):
+            raise ValueError("JSON input outside frozen record schema")
+        row["title"].encode("utf-8")
+        if row["active"] and row["id"] % 5 != 0:
+            projected = dict(id=row["id"], score=row["score"] * 3 + row["id"], title="task:" + row["title"])
+            encoded = json.dumps(projected, ensure_ascii=False, separators=(",", ":"))
+            counts[encoded] += rounds
+            total_bytes += len(encoded.encode("utf-8")) * rounds
+    result = "".join(f"{record}\t{counts[record]}\n" for record in sorted(counts))
+    return (result + f"TOTAL {sum(counts.values())} {total_bytes} {size * rounds}\n").encode("utf-8")
 
 
 def tree_oracle(depth, rounds):
@@ -502,6 +551,34 @@ def working_tree_status():
     return tool_output(["git", "status", "--porcelain=v1", "--untracked-files=all"]).splitlines()
 
 
+def cargo_example_artifact(stdout, source):
+    """Select the executable Cargo actually built, including configured targets."""
+    matches = []
+    for line in stdout.splitlines():
+        if not line.startswith("{"):
+            continue
+        message = json.loads(line)
+        if not isinstance(message, dict) or message.get("reason") != "compiler-artifact":
+            continue
+        target = message.get("target", {})
+        if (isinstance(target, dict) and isinstance(target.get("kind"), list)
+                and "example" in target["kind"]
+                and isinstance(target.get("src_path"), str)
+                and Path(target["src_path"]).resolve() == source.resolve()
+                and isinstance(message.get("executable"), str)):
+            matches.append(Path(message["executable"]).resolve())
+    if len(matches) != 1 or not matches[0].is_file():
+        raise EvaluationError("Cargo must report exactly one existing executable for the JSON reference")
+    return matches[0]
+
+
+def rust_host_target(version):
+    hosts = [line.removeprefix("host: ") for line in version.splitlines() if line.startswith("host: ")]
+    if len(hosts) != 1 or not hosts[0] or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for c in hosts[0]):
+        raise EvaluationError("Rust compiler did not report one valid host target")
+    return hosts[0]
+
+
 def prepare_case(name, case, work, compiler, emit):
     commands = {}
     builds = {}
@@ -520,6 +597,14 @@ def prepare_case(name, case, work, compiler, emit):
         check_output(generated, b"")
         env["WORDCOUNT_INPUT"] = str(data)
         expected = wordcount_oracle(data)
+    elif name == "json_transform":
+        data = work / "json_transform_input.ndjson"
+        generator = source_path("turbo/benchmarks/gen_json_input.py")
+        generated = run_process([sys.executable, generator, data, env["TURBO_BENCH_SIZE"]], timeout_s=60)
+        emit(dict(kind="input_generation", case=name, sample=generated))
+        check_output(generated, b"")
+        env["JSON_TRANSFORM_INPUT"] = str(data)
+        expected = json_transform_oracle(data, int(env["TURBO_BENCH_SIZE"]), int(env["TURBO_BENCH_STEPS"]))
     elif name == "string_tokens":
         data = source_path("turbo/benchmarks/string_tokens_corpus.txt")
         env["STRING_TOKENS_INPUT"] = str(data)
@@ -537,15 +622,38 @@ def prepare_case(name, case, work, compiler, emit):
     for language in ("turbo", "rust"):
         binary = work / (name + "-" + language)
         source = source_path(case[language + "_source"])
-        command = ([compiler, "build", source, "-o", binary] if language == "turbo" else
+        method = case.get("rust_build", "rustc") if language == "rust" else "turbo"
+        build_env = os.environ.copy()
+        if method == "workspace_example":
+            rustc = shutil.which("rustc") or "rustc"
+            host_target = rust_host_target(tool_output([rustc, "--version", "--verbose"]))
+            overrides = {"CARGO_PROFILE_RELEASE_LTO": "false", "CARGO_ENCODED_RUSTFLAGS": "",
+                         "RUSTC": rustc, "RUSTC_WRAPPER": "", "RUSTC_WORKSPACE_WRAPPER": ""}
+            build_env.update(overrides)
+            # Empty encoded flags take precedence over inherited/config rustflags.
+            # Cargo's artifact message, not a guessed host path, selects the output.
+            command = [shutil.which("cargo") or "cargo", "rustc", "--release", "--locked", "--offline",
+                       "--message-format=json", "--target", host_target,
+                       "--manifest-path", ROOT / "turbo/Cargo.toml", "--target-dir", ROOT / "turbo/target",
+                       "-p", "turbo-cli", "--example", source.stem, "--", "-C", "opt-level=3",
+                       "-C", "target-cpu=native", "-C", "overflow-checks=off"]
+        else:
+            command = ([compiler, "build", source, "-o", binary] if language == "turbo" else
                    [shutil.which("rustc") or "rustc", "-C", "opt-level=3", "-C",
                     "target-cpu=native", "-C", "overflow-checks=off", source, "-o", binary])
-        built = run_process(command, cwd=ROOT, timeout_s=180)
+        built = run_process(command, cwd=ROOT, env=build_env, timeout_s=600 if method == "workspace_example" else 180)
         emit(dict(kind="build", case=name, language=language, sample=built))
         if built["status"] != "ok":
             raise EvaluationError(f"{name}/{language} build failed: {built['stderr']}")
+        if method == "workspace_example":
+            artifact = cargo_example_artifact(built["stdout"], source)
+            shutil.copy2(artifact, binary)
         builds[language] = dict(elapsed_ns=built["elapsed_ns"], binary_bytes=binary.stat().st_size,
-                                binary_sha256=file_digest(binary), command=built["command"])
+                                binary_sha256=file_digest(binary), command=built["command"], method=method)
+        if method == "workspace_example":
+            builds[language].update(build_environment=overrides,
+                artifact_path=str(artifact),
+                compile_scope="shared cached CLI workspace dependencies; not clean/minimal Rust compile time")
         commands[language] = [str(binary)]
     return dict(commands=commands, env=env, expected=expected, builds=builds,
                 input_kind="file" if data else "generated_in_memory",
@@ -668,6 +776,8 @@ def evaluate(args, manifest, emit):
         blockers += ["controlled profiles pending G3", "allocation coverage incomplete" if args.profile_compiler else "allocation counters not instrumented",
                      "cross-host qualification not established", "host power/load conditions unvalidated"]
         blockers.append("compiler source provenance not independently attested")
+        for name in args.cases:
+            blockers.extend(f"{name}: {reason}" for reason in manifest["cases"][name].get("qualification_blockers", []))
         if args.samples < 20 or args.batches < 3 or args.warmups < 3 or args.bootstrap < 2000:
             blockers.append("smoke protocol below required sampling minimums")
         if any(min(p["turbo_ns"], p["rust_ns"]) < 200_000_000 for data in rows.values() for p in data):
@@ -685,7 +795,7 @@ def evaluate(args, manifest, emit):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cases", default="fib,wordcount,buffer_scan,hashmap_churn,particle_update,string_tokens,tree_walk")
+    parser.add_argument("--cases", default="fib,wordcount,buffer_scan,hashmap_churn,particle_update,string_tokens,tree_walk,json_transform")
     parser.add_argument("--samples", type=int, default=20)
     parser.add_argument("--batches", type=int, default=3)
     parser.add_argument("--warmups", type=int, default=3)

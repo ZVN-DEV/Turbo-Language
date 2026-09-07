@@ -42,6 +42,14 @@ export default function Footer() {
                   Playground
                 </Link>
               </li>
+              <li>
+                <Link
+                  href="/roadmap"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
+                >
+                  Roadmap
+                </Link>
+              </li>
             </ul>
           </div>
           <div>
@@ -71,6 +79,14 @@ export default function Footer() {
                   className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
                 >
                   LSP
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/performance"
+                  className="text-sm text-gray-400 hover:text-gray-300 transition-colors"
+                >
+                  Performance
                 </Link>
               </li>
             </ul>

@@ -8,6 +8,7 @@ GitHub-hosted runners, and release machines before a tag is pushed.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -118,6 +119,18 @@ def version_from_json(path: Path) -> str:
     return version
 
 
+def package_lock_root_version(path: Path) -> str:
+    try:
+        data = json.loads(read(path))
+    except json.JSONDecodeError as exc:
+        raise CheckFailure(f"{rel(path)} is not valid JSON: {exc}") from exc
+    root_package = data.get("packages", {}).get("", {})
+    version = root_package.get("version")
+    if not isinstance(version, str) or not version:
+        raise CheckFailure(f"{rel(path)} packages[''] has no string version field")
+    return version
+
+
 def homebrew_metadata(path: Path) -> tuple[str, list[str], list[str]]:
     text = read(path)
     version_match = re.search(r'^\s*version\s+"([^"]+)"', text, re.MULTILINE)
@@ -157,6 +170,86 @@ def local_lock_versions(path: Path, package_names: set[str]) -> dict[str, str]:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise CheckFailure(message)
+
+
+def extract_yaml_block_scalar(text: str, step_name: str) -> str:
+    lines = text.splitlines()
+    in_step = False
+    in_run = False
+    block: list[str] = []
+    for line in lines:
+        if line.startswith("      - name: "):
+            if in_run:
+                break
+            in_step = line.strip() == f"- name: {step_name}"
+            continue
+        if in_step and line == "        run: |":
+            in_run = True
+            continue
+        if in_run:
+            if line.startswith("      - name: ") or (line.startswith("      - uses: ")):
+                break
+            if line.startswith("          "):
+                block.append(line[10:])
+            elif line.strip() == "":
+                block.append("")
+            else:
+                break
+    if not block:
+        raise CheckFailure(f"release.yml step {step_name!r} has no run block")
+    return "\n".join(block) + "\n"
+
+
+def run_release_channel_classifier(script: str, tag: str) -> tuple[int, dict[str, str], str]:
+    with tempfile.TemporaryDirectory() as tmp:
+        output_path = Path(tmp) / "github_output"
+        env = os.environ.copy()
+        env["GITHUB_REF_NAME"] = tag
+        env["GITHUB_OUTPUT"] = str(output_path)
+        result = subprocess.run(
+            ["bash", "-c", script],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        outputs: dict[str, str] = {}
+        if output_path.exists():
+            for line in output_path.read_text(encoding="utf-8").splitlines():
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    outputs[key] = value
+        return result.returncode, outputs, result.stdout + result.stderr
+
+
+def check_release_channel_classifier(release_workflow: str) -> None:
+    script = extract_yaml_block_scalar(release_workflow, "Classify release channel")
+    stable_status, stable, stable_log = run_release_channel_classifier(script, "v0.16.0")
+    require(stable_status == 0, f"stable release channel classifier failed: {stable_log.strip()}")
+    require(
+        stable == {"prerelease": "false", "make_latest": "true", "homebrew": "true"},
+        f"stable release channel classifier produced wrong outputs: {stable}",
+    )
+
+    pre_status, prerelease, pre_log = run_release_channel_classifier(script, "v0.16.0-pre.1")
+    require(pre_status == 0, f"prerelease channel classifier failed: {pre_log.strip()}")
+    require(
+        prerelease == {"prerelease": "true", "make_latest": "false", "homebrew": "false"},
+        f"prerelease channel classifier produced wrong outputs: {prerelease}",
+    )
+
+    for tag in ["v0.16.0-rc.1", "v0.16.0-beta.2", "v0.16.0-alpha.1.build.7"]:
+        status, outputs, log = run_release_channel_classifier(script, tag)
+        require(status == 0, f"prerelease channel classifier failed for {tag}: {log.strip()}")
+        require(
+            outputs == {"prerelease": "true", "make_latest": "false", "homebrew": "false"},
+            f"prerelease channel classifier produced wrong outputs for {tag}: {outputs}",
+        )
+
+    for tag in ["vnot-a-version", "v0.16", "0.16.0", "v0.16.0-", "v0.16.0+build.1"]:
+        bad_status, _, _ = run_release_channel_classifier(script, tag)
+        require(bad_status != 0, f"release channel classifier accepted malformed tag {tag}")
 
 
 def tracked_files(repo_root: Path, pathspec: str) -> list[Path]:
@@ -249,7 +342,20 @@ def check_release_consistency(repo_root: Path = REPO_ROOT) -> list[str]:
         vscode_version == version,
         f"{rel(vscode_package)} version {vscode_version} does not match crate version {version}",
     )
-    passed.append(f"{rel(vscode_package)} version matches")
+    vscode_package_text = read(vscode_package)
+    require('"license": "MIT"' in vscode_package_text, f"{rel(vscode_package)} does not declare MIT license")
+    vscode_license = repo_root / "editors" / "vscode" / "turbo-lang" / "LICENSE"
+    require(vscode_license.exists(), f"{rel(vscode_license)} is missing")
+    passed.append(f"{rel(vscode_package)} version and license metadata match")
+
+    vscode_lock = repo_root / "editors" / "vscode" / "turbo-lang" / "package-lock.json"
+    vscode_lock_version = version_from_json(vscode_lock)
+    vscode_lock_root = package_lock_root_version(vscode_lock)
+    require(
+        vscode_lock_version == version and vscode_lock_root == version,
+        f"{rel(vscode_lock)} version drift: top={vscode_lock_version} root={vscode_lock_root} expected {version}",
+    )
+    passed.append(f"{rel(vscode_lock)} version matches")
 
     formula = repo_root / "distribution" / "homebrew" / "turbo-lang.rb"
     formula_version, urls, sha256s = homebrew_metadata(formula)
@@ -267,6 +373,10 @@ def check_release_consistency(repo_root: Path = REPO_ROOT) -> list[str]:
     require(all(f"/releases/download/v{version}/" in url for url in urls), f"{rel(formula)} has URL tag drift")
     require(len(sha256s) == len(expected_targets), f"{rel(formula)} should have one sha256 per release target")
     formula_text = read(formula)
+    require(
+        'desc "Native compiled language with familiar syntax"' in formula_text,
+        f"{rel(formula)} still overclaims Rust-level performance in its description",
+    )
     require(
         f'assert_match "turbolang {version}"' in formula_text,
         f"{rel(formula)} test assertion does not check turbolang {version}",
@@ -322,10 +432,19 @@ def check_release_consistency(repo_root: Path = REPO_ROOT) -> list[str]:
     release_workflow = read(repo_root / ".github" / "workflows" / "release.yml")
     require("turbolang turbo-lsp" in release_workflow, "release.yml does not package both turbolang and turbo-lsp")
     require("Smoke test - AOT build" in release_workflow, "release.yml is missing AOT release smoke")
+    require("Classify release channel" in release_workflow, "release.yml does not classify stable vs prerelease tags")
+    check_release_channel_classifier(release_workflow)
+    require("prerelease: ${{ steps.release-channel.outputs.prerelease }}" in release_workflow, "release.yml does not route prerelease tags to GitHub prereleases")
+    require("make_latest: ${{ steps.release-channel.outputs.make_latest }}" in release_workflow, "release.yml does not prevent prerelease tags from becoming Latest")
+    require("steps.release-channel.outputs.homebrew == 'true'" in release_workflow, "release.yml does not restrict Homebrew updates to stable tags")
+    require(
+        "Native compiled language with familiar syntax" in release_workflow,
+        "release.yml generated Homebrew formula still overclaims Rust-level performance",
+    )
     require('bin.install "turbo-lsp"' in release_workflow, "release.yml generated Homebrew formula does not require turbo-lsp install")
     require('bin.install "turbo-lsp" if' not in release_workflow, "release.yml generated Homebrew formula still allows archives missing turbo-lsp")
     require('assert_predicate bin/"turbo-lsp", :exist?' in release_workflow, "release.yml generated Homebrew formula does not test turbo-lsp")
-    passed.append("release workflow packages, smokes, and publishes the two-binary toolchain")
+    passed.append("release workflow packages, smokes, classifies prereleases, and publishes the two-binary toolchain")
 
     nightly_workflow = read(repo_root / ".github" / "workflows" / "nightly.yml")
     require("cp turbo/target/release/turbolang turbo/target/release/turbo-lsp ." in nightly_workflow, "nightly.yml does not stage turbo-lsp")
@@ -391,10 +510,26 @@ def write_fixture(root: Path, version: str = "1.2.3") -> None:
             f'[package]\nname = "{name}"\nversion = "{version}"\nreadme.workspace = true\n',
         )
 
-    write(root / "editors" / "vscode" / "turbo-lang" / "package.json", json.dumps({"version": version}))
+    write(
+        root / "editors" / "vscode" / "turbo-lang" / "package.json",
+        json.dumps({"version": version, "license": "MIT"}),
+    )
+    write(
+        root / "editors" / "vscode" / "turbo-lang" / "package-lock.json",
+        json.dumps(
+            {
+                "name": "turbo-lang",
+                "version": version,
+                "lockfileVersion": 3,
+                "packages": {"": {"name": "turbo-lang", "version": version, "license": "MIT"}},
+            }
+        ),
+    )
+    write(root / "editors" / "vscode" / "turbo-lang" / "LICENSE", "MIT License\n")
     write(
         root / "distribution" / "homebrew" / "turbo-lang.rb",
         f'''class TurboLang < Formula
+  desc "Native compiled language with familiar syntax"
   version "{version}"
   url "https://github.com/ZVN-DEV/Turbo-Language/releases/download/v{version}/turbolang-v{version}-aarch64-apple-darwin.tar.gz"
   sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -441,7 +576,46 @@ end
     write(root / "CHANGELOG.md", f"# Changelog\n\n## [{version}] - 2099-01-01\n")
     write(
         root / ".github" / "workflows" / "release.yml",
-        'tar czf artifact.tgz turbolang turbo-lsp\nSmoke test - AOT build\nbin.install "turbo-lsp"\nassert_predicate bin/"turbo-lsp", :exist?\n',
+        '''jobs:
+  release:
+    steps:
+      - name: Classify release channel
+        id: release-channel
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "error: release tags must look like vX.Y.Z or vX.Y.Z-pre.N; got ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+          if [[ "${VERSION}" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+            echo "homebrew=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+            echo "homebrew=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Create Release
+        with:
+          prerelease: ${{ steps.release-channel.outputs.prerelease }}
+          make_latest: ${{ steps.release-channel.outputs.make_latest }}
+      - name: Update Homebrew tap
+        if: success() && steps.probe-secrets.outputs.has_tap == 'true' && steps.release-channel.outputs.homebrew == 'true'
+        run: |
+          tar czf artifact.tgz turbolang turbo-lsp
+          echo "Smoke test - AOT build"
+          cat > Formula/turbo-lang.rb <<EOF
+          class TurboLang < Formula
+            desc "Native compiled language with familiar syntax"
+            bin.install "turbo-lsp"
+            assert_predicate bin/"turbo-lsp", :exist?
+          end
+          EOF
+''',
     )
     write(
         root / ".github" / "workflows" / "nightly.yml",

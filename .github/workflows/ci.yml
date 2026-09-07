@@ -100,7 +100,7 @@ jobs:
         run: python3 -m unittest discover -s benchmarks -p test_evaluator.py -v
 
       - name: Allocation calibration and recursive ownership (JIT and AOT)
-        run: cargo test -p turbo-cli --features allocation-profile --manifest-path turbo/Cargo.toml --test allocation_profile --test recursive_types --test tree_workload --test json_extract
+        run: cargo test -p turbo-cli --features allocation-profile --manifest-path turbo/Cargo.toml --test allocation_profile --test recursive_types --test tree_workload --test json_extract --test json_workload
 
   test-windows:
     name: test-windows (experimental, advisory)

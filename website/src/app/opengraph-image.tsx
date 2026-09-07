@@ -3,7 +3,8 @@ import { ImageResponse } from "next/og";
 // Default social card for every route. Next.js wires this file into the
 // og:image (and twitter:image) tags site-wide via the file-based metadata
 // convention, so a shared link renders a branded card instead of bare text.
-export const alt = "Turbo — JavaScript's Soul. Rust's Speed.";
+export const alt =
+  "Turbo — Familiar code. Native execution. A path to deeper control.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -56,7 +57,7 @@ export default function OpengraphImage() {
               lineHeight: 1.05,
             }}
           >
-            JavaScript&apos;s Soul.
+            Familiar code.
           </div>
           <div
             style={{
@@ -67,7 +68,7 @@ export default function OpengraphImage() {
               lineHeight: 1.05,
             }}
           >
-            Rust&apos;s Speed.
+            Native execution.
           </div>
           <div
             style={{
@@ -77,7 +78,7 @@ export default function OpengraphImage() {
               color: "#9ca3af",
             }}
           >
-            A compiled, type-safe language. No VM, no GC, tiny binaries.
+            A path to deeper control.
           </div>
         </div>
 
