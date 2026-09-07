@@ -28,7 +28,7 @@ notify = { workspace = true }
 notify-debouncer-mini = { workspace = true }
 ctrlc = { workspace = true }
 libc = { workspace = true }
-getrandom = "0.2"
+getrandom = "0.4"
 tempfile = "3"
 # Already compiled into the binary via turbo-codegen-cranelift; used here to
 # parse the package registry index (registry.rs). Adds no new supply-chain
