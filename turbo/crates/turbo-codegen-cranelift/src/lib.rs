@@ -63,9 +63,9 @@ mod expr;
 pub(crate) use expr::{
     compile_expr, expr_produces_owned_rc_temp, expr_result_borrows_existing_rc,
     generic_origin_for_value, generic_return_retain_flag_for_value, is_rc_managed_type,
-    mark_generic_value_origin, mark_generic_value_origin_with_retain_flag,
+    load_struct_field_slot, mark_generic_value_origin, mark_generic_value_origin_with_retain_flag,
     release_expr_temp_if_needed, release_if_needed, release_mutable_param_vars,
-    retain_generic_return_if_needed, retain_if_needed,
+    release_struct_with_concrete_fields, retain_generic_return_if_needed, retain_if_needed,
 };
 pub(crate) use expr::{retain_array_elements_if_needed, retain_array_prefix_if_needed};
 

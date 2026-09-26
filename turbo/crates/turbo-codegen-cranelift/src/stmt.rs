@@ -134,6 +134,8 @@ pub(crate) fn compile_stmt<M: Module>(
             Ok(())
         }
         Stmt::LetDestructure { fields, value, .. } => {
+            cx.last_struct_lit_concrete_fields = None;
+
             // Compile the value expression (should produce a struct pointer)
             let (struct_ptr, struct_tty) =
                 compile_expr(cx, value)?.ok_or_else(|| CodegenError {
@@ -160,6 +162,13 @@ pub(crate) fn compile_stmt<M: Module>(
                 })?
                 .clone();
 
+            let concrete_fields = if matches!(value.node, Expr::StructLit { .. }) {
+                cx.last_struct_lit_concrete_fields.take()
+            } else {
+                cx.last_struct_lit_concrete_fields.take();
+                None
+            };
+
             for field_name in fields {
                 let field_index = struct_layout
                     .iter()
@@ -169,20 +178,47 @@ pub(crate) fn compile_stmt<M: Module>(
                         message: format!("struct `{struct_name}` has no field `{field_name}`"),
                     })?;
 
-                let field_tty = struct_layout[field_index].1.clone();
+                let mut field_tty = struct_layout[field_index].1.clone();
+                if let Expr::Ident(var_name) = &value.node {
+                    if let Some(overrides) = cx.generic_struct_field_overrides.get(var_name) {
+                        if let Some((_, concrete_tty)) =
+                            overrides.iter().find(|(n, _)| n == field_name)
+                        {
+                            field_tty = concrete_tty.clone();
+                        }
+                    }
+                } else if let Some(overrides) = concrete_fields.as_ref() {
+                    if let Some((_, concrete_tty)) = overrides.iter().find(|(n, _)| n == field_name)
+                    {
+                        field_tty = concrete_tty.clone();
+                    }
+                }
+
                 let offset = (field_index * 8) as i32;
 
-                let val = cx
-                    .builder
-                    .ins()
-                    .load(types::I64, MemFlags::new(), struct_ptr, offset);
+                let (val, field_tty) = load_struct_field_slot(cx, struct_ptr, offset, &field_tty);
+                let cl_ty = cx.builder.func.dfg.value_type(val);
+                if is_rc_managed_type(cx, &field_tty) {
+                    retain_if_needed(cx, val, &field_tty);
+                }
 
                 let var = Variable::new(cx.next_var);
                 cx.next_var += 1;
-                cx.builder.declare_var(var, types::I64);
+                cx.builder.declare_var(var, cl_ty);
                 cx.builder.def_var(var, val);
-                cx.vars
-                    .insert(field_name.clone(), (var, types::I64, field_tty));
+                cx.vars.insert(field_name.clone(), (var, cl_ty, field_tty));
+            }
+            if expr_produces_owned_rc_temp(cx, value) {
+                if let Some(concrete_fields) = concrete_fields.as_ref() {
+                    release_struct_with_concrete_fields(
+                        cx,
+                        struct_ptr,
+                        &struct_layout,
+                        concrete_fields,
+                    )?;
+                } else {
+                    release_expr_temp_if_needed(cx, struct_ptr, &struct_tty, value);
+                }
             }
             Ok(())
         }

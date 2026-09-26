@@ -1,0 +1,9 @@
+struct Box<T> {
+    item: T,
+    label: str,
+}
+
+fn main() {
+    let { item } = Box { item: "generic" + "-item", label: "generic" + "-owned" }
+    print(item)
+}

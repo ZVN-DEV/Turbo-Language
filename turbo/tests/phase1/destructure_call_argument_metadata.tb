@@ -1,0 +1,16 @@
+struct Box<T> {
+    value: T,
+}
+
+struct Holder {
+    values: [str],
+}
+
+fn make_holder(seed: Box<int>) -> Holder {
+    Holder { values: ["kept"] }
+}
+
+fn main() {
+    let { values } = make_holder(Box { value: 123 })
+    print(values[0])
+}

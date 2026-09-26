@@ -1,0 +1,11 @@
+struct Holder {
+    values: [int],
+}
+
+fn main() {
+    let holder = Holder { values: [1] }
+    let mut { values } = holder
+    values[0] = 9
+    print(holder.values[0])
+    print(values[0])
+}

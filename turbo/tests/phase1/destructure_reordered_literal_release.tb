@@ -1,0 +1,9 @@
+struct Reordered {
+    count: int,
+    text: str,
+}
+
+fn main() {
+    let { text } = Reordered { text: "x" + "y", count: 123 }
+    print(text)
+}

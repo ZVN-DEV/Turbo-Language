@@ -1,0 +1,15 @@
+struct Mixed {
+    amount: float,
+    active: bool,
+    byte: u8,
+    small: i16,
+}
+
+fn main() {
+    let mixed = Mixed { amount: 1.5, active: true, byte: 200 as u8, small: -12 as i16 }
+    let { amount, active, byte, small } = mixed
+    print(amount + 0.5)
+    print(active)
+    print(byte as i64)
+    print(small as i64)
+}

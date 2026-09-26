@@ -1163,31 +1163,7 @@ fn compile_expr_inner<M: Module>(
             }
 
             let offset = (field_index * 8) as i32;
-
-            // Load from the struct pointer
-            let raw_val = cx
-                .builder
-                .ins()
-                .load(types::I64, MemFlags::new(), obj_ptr, offset);
-
-            // Convert back to the appropriate type
-            let (val, tty) = match &field_tty {
-                TurboTy::Int => (raw_val, TurboTy::Int),
-                TurboTy::Bool => {
-                    let truncated = cx.builder.ins().ireduce(types::I8, raw_val);
-                    (truncated, TurboTy::Bool)
-                }
-                TurboTy::Float => {
-                    let f = cx
-                        .builder
-                        .ins()
-                        .bitcast(types::F64, MemFlags::new(), raw_val);
-                    (f, TurboTy::Float)
-                }
-                TurboTy::Str => (raw_val, TurboTy::Str),
-                TurboTy::Struct(name) => (raw_val, TurboTy::Struct(name.clone())),
-                _ => (raw_val, field_tty),
-            };
+            let (val, tty) = load_struct_field_slot(cx, obj_ptr, offset, &field_tty);
 
             Ok(Some((val, tty)))
         }
@@ -1556,6 +1532,51 @@ pub(crate) fn retain_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty:
     let retain_fid = cx.rt_fns["rt_retain"];
     let retain_ref = cx.module.declare_func_in_func(retain_fid, cx.builder.func);
     cx.builder.ins().call(retain_ref, &[value]);
+}
+
+/// Struct storage uses uniform 8-byte slots. Convert a raw slot back to the
+/// field's value type before it flows into a local, expression result, or call.
+pub(crate) fn load_struct_field_slot<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    struct_ptr: Value,
+    offset: i32,
+    field_tty: &TurboTy,
+) -> (Value, TurboTy) {
+    let raw_val = cx
+        .builder
+        .ins()
+        .load(types::I64, MemFlags::new(), struct_ptr, offset);
+
+    match field_tty {
+        TurboTy::Bool => {
+            let truncated = cx.builder.ins().ireduce(types::I8, raw_val);
+            (truncated, TurboTy::Bool)
+        }
+        TurboTy::I8 => {
+            let truncated = cx.builder.ins().ireduce(types::I8, raw_val);
+            (truncated, TurboTy::I8)
+        }
+        TurboTy::U8 => {
+            let truncated = cx.builder.ins().ireduce(types::I8, raw_val);
+            (truncated, TurboTy::U8)
+        }
+        TurboTy::I16 => {
+            let truncated = cx.builder.ins().ireduce(types::I16, raw_val);
+            (truncated, TurboTy::I16)
+        }
+        TurboTy::U16 => {
+            let truncated = cx.builder.ins().ireduce(types::I16, raw_val);
+            (truncated, TurboTy::U16)
+        }
+        TurboTy::Float => {
+            let f = cx
+                .builder
+                .ins()
+                .bitcast(types::F64, MemFlags::new(), raw_val);
+            (f, TurboTy::Float)
+        }
+        _ => (raw_val, field_tty.clone()),
+    }
 }
 
 pub(crate) fn retain_array_prefix_if_needed<M: Module>(
@@ -2130,6 +2151,39 @@ pub(crate) fn release_if_needed<M: Module>(cx: &mut Ctx<'_, M>, value: Value, ty
         return;
     }
     release_inline(cx, value, ty);
+}
+
+/// Release a freshly-owned struct using concrete field types captured from its
+/// literal. Generic struct layouts erase type parameters to `Int`; this keeps
+/// destructuring an owned `Box { item: [1] }` from leaking `item`.
+pub(crate) fn release_struct_with_concrete_fields<M: Module>(
+    cx: &mut Ctx<'_, M>,
+    value: Value,
+    declared_layout: &[(String, TurboTy)],
+    concrete_fields: &[(String, TurboTy)],
+) -> Result<(), CodegenError> {
+    for (field_name, field_ty) in concrete_fields {
+        if is_rc_managed_type(cx, field_ty) {
+            let field_index = declared_layout
+                .iter()
+                .position(|(declared_name, _)| declared_name == field_name)
+                .ok_or_else(|| CodegenError {
+                    code: ErrorCode::E0400,
+                    message: format!("struct literal has unknown field `{field_name}`"),
+                })?;
+            let field_val = cx.builder.ins().load(
+                cx.ptr_type,
+                MemFlags::new(),
+                value,
+                (field_index * 8) as i32,
+            );
+            release_if_needed(cx, field_val, field_ty);
+        }
+    }
+    let release_fid = cx.rt_fns["rt_release"];
+    let release_ref = cx.module.declare_func_in_func(release_fid, cx.builder.func);
+    cx.builder.ins().call(release_ref, &[value]);
+    Ok(())
 }
 
 /// Emit one helper's body (or an acyclic inline release). Nested fields go
