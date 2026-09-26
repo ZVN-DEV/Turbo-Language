@@ -15,6 +15,50 @@ busywork. It was seeded from the 2026-06-28 product review + 0.9.2 hardening spr
 
 ## P1 — correctness & credibility
 
+### Astra corrective slices (authorized 2026-09-25)
+
+The user authorized implementing the September 20 review findings. This is
+bounded corrective work, not resumption of the paused G1–G8 goal. Preserve the
+vision: familiar JS/TS-shaped code, native execution, and progressively explicit
+memory/layout control. Lightweight TypeScript migration and large speed/memory
+gains require semantic compatibility and reproducible comparisons; they are not
+current guarantees. Circular has no matching Turbo project, so this existing
+backlog remains the tracking surface.
+
+- [x] **AS-1 — Safe, usable project creation. DONE (this change)** on `codex/astra-safe-init`.
+  Add failing CLI regressions before changes: existing scaffold outputs and
+  symlinked/non-directory parents must be rejected without modifying user files
+  or creating a partial scaffold for those preflight failures. Use exclusive
+  file creation to prevent truncating an output created after preflight. Repair
+  the generated test syntax and verify `init → check → run → test → fmt --check
+  → build → execute` in an isolated project. No compiler representation changes.
+  Three regression groups failed before the fix (overwrite, symlink and generated
+  syntax); all five CLI tests and the post-preflight exclusive-create unit test
+  pass after it. Full workspace, 358 integration/10 helper skips, 37 parity,
+  Clippy, fmt, release consistency and panic budget pass. Independent code review
+  APPROVE and architecture CLEAR. This prevents predictable scaffold conflicts
+  and final-file truncation, not hostile parent-directory replacement or a fully
+  transactional rollback of later I/O failures. Arbitrary quote/backslash project
+  names remain an existing limitation.
+- [ ] **AS-2 — Destructuring type and ownership correctness.** Preserve field
+  types, retain managed bindings, and release owned temporary inputs. Regressions
+  cover float/narrow fields, alias isolation, scope escape and JIT/AOT allocation
+  balance before extracting shared field-projection helpers.
+- [ ] **AS-3 — Unsigned numeric semantics.** Correct extension, division,
+  remainder and comparisons across scalar/container/call/optional boundaries;
+  compare against independent expected values, not merely backend agreement.
+- [ ] **AS-4 — Closure capture lifetimes and nested COW assignment.** Separate
+  fixes by invariant; test escaping managed captures and full parent-path update
+  semantics. Do not conceal them in a broad ownership refactor.
+- [ ] **AS-5 — Package acquisition and project-aware LSP.** Align advertised
+  install commands and package/source versions, fail nonzero on resolution errors,
+  and share project/import resolution with the editor in separate scoped changes.
+- [ ] **AS-6 — JSON output contract.** Support or clearly reject nested values
+  and nonfinite numbers rather than emitting successful malformed JSON.
+- [ ] **AS-7 — Build/release and measurement contracts.** Establish a tested
+  truthful MSRV, exact-tag release qualification, a matched nightly baseline and
+  separate JSON API-workflow comparisons from the CPU aggregate.
+
 ### Approved native-platform execution (2026-09-06)
 
 User-directed sequence: [master plan](TURBO-MASTER-PLAN.md), [acceptance spec](TURBO-ACCEPTANCE-SPEC.md). Preserve prior BL history; BL-27B/BL-28 remain owned by their existing entries. **The user paused the aggregate goal and explicitly requested no further goal execution on 2026-09-07.** The authorized work is a bounded v0.16.0 release closeout, not continuation of later milestones. OMX CLI is not installed and no matching Circular project is exposed. No shadow OMX ledger has been fabricated.
