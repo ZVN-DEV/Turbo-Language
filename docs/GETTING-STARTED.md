@@ -395,7 +395,11 @@ turbolang init text-stats
 cd text-stats
 ```
 
-This creates a project directory with a `turbo.toml` and `src/main.tb`.
+This creates a project directory with `turbo.toml`, `src/main.tb`,
+`tests/main_test.tb`, and `.gitignore`. To initialize the current directory,
+use `turbolang init .`. Init checks all four destinations before writing and
+refuses to replace existing files; it also rejects symlinked `src` or `tests`
+directories. Unrelated existing files are left alone.
 
 ### Write the program
 

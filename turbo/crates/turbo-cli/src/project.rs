@@ -1,8 +1,72 @@
 //! Project scaffolding (`turbolang init`) and `turbo.toml` reading helpers.
 
-use std::path::PathBuf;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 use crate::diagnostics::io_reason;
+
+fn require_missing(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Err(format!(
+            "`{}` already exists; no project files were written",
+            path.display()
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "could not inspect `{}`: {}",
+            path.display(),
+            io_reason(&error)
+        )),
+    }
+}
+
+fn preflight_project(dir: &Path, into_current: bool) -> Result<(), String> {
+    if !into_current {
+        return require_missing(dir);
+    }
+    // Check every destination before creating anything. In particular, a
+    // missing manifest does not imply that existing source may be overwritten.
+    for parent in ["src", "tests"] {
+        let path = dir.join(parent);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => {
+                return Err(format!(
+                "`{}` must be a directory, not a file or symlink; no project files were written",
+                path.display()
+            ))
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "could not inspect `{}`: {}",
+                    path.display(),
+                    io_reason(&error)
+                ))
+            }
+        }
+    }
+    for output in [
+        "turbo.toml",
+        "src/main.tb",
+        "tests/main_test.tb",
+        ".gitignore",
+    ] {
+        require_missing(&dir.join(output))?;
+    }
+    Ok(())
+}
+
+fn create_project_file(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) -> io::Result<()> {
+    // Refuse a destination created after preflight too: never truncate a file
+    // (or follow an existing final-component symlink) to complete scaffolding.
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?
+        .write_all(contents.as_ref())
+}
 
 /// Initialize a new Turbo project with the given name.
 ///
@@ -23,16 +87,30 @@ pub(crate) fn init_project(name: &str) {
             .unwrap_or_else(|| name.to_string())
     };
 
-    if into_current {
-        if dir.join("turbo.toml").exists() {
+    if let Err(message) = preflight_project(&dir, into_current) {
+        eprintln!("\x1b[1;31merror\x1b[0m: {message}");
+        std::process::exit(1);
+    }
+
+    if !into_current {
+        if let Some(parent) = dir.parent().filter(|path| !path.as_os_str().is_empty()) {
+            if let Err(error) = fs::create_dir_all(parent) {
+                eprintln!(
+                    "\x1b[1;31merror\x1b[0m: could not create parent directory: {}",
+                    io_reason(&error)
+                );
+                std::process::exit(1);
+            }
+        }
+        // Reserve the new root exclusively; create_dir_all would accept a root
+        // inserted by another process after the existence check.
+        if let Err(error) = fs::create_dir(&dir) {
             eprintln!(
-                "\x1b[1;31merror\x1b[0m: `turbo.toml` already exists in the current directory"
+                "\x1b[1;31merror\x1b[0m: could not create project directory: {}",
+                io_reason(&error)
             );
             std::process::exit(1);
         }
-    } else if dir.exists() {
-        eprintln!("\x1b[1;31merror\x1b[0m: directory `{name}` already exists");
-        std::process::exit(1);
     }
 
     std::fs::create_dir_all(dir.join("src")).unwrap_or_else(|e| {
@@ -51,7 +129,7 @@ pub(crate) fn init_project(name: &str) {
     });
 
     // turbo.toml
-    std::fs::write(
+    create_project_file(
         dir.join("turbo.toml"),
         format!(
             "[package]\nname = \"{pkg_name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n"
@@ -66,7 +144,7 @@ pub(crate) fn init_project(name: &str) {
     });
 
     // src/main.tb
-    std::fs::write(
+    create_project_file(
         dir.join("src/main.tb"),
         format!(
             r#"/// A counter that tracks a value
@@ -125,7 +203,7 @@ fn main() {{
     });
 
     // tests/main_test.tb
-    std::fs::write(
+    create_project_file(
         dir.join("tests/main_test.tb"),
         r#"struct Counter {
     count: i64,
@@ -146,7 +224,7 @@ type Shape {
     Rectangle(f64, f64),
 }
 
-pub(crate) fn area(shape: Shape) -> f64 {
+fn area(shape: Shape) -> f64 {
     match shape {
         Circle(r) => 3.14159 * r * r
         Rectangle(w, h) => w * h
@@ -179,13 +257,15 @@ pub(crate) fn area(shape: Shape) -> f64 {
     });
 
     // .gitignore
-    std::fs::write(dir.join(".gitignore"), "turbo_modules/\ntarget/\n*.o\n").unwrap_or_else(|e| {
-        eprintln!(
-            "\x1b[1;31merror\x1b[0m: failed to write .gitignore: {}",
-            io_reason(&e)
-        );
-        std::process::exit(1);
-    });
+    create_project_file(dir.join(".gitignore"), "turbo_modules/\ntarget/\n*.o\n").unwrap_or_else(
+        |e| {
+            eprintln!(
+                "\x1b[1;31merror\x1b[0m: failed to write .gitignore: {}",
+                io_reason(&e)
+            );
+            std::process::exit(1);
+        },
+    );
 
     if into_current {
         eprintln!("\x1b[32m\u{2713}\x1b[0m Created project `{pkg_name}`");
@@ -228,4 +308,20 @@ pub(crate) fn extract_quoted_value(s: &str, key: &str) -> Option<String> {
     let inner = &after_eq[1..];
     let end = inner.find(quote_char)?;
     Some(inner[..end].to_string())
+}
+
+#[cfg(test)]
+mod scaffold_tests {
+    use super::*;
+
+    #[test]
+    fn file_created_after_preflight_is_not_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        preflight_project(dir.path(), true).unwrap();
+        let destination = dir.path().join("turbo.toml");
+        fs::write(&destination, b"created concurrently").unwrap();
+        let error = create_project_file(&destination, b"replacement").unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(destination).unwrap(), b"created concurrently");
+    }
 }
