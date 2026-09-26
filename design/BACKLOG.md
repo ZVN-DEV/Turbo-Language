@@ -25,7 +25,7 @@ gains require semantic compatibility and reproducible comparisons; they are not
 current guarantees. Circular has no matching Turbo project, so this existing
 backlog remains the tracking surface.
 
-- [x] **AS-1 — Safe, usable project creation. DONE (this change)** on `codex/astra-safe-init`.
+- [x] **AS-1 — Safe, usable project creation. DONE** in `1924ee0` / PR #80.
   Add failing CLI regressions before changes: existing scaffold outputs and
   symlinked/non-directory parents must be rejected without modifying user files
   or creating a partial scaffold for those preflight failures. Use exclusive
@@ -40,10 +40,21 @@ backlog remains the tracking surface.
   and final-file truncation, not hostile parent-directory replacement or a fully
   transactional rollback of later I/O failures. Arbitrary quote/backslash project
   names remain an existing limitation.
-- [ ] **AS-2 — Destructuring type and ownership correctness.** Preserve field
+- [x] **AS-2 — Destructuring type and ownership correctness. DONE (this change).** Preserve field
   types, retain managed bindings, and release owned temporary inputs. Regressions
   cover float/narrow fields, alias isolation, scope escape and JIT/AOT allocation
   balance before extracting shared field-projection helpers.
+  Shared typed slot loading now decodes bool/float/narrow fields consistently;
+  managed projections retain their own references and owned source temporaries
+  are released. Concrete literal cleanup resolves slots by declared field name,
+  not initializer order, and ignores metadata from unrelated call arguments.
+  Six JIT/AOT regressions cover type preservation, aliases, scope escape, subset
+  generic literals, reordered fields and argument metadata; tracked allocation
+  profiles end balanced with zero live allocations. Workspace, 364 integration/
+  10 helper skips, 37 parity, normal/profile all-target Clippy and fmt pass.
+  Independent code APPROVE and architecture CLEAR after the reordered-field
+  correction. CI now includes this allocation suite. Broader generic parameter
+  layouts, closure capture and unsigned arithmetic remain separate work.
 - [ ] **AS-3 — Unsigned numeric semantics.** Correct extension, division,
   remainder and comparisons across scalar/container/call/optional boundaries;
   compare against independent expected values, not merely backend agreement.
