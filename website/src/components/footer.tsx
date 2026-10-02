@@ -99,6 +99,7 @@ export default function Footer() {
               <li>
                 <a
                   href="https://github.com/ZVN-DEV/Turbo-Language"
+                  data-lf="footer.github"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-sm text-gray-400 hover:text-gray-300 transition-colors"

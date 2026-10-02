@@ -17,12 +17,14 @@ export default function Navbar() {
         <div className="flex items-center gap-4 sm:gap-8">
           <Link
             href="/docs"
+            data-lf="nav.docs"
             className="text-sm text-gray-400 hover:text-white transition-colors font-[family-name:var(--font-geist-sans)]"
           >
             Docs
           </Link>
           <Link
             href="/play"
+            data-lf="nav.play"
             className="text-sm text-gray-400 hover:text-white transition-colors font-[family-name:var(--font-geist-sans)]"
           >
             Play
@@ -53,6 +55,7 @@ export default function Navbar() {
           </Link>
           <a
             href="https://github.com/ZVN-DEV/Turbo-Language"
+            data-lf="nav.github"
             target="_blank"
             rel="noopener noreferrer"
             className="hidden items-center gap-1.5 text-sm text-gray-400 transition-colors hover:text-white sm:flex font-[family-name:var(--font-geist-sans)]"
