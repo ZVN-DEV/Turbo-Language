@@ -3,11 +3,12 @@ import type { NextConfig } from "next";
 const isDev = process.env.NODE_ENV !== "production";
 const playgroundContentSecurityPolicy = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'" + (isDev ? " 'unsafe-eval'" : ""),
+  "script-src 'self' 'unsafe-inline' https://cdn.littlefriend.io" +
+    (isDev ? " 'unsafe-eval'" : ""),
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self'",
-  "connect-src 'self'" + (isDev ? " ws: http:" : ""),
+  "connect-src 'self' https://in.littlefriend.io" + (isDev ? " ws: http:" : ""),
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'none'",

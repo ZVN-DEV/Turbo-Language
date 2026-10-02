@@ -308,6 +308,7 @@ export default function Home() {
               <div className="flex flex-wrap items-center gap-x-6 gap-y-4">
                 <Link
                   href="/docs/installation"
+                  data-lf="cta.get_started"
                   className="inline-flex items-center gap-2 bg-[#00ff88] text-[#0a0a0a] font-semibold px-6 py-3 rounded-lg hover:bg-[#00cc6a] transition-colors text-sm"
                 >
                   Get Started
@@ -324,6 +325,7 @@ export default function Home() {
                 </Link>
                 <Link
                   href="/play"
+                  data-lf="cta.play"
                   className="inline-flex items-center gap-1.5 text-sm text-gray-300 hover:text-[#00ff88] transition-colors"
                 >
                   Try in browser
@@ -340,6 +342,7 @@ export default function Home() {
                 </Link>
                 <Link
                   href="/roadmap"
+                  data-lf="cta.roadmap"
                   className="inline-flex items-center gap-1.5 text-sm text-gray-300 hover:text-[#00ff88] transition-colors"
                 >
                   Read the roadmap
@@ -359,6 +362,7 @@ export default function Home() {
                   target="_blank"
                   rel="noopener noreferrer"
                   aria-label="Turbo on GitHub"
+                  data-lf="cta.github"
                   className="inline-flex items-center justify-center w-10 h-10 rounded-lg border border-[#1a1a2e] text-gray-400 hover:text-[#00ff88] hover:border-[#00ff88] transition-colors"
                 >
                   <svg
@@ -439,7 +443,11 @@ export default function Home() {
             </div>
 
             <div className="relative rounded-2xl border border-[#1a1a2e] bg-[#111118] p-6">
-              <CopyButton text={quickstartCommand} label="Copy command" />
+              <CopyButton
+                text={quickstartCommand}
+                label="Copy command"
+                event="quickstart.copy"
+              />
               <p className="text-sm font-semibold text-white mb-4">
                 Quickstart
               </p>
@@ -667,6 +675,8 @@ export default function Home() {
               <CopyButton
                 text={homebrewCopyText}
                 label="Copy install commands"
+                event="install.copy"
+                eventProps={{ method: "homebrew" }}
               />
               <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
                 Homebrew
@@ -682,6 +692,8 @@ export default function Home() {
               <CopyButton
                 text={fromSourceCopyText}
                 label="Copy install commands"
+                event="install.copy"
+                eventProps={{ method: "source" }}
               />
               <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
                 From Source

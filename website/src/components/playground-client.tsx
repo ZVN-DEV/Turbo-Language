@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useReducer, useState } from "react";
 import Link from "next/link";
+import { track } from "@/lib/little-friend";
 import type { PlaygroundRunResult } from "@/lib/playground-runner";
 import {
   MAX_SHARE_URL_LENGTH,
@@ -206,7 +207,11 @@ export default function PlaygroundClient() {
         typeof result.durationMs === "number" && Number.isFinite(result.durationMs)
           ? result.durationMs
           : Math.max(0, Math.round(performance.now() - started));
+      const success = response.ok && result.success === true;
 
+      track("playground.run", {
+        outcome: success ? "ok" : result.unavailable === true ? "unavailable" : "error",
+      });
       dispatch({
         type: "run-finished",
         result: {
@@ -215,12 +220,13 @@ export default function PlaygroundClient() {
             typeof result.stderr === "string"
               ? result.stderr
               : `Playground request failed with HTTP ${response.status}.`,
-          success: response.ok && result.success === true,
+          success,
           durationMs,
           unavailable: result.unavailable === true,
         },
       });
     } catch {
+      track("playground.run", { outcome: "unavailable" });
       dispatch({
         type: "run-finished",
         result: {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { track } from "@/lib/little-friend";
 
 // Small, dependency-free copy-to-clipboard button meant to float over a code
 // block. It copies the RAW `text` prop (passed by the caller) rather than
@@ -10,16 +11,22 @@ export default function CopyButton({
   text,
   label = "Copy to clipboard",
   className = "",
+  event,
+  eventProps,
 }: {
   text: string;
   label?: string;
   className?: string;
+  // Little Friend event sent after a successful copy.
+  event?: string;
+  eventProps?: Record<string, string>;
 }) {
   const [copied, setCopied] = useState(false);
 
   async function handleCopy() {
     try {
       await navigator.clipboard.writeText(text);
+      if (event) track(event, eventProps);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
