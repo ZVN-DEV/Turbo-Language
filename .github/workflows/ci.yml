@@ -10,6 +10,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# No job writes to GitHub, so every job gets a read-only token.
+permissions:
+  contents: read
+
 jobs:
   fmt:
     name: Format

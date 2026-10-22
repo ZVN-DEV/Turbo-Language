@@ -15,6 +15,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Read by default. canary-publish (contents: write) and notify-on-failure
+# (issues: write) grant themselves the one write each needs.
+permissions:
+  contents: read
+
 jobs:
   gauntlet:
     name: Gauntlet (ubuntu-latest)
