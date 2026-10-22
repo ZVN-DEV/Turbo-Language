@@ -9,6 +9,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Read by default. Only the release job writes (contents: write).
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:
@@ -34,16 +38,9 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
-      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            turbo/target
-          key: ${{ runner.os }}-cargo-release-${{ matrix.target }}-${{ hashFiles('turbo/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-release-${{ matrix.target }}-
-            ${{ runner.os }}-cargo-release-
+      # No actions/cache here. These binaries are GPG-signed and pushed to the
+      # Homebrew tap by the release job, and a tag run can restore caches that
+      # any workflow on master wrote, so a release builds from a clean target/.
 
       - name: Build (Cranelift)
         run: |
