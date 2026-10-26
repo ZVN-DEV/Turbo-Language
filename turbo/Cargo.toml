@@ -46,7 +46,7 @@ target-lexicon = "0.12"
 ariadne = "0.4"
 clap = { version = "4", features = ["derive"] }
 notify = "7"
-notify-debouncer-mini = "0.5"
+notify-debouncer-mini = "0.7"
 ctrlc = "3"
 libc = "0.2"
 
