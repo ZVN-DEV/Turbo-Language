@@ -42,7 +42,7 @@ cranelift-codegen = { version = "0.113", features = ["all-arch"] }
 cranelift-frontend = "0.113"
 cranelift-native = "0.113"
 cranelift-object = "0.113"
-target-lexicon = "0.12"
+target-lexicon = "0.13"
 ariadne = "0.4"
 clap = { version = "4", features = ["derive"] }
 notify = "7"
