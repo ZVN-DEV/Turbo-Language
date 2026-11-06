@@ -49,7 +49,7 @@ export async function assertExecRejectedRun(fetcher, runUrl, options = {}) {
 // runtime resources with an unbounded compute loop. On the deployed container it
 // must be contained — killed by the prlimit CPU cap or the wall-clock watchdog —
 // never returning a successful run. This is the first non-mock exercise of the
-// prlimit path, so it validates on the Fly deploy rather than in local/CI (which
+// prlimit path, so it validates on a deployed runner rather than in local/CI (which
 // have no prlimit and rely on the wall timeout alone).
 export async function assertResourceAbuseContained(fetcher, runUrl, options = {}) {
   const label = options.label ?? "playground";
