@@ -15,24 +15,16 @@ From the repository root:
 docker build -t turbo-playground-runner -f website/playground-runner/Dockerfile .
 ```
 
-## Deploy on Fly.io
+## Deployment Status
 
-The repo includes `fly.toml` for the public runner. Create the app once, set a
-random bearer token as a Fly secret, deploy from the repository root, then point
-Vercel at the deployed `/run` URL with the same token.
+The hosted runner is not deployed. It was shut down on 2026-10-29, and this
+repo no longer ships a deploy config for it. With no runner configured,
+`https://turbolang.dev/api/playground/run` returns the "not configured" 503
+response and `/play` shows the local CLI command instead.
 
-```bash
-flyctl apps create turbolang-playground-runner --org zvn-dev
-
-TOKEN="$(openssl rand -hex 32)"
-flyctl secrets set \
-  --app turbolang-playground-runner \
-  TURBO_PLAYGROUND_RUNNER_TOKEN="$TOKEN"
-
-flyctl deploy --config website/playground-runner/fly.toml
-```
-
-After deployment, configure the website runtime:
+To host it again, run the image in an isolated container with the flags shown
+under Run Locally, give it a random bearer token, then point the website at its
+`/run` URL with the same token:
 
 ```bash
 cd website
@@ -42,8 +34,7 @@ vercel env add TURBO_PLAYGROUND_RUNNER_URL preview
 vercel env add TURBO_PLAYGROUND_RUNNER_TOKEN preview
 ```
 
-Use `https://turbolang-playground-runner.fly.dev/run` for
-`TURBO_PLAYGROUND_RUNNER_URL`. After Vercel redeploys, smoke the public site:
+After Vercel redeploys, smoke the public site:
 
 ```bash
 cd website

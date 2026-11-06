@@ -64,7 +64,7 @@ Build the runner from the repository root:
 docker build -t turbo-playground-runner -f website/playground-runner/Dockerfile .
 ```
 
-Run it with the hardening flags or deploy it with the Fly config documented in
+Run it with the hardening flags documented in
 [`playground-runner/README.md`](playground-runner/README.md), then configure the
 website runtime in Vercel:
 
@@ -78,6 +78,9 @@ missing.
 
 If those variables are absent, `/api/playground/run` returns an explicit
 unavailable response and the page shows the local CLI command instead.
+
+The hosted runner is not deployed today. It was shut down on 2026-10-29, so
+production returns that unavailable response.
 
 ## Content Ownership
 
